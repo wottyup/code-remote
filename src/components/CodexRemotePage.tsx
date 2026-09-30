@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronsUpDown,
+  Copy,
+  FileText,
   ImagePlus,
   LoaderCircle,
   Menu,
@@ -14,8 +17,8 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity } from '../hooks/useCodexRemote'
-import type { CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
+import { useCodexRemote, type CodexActivity, type CodexFileChange } from '../hooks/useCodexRemote'
+import type { CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
   token: string
@@ -33,6 +36,10 @@ const connectionLabel = {
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
 const maxImagesPerTurn = 4
+const longPasteThreshold = 4_000
+const maxLongPasteChars = 24_000
+const minComposerHeight = 45
+const maxComposerHeight = 260
 
 function modelIdOf(model: CodexModel) {
   return model.model || model.id || ''
@@ -61,6 +68,27 @@ function readImage(file: File): Promise<CodexImageAttachment> {
     }
     reader.readAsDataURL(file)
   })
+}
+
+async function copyText(value: string) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value)
+      return true
+    }
+  } catch {
+    // Fall through to the legacy clipboard path for LAN HTTP pages.
+  }
+  const helper = document.createElement('textarea')
+  helper.value = value
+  helper.style.position = 'fixed'
+  helper.style.opacity = '0'
+  document.body.appendChild(helper)
+  helper.focus()
+  helper.select()
+  const copied = document.execCommand('copy')
+  helper.remove()
+  return copied
 }
 
 function titleOf(thread: CodexThread) {
@@ -107,7 +135,7 @@ function ComposerMenu({
 
   useEffect(() => {
     if (!open) return
-    const closeOnOutside = (event: PointerEvent) => {
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
       if (!root.current?.contains(event.target as Node)) setOpen(false)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -170,10 +198,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState('')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [composerHeight, setComposerHeight] = useState(72)
+  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
+  const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const copyResetTimer = useRef<number | undefined>(undefined)
 
   const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = chosenModel?.supportedReasoningEfforts ?? []
@@ -182,6 +215,29 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const container = messageContainer.current
     if (container) container.scrollTop = container.scrollHeight
   }, [remote.messages, remote.isRunning, remote.activity])
+
+  useEffect(() => {
+    const moveResize = (event: globalThis.PointerEvent) => {
+      const resize = resizeState.current
+      if (!resize) return
+      const nextHeight = resize.startHeight + resize.startY - event.clientY
+      setComposerHeight(Math.min(maxComposerHeight, Math.max(minComposerHeight, nextHeight)))
+    }
+    const endResize = () => {
+      resizeState.current = null
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+    }
+    window.addEventListener('pointermove', moveResize)
+    window.addEventListener('pointerup', endResize)
+    window.addEventListener('pointercancel', endResize)
+    return () => {
+      window.removeEventListener('pointermove', moveResize)
+      window.removeEventListener('pointerup', endResize)
+      window.removeEventListener('pointercancel', endResize)
+      if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (remote.models.length === 0) return
@@ -213,15 +269,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = draft.trim()
-    if ((!prompt && attachedImages.length === 0) || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
+    if ((!prompt && attachedImages.length === 0 && !attachedDocument) || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
     if (!modelSupportsImages && attachedImages.length > 0) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
     setSending(true)
-    if (await remote.sendMessage({ prompt, images: attachedImages, model: selectedModel || undefined, effort: selectedEffort || undefined })) {
+    if (await remote.sendMessage({ prompt, images: attachedImages, document: attachedDocument || undefined, model: selectedModel || undefined, effort: selectedEffort || undefined })) {
       setDraft('')
       setAttachedImages([])
+      setAttachedDocument(null)
       setAttachmentError(null)
     }
     setSending(false)
@@ -273,15 +330,42 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
       .filter((file): file is File => file !== null)
     const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
-    if (images.length === 0) return
+    if (images.length > 0) {
+      event.preventDefault()
+      void attachImages(images)
+      return
+    }
+    const pastedText = event.clipboardData.getData('text/plain')
+    if (pastedText.length < longPasteThreshold) return
     event.preventDefault()
-    void attachImages(images)
+    if (pastedText.length > maxLongPasteChars) {
+      setAttachmentError(`粘贴内容过长，最多支持 ${maxLongPasteChars.toLocaleString()} 个字符。`)
+      return
+    }
+    setAttachedDocument({ name: 'pasted-content.md', content: pastedText })
+    setAttachmentError(null)
+  }
+
+  function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    resizeState.current = { startY: event.clientY, startHeight: composerHeight }
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  async function copyMessage(message: CodexMessage) {
+    const documentText = message.documents?.map((document) => `\n\n${document.name}\n${document.content}`).join('') ?? ''
+    const value = `${message.text}${documentText}`.trim()
+    if (!value || !(await copyText(value))) return
+    setCopiedMessageId(message.id)
+    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
-  const canSend = (draft.trim().length > 0 || attachedImages.length > 0) && canCompose
+  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
     const id = modelIdOf(model)
@@ -345,7 +429,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} />)}
+          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={() => void copyMessage(message)} />)}
+          {remote.fileChanges.map((change) => <FileChangeCard key={change.id} change={change} />)}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -385,7 +470,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             </div>
           ) : null}
           {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
+          {attachedDocument ? (
+            <div className="composer-document" aria-label="待发送文档">
+              <FileText size={16} />
+              <span><strong>{attachedDocument.name}</strong><small>{attachedDocument.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
+              <button type="button" onClick={() => setAttachedDocument(null)} aria-label="移除文档"><X size={13} /></button>
+            </div>
+          ) : null}
+          <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
+            <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
+            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} aria-label="发送消息给 Codex" />
+          </div>
           <div className="message-composer__footer">
             <div className="composer-preferences">
               <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={setSelectedModel} />
@@ -409,7 +504,54 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   )
 }
 
-function MessageBubble({ message, activity }: { message: CodexMessage; activity: CodexActivity | null }) {
+function MessageContent({ text }: { text: string }) {
+  const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
+  const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
+  let cursor = 0
+  let match: RegExpExecArray | null
+  while ((match = codePattern.exec(text)) !== null) {
+    if (match.index > cursor) blocks.push({ type: 'text', value: text.slice(cursor, match.index) })
+    blocks.push({ type: 'code', value: match[2].replace(/\n$/, ''), language: match[1].trim() || undefined })
+    cursor = match.index + match[0].length
+  }
+  if (cursor < text.length) blocks.push({ type: 'text', value: text.slice(cursor) })
+  if (blocks.length === 0) blocks.push({ type: 'text', value: text })
+
+  return (
+    <div className="chat-message__content">
+      {blocks.map((block, index) => block.type === 'code'
+        ? <pre className="chat-message__code" key={`code-${index}`}><code data-language={block.language}>{block.value}</code></pre>
+        : <div className="chat-message__text" key={`text-${index}`}>{block.value}</div>)}
+    </div>
+  )
+}
+
+function FileChangeCard({ change }: { change: CodexFileChange }) {
+  const additions = change.changes.reduce((total, item) => total + item.additions, 0)
+  const deletions = change.changes.reduce((total, item) => total + item.deletions, 0)
+  return (
+    <article className={`file-change-card file-change-card--${change.status}`}>
+      <div className="file-change-card__heading">
+        <FileText size={16} />
+        <div><strong>{change.changes.length === 1 ? change.changes[0].path : `${change.changes.length} 个文件已编辑`}</strong><small>{change.status === 'inProgress' ? '正在修改' : '已完成修改'}</small></div>
+        <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span>
+      </div>
+      <details className="file-change-card__details" open={change.status === 'inProgress'}>
+        <summary>查看更改内容</summary>
+        <div className="file-change-card__files">
+          {change.changes.map((item) => (
+            <div className="file-change-card__file" key={item.path}>
+              <span>{item.path}</span>
+              {item.diff ? <pre>{item.diff}</pre> : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>}
+            </div>
+          ))}
+        </div>
+      </details>
+    </article>
+  )
+}
+
+function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: () => void }) {
   return (
     <article className={`chat-message chat-message--${message.role}`}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
@@ -424,8 +566,10 @@ function MessageBubble({ message, activity }: { message: CodexMessage; activity:
           ) : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
-        {message.text ? <pre>{message.text}</pre> : null}
+        {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
+        {message.text ? <MessageContent text={message.text} /> : null}
         {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
+        {message.text || message.documents?.length ? <div className="chat-message__actions"><button type="button" onClick={onCopy}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
   )

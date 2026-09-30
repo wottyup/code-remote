@@ -3,6 +3,7 @@ import {
   codexRemoteClient,
   messagesFromThread,
   RemoteApiError,
+  type CodexDocumentAttachment,
   type CodexImageAttachment,
   type CodexMessage,
   type CodexModel,
@@ -22,6 +23,20 @@ export interface CodexActivity {
   detail?: string
 }
 
+export interface CodexFileChangeEntry {
+  path: string
+  kind?: string
+  diff?: string
+  additions: number
+  deletions: number
+}
+
+export interface CodexFileChange {
+  id: string
+  status: 'inProgress' | 'completed'
+  changes: CodexFileChangeEntry[]
+}
+
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 
@@ -39,6 +54,47 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
     used.add(previous.id)
     return { ...message, images: previous.images }
   })
+}
+
+function fileChangeForItem(value: unknown): CodexFileChange | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  if (item.type !== 'fileChange') return null
+  const rawChanges = item.changes
+  const changes = Array.isArray(rawChanges)
+    ? rawChanges
+    : rawChanges && typeof rawChanges === 'object'
+      ? Object.entries(rawChanges).map(([path, change]) => ({ path, ...(change && typeof change === 'object' ? change : {}) }))
+      : []
+  const entries = changes.flatMap((value) => {
+    if (typeof value === 'string') return [{ path: value, additions: 0, deletions: 0 }]
+    if (!value || typeof value !== 'object') return []
+    const change = value as Record<string, unknown>
+    const path = [change.path, change.filePath, change.filename]
+      .find((part): part is string => typeof part === 'string' && part.length > 0)
+    if (!path) return []
+    const diff = typeof change.diff === 'string' ? change.diff : typeof change.patch === 'string' ? change.patch : undefined
+    const diffLines = diff?.split('\n') ?? []
+    return [{
+      path,
+      kind: typeof change.kind === 'string' ? change.kind : undefined,
+      diff,
+      additions: diffLines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length,
+      deletions: diffLines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length,
+    }]
+  })
+  if (entries.length === 0) return null
+  return {
+    id: typeof item.id === 'string' ? item.id : `file-change-${Date.now()}`,
+    status: item.status === 'completed' ? 'completed' : 'inProgress',
+    changes: entries,
+  }
+}
+
+function upsertFileChange(current: CodexFileChange[], next: CodexFileChange) {
+  const index = current.findIndex((change) => change.id === next.id)
+  if (index < 0) return [...current, next]
+  return current.map((change, currentIndex) => currentIndex === index ? next : change)
 }
 
 function activityForItem(value: unknown): CodexActivity {
@@ -84,6 +140,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
+  const [fileChanges, setFileChanges] = useState<CodexFileChange[]>([])
   const [writerConflict, setWriterConflict] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -209,6 +266,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(true)
       setActivity({ label: '正在思考' })
+      setFileChanges([])
       activityItemId.current = null
       return
     }
@@ -235,6 +293,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
     if (event.method === 'item/started') {
       const item = params.item as Record<string, unknown> | undefined
+      const fileChange = fileChangeForItem(item)
+      if (fileChange) setFileChanges((current) => upsertFileChange(current, fileChange))
       activityItemId.current = typeof item?.id === 'string' ? item.id : null
       setIsRunning(true)
       setActivity(activityForItem(item))
@@ -258,6 +318,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
     if (event.method === 'item/completed') {
       const item = params.item as Record<string, unknown> | undefined
+      const fileChange = fileChangeForItem(item)
+      if (fileChange) setFileChanges((current) => upsertFileChange(current, { ...fileChange, status: 'completed' }))
       const itemId = typeof item?.id === 'string' ? item.id : null
       if (item?.type !== 'agentMessage') {
         if (itemId && activityItemId.current === itemId) {
@@ -353,6 +415,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setMessages([])
     setIsRunning(false)
     setActivity(null)
+    setFileChanges([])
     writerConflictRef.current = false
     setWriterConflict(false)
     activityItemId.current = null
@@ -380,6 +443,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setMessages([])
       setIsRunning(false)
       setActivity(null)
+      setFileChanges([])
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
@@ -396,10 +460,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; model?: string; effort?: string }) => {
+  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; document?: CodexDocumentAttachment; model?: string; effort?: string }) => {
     if (loadingHistory) return false
     const text = input.prompt.trim()
-    if (!text && input.images.length === 0) return false
+    if (!text && input.images.length === 0 && !input.document) return false
+    const documentText = input.document
+      ? `\n\n[附件文档：${input.document.name}]\n${input.document.content}\n[/附件文档]`
+      : ''
+    const requestText = `${text}${documentText}`.trim()
     let thread = activeThread
     if (!thread) thread = await createThread(input.model)
     if (!thread) return false
@@ -409,6 +477,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       role: 'user',
       text,
       images: input.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
+      ...(input.document ? { documents: [{ ...input.document, charCount: input.document.content.length }] } : {}),
       createdAt: new Date().toISOString(),
     }])
     setIsRunning(true)
@@ -422,13 +491,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         resumedThreadId.current = thread.id
       }
       try {
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model, effort: input.effort })
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: requestText, images: input.images, model: input.model, effort: input.effort })
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
         await codexRemoteClient.resumeThread(token, thread.id)
         resumedThreadId.current = thread.id
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model, effort: input.effort })
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: requestText, images: input.images, model: input.model, effort: input.effort })
       }
       return true
     } catch (reason) {
@@ -483,6 +552,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     messages,
     isRunning,
     activity,
+    fileChanges,
     writerConflict,
     loadingHistory,
     error,

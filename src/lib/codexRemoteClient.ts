@@ -17,12 +17,22 @@ export interface CodexMessageImage {
   previewUrl: string
 }
 
+export interface CodexDocumentAttachment {
+  name: string
+  content: string
+}
+
+export interface CodexMessageDocument extends CodexDocumentAttachment {
+  charCount: number
+}
+
 export interface CodexMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
   createdAt: string
   images?: CodexMessageImage[]
+  documents?: CodexMessageDocument[]
   streaming?: boolean
 }
 

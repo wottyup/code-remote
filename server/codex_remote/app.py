@@ -294,7 +294,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.18", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.19", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
