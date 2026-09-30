@@ -314,7 +314,7 @@ function MessageBubble({ message, activity }: { message: CodexMessage; activity:
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
-          <strong>{message.role === 'user' ? '你' : 'Codex'}</strong>
+          {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {message.streaming ? (
             <span className="chat-message__activity" aria-live="polite">
               <LoaderCircle className="spin" size={12} />{activity?.label ?? '正在回复'}

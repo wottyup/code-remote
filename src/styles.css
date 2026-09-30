@@ -68,11 +68,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .prompt-suggestions button { min-height: 33px; padding: 0 10px; border: 1px solid #34363d; border-radius: 8px; background: #191b20; color: #afb3bc; cursor: pointer; font-size: 10px; }
 .prompt-suggestions button:hover { border-color: #555962; color: #ededef; }
 .chat-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; width: min(100%, 840px); margin: 0 auto; }
-.chat-message--user { grid-template-columns: minmax(0, 1fr) 28px; margin: 4px 0 0 auto; }
-.chat-message--user .chat-message__avatar { grid-column: 2; }
-.chat-message--user .chat-message__body { grid-row: 1; grid-column: 1; justify-self: end; width: fit-content; max-width: min(100%, 700px); padding: 8px 11px 9px; border: 1px solid #2d2d2e; border-radius: 12px; background: #141518; }
-.chat-message--user .chat-message__meta { justify-content: flex-end; min-height: 17px; }
-.chat-message--user .chat-message__body pre { margin: 2px 0 0; }
+.chat-message--user { grid-template-columns: minmax(0, 1fr); margin: 4px 0 0 auto; }
+.chat-message--user .chat-message__avatar { display: none; }
+.chat-message--user .chat-message__body { grid-row: 1; grid-column: 1; justify-self: end; width: fit-content; max-width: min(100%, 700px); padding: 9px 11px; border: 1px solid #2d2d2e; border-radius: 12px; background: #141518; }
+.chat-message--user .chat-message__meta { display: none; }
+.chat-message--user .chat-message__body pre { margin: 0; }
 .chat-message__avatar { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid #3b3e45; border-radius: 50%; background: #24262b; color: #e7e8eb; font-size: 10px; font-weight: 650; }
 .chat-message--assistant .chat-message__avatar { background: linear-gradient(145deg, #30333a, #1d1f23); }
 .chat-message__body { min-width: 0; padding-top: 1px; }
@@ -158,7 +158,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .model-picker select { max-width: 122px; }
   .remote-chat__title span { max-width: 47vw; }
   .connection-label span { display: none; }
-  .message-stream { gap: 21px; padding: 20px 13px 18px; }
+  .message-stream { gap: 21px; padding: 20px 8px 18px; }
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__body pre { font-size: 12px; }
