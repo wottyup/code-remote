@@ -68,6 +68,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .prompt-suggestions button { min-height: 33px; padding: 0 10px; border: 1px solid #34363d; border-radius: 8px; background: #191b20; color: #afb3bc; cursor: pointer; font-size: 10px; }
 .prompt-suggestions button:hover { border-color: #555962; color: #ededef; }
 .chat-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; width: min(100%, 840px); margin: 0 auto; }
+.chat-message.chat-message--assistant { grid-template-columns: minmax(0, 1fr); }
+.chat-message--assistant .chat-message__avatar { display: none; }
 .chat-message--user { grid-template-columns: minmax(0, 1fr); margin: 4px auto 0; }
 .chat-message--user .chat-message__avatar { display: none; }
 .chat-message--user .chat-message__body { grid-row: 1; grid-column: 1; justify-self: end; width: fit-content; max-width: min(100%, 700px); padding: 9px 11px; border: 1px solid #2d2d2e; border-radius: 12px; background: #141518; }
@@ -86,8 +88,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message__images img { display: block; width: min(100%, 230px); max-height: 220px; border: 1px solid #2d2d2e; border-radius: 8px; object-fit: cover; }
 .stream-cursor { display: inline-block; width: 6px; height: 13px; margin: 3px 0 0 1px; vertical-align: text-bottom; background: #d3d6dc; animation: cursor-blink 1s steps(2, start) infinite; }
 @keyframes cursor-blink { to { visibility: hidden; } }
-.running-indicator { display: grid; grid-template-columns: 28px minmax(0, 1fr); width: min(100%, 840px); margin: -13px auto 0; }
-.running-indicator__activity { grid-column: 2; display: flex; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
+.running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -13px auto 0; }
+.running-indicator__activity { grid-column: 1; display: flex; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100%; color: #9298a2; font-size: 11px; }
 .approval-card { width: min(100%, 800px); margin: 0 auto 0 39px; padding: 13px; border: 1px solid rgba(191, 147, 81, .4); border-radius: 10px; background: rgba(54, 42, 27, .3); color: #ddd0b8; }
 .approval-card__heading { display: flex; align-items: center; gap: 8px; color: #e0c18e; font-size: 11px; }
