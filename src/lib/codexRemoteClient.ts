@@ -78,7 +78,16 @@ async function request<T>(token: string, path: string, init?: RequestInit): Prom
   if (!response.ok) {
     const body = await response.json().catch(() => null)
     const detail = body?.detail
-    const message = typeof detail === 'string' ? detail : detail?.message ?? `请求失败 (${response.status})`
+    const validationDetail = Array.isArray(detail)
+      ? detail.map((item) => {
+        if (!item || typeof item !== 'object') return ''
+        const message = (item as Record<string, unknown>).msg
+        return typeof message === 'string' ? message : ''
+      }).filter(Boolean).join('；')
+      : ''
+    const message = typeof detail === 'string'
+      ? detail
+      : validationDetail || (detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : `请求失败 (${response.status})`)
     throw new RemoteApiError(message, response.status)
   }
   return response.json() as Promise<T>
@@ -179,7 +188,15 @@ export const codexRemoteClient = {
   startTurn(token: string, threadId: string, input: { prompt: string; images: CodexImageAttachment[]; model?: string }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
       method: 'POST',
-      body: JSON.stringify(input),
+      body: JSON.stringify({
+        prompt: input.prompt,
+        model: input.model,
+        images: input.images.map((image) => ({
+          name: image.name,
+          media_type: image.mediaType,
+          data: image.data,
+        })),
+      }),
     })
   },
   interrupt(token: string, threadId: string) {
