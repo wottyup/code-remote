@@ -87,6 +87,7 @@ class TurnRequest(BaseModel):
     prompt: str = Field(default="", max_length=32_000)
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=50)
 
 
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
@@ -247,7 +248,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.16", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.17", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
@@ -345,6 +346,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 prompt,
                 image_paths,
                 body.model.strip() or None if body.model else None,
+                body.effort.strip() or None if body.effort else None,
             )
             turn = result.get("turn", {})
             return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}

@@ -383,7 +383,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; model?: string }) => {
+  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; model?: string; effort?: string }) => {
     if (loadingHistory) return false
     const text = input.prompt.trim()
     if (!text && input.images.length === 0) return false
@@ -409,13 +409,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         resumedThreadId.current = thread.id
       }
       try {
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model })
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model, effort: input.effort })
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
         await codexRemoteClient.resumeThread(token, thread.id)
         resumedThreadId.current = thread.id
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model })
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model, effort: input.effort })
       }
       return true
     } catch (reason) {

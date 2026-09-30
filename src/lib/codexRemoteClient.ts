@@ -36,6 +36,8 @@ export interface CodexModel {
   id?: string
   model?: string
   displayName?: string
+  defaultReasoningEffort?: string
+  supportedReasoningEfforts?: Array<{ reasoningEffort: string; description?: string }>
   inputModalities?: string[]
   isDefault?: boolean
 }
@@ -185,12 +187,13 @@ export const codexRemoteClient = {
       body: JSON.stringify({ model }),
     })
   },
-  startTurn(token: string, threadId: string, input: { prompt: string; images: CodexImageAttachment[]; model?: string }) {
+  startTurn(token: string, threadId: string, input: { prompt: string; images: CodexImageAttachment[]; model?: string; effort?: string }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
         model: input.model,
+        effort: input.effort,
         images: input.images.map((image) => ({
           name: image.name,
           media_type: image.mediaType,

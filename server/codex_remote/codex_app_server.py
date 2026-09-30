@@ -108,6 +108,7 @@ class CodexAppServer:
         prompt: str,
         image_paths: list[Path] | None = None,
         model: str | None = None,
+        effort: str | None = None,
     ) -> dict[str, Any]:
         if len(prompt) > 32_000:
             raise CodexRuntimeError("消息不能超过 32000 个字符")
@@ -121,6 +122,8 @@ class CodexAppServer:
         params: dict[str, Any] = {"threadId": thread_id, "input": input_items}
         if model:
             params["model"] = model
+        if effort:
+            params["effort"] = effort
         return await self.request("turn/start", params)
 
     async def interrupt(self, thread_id: str) -> dict[str, Any]:
@@ -194,7 +197,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.16",
+                        "version": "0.0.17",
                     },
                     "capabilities": {
                         "experimentalApi": False,

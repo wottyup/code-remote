@@ -41,6 +41,10 @@ function modelLabelOf(model: CodexModel) {
   return model.displayName || modelIdOf(model) || '未命名模型'
 }
 
+function effortLabelOf(effort: string) {
+  return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' } as Record<string, string>)[effort] ?? effort
+}
+
 function readImage(file: File): Promise<CodexImageAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -82,11 +86,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
+  const [selectedEffort, setSelectedEffort] = useState('')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const imageInput = useRef<HTMLInputElement>(null)
+
+  const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
+  const effortOptions = chosenModel?.supportedReasoningEfforts ?? []
 
   useEffect(() => {
     const container = messageContainer.current
@@ -99,6 +107,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const defaultModel = remote.models.find((model) => model.isDefault) ?? remote.models[0]
     setSelectedModel(modelIdOf(defaultModel))
   }, [remote.models, selectedModel])
+
+  useEffect(() => {
+    if (effortOptions.length === 0) {
+      setSelectedEffort('')
+      return
+    }
+    if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
+    setSelectedEffort(chosenModel?.defaultReasoningEffort ?? effortOptions[0].reasoningEffort)
+  }, [chosenModel, effortOptions, selectedEffort])
 
   async function createThread() {
     setSidebarOpen(false)
@@ -120,7 +137,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       return
     }
     setSending(true)
-    if (await remote.sendMessage({ prompt, images: attachedImages, model: selectedModel || undefined })) {
+    if (await remote.sendMessage({ prompt, images: attachedImages, model: selectedModel || undefined, effort: selectedEffort || undefined })) {
       setDraft('')
       setAttachedImages([])
       setAttachmentError(null)
@@ -180,7 +197,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0) && canCompose
@@ -221,16 +237,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             <div className="remote-chat__title"><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
           </div>
           <div className="remote-chat__controls">
-            <label className="model-picker" title="模型在下一条消息开始时生效">
-              <span>模型</span>
-              <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={!canCompose || remote.models.length === 0}>
-                {remote.models.length === 0 ? <option value="">读取可用模型…</option> : null}
-                {remote.models.map((model) => {
-                  const id = modelIdOf(model)
-                  return id ? <option key={id} value={id}>{modelLabelOf(model)}</option> : null
-                })}
-              </select>
-            </label>
             <div className={`connection-label connection-label--${remote.connection}`}><i className={`status-dot status-dot--${remote.connection}`} /><span>{connectionLabel[remote.connection]}</span></div>
           </div>
         </header>
@@ -290,7 +296,26 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
           <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
           <div className="message-composer__footer">
-            <span><ShieldCheck size={14} />本机 Codex · Enter 发送，Shift+Enter 换行</span>
+            <div className="composer-preferences">
+              <label className="model-picker" title="模型在下一条消息开始时生效">
+                <span>模型</span>
+                <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={!canCompose || remote.models.length === 0}>
+                  {remote.models.length === 0 ? <option value="">读取模型…</option> : null}
+                  {remote.models.map((model) => {
+                    const id = modelIdOf(model)
+                    return id ? <option key={id} value={id}>{modelLabelOf(model)}</option> : null
+                  })}
+                </select>
+              </label>
+              <label className="effort-picker" title="思考强度在下一条消息开始时生效">
+                <span>思考</span>
+                <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value)} disabled={!canCompose || effortOptions.length === 0}>
+                  {effortOptions.length === 0 ? <option value="">默认</option> : null}
+                  {effortOptions.map((option) => <option key={option.reasoningEffort} value={option.reasoningEffort}>{effortLabelOf(option.reasoningEffort)}</option>)}
+                </select>
+              </label>
+              <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
+            </div>
             <div className="composer-actions">
               <button className="attach-button" type="button" onClick={() => imageInput.current?.click()} disabled={!canCompose || !modelSupportsImages} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'} aria-label="附加图片"><ImagePlus size={16} /></button>
               {remote.writerConflict ? (
