@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -129,13 +129,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     composer.current?.focus()
   }
 
-  async function attachImages(files: FileList | null) {
-    if (!files || files.length === 0) return
+  async function attachImages(files: File[]) {
+    if (files.length === 0) return
     if (!modelSupportsImages) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
-    const candidates = Array.from(files)
+    const candidates = files
     const unsupported = candidates.find((file) => !imageTypes.has(file.type as CodexImageAttachment['mediaType']))
     if (unsupported) {
       setAttachmentError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
@@ -166,6 +166,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       event.preventDefault()
       event.currentTarget.form?.requestSubmit()
     }
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const directFiles = Array.from(event.clipboardData.files)
+    const itemFiles = Array.from(event.clipboardData.items)
+      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
+      .filter((file): file is File => file !== null)
+    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    if (images.length === 0) return
+    event.preventDefault()
+    void attachImages(images)
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
@@ -270,14 +281,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         ) : null}
 
         <form className="message-composer" onSubmit={(event) => void send(event)}>
-          <input ref={imageInput} className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(event.target.files); event.currentTarget.value = '' }} />
+          <input ref={imageInput} className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} />
           {attachedImages.length > 0 ? (
             <div className="composer-images" aria-label="待发送图片">
               {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
             </div>
           ) : null}
           {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
+          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
           <div className="message-composer__footer">
             <span><ShieldCheck size={14} />本机 Codex · Enter 发送，Shift+Enter 换行</span>
             <div className="composer-actions">
