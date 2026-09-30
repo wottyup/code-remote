@@ -292,8 +292,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-editor { min-height: 46px; }
   .message-composer textarea { padding-top: 9px; padding-bottom: 9px; font-size: 13px; }
   .message-composer__footer { display: grid; min-width: 0; min-height: 31px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 4px; }
-  .composer-preferences { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, .7fr) minmax(0, 1.15fr); gap: 5px; overflow: hidden; }
-  .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
+  .composer-preferences { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, .7fr) minmax(0, 1.15fr); gap: 5px; }
+  .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; -webkit-tap-highlight-color: transparent; }
+  .composer-menu--open .composer-menu__trigger { background: rgba(20, 22, 28, .62); }
+  .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { background: #f4f6f8; }
+  .remote-shell--theme-warm .composer-menu--open .composer-menu__trigger { background: #fbf3e9; }
+  .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { background: var(--custom-theme-control); }
   .composer-actions { min-width: 0; gap: 4px; }
   .send-button, .stop-button, .attach-button { padding-inline: 6px; }
   .composer-hint { display: none; }
