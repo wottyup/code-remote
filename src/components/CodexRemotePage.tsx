@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type 
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   ImagePlus,
   LoaderCircle,
   Menu,
@@ -78,6 +79,89 @@ function timeOf(thread: CodexThread) {
   return date.toDateString() === today.toDateString()
     ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(date)
     : new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date)
+}
+
+interface ComposerMenuOption {
+  value: string
+  label: string
+  description?: string
+}
+
+function ComposerMenu({
+  label,
+  value,
+  options,
+  emptyLabel,
+  disabled,
+  onChange,
+}: {
+  label: string
+  value: string
+  options: ComposerMenuOption[]
+  emptyLabel: string
+  disabled?: boolean
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const root = useRef<HTMLDivElement>(null)
+  const selected = options.find((option) => option.value === value)
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as Node)) setOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  return (
+    <div className={`composer-menu${open ? ' composer-menu--open' : ''}`} ref={root}>
+      <button
+        className="composer-menu__trigger"
+        type="button"
+        disabled={disabled}
+        aria-label={label}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="composer-menu__label">{label}</span>
+        <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="composer-menu__popover" role="listbox" aria-label={label}>
+          {options.length > 0 ? options.map((option) => (
+            <button
+              className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+              key={option.value}
+              type="button"
+              role="option"
+              aria-selected={option.value === value}
+              onClick={() => {
+                onChange(option.value)
+                setOpen(false)
+              }}
+            >
+              <span className="composer-menu__option-copy">
+                <strong>{option.label}</strong>
+                {option.description ? <small>{option.description}</small> : null}
+              </span>
+              {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+            </button>
+          )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+        </div>
+      ) : null}
+    </div>
+  )
 }
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
@@ -201,6 +285,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0) && canCompose
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
+    const id = modelIdOf(model)
+    if (!id) return []
+    const label = modelLabelOf(model)
+    return [{ value: id, label, description: label === id ? undefined : id }]
+  })
+  const reasoningOptions: ComposerMenuOption[] = effortOptions.map((option) => ({
+    value: option.reasoningEffort,
+    label: effortLabelOf(option.reasoningEffort),
+    description: option.description,
+  }))
 
   return (
     <div className="remote-shell">
@@ -286,7 +381,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           </div>
         ) : null}
 
-        <form className="message-composer" onSubmit={(event) => void send(event)}>
+        <form className={`message-composer${remote.isRunning ? ' message-composer--running' : ''}`} onSubmit={(event) => void send(event)}>
           <input ref={imageInput} className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} />
           {attachedImages.length > 0 ? (
             <div className="composer-images" aria-label="待发送图片">
@@ -297,23 +392,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
           <div className="message-composer__footer">
             <div className="composer-preferences">
-              <label className="model-picker" title="模型在下一条消息开始时生效">
-                <span>模型</span>
-                <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={!canCompose || remote.models.length === 0}>
-                  {remote.models.length === 0 ? <option value="">读取模型…</option> : null}
-                  {remote.models.map((model) => {
-                    const id = modelIdOf(model)
-                    return id ? <option key={id} value={id}>{modelLabelOf(model)}</option> : null
-                  })}
-                </select>
-              </label>
-              <label className="effort-picker" title="思考强度在下一条消息开始时生效">
-                <span>思考</span>
-                <select value={selectedEffort} onChange={(event) => setSelectedEffort(event.target.value)} disabled={!canCompose || effortOptions.length === 0}>
-                  {effortOptions.length === 0 ? <option value="">默认</option> : null}
-                  {effortOptions.map((option) => <option key={option.reasoningEffort} value={option.reasoningEffort}>{effortLabelOf(option.reasoningEffort)}</option>)}
-                </select>
-              </label>
+              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={setSelectedModel} />
+              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || effortOptions.length === 0} onChange={setSelectedEffort} />
               <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div className="composer-actions">

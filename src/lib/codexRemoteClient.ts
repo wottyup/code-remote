@@ -105,6 +105,21 @@ function plainText(value: unknown): string {
   }).join('')
 }
 
+function imagesFromContent(value: unknown): CodexMessageImage[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((part, index) => {
+    if (!part || typeof part !== 'object') return []
+    const image = part as Record<string, unknown>
+    if (image.type !== 'localImage' || typeof image.data !== 'string' || image.data.length === 0) return []
+    const mediaType = typeof image.mediaType === 'string'
+      ? image.mediaType
+      : typeof image.media_type === 'string' ? image.media_type : 'image/png'
+    if (!mediaType.startsWith('image/')) return []
+    const name = typeof image.name === 'string' && image.name.length > 0 ? image.name : `image-${index + 1}`
+    return [{ name, previewUrl: `data:${mediaType};base64,${image.data}` }]
+  })
+}
+
 function timestamp(value: unknown) {
   if (typeof value === 'number') {
     const normalized = value > 10_000_000_000 ? value : value * 1000
@@ -126,12 +141,14 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const item = itemValue as Record<string, unknown>
       if (item.type !== 'userMessage' && item.type !== 'agentMessage') continue
       const text = item.type === 'userMessage' ? plainText(item.content) : plainText(item.text)
-      if (!text) continue
+      const images = item.type === 'userMessage' ? imagesFromContent(item.content) : []
+      if (!text && images.length === 0) continue
       messages.push({
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: item.type === 'userMessage' ? 'user' : 'assistant',
         text,
         createdAt: timestamp(turn.startedAt),
+        ...(images.length > 0 ? { images } : {}),
       })
     }
   }

@@ -68,6 +68,7 @@ IMAGE_EXTENSIONS = {
     "image/webp": ".webp",
     "image/gif": ".gif",
 }
+IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EXTENSIONS.items()}
 MAX_IMAGES_PER_TURN = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
@@ -114,6 +115,51 @@ def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Pat
             with suppress(FileNotFoundError):
                 path.unlink()
         raise
+
+
+def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
+    """Embed images created by this process so a refreshed thread can render them."""
+    image_root = image_directory.resolve()
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return thread
+    for turn in turns:
+        if not isinstance(turn, dict):
+            continue
+        items = turn.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or item.get("type") != "userMessage":
+                continue
+            content = item.get("content")
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if not isinstance(part, dict) or part.get("type") != "localImage":
+                    continue
+                raw_path = part.get("path")
+                if not isinstance(raw_path, str) or not raw_path:
+                    continue
+                try:
+                    image_path = Path(raw_path).expanduser().resolve()
+                    image_path.relative_to(image_root)
+                    if not image_path.is_file():
+                        continue
+                    if image_path.stat().st_size > MAX_IMAGE_BYTES:
+                        continue
+                    data = base64.b64encode(image_path.read_bytes()).decode("ascii")
+                except (OSError, ValueError):
+                    continue
+                media_type = part.get("mediaType")
+                if not isinstance(media_type, str) or media_type not in IMAGE_EXTENSIONS:
+                    media_type = IMAGE_MEDIA_TYPES.get(image_path.suffix.lower())
+                if media_type is None:
+                    continue
+                part["name"] = part.get("name") if isinstance(part.get("name"), str) else image_path.name
+                part["mediaType"] = media_type
+                part["data"] = data
+    return thread
 
 
 class PairingAuth:
@@ -248,7 +294,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.17", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.18", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
@@ -323,7 +369,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/api/v1/codex/threads/{thread_id}")
     async def read_thread(thread_id: str) -> dict[str, Any]:
         try:
-            return await app_server.read_thread(thread_id)
+            thread = await app_server.read_thread(thread_id)
+            return enrich_thread_images(thread, image_directory)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
