@@ -58,6 +58,9 @@ class CodexAppServer:
     def unsubscribe(self, queue: asyncio.Queue[dict[str, Any]]) -> None:
         self._subscribers.discard(queue)
 
+    async def notify_threads_changed(self) -> None:
+        await self._emit({"type": "threads.changed"})
+
     async def connect(self) -> dict[str, Any]:
         await self._ensure_started()
         return self.status()
@@ -170,7 +173,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.2",
+                        "version": "0.0.3",
                     },
                     "capabilities": {
                         "experimentalApi": False,

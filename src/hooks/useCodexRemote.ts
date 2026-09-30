@@ -59,6 +59,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [onUnauthorized, token])
 
   const handleEvent = useCallback((event: RemoteEvent) => {
+    if (event.type === 'threads.changed') {
+      void refreshThreads()
+      return
+    }
     if (event.type === 'connection') {
       setRuntime({
         available: Boolean(event.available),
@@ -155,6 +159,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         setConnection(nextState)
         if (nextState === 'connected') {
           retryDelay = 500
+          void refreshThreads()
           if (activeThreadId.current) void loadThread(activeThreadId.current)
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
           if (retryTimer !== undefined) return

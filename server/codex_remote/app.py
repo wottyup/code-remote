@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import logging
 import os
 import secrets
 import time
@@ -13,8 +14,38 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from watchfiles import awatch
 
 from .codex_app_server import CodexAppServer, CodexRuntimeError
+
+logger = logging.getLogger(__name__)
+
+
+async def watch_codex_history(app_server: CodexAppServer) -> None:
+    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+    sessions = codex_home / "sessions"
+    watch_root = sessions if sessions.is_dir() else codex_home
+    if not watch_root.is_dir():
+        return
+
+    def is_session_change(_change: object, changed_path: str) -> bool:
+        path = Path(changed_path).resolve()
+        if path == sessions:
+            return True
+        try:
+            relative = path.relative_to(sessions)
+        except ValueError:
+            return False
+        return relative.suffix == ".jsonl" or not relative.suffix
+
+    try:
+        async for changes in awatch(watch_root, watch_filter=is_session_change, debounce=500):
+            if changes:
+                await app_server.notify_threads_changed()
+    except asyncio.CancelledError:
+        raise
+    except OSError:
+        logger.exception("Could not watch Codex session history")
 
 
 class PairRequest(BaseModel):
@@ -60,12 +91,16 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
+        history_watcher = asyncio.create_task(watch_codex_history(app_server))
         try:
             yield
         finally:
+            history_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await history_watcher
             await app_server.close()
 
-    app = FastAPI(title="Codex Remote", version="0.0.2", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.3", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
