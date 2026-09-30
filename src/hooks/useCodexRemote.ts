@@ -148,6 +148,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const activeThreadId = useRef<string | null>(null)
+  const activeTurnId = useRef<string | null>(null)
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
@@ -187,6 +188,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const turns = Array.isArray(thread.turns) ? thread.turns : []
       const latest = turns.at(-1) as Record<string, unknown> | undefined
       const running = latest?.status === 'inProgress' || latest?.status === 'running'
+      const latestTurnId = typeof latest?.id === 'string' ? latest.id : null
+      if (running && latestTurnId) activeTurnId.current = latestTurnId
+      else if (!running) activeTurnId.current = null
       setIsRunning(running)
       if (writerConflictRef.current) {
         if (running) {
@@ -262,6 +266,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (eventThreadId && eventThreadId !== activeThreadId.current) return
 
     if (event.method === 'turn/started') {
+      const turn = params.turn as Record<string, unknown> | undefined
+      const turnId = typeof turn?.id === 'string'
+        ? turn.id
+        : typeof params.turnId === 'string' ? params.turnId : null
+      if (turnId) activeTurnId.current = turnId
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
@@ -272,6 +281,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'turn/completed') {
+      activeTurnId.current = null
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
@@ -411,6 +421,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const selectThread = useCallback(async (thread: CodexThread) => {
     const requestId = ++loadRequest.current
     activeThreadId.current = thread.id
+    activeTurnId.current = null
     resumedThreadId.current = null
     setActiveThread(thread)
     setMessages([])
@@ -439,6 +450,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     try {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
       activeThreadId.current = thread.id
+      activeTurnId.current = null
       resumedThreadId.current = thread.id
       setActiveThread(thread)
       setMessages([])
@@ -499,25 +511,27 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         resumedThreadId.current = thread.id
       }
       try {
-        await codexRemoteClient.startTurn(token, thread.id, {
+        const turnResult = await codexRemoteClient.startTurn(token, thread.id, {
           prompt: requestText,
           images: input.images,
           model: input.model,
           effort: input.effort,
           approvalPolicy: input.approvalPolicy,
         })
+        if (turnResult.turn_id) activeTurnId.current = turnResult.turn_id
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
         await codexRemoteClient.resumeThread(token, thread.id)
         resumedThreadId.current = thread.id
-        await codexRemoteClient.startTurn(token, thread.id, {
+        const turnResult = await codexRemoteClient.startTurn(token, thread.id, {
           prompt: requestText,
           images: input.images,
           model: input.model,
           effort: input.effort,
           approvalPolicy: input.approvalPolicy,
         })
+        if (turnResult.turn_id) activeTurnId.current = turnResult.turn_id
       }
       return true
     } catch (reason) {
@@ -544,7 +558,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const interrupt = useCallback(async () => {
     if (!activeThread) return
     try {
-      await codexRemoteClient.interrupt(token, activeThread.id)
+      await codexRemoteClient.interrupt(token, activeThread.id, activeTurnId.current)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setError(reason instanceof Error ? reason.message : '停止 Codex 任务失败')

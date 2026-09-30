@@ -224,6 +224,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote.messages, remote.isRunning, remote.activity])
 
   useEffect(() => {
+    const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented || !remote.isRunning) return
+      event.preventDefault()
+      void remote.interrupt()
+    }
+    document.addEventListener('keydown', interruptOnEscape)
+    return () => document.removeEventListener('keydown', interruptOnEscape)
+  }, [remote.interrupt, remote.isRunning])
+
+  useEffect(() => {
     const moveResize = (event: globalThis.PointerEvent) => {
       const resize = resizeState.current
       if (!resize) return

@@ -238,8 +238,11 @@ export const codexRemoteClient = {
       }),
     })
   },
-  interrupt(token: string, threadId: string) {
-    return request<{ interrupted: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, { method: 'POST' })
+  interrupt(token: string, threadId: string, turnId?: string | null) {
+    return request<{ interrupted: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, {
+      method: 'POST',
+      body: JSON.stringify({ turn_id: turnId }),
+    })
   },
   connect(token: string, onEvent: (event: RemoteEvent) => void, onState: (state: 'connecting' | 'connected' | 'disconnected' | 'unavailable') => void) {
     const url = new URL('/api/v1/codex/ws', window.location.origin)

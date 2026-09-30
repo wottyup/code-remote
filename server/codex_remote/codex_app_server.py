@@ -31,6 +31,7 @@ class CodexAppServer:
         self._request_id = 1
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
+        self._active_turn_ids: dict[str, str] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
 
@@ -140,10 +141,17 @@ class CodexAppServer:
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
-        return await self.request("turn/start", params)
+        result = await self.request("turn/start", params)
+        turn = result.get("turn")
+        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
+            self._active_turn_ids[thread_id] = turn["id"]
+        return result
 
-    async def interrupt(self, thread_id: str) -> dict[str, Any]:
-        return await self.request("turn/interrupt", {"threadId": thread_id})
+    async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
+        active_turn_id = turn_id or self._active_turn_ids.get(thread_id)
+        if not active_turn_id:
+            raise CodexRuntimeError("Codex 当前没有可中断的任务")
+        return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
 
     async def answer_server_request(self, request_id: str | int, decision: str) -> None:
         if request_id not in self._server_requests:
@@ -163,6 +171,7 @@ class CodexAppServer:
         if process is None:
             return
         self._server_requests.clear()
+        self._active_turn_ids.clear()
         if process.stdin and not process.stdin.is_closing():
             process.stdin.close()
         try:
@@ -213,7 +222,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.21",
+                        "version": "0.0.22",
                     },
                     "capabilities": {
                         "experimentalApi": False,
@@ -323,7 +332,28 @@ class CodexAppServer:
                 "params": message.get("params", {}),
             })
         else:
-            await self._emit({"type": "notification", "method": method, "params": message.get("params", {})})
+            params = message.get("params", {})
+            if not isinstance(params, dict):
+                params = {}
+            turn = params.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) else params.get("turnId")
+            if not isinstance(turn_id, str):
+                turn_id = None
+            thread_id = params.get("threadId")
+            if not isinstance(thread_id, str) and isinstance(turn, dict):
+                candidate = turn.get("threadId")
+                thread_id = candidate if isinstance(candidate, str) else None
+            if method == "turn/started" and thread_id and turn_id:
+                self._active_turn_ids[thread_id] = turn_id
+            elif method == "turn/completed" and turn_id:
+                if thread_id:
+                    if self._active_turn_ids.get(thread_id) == turn_id:
+                        self._active_turn_ids.pop(thread_id, None)
+                else:
+                    for active_thread_id, active_turn_id in tuple(self._active_turn_ids.items()):
+                        if active_turn_id == turn_id:
+                            self._active_turn_ids.pop(active_thread_id, None)
+            await self._emit({"type": "notification", "method": method, "params": params})
 
     async def _emit(self, event: dict[str, Any]) -> None:
         for queue in tuple(self._subscribers):
@@ -352,6 +382,7 @@ class CodexAppServer:
         self._process = None
         self._initialized = False
         self._server_requests.clear()
+        self._active_turn_ids.clear()
         if process and process.returncode is None:
             process.terminate()
             try:

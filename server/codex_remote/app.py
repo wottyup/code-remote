@@ -93,6 +93,10 @@ class TurnRequest(BaseModel):
     approval_policy: ApprovalPolicy | None = None
 
 
+class InterruptRequest(BaseModel):
+    turn_id: str | None = Field(default=None, max_length=200)
+
+
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
     paths: list[Path] = []
     total_size = 0
@@ -296,7 +300,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.21", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.22", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
@@ -410,9 +414,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")
-    async def interrupt_turn(thread_id: str) -> dict[str, bool]:
+    async def interrupt_turn(thread_id: str, body: InterruptRequest | None = None) -> dict[str, bool]:
         try:
-            await app_server.interrupt(thread_id)
+            await app_server.interrupt(thread_id, body.turn_id if body else None)
             return {"interrupted": True}
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
