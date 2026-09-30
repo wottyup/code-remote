@@ -536,9 +536,35 @@ function MessageContent({ text }: { text: string }) {
   return (
     <div className="chat-message__content">
       {blocks.map((block, index) => block.type === 'code'
-        ? <pre className="chat-message__code" key={`code-${index}`}><code data-language={block.language}>{block.value}</code></pre>
+        ? <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
         : <div className="chat-message__text" key={`text-${index}`}>{block.value}</div>)}
     </div>
+  )
+}
+
+function CodeBlock({ value, language }: { value: string; language?: string }) {
+  const [copied, setCopied] = useState(false)
+  const resetTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => () => {
+    if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
+  }, [])
+
+  async function copyCode() {
+    if (!(await copyText(value))) return
+    setCopied(true)
+    if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
+    resetTimer.current = window.setTimeout(() => setCopied(false), 1600)
+  }
+
+  return (
+    <pre className="chat-message__code">
+      <code data-language={language}>{value}</code>
+      <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
+        {copied ? <Check size={13} /> : <Copy size={13} />}
+        {copied ? '已复制' : '复制'}
+      </button>
+    </pre>
   )
 }
 
