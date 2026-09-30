@@ -45,6 +45,11 @@ const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 interface ComposerPreferences {
   model?: string
   effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+}
+
+function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
+  return value === 'onRequest' || value === 'unlessTrusted' || value === 'never' ? value : undefined
 }
 
 function readComposerPreferences(): ComposerPreferences {
@@ -56,6 +61,7 @@ function readComposerPreferences(): ComposerPreferences {
     return {
       model: typeof parsed.model === 'string' ? parsed.model : undefined,
       effort: typeof parsed.effort === 'string' ? parsed.effort : undefined,
+      approvalPolicy: approvalPolicyOf(parsed.approvalPolicy),
     }
   } catch {
     return {}
@@ -233,7 +239,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
   const [selectedEffort, setSelectedEffort] = useState(() => readComposerPreferences().effort ?? '')
-  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>('onRequest')
+  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>(() => readComposerPreferences().approvalPolicy ?? 'onRequest')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -304,9 +310,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [chosenModel, effortOptions, remote.models.length, selectedEffort])
 
   useEffect(() => {
-    if (!selectedModel && !selectedEffort) return
-    saveComposerPreferences({ model: selectedModel || undefined, effort: selectedEffort || undefined })
-  }, [selectedEffort, selectedModel])
+    if (!selectedModel && !selectedEffort && selectedApprovalPolicy === 'onRequest') return
+    saveComposerPreferences({
+      model: selectedModel || undefined,
+      effort: selectedEffort || undefined,
+      approvalPolicy: selectedApprovalPolicy,
+    })
+  }, [selectedApprovalPolicy, selectedEffort, selectedModel])
 
   async function createThread() {
     setSidebarOpen(false)
