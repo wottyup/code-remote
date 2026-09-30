@@ -506,6 +506,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         <section className="message-stream" ref={messageContainer} aria-live="polite" aria-label="Codex 对话">
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
+              <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
               <span className="welcome-state__mark">C</span>
               <h1>你想在本机项目中完成什么？</h1>
               <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>

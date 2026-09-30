@@ -57,12 +57,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-chat__title strong { overflow: hidden; color: #f0f1f4; font-size: 13px; font-weight: 620; letter-spacing: -.02em; text-overflow: ellipsis; white-space: nowrap; }
 .remote-chat__title span { overflow: hidden; max-width: min(55vw, 530px); color: #747b86; font: 9.5px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
 .remote-chat__title .remote-chat__eyebrow { color: #858da2; font: 8px/1.2 Inter, ui-sans-serif, sans-serif; letter-spacing: .11em; text-transform: uppercase; }
-.connection-label { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; color: #878d97; font-size: 10px; }
+.connection-label { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid rgba(146, 157, 184, .16); border-radius: 999px; background: rgba(27, 30, 37, .72); color: #878d97; font-size: 9px; }
 .connection-label--connected { color: #9abea7; }
 .connection-label--unavailable, .connection-label--disconnected { color: #ca9294; }
 .message-stream { grid-row: 2; display: flex; min-height: 0; flex-direction: column; gap: 24px; overflow-y: auto; padding: 32px 25px 28px; scrollbar-width: thin; scrollbar-color: #383b42 transparent; }
-.welcome-state { display: grid; align-content: center; justify-items: center; min-height: 100%; margin: auto; padding: 28px 10px; text-align: center; }
-.welcome-state__mark { width: 48px; height: 48px; margin-bottom: 18px; border-radius: 15px; box-shadow: 0 12px 34px rgba(0, 0, 0, .24), 0 0 0 5px rgba(170, 186, 255, .04); font-size: 23px; }
+.welcome-state { position: relative; display: grid; align-content: center; justify-items: center; min-height: 100%; margin: auto; padding: 28px 10px; text-align: center; }
+.welcome-state::before { position: absolute; z-index: -1; top: 50%; left: 50%; width: min(86vw, 620px); height: 330px; transform: translate(-50%, -52%); border-radius: 50%; background: radial-gradient(ellipse, rgba(93, 107, 164, .14), rgba(30, 33, 43, .04) 48%, transparent 72%); content: ''; pointer-events: none; }
+.welcome-state__eyebrow { margin-bottom: 13px; color: #8791b0; font-size: 8px; font-weight: 650; letter-spacing: .18em; }
+.welcome-state__mark { width: 52px; height: 52px; margin-bottom: 19px; border-radius: 16px; box-shadow: 0 14px 38px rgba(0, 0, 0, .28), 0 0 0 6px rgba(170, 186, 255, .06); font-size: 24px; }
 .welcome-state h1 { margin: 0; color: #f0f1f4; font-size: clamp(18px, 2.5vw, 24px); font-weight: 600; letter-spacing: -.04em; }
 .welcome-state p { margin: 10px 0 22px; color: #858b95; font-size: 11px; }
 .prompt-suggestions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
@@ -225,25 +227,30 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-sidebar--open { transform: translateX(0); }
   .remote-sidebar__close, .menu-button { display: grid; }
   .sidebar-backdrop { position: fixed; z-index: 1; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, .56); }
-  .remote-chat { position: relative; width: 100%; height: 100%; grid-template-rows: 58px minmax(0, 1fr) auto auto; }
-  .remote-chat__header { padding: 0 11px; }
+  .remote-chat { position: relative; width: 100%; height: 100%; grid-template-rows: 64px minmax(0, 1fr) auto auto; }
+  .remote-chat__header { padding: 0 16px; }
   .remote-chat__title-wrap { gap: 5px; }
   .remote-chat__controls { gap: 7px; }
   .composer-menu__trigger { max-width: 145px; }
   .composer-menu__label { display: none; }
   .composer-menu__popover { max-width: min(270px, calc(100vw - 24px)); }
   .remote-chat__title span { max-width: 47vw; }
-  .connection-label span { display: none; }
-  .message-stream { gap: 21px; padding: 20px 16px 18px; }
+  .connection-label { padding: 5px 8px; font-size: 8px; }
+  .connection-label span { display: inline; }
+  .message-stream { gap: 21px; padding: 24px 16px 18px; }
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__content { font-size: 12px; }
   .chat-message--user .chat-message__body { min-width: min(7rem, 100%); max-width: min(100%, 84vw); }
   .approval-card { width: 100%; margin-inline: 0; }
+  .welcome-state { padding-inline: 4px; }
+  .welcome-state__eyebrow { margin-bottom: 11px; font-size: 7px; letter-spacing: .15em; }
   .welcome-state p { max-width: 290px; font-size: 11px; line-height: 1.6; }
   .prompt-suggestions { display: grid; width: min(100%, 290px); }
-  .message-composer { width: calc(100% - 32px); margin-bottom: max(8px, env(safe-area-inset-bottom)); padding: 8px 8px 6px; }
-  .composer-editor { min-height: 42px; }
+  .message-composer { width: calc(100% - 32px); margin-bottom: max(8px, env(safe-area-inset-bottom)); padding: 11px 11px 8px; border-radius: 20px; }
+  .composer-editor { min-height: 46px; }
+  .message-composer textarea { padding-top: 9px; padding-bottom: 9px; font-size: 13px; }
+  .message-composer__footer { min-height: 31px; margin-top: 4px; }
   .composer-hint { display: none; }
   .remote-error { width: calc(100% - 32px); }
   .pair-card { padding: 25px 22px; }
