@@ -505,7 +505,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
           {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={() => void copyMessage(message)} />)}
-          {remote.fileChanges.map((change) => <FileChangeCard key={change.id} change={change} />)}
+          {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -628,27 +628,76 @@ function CodeBlock({ value, language }: { value: string; language?: string }) {
   )
 }
 
-function FileChangeCard({ change }: { change: CodexFileChange }) {
-  const additions = change.changes.reduce((total, item) => total + item.additions, 0)
-  const deletions = change.changes.reduce((total, item) => total + item.deletions, 0)
+function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
+  const [expanded, setExpanded] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const files = [...changes.reduce((entries, change) => {
+    for (const item of change.changes) {
+      const previous = entries.get(item.path)
+      if (!previous) {
+        entries.set(item.path, { ...item })
+        continue
+      }
+      const diffs = [previous.diff, item.diff].filter((diff): diff is string => Boolean(diff))
+      entries.set(item.path, {
+        ...previous,
+        kind: item.kind ?? previous.kind,
+        diff: diffs.length > 0 ? diffs.join('\n\n') : undefined,
+        additions: previous.additions + item.additions,
+        deletions: previous.deletions + item.deletions,
+      })
+    }
+    return entries
+  }, new Map<string, CodexFileChange['changes'][number]>()).values()]
+  const additions = files.reduce((total, item) => total + item.additions, 0)
+  const deletions = files.reduce((total, item) => total + item.deletions, 0)
+  const inProgress = changes.some((change) => change.status === 'inProgress')
+  const showAll = expanded || reviewing
+  const visibleFiles = showAll ? files : files.slice(0, 3)
+  const hiddenCount = files.length - 3
+
+  function toggleFiles() {
+    if (showAll) {
+      setExpanded(false)
+      setReviewing(false)
+      return
+    }
+    setExpanded(true)
+  }
+
   return (
-    <article className={`file-change-card file-change-card--${change.status}`}>
-      <div className="file-change-card__heading">
-        <FileText size={16} />
-        <div><strong>{change.changes.length === 1 ? change.changes[0].path : `${change.changes.length} 个文件已编辑`}</strong><small>{change.status === 'inProgress' ? '正在修改' : '已完成修改'}</small></div>
-        <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span>
-      </div>
-      <details className="file-change-card__details" open={change.status === 'inProgress'}>
-        <summary>查看更改内容</summary>
-        <div className="file-change-card__files">
-          {change.changes.map((item) => (
-            <div className="file-change-card__file" key={item.path}>
-              <span>{item.path}</span>
-              {item.diff ? <pre>{item.diff}</pre> : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>}
-            </div>
-          ))}
+    <article className={`file-change-card${inProgress ? ' file-change-card--inProgress' : ''}`}>
+      <header className="file-change-card__heading">
+        <span className="file-change-card__icon"><FileText size={15} /></span>
+        <div className="file-change-card__summary">
+          <strong>{inProgress ? '正在编辑' : '已编辑'} {files.length} 个文件</strong>
+          <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span>
         </div>
-      </details>
+        <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
+          {reviewing ? '收起审核' : '审核'}
+        </button>
+      </header>
+      <div className="file-change-card__files">
+        {visibleFiles.map((item) => (
+          <div className="file-change-card__file" key={item.path}>
+            <div className="file-change-card__file-row">
+              <span title={item.path}>{item.path}</span>
+              <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span>
+            </div>
+            {reviewing ? (
+              item.diff
+                ? <pre>{item.diff}</pre>
+                : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {hiddenCount > 0 ? (
+        <button className="file-change-card__more" type="button" aria-expanded={showAll} onClick={toggleFiles}>
+          {showAll ? '收起文件' : `再显示 ${hiddenCount} 个文件`}
+          <ChevronDown size={14} />
+        </button>
+      ) : null}
     </article>
   )
 }

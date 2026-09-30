@@ -311,6 +311,19 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setActivity(activityForItem(item))
       return
     }
+    if (event.method === 'item/fileChange/patchUpdated') {
+      const itemId = typeof params.itemId === 'string' ? params.itemId : `file-change-${Date.now()}`
+      const fileChange = fileChangeForItem({
+        type: 'fileChange',
+        id: itemId,
+        status: 'inProgress',
+        changes: params.changes,
+      })
+      if (fileChange) setFileChanges((current) => upsertFileChange(current, fileChange))
+      setIsRunning(true)
+      setActivity({ label: '正在修改文件', detail: fileChange ? `${fileChange.changes.length} 个文件` : undefined })
+      return
+    }
     if (event.method === 'item/agentMessage/delta') {
       const itemId = typeof params.itemId === 'string' ? params.itemId : `stream-${Date.now()}`
       const delta = typeof params.delta === 'string' ? params.delta : ''
