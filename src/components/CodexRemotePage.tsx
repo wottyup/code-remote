@@ -163,7 +163,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ) : null}
         </section>
 
-        {remote.error ? <div className="remote-error" role="alert"><AlertTriangle size={15} /><span>{remote.error}</span></div> : null}
+        {remote.error ? (
+          <div className="remote-error" role="alert">
+            <AlertTriangle size={15} />
+            <span>{remote.error}</span>
+            {remote.writerConflict ? <button type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
+          </div>
+        ) : null}
 
         <form className="message-composer" onSubmit={(event) => void send(event)}>
           <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />

@@ -189,7 +189,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await history_watcher
             await app_server.close()
 
-    app = FastAPI(title="Codex Remote", version="0.0.12", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.13", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(

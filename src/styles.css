@@ -88,6 +88,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .approval-card__actions .approval-card__accept { border-color: #806840; background: #3b301f; color: #eed29f; }
 .remote-error { grid-row: 3; display: flex; align-items: center; gap: 8px; width: min(calc(100% - 44px), 840px); margin: 0 auto 8px; padding: 8px 10px; border: 1px solid rgba(173, 86, 91, .36); border-radius: 8px; background: rgba(66, 30, 34, .27); color: #dda0a3; font-size: 10px; }
 .remote-error span { flex: 1; }
+.remote-error button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 27px; padding: 0 8px; border: 1px solid rgba(197, 124, 128, .55); border-radius: 6px; background: rgba(83, 36, 40, .55); color: #efb2b5; cursor: pointer; font-size: 9px; }
+.remote-error button:hover:not(:disabled) { border-color: #e4a1a5; background: rgba(104, 45, 50, .7); }
+.remote-error button:disabled { cursor: not-allowed; opacity: .5; }
 .message-composer { grid-row: 4; width: min(calc(100% - 44px), 840px); margin: 0 auto 19px; padding: 9px 10px 7px; border: 1px solid #373a42; border-radius: 12px; background: #1a1c21; box-shadow: 0 8px 24px rgba(0, 0, 0, .2); }
 .message-composer:focus-within { border-color: #535862; }
 .message-composer textarea { display: block; width: 100%; min-height: 45px; max-height: 170px; resize: vertical; padding: 4px 2px 8px; border: 0; outline: 0; background: transparent; color: #e7e9ed; font: 12px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; }
