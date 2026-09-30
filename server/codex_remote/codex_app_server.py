@@ -173,7 +173,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.3",
+                        "version": "0.0.7",
                     },
                     "capabilities": {
                         "experimentalApi": False,

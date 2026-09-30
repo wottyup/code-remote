@@ -114,6 +114,15 @@ function threadUpdatedAt(thread: CodexThread): number {
   return 0
 }
 
+function uniqueThreads(threads: CodexThread[]) {
+  const latestById = new Map<string, CodexThread>()
+  for (const thread of threads) {
+    const current = latestById.get(thread.id)
+    if (!current || threadUpdatedAt(thread) > threadUpdatedAt(current)) latestById.set(thread.id, thread)
+  }
+  return [...latestById.values()]
+}
+
 export const codexRemoteClient = {
   pair(code: string) {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
@@ -126,7 +135,7 @@ export const codexRemoteClient = {
   },
   threads(token: string) {
     return request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>
-      threads.sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left)),
+      uniqueThreads(threads).sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left)),
     )
   },
   readThread(token: string, threadId: string) {
