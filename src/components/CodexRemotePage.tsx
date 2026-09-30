@@ -84,7 +84,6 @@ function timeOf(thread: CodexThread) {
 interface ComposerMenuOption {
   value: string
   label: string
-  description?: string
 }
 
 function ComposerMenu({
@@ -153,7 +152,6 @@ function ComposerMenu({
             >
               <span className="composer-menu__option-copy">
                 <strong>{option.label}</strong>
-                {option.description ? <small>{option.description}</small> : null}
               </span>
               {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
             </button>
@@ -288,13 +286,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
     const id = modelIdOf(model)
     if (!id) return []
-    const label = modelLabelOf(model)
-    return [{ value: id, label, description: label === id ? undefined : id }]
+    return [{ value: id, label: modelLabelOf(model) }]
   })
   const reasoningOptions: ComposerMenuOption[] = effortOptions.map((option) => ({
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
-    description: option.description,
   }))
 
   return (

@@ -133,7 +133,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-menu__option > svg { flex: 0 0 auto; color: #aabaff; }
 .composer-menu__option-copy { display: grid; min-width: 0; gap: 2px; }
 .composer-menu__option-copy strong { overflow: hidden; font-size: 10px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
-.composer-menu__option-copy small { overflow: hidden; max-width: 250px; color: #7f8797; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
 .composer-menu__empty { padding: 8px 9px; color: #858b95; font-size: 9px; }
 .composer-hint { display: flex; align-items: center; gap: 6px; overflow: hidden; color: #7e848e; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .composer-hint svg { flex: 0 0 auto; color: #8c929c; }
