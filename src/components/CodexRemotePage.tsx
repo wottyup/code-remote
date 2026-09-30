@@ -263,7 +263,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const imageInput = useRef<HTMLInputElement>(null)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
 
@@ -452,6 +451,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
+  const canAttachImages = canCompose && modelSupportsImages
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
     const id = modelIdOf(model)
@@ -551,7 +551,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         ) : null}
 
         <form className={`message-composer${remote.isRunning ? ' message-composer--running' : ''}`} onSubmit={(event) => void send(event)}>
-          <input ref={imageInput} className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} />
           {attachedImages.length > 0 ? (
             <div className="composer-images" aria-label="待发送图片">
               {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
@@ -577,7 +576,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div className="composer-actions">
-              <button className="attach-button" type="button" onClick={() => imageInput.current?.click()} disabled={!canCompose || !modelSupportsImages} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'} aria-label="附加图片"><ImagePlus size={16} /></button>
+              <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
+                <ImagePlus size={16} />
+                <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
+              </span>
               {remote.writerConflict ? (
                 <button className="stop-button" type="button" onClick={remote.refreshActiveThread}><RefreshCw size={13} />刷新状态</button>
               ) : remote.isRunning ? (
