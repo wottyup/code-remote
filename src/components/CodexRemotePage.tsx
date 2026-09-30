@@ -40,6 +40,36 @@ const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const minComposerHeight = 45
 const maxComposerHeight = 260
+const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
+
+interface ComposerPreferences {
+  model?: string
+  effort?: string
+}
+
+function readComposerPreferences(): ComposerPreferences {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(composerPreferencesStorageKey)
+    if (!value) return {}
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    return {
+      model: typeof parsed.model === 'string' ? parsed.model : undefined,
+      effort: typeof parsed.effort === 'string' ? parsed.effort : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+function saveComposerPreferences(preferences: ComposerPreferences) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(composerPreferencesStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Ignore storage restrictions; the composer still works for this session.
+  }
+}
 
 function modelIdOf(model: CodexModel) {
   return model.model || model.id || ''
@@ -201,8 +231,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
-  const [selectedModel, setSelectedModel] = useState('')
-  const [selectedEffort, setSelectedEffort] = useState('')
+  const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
+  const [selectedEffort, setSelectedEffort] = useState(() => readComposerPreferences().effort ?? '')
   const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>('onRequest')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
@@ -264,13 +294,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote.models, selectedModel])
 
   useEffect(() => {
+    if (remote.models.length === 0 || !chosenModel) return
     if (effortOptions.length === 0) {
       setSelectedEffort('')
       return
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
     setSelectedEffort(chosenModel?.defaultReasoningEffort ?? effortOptions[0].reasoningEffort)
-  }, [chosenModel, effortOptions, selectedEffort])
+  }, [chosenModel, effortOptions, remote.models.length, selectedEffort])
+
+  useEffect(() => {
+    if (!selectedModel && !selectedEffort) return
+    saveComposerPreferences({ model: selectedModel || undefined, effort: selectedEffort || undefined })
+  }, [selectedEffort, selectedModel])
 
   async function createThread() {
     setSidebarOpen(false)
