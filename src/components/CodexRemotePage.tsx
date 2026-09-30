@@ -18,7 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange } from '../hooks/useCodexRemote'
-import type { CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
+import type { CodexApprovalPolicy, CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
   token: string
@@ -52,6 +52,12 @@ function modelLabelOf(model: CodexModel) {
 function effortLabelOf(effort: string) {
   return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' } as Record<string, string>)[effort] ?? effort
 }
+
+const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
+  { value: 'onRequest', label: '请求批准' },
+  { value: 'unlessTrusted', label: '帮我批准' },
+  { value: 'never', label: '完全访问权限' },
+]
 
 function readImage(file: File): Promise<CodexImageAttachment> {
   return new Promise((resolve, reject) => {
@@ -197,6 +203,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState('')
   const [selectedEffort, setSelectedEffort] = useState('')
+  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>('onRequest')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -257,7 +264,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   async function createThread() {
     setSidebarOpen(false)
-    await remote.createThread(selectedModel || undefined)
+    await remote.createThread(selectedModel || undefined, selectedApprovalPolicy)
     composer.current?.focus()
   }
 
@@ -275,7 +282,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       return
     }
     setSending(true)
-    if (await remote.sendMessage({ prompt, images: attachedImages, document: attachedDocument || undefined, model: selectedModel || undefined, effort: selectedEffort || undefined })) {
+    if (await remote.sendMessage({
+      prompt,
+      images: attachedImages,
+      document: attachedDocument || undefined,
+      model: selectedModel || undefined,
+      effort: selectedEffort || undefined,
+      approvalPolicy: selectedApprovalPolicy,
+    })) {
       setDraft('')
       setAttachedImages([])
       setAttachedDocument(null)
@@ -376,6 +390,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   }))
+  const authorizationOptions: ComposerMenuOption[] = approvalPolicyOptions
 
   return (
     <div className="remote-shell">
@@ -485,6 +500,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             <div className="composer-preferences">
               <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={setSelectedModel} />
               <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || effortOptions.length === 0} onChange={setSelectedEffort} />
+              <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(value) => setSelectedApprovalPolicy(value as CodexApprovalPolicy)} />
               <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div className="composer-actions">

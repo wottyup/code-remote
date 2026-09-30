@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from watchfiles import awatch
 
-from .codex_app_server import CodexAppServer, CodexRuntimeError
+from .codex_app_server import ApprovalPolicy, CodexAppServer, CodexRuntimeError
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +76,7 @@ MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
 
 class ThreadStartRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
+    approval_policy: ApprovalPolicy | None = None
 
 
 class TurnImage(BaseModel):
@@ -89,6 +90,7 @@ class TurnRequest(BaseModel):
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
+    approval_policy: ApprovalPolicy | None = None
 
 
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
@@ -294,7 +296,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.19", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.20", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
@@ -362,7 +364,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads", status_code=status.HTTP_201_CREATED)
     async def create_thread(body: ThreadStartRequest) -> dict[str, Any]:
         try:
-            return await app_server.start_thread(body.model.strip() or None if body.model else None)
+            return await app_server.start_thread(
+                body.model.strip() or None if body.model else None,
+                body.approval_policy,
+            )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -394,6 +399,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 image_paths,
                 body.model.strip() or None if body.model else None,
                 body.effort.strip() or None if body.effort else None,
+                body.approval_policy,
             )
             turn = result.get("turn", {})
             return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}

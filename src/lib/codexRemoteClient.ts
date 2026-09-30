@@ -59,6 +59,8 @@ export interface CodexRuntime {
   error: string | null
 }
 
+export type CodexApprovalPolicy = 'onRequest' | 'unlessTrusted' | 'never'
+
 export interface RemoteEvent {
   type: string
   method?: string
@@ -208,19 +210,26 @@ export const codexRemoteClient = {
   models(token: string) {
     return request<CodexModel[]>(token, '/api/v1/codex/models')
   },
-  createThread(token: string, model?: string) {
+  createThread(token: string, model?: string, approvalPolicy?: CodexApprovalPolicy) {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
-      body: JSON.stringify({ model }),
+      body: JSON.stringify({ model, approval_policy: approvalPolicy }),
     })
   },
-  startTurn(token: string, threadId: string, input: { prompt: string; images: CodexImageAttachment[]; model?: string; effort?: string }) {
+  startTurn(token: string, threadId: string, input: {
+    prompt: string
+    images: CodexImageAttachment[]
+    model?: string
+    effort?: string
+    approvalPolicy?: CodexApprovalPolicy
+  }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
         model: input.model,
         effort: input.effort,
+        approval_policy: input.approvalPolicy,
         images: input.images.map((image) => ({
           name: image.name,
           media_type: image.mediaType,

@@ -7,6 +7,7 @@ import {
   type CodexImageAttachment,
   type CodexMessage,
   type CodexModel,
+  type CodexApprovalPolicy,
   type CodexRuntime,
   type CodexThread,
   type RemoteEvent,
@@ -433,10 +434,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [loadThread, onUnauthorized])
 
-  const createThread = useCallback(async (model?: string) => {
+  const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token, model)
+      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
       activeThreadId.current = thread.id
       resumedThreadId.current = thread.id
       setActiveThread(thread)
@@ -460,7 +461,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; document?: CodexDocumentAttachment; model?: string; effort?: string }) => {
+  const sendMessage = useCallback(async (input: {
+    prompt: string
+    images: CodexImageAttachment[]
+    document?: CodexDocumentAttachment
+    model?: string
+    effort?: string
+    approvalPolicy?: CodexApprovalPolicy
+  }) => {
     if (loadingHistory) return false
     const text = input.prompt.trim()
     if (!text && input.images.length === 0 && !input.document) return false
@@ -469,7 +477,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       : ''
     const requestText = `${text}${documentText}`.trim()
     let thread = activeThread
-    if (!thread) thread = await createThread(input.model)
+    if (!thread) thread = await createThread(input.model, input.approvalPolicy)
     if (!thread) return false
     const localId = `local-${Date.now()}`
     setMessages((current) => [...current, {
@@ -491,13 +499,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         resumedThreadId.current = thread.id
       }
       try {
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: requestText, images: input.images, model: input.model, effort: input.effort })
+        await codexRemoteClient.startTurn(token, thread.id, {
+          prompt: requestText,
+          images: input.images,
+          model: input.model,
+          effort: input.effort,
+          approvalPolicy: input.approvalPolicy,
+        })
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
         await codexRemoteClient.resumeThread(token, thread.id)
         resumedThreadId.current = thread.id
-        await codexRemoteClient.startTurn(token, thread.id, { prompt: requestText, images: input.images, model: input.model, effort: input.effort })
+        await codexRemoteClient.startTurn(token, thread.id, {
+          prompt: requestText,
+          images: input.images,
+          model: input.model,
+          effort: input.effort,
+          approvalPolicy: input.approvalPolicy,
+        })
       }
       return true
     } catch (reason) {

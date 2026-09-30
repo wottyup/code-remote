@@ -5,13 +5,16 @@ import json
 import logging
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
 
 class CodexRuntimeError(RuntimeError):
     pass
+
+
+ApprovalPolicy = Literal["onRequest", "unlessTrusted", "never"]
 
 
 class CodexAppServer:
@@ -82,13 +85,20 @@ class CodexAppServer:
         models = result.get("data", [])
         return [model for model in models if isinstance(model, dict)] if isinstance(models, list) else []
 
-    async def start_thread(self, model: str | None = None) -> dict[str, Any]:
+    async def start_thread(
+        self,
+        model: str | None = None,
+        approval_policy: ApprovalPolicy | None = None,
+    ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "cwd": str(self.workspace),
             "serviceName": "codex_remote_web",
         }
         if model:
             params["model"] = model
+        if approval_policy:
+            params["approvalPolicy"] = approval_policy
+            params["sandbox"] = "dangerFullAccess" if approval_policy == "never" else "workspaceWrite"
         result = await self.request("thread/start", params)
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
@@ -109,6 +119,7 @@ class CodexAppServer:
         image_paths: list[Path] | None = None,
         model: str | None = None,
         effort: str | None = None,
+        approval_policy: ApprovalPolicy | None = None,
     ) -> dict[str, Any]:
         if len(prompt) > 32_000:
             raise CodexRuntimeError("消息不能超过 32000 个字符")
@@ -124,6 +135,11 @@ class CodexAppServer:
             params["model"] = model
         if effort:
             params["effort"] = effort
+        if approval_policy:
+            params["approvalPolicy"] = approval_policy
+            params["sandboxPolicy"] = {
+                "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
+            }
         return await self.request("turn/start", params)
 
     async def interrupt(self, thread_id: str) -> dict[str, Any]:
@@ -197,7 +213,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.19",
+                        "version": "0.0.20",
                     },
                     "capabilities": {
                         "experimentalApi": False,

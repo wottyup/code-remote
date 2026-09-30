@@ -98,7 +98,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -13px auto 0; }
 .running-indicator__activity { grid-column: 1; display: flex; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100%; color: #9298a2; font-size: 11px; }
-.approval-card { width: min(100%, 800px); margin: 0 auto 0 39px; padding: 13px; border: 1px solid rgba(191, 147, 81, .4); border-radius: 10px; background: rgba(54, 42, 27, .3); color: #ddd0b8; }
+.approval-card { width: min(100%, 840px); margin: 0 auto; padding: 13px; border: 1px solid rgba(191, 147, 81, .4); border-radius: 10px; background: rgba(54, 42, 27, .3); color: #ddd0b8; }
 .approval-card__heading { display: flex; align-items: center; gap: 8px; color: #e0c18e; font-size: 11px; }
 .approval-card p { margin: 8px 0; color: #b9ad99; font-size: 10px; line-height: 1.55; }
 .approval-card code { display: block; overflow: auto; padding: 8px; border-radius: 6px; background: #141518; color: #ded5c6; font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -166,7 +166,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-menu__value { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
 .composer-menu__trigger > svg { flex: 0 0 auto; color: #8f98aa; }
 .composer-menu__popover { position: absolute; z-index: 20; bottom: calc(100% + 8px); left: 0; display: grid; width: max-content; min-width: 154px; max-width: min(300px, calc(100vw - 24px)); max-height: min(340px, 50vh); gap: 3px; overflow-y: auto; padding: 5px; border: 1px solid rgba(146, 157, 184, .3); border-radius: 11px; background: rgba(25, 28, 36, .96); box-shadow: 0 18px 45px rgba(0, 0, 0, .46), inset 0 1px 0 rgba(255, 255, 255, .08); backdrop-filter: blur(20px) saturate(145%); -webkit-backdrop-filter: blur(20px) saturate(145%); }
-.composer-menu:nth-child(2) .composer-menu__popover { right: 0; left: auto; }
+.composer-menu:nth-child(2) .composer-menu__popover, .composer-menu:nth-child(3) .composer-menu__popover { right: 0; left: auto; }
 .composer-menu__option { display: flex; align-items: center; justify-content: space-between; gap: 14px; min-width: 0; padding: 8px 9px; border: 0; border-radius: 7px; background: transparent; color: #cdd1db; cursor: pointer; text-align: left; }
 .composer-menu__option:hover, .composer-menu__option--selected { background: rgba(117, 135, 177, .2); color: #f0f2f6; }
 .composer-menu__option > svg { flex: 0 0 auto; color: #aabaff; }
@@ -222,7 +222,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__content { font-size: 12px; }
   .chat-message--user .chat-message__body { max-width: min(100%, 84vw); }
-  .approval-card { margin-left: 33px; }
   .welcome-state p { max-width: 290px; font-size: 11px; line-height: 1.6; }
   .prompt-suggestions { display: grid; width: min(100%, 290px); }
   .message-composer { width: calc(100% - 16px); margin-bottom: max(8px, env(safe-area-inset-bottom)); padding: 8px 8px 6px; }
