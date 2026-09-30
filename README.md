@@ -34,11 +34,11 @@ source /code/codex-remote/.venv/bin/activate
 pnpm --filter codex-remote engine:dev
 ```
 
-终端二使用 `dev:lan` 启动局域网页面：
+终端二启动局域网页面：
 
 ```bash
 cd /code
-pnpm --filter codex-remote dev:lan
+pnpm --filter codex-remote dev
 ```
 
 在手机浏览器打开 `http://电脑的局域网 IP:4173`。当前电脑可使用 `http://192.168.15.22:4173`；首次输入终端一显示的配对码。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。

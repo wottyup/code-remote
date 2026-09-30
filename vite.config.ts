@@ -10,13 +10,13 @@ const engineProxy = {
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 4173,
     strictPort: true,
     proxy: { '/api': engineProxy },
   },
   preview: {
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 4173,
     strictPort: true,
     proxy: { '/api': engineProxy },
