@@ -130,6 +130,9 @@ export const codexRemoteClient = {
       body: JSON.stringify({ code }),
     })
   },
+  unpair(token: string) {
+    return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
+  },
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status')
   },

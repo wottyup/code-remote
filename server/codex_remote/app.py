@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import json
 import logging
 import os
 import secrets
+import tempfile
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
@@ -52,12 +55,79 @@ class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
 
 
+class PairingStateError(RuntimeError):
+    """The local trusted-device state could not be safely updated."""
+
+
 class PairingAuth:
-    def __init__(self) -> None:
+    def __init__(self, state_path: Path | None = None) -> None:
         self.code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
-        self.tokens: set[str] = set()
+        self.state_path = state_path or self._default_state_path()
+        self.token_hashes = self._load_token_hashes()
         self.failed_attempts = 0
         self.blocked_until = 0.0
+
+    @staticmethod
+    def _default_state_path() -> Path:
+        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
+        if configured_path:
+            return Path(configured_path).expanduser()
+        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+        return codex_home / "codex-remote" / "trusted-devices.json"
+
+    @staticmethod
+    def _token_hash(token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+    def _load_token_hashes(self) -> set[str]:
+        try:
+            raw_state = self.state_path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return set()
+        except OSError as error:
+            logger.warning("Could not read Codex Remote trusted-device state: %s", error)
+            return set()
+
+        try:
+            parsed_state = json.loads(raw_state)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring malformed Codex Remote trusted-device state")
+            return set()
+        if not isinstance(parsed_state, dict) or parsed_state.get("version") != 1:
+            logger.warning("Ignoring unsupported Codex Remote trusted-device state")
+            return set()
+        token_hashes = parsed_state.get("token_hashes")
+        if not isinstance(token_hashes, list):
+            return set()
+        return {
+            token_hash
+            for token_hash in token_hashes
+            if isinstance(token_hash, str)
+            and len(token_hash) == 64
+            and all(character in "0123456789abcdef" for character in token_hash)
+        }
+
+    def _save_token_hashes(self) -> None:
+        try:
+            self.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=f".{self.state_path.name}.", suffix=".tmp", dir=self.state_path.parent,
+            )
+            try:
+                os.chmod(temporary_path, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as state_file:
+                    json.dump({"version": 1, "token_hashes": sorted(self.token_hashes)}, state_file)
+                    state_file.write("\n")
+                    state_file.flush()
+                    os.fsync(state_file.fileno())
+                os.replace(temporary_path, self.state_path)
+                os.chmod(self.state_path, 0o600)
+            except Exception:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_path)
+                raise
+        except OSError as error:
+            raise PairingStateError("无法安全保存受信任设备授权。") from error
 
     def pair(self, code: str) -> str | None:
         if time.monotonic() < self.blocked_until:
@@ -70,13 +140,32 @@ class PairingAuth:
             return None
         self.failed_attempts = 0
         token = secrets.token_urlsafe(32)
-        self.tokens.add(token)
+        token_hash = self._token_hash(token)
+        self.token_hashes.add(token_hash)
+        try:
+            self._save_token_hashes()
+        except PairingStateError:
+            self.token_hashes.discard(token_hash)
+            raise
         return token
 
     def accepts(self, token: str | None) -> bool:
         if not token:
             return False
-        return any(hmac.compare_digest(token, known) for known in self.tokens)
+        token_hash = self._token_hash(token)
+        return any(hmac.compare_digest(token_hash, known_hash) for known_hash in self.token_hashes)
+
+    def revoke(self, token: str) -> bool:
+        token_hash = self._token_hash(token)
+        if token_hash not in self.token_hashes:
+            return False
+        self.token_hashes.remove(token_hash)
+        try:
+            self._save_token_hashes()
+        except PairingStateError:
+            self.token_hashes.add(token_hash)
+            raise
+        return True
 
 
 def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
@@ -127,10 +216,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/pair")
     async def pair(request: PairRequest) -> dict[str, str]:
-        token = auth.pair(request.code)
+        try:
+            token = auth.pair(request.code)
+        except PairingStateError as error:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码无效或尝试次数过多")
         return {"token": token}
+
+    @app.post("/api/v1/unpair")
+    async def unpair(request: Request) -> dict[str, bool]:
+        token = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+        try:
+            auth.revoke(token)
+        except PairingStateError as error:
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
+        return {"unpaired": True}
 
     @app.get("/api/v1/codex/status")
     async def codex_status() -> dict[str, Any]:

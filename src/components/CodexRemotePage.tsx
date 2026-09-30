@@ -18,7 +18,7 @@ import type { CodexMessage, CodexThread } from '../lib/codexRemoteClient'
 interface Props {
   token: string
   onUnauthorized: () => void
-  onUnpair: () => void
+  onUnpair: () => void | Promise<void>
 }
 
 const connectionLabel = {
@@ -113,7 +113,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         <footer className="remote-sidebar__footer">
           <i className={`status-dot status-dot--${remote.connection}`} />
           <span>{connectionLabel[remote.connection]}</span>
-          <button type="button" onClick={onUnpair}>退出</button>
+          <button type="button" onClick={() => void onUnpair()}>退出</button>
         </footer>
       </aside>
 

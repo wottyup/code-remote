@@ -13,9 +13,16 @@ export default function App() {
     setToken(nextToken)
   }, [])
 
-  const unpair = useCallback(() => {
+  const unpair = useCallback(async () => {
+    const currentToken = window.localStorage.getItem(STORAGE_KEY)
     window.localStorage.removeItem(STORAGE_KEY)
     setToken(null)
+    if (!currentToken) return
+    try {
+      await codexRemoteClient.unpair(currentToken)
+    } catch {
+      // The local token is already removed. A later server restart cannot restore it in this browser.
+    }
   }, [])
 
   if (!token) return <PairingPage onPaired={paired} />
