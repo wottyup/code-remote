@@ -293,17 +293,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         if (disposed) return
         setRuntime(nextRuntime)
         connect()
-        const nextThreads = await refreshThreads()
-        if (disposed || !nextThreads) return
-        if (nextThreads.length > 0 && !activeThreadId.current) {
-          const latest = nextThreads[0]
-          activeThreadId.current = latest.id
-          resumedThreadId.current = null
-          setActiveThread(latest)
-          setLoadingHistory(true)
-          await loadThread(latest.id)
-          if (!disposed) setLoadingHistory(false)
-        }
+        await refreshThreads()
+        if (disposed) return
       } catch (reason) {
         if (disposed) return
         if (reason instanceof RemoteApiError && reason.status === 401) {
