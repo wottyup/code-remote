@@ -3,7 +3,9 @@ import {
   codexRemoteClient,
   messagesFromThread,
   RemoteApiError,
+  type CodexImageAttachment,
   type CodexMessage,
+  type CodexModel,
   type CodexRuntime,
   type CodexThread,
   type RemoteEvent,
@@ -65,6 +67,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)
   const [threads, setThreads] = useState<CodexThread[]>([])
+  const [models, setModels] = useState<CodexModel[]>([])
   const [activeThread, setActiveThread] = useState<CodexThread | null>(null)
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
@@ -89,6 +92,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setError(reason instanceof Error ? reason.message : '无法读取对话记录')
+      return null
+    }
+  }, [onUnauthorized, token])
+
+  const refreshModels = useCallback(async () => {
+    try {
+      const next = await codexRemoteClient.models(token)
+      setModels(next)
+      return next
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       return null
     }
   }, [onUnauthorized, token])
@@ -293,7 +307,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         if (disposed) return
         setRuntime(nextRuntime)
         connect()
-        await refreshThreads()
+        await Promise.all([refreshThreads(), refreshModels()])
         if (disposed) return
       } catch (reason) {
         if (disposed) return
@@ -316,7 +330,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       socketRef.current?.close()
       socketRef.current = null
     }
-  }, [handleEvent, loadThread, onUnauthorized, refreshThreads, token])
+  }, [handleEvent, loadThread, onUnauthorized, refreshModels, refreshThreads, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     const requestId = ++loadRequest.current
@@ -343,10 +357,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [loadThread, onUnauthorized])
 
-  const createThread = useCallback(async () => {
+  const createThread = useCallback(async (model?: string) => {
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token)
+      const thread = await codexRemoteClient.createThread(token, model)
       activeThreadId.current = thread.id
       resumedThreadId.current = thread.id
       setActiveThread(thread)
@@ -369,15 +383,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const sendMessage = useCallback(async (prompt: string) => {
+  const sendMessage = useCallback(async (input: { prompt: string; images: CodexImageAttachment[]; model?: string }) => {
     if (loadingHistory) return false
+    const text = input.prompt.trim()
+    if (!text && input.images.length === 0) return false
     let thread = activeThread
-    if (!thread) thread = await createThread()
+    if (!thread) thread = await createThread(input.model)
     if (!thread) return false
-    const text = prompt.trim()
-    if (!text) return false
     const localId = `local-${Date.now()}`
-    setMessages((current) => [...current, { id: localId, role: 'user', text, createdAt: new Date().toISOString() }])
+    setMessages((current) => [...current, {
+      id: localId,
+      role: 'user',
+      text,
+      images: input.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
+      createdAt: new Date().toISOString(),
+    }])
     setIsRunning(true)
     setActivity({ label: '正在思考' })
     writerConflictRef.current = false
@@ -389,13 +409,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         resumedThreadId.current = thread.id
       }
       try {
-        await codexRemoteClient.startTurn(token, thread.id, text)
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model })
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
         await codexRemoteClient.resumeThread(token, thread.id)
         resumedThreadId.current = thread.id
-        await codexRemoteClient.startTurn(token, thread.id, text)
+        await codexRemoteClient.startTurn(token, thread.id, { prompt: text, images: input.images, model: input.model })
       }
       return true
     } catch (reason) {
@@ -445,6 +465,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     connection,
     runtime,
     threads,
+    models,
     activeThread,
     messages,
     isRunning,
@@ -454,6 +475,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     error,
     approval,
     refreshThreads,
+    refreshModels,
     selectThread,
     createThread,
     sendMessage,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import {
   AlertTriangle,
   Check,
+  ImagePlus,
   LoaderCircle,
   Menu,
   MessageSquare,
@@ -13,7 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity } from '../hooks/useCodexRemote'
-import type { CodexMessage, CodexThread } from '../lib/codexRemoteClient'
+import type { CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
   token: string
@@ -26,6 +27,35 @@ const connectionLabel = {
   connected: 'Codex 已连接',
   disconnected: '连接已断开',
   unavailable: 'Codex 不可用',
+}
+
+const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const maxImageSize = 8 * 1024 * 1024
+const maxImagesPerTurn = 4
+
+function modelIdOf(model: CodexModel) {
+  return model.model || model.id || ''
+}
+
+function modelLabelOf(model: CodexModel) {
+  return model.displayName || modelIdOf(model) || '未命名模型'
+}
+
+function readImage(file: File): Promise<CodexImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`))
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : ''
+      const separator = result.indexOf(',')
+      if (separator < 0) {
+        reject(new Error(`无法读取图片：${file.name}`))
+        return
+      }
+      resolve({ name: file.name || 'image', mediaType: file.type as CodexImageAttachment['mediaType'], data: result.slice(separator + 1) })
+    }
+    reader.readAsDataURL(file)
+  })
 }
 
 function titleOf(thread: CodexThread) {
@@ -51,17 +81,28 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
+  const [selectedModel, setSelectedModel] = useState('')
+  const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const imageInput = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     const container = messageContainer.current
     if (container) container.scrollTop = container.scrollHeight
   }, [remote.messages, remote.isRunning, remote.activity])
 
+  useEffect(() => {
+    if (remote.models.length === 0) return
+    if (selectedModel && remote.models.some((model) => modelIdOf(model) === selectedModel)) return
+    const defaultModel = remote.models.find((model) => model.isDefault) ?? remote.models[0]
+    setSelectedModel(modelIdOf(defaultModel))
+  }, [remote.models, selectedModel])
+
   async function createThread() {
     setSidebarOpen(false)
-    await remote.createThread()
+    await remote.createThread(selectedModel || undefined)
     composer.current?.focus()
   }
 
@@ -73,11 +114,51 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = draft.trim()
-    if (!prompt || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
+    if ((!prompt && attachedImages.length === 0) || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
+    if (!modelSupportsImages && attachedImages.length > 0) {
+      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
+      return
+    }
     setSending(true)
-    if (await remote.sendMessage(prompt)) setDraft('')
+    if (await remote.sendMessage({ prompt, images: attachedImages, model: selectedModel || undefined })) {
+      setDraft('')
+      setAttachedImages([])
+      setAttachmentError(null)
+    }
     setSending(false)
     composer.current?.focus()
+  }
+
+  async function attachImages(files: FileList | null) {
+    if (!files || files.length === 0) return
+    if (!modelSupportsImages) {
+      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
+      return
+    }
+    const candidates = Array.from(files)
+    const unsupported = candidates.find((file) => !imageTypes.has(file.type as CodexImageAttachment['mediaType']))
+    if (unsupported) {
+      setAttachmentError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
+      return
+    }
+    const oversized = candidates.find((file) => file.size > maxImageSize)
+    if (oversized) {
+      setAttachmentError('单张图片不能超过 8 MB。')
+      return
+    }
+    const remaining = maxImagesPerTurn - attachedImages.length
+    if (remaining <= 0) {
+      setAttachmentError('单条消息最多附加 4 张图片。')
+      return
+    }
+    const chosen = candidates.slice(0, remaining)
+    try {
+      const next = await Promise.all(chosen.map(readImage))
+      setAttachedImages((current) => [...current, ...next].slice(0, maxImagesPerTurn))
+      setAttachmentError(candidates.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
+    }
   }
 
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -88,7 +169,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const canSend = draft.trim().length > 0 && !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
+  const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
+  const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
+  const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
+  const canSend = (draft.trim().length > 0 || attachedImages.length > 0) && canCompose
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
 
   return (
@@ -125,7 +209,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
             <div className="remote-chat__title"><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
           </div>
-          <div className={`connection-label connection-label--${remote.connection}`}><i className={`status-dot status-dot--${remote.connection}`} /><span>{connectionLabel[remote.connection]}</span></div>
+          <div className="remote-chat__controls">
+            <label className="model-picker" title="模型在下一条消息开始时生效">
+              <span>模型</span>
+              <select value={selectedModel} onChange={(event) => setSelectedModel(event.target.value)} disabled={!canCompose || remote.models.length === 0}>
+                {remote.models.length === 0 ? <option value="">读取可用模型…</option> : null}
+                {remote.models.map((model) => {
+                  const id = modelIdOf(model)
+                  return id ? <option key={id} value={id}>{modelLabelOf(model)}</option> : null
+                })}
+              </select>
+            </label>
+            <div className={`connection-label connection-label--${remote.connection}`}><i className={`status-dot status-dot--${remote.connection}`} /><span>{connectionLabel[remote.connection]}</span></div>
+          </div>
         </header>
 
         <section className="message-stream" ref={messageContainer} aria-live="polite" aria-label="Codex 对话">
@@ -156,9 +252,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ) : null}
           {remote.isRunning && !hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
-              <LoaderCircle className="spin" size={15} />
-              <span>{remote.activity?.label ?? '正在思考'}</span>
-              {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
+              <span className="running-indicator__activity">
+                <LoaderCircle className="spin" size={15} />
+                <span>{remote.activity?.label ?? '正在思考'}</span>
+                {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
+              </span>
             </div>
           ) : null}
         </section>
@@ -172,16 +270,26 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         ) : null}
 
         <form className="message-composer" onSubmit={(event) => void send(event)}>
+          <input ref={imageInput} className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => { void attachImages(event.target.files); event.currentTarget.value = '' }} />
+          {attachedImages.length > 0 ? (
+            <div className="composer-images" aria-label="待发送图片">
+              {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+            </div>
+          ) : null}
+          {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
           <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
           <div className="message-composer__footer">
             <span><ShieldCheck size={14} />本机 Codex · Enter 发送，Shift+Enter 换行</span>
-            {remote.writerConflict ? (
-              <button className="stop-button" type="button" onClick={remote.refreshActiveThread}><RefreshCw size={13} />刷新状态</button>
-            ) : remote.isRunning ? (
-              <button className="stop-button" type="button" onClick={() => void remote.interrupt()}><Square size={13} fill="currentColor" />停止</button>
-            ) : (
-              <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
-            )}
+            <div className="composer-actions">
+              <button className="attach-button" type="button" onClick={() => imageInput.current?.click()} disabled={!canCompose || !modelSupportsImages} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'} aria-label="附加图片"><ImagePlus size={16} /></button>
+              {remote.writerConflict ? (
+                <button className="stop-button" type="button" onClick={remote.refreshActiveThread}><RefreshCw size={13} />刷新状态</button>
+              ) : remote.isRunning ? (
+                <button className="stop-button" type="button" onClick={() => void remote.interrupt()}><Square size={13} fill="currentColor" />停止</button>
+              ) : (
+                <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+              )}
+            </div>
           </div>
         </form>
       </main>
@@ -203,7 +311,8 @@ function MessageBubble({ message, activity }: { message: CodexMessage; activity:
             </span>
           ) : null}
         </div>
-        <pre>{message.text}</pre>
+        {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
+        {message.text ? <pre>{message.text}</pre> : null}
         {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
       </div>
     </article>

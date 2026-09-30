@@ -12,12 +12,32 @@ export interface CodexThreadDetails extends CodexThread {
   turns?: unknown[]
 }
 
+export interface CodexMessageImage {
+  name: string
+  previewUrl: string
+}
+
 export interface CodexMessage {
   id: string
   role: 'user' | 'assistant'
   text: string
   createdAt: string
+  images?: CodexMessageImage[]
   streaming?: boolean
+}
+
+export interface CodexImageAttachment {
+  name: string
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
+  data: string
+}
+
+export interface CodexModel {
+  id?: string
+  model?: string
+  displayName?: string
+  inputModalities?: string[]
+  isDefault?: boolean
 }
 
 export interface CodexRuntime {
@@ -147,13 +167,19 @@ export const codexRemoteClient = {
   resumeThread(token: string, threadId: string) {
     return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' })
   },
-  createThread(token: string) {
-    return request<CodexThread>(token, '/api/v1/codex/threads', { method: 'POST' })
+  models(token: string) {
+    return request<CodexModel[]>(token, '/api/v1/codex/models')
   },
-  startTurn(token: string, threadId: string, prompt: string) {
+  createThread(token: string, model?: string) {
+    return request<CodexThread>(token, '/api/v1/codex/threads', {
+      method: 'POST',
+      body: JSON.stringify({ model }),
+    })
+  },
+  startTurn(token: string, threadId: string, input: { prompt: string; images: CodexImageAttachment[]; model?: string }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
       method: 'POST',
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify(input),
     })
   },
   interrupt(token: string, threadId: string) {

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import hmac
 import json
 import logging
 import os
 import secrets
+import shutil
 import tempfile
 import time
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -57,6 +60,59 @@ class PairRequest(BaseModel):
 
 class PairingStateError(RuntimeError):
     """The local trusted-device state could not be safely updated."""
+
+
+IMAGE_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+MAX_IMAGES_PER_TURN = 4
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
+
+
+class ThreadStartRequest(BaseModel):
+    model: str | None = Field(default=None, max_length=200)
+
+
+class TurnImage(BaseModel):
+    name: str = Field(default="image", min_length=1, max_length=255)
+    media_type: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
+    data: str = Field(min_length=4)
+
+
+class TurnRequest(BaseModel):
+    prompt: str = Field(default="", max_length=32_000)
+    images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
+    model: str | None = Field(default=None, max_length=200)
+
+
+def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
+    paths: list[Path] = []
+    total_size = 0
+    try:
+        for image in images:
+            try:
+                encoded = image.data.encode("ascii")
+                content = base64.b64decode(encoded, validate=True)
+            except (UnicodeEncodeError, binascii.Error, ValueError) as error:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="图片数据格式无效") from error
+            if not content or len(content) > MAX_IMAGE_BYTES:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="单张图片不能超过 8 MB")
+            total_size += len(content)
+            if total_size > MAX_TOTAL_IMAGE_BYTES:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="单条消息的图片总大小不能超过 24 MB")
+            path = image_directory / f"{secrets.token_hex(16)}{IMAGE_EXTENSIONS[image.media_type]}"
+            path.write_bytes(content)
+            paths.append(path)
+        return paths
+    except Exception:
+        for path in paths:
+            with suppress(FileNotFoundError):
+                path.unlink()
+        raise
 
 
 class PairingAuth:
@@ -176,6 +232,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         configured_workspace,
     )
     auth = PairingAuth()
+    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -188,8 +245,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await history_watcher
             await app_server.close()
+            shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.13", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.14", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
@@ -247,10 +305,17 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
-    @app.post("/api/v1/codex/threads", status_code=status.HTTP_201_CREATED)
-    async def create_thread() -> dict[str, Any]:
+    @app.get("/api/v1/codex/models")
+    async def list_models() -> list[dict[str, Any]]:
         try:
-            return await app_server.start_thread()
+            return await app_server.list_models()
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads", status_code=status.HTTP_201_CREATED)
+    async def create_thread(body: ThreadStartRequest) -> dict[str, Any]:
+        try:
+            return await app_server.start_thread(body.model.strip() or None if body.model else None)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -269,15 +334,24 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/turns")
-    async def start_turn(thread_id: str, body: dict[str, Any]) -> dict[str, Any]:
-        prompt = body.get("prompt")
-        if not isinstance(prompt, str):
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="prompt must be text")
+    async def start_turn(thread_id: str, body: TurnRequest) -> dict[str, Any]:
+        prompt = body.prompt.strip()
+        if not prompt and not body.images:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
+        image_paths = save_turn_images(body.images, image_directory)
         try:
-            result = await app_server.start_turn(thread_id, prompt)
+            result = await app_server.start_turn(
+                thread_id,
+                prompt,
+                image_paths,
+                body.model.strip() or None if body.model else None,
+            )
             turn = result.get("turn", {})
             return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}
         except CodexRuntimeError as error:
+            for path in image_paths:
+                with suppress(FileNotFoundError):
+                    path.unlink()
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")

@@ -77,11 +77,19 @@ class CodexAppServer:
             raise CodexRuntimeError("Codex 没有返回该对话内容")
         return thread
 
-    async def start_thread(self) -> dict[str, Any]:
-        result = await self.request("thread/start", {
+    async def list_models(self) -> list[dict[str, Any]]:
+        result = await self.request("model/list", {"limit": 100, "includeHidden": False})
+        models = result.get("data", [])
+        return [model for model in models if isinstance(model, dict)] if isinstance(models, list) else []
+
+    async def start_thread(self, model: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {
             "cwd": str(self.workspace),
             "serviceName": "codex_remote_web",
-        })
+        }
+        if model:
+            params["model"] = model
+        result = await self.request("thread/start", params)
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise CodexRuntimeError("Codex 没有返回新对话编号")
@@ -94,13 +102,26 @@ class CodexAppServer:
             raise CodexRuntimeError("Codex 无法恢复该对话")
         return thread
 
-    async def start_turn(self, thread_id: str, prompt: str) -> dict[str, Any]:
-        if not prompt.strip() or len(prompt) > 32_000:
-            raise CodexRuntimeError("消息长度需在 1 到 32000 个字符之间")
-        return await self.request("turn/start", {
-            "threadId": thread_id,
-            "input": [{"type": "text", "text": prompt, "text_elements": []}],
-        })
+    async def start_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        image_paths: list[Path] | None = None,
+        model: str | None = None,
+    ) -> dict[str, Any]:
+        if len(prompt) > 32_000:
+            raise CodexRuntimeError("消息不能超过 32000 个字符")
+        images = image_paths or []
+        if not prompt.strip() and not images:
+            raise CodexRuntimeError("请填写消息或附加图片")
+        input_items: list[dict[str, Any]] = []
+        if prompt.strip():
+            input_items.append({"type": "text", "text": prompt})
+        input_items.extend({"type": "localImage", "path": str(path)} for path in images)
+        params: dict[str, Any] = {"threadId": thread_id, "input": input_items}
+        if model:
+            params["model"] = model
+        return await self.request("turn/start", params)
 
     async def interrupt(self, thread_id: str) -> dict[str, Any]:
         return await self.request("turn/interrupt", {"threadId": thread_id})
@@ -173,7 +194,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.13",
+                        "version": "0.0.14",
                     },
                     "capabilities": {
                         "experimentalApi": False,
