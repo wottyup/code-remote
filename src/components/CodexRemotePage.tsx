@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -13,6 +13,7 @@ import {
   Plus,
   RefreshCw,
   Send,
+  Settings2,
   ShieldCheck,
   Square,
   X,
@@ -46,6 +47,57 @@ interface ComposerPreferences {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+}
+
+type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
+
+interface ThemePreferences {
+  theme: AppTheme
+  customBackgroundColor: string
+  customTextColor: string
+  customBackgroundTransparency: number
+}
+
+const themePreferencesStorageKey = 'codex-remote.theme-preferences'
+const defaultThemePreferences: ThemePreferences = {
+  theme: 'dark',
+  customBackgroundColor: '#4b5563',
+  customTextColor: '#f1f5f9',
+  customBackgroundTransparency: 0,
+}
+
+function normalizeHexColor(value: unknown, fallback: string) {
+  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
+}
+
+function normalizeTransparency(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
+}
+
+function readThemePreferences(): ThemePreferences {
+  if (typeof window === 'undefined') return defaultThemePreferences
+  try {
+    const value = window.localStorage.getItem(themePreferencesStorageKey)
+    if (!value) return defaultThemePreferences
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' ? parsed.theme : defaultThemePreferences.theme
+    return {
+      theme,
+      customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
+      customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
+      customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
+    }
+  } catch {
+    return defaultThemePreferences
+  }
+}
+
+function rgbaFromHex(hex: string, alpha: number) {
+  const value = normalizeHexColor(hex, '#4b5563').slice(1)
+  const red = Number.parseInt(value.slice(0, 2), 16)
+  const green = Number.parseInt(value.slice(2, 4), 16)
+  const blue = Number.parseInt(value.slice(4, 6), 16)
+  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
 }
 
 function formatDuration(durationMs: number) {
@@ -251,6 +303,8 @@ function ComposerMenu({
 export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const remote = useCodexRemote(token, onUnauthorized)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
@@ -268,6 +322,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = chosenModel?.supportedReasoningEfforts ?? []
+  const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
+  const themeStyle = {
+    '--custom-theme-background': themePreferences.customBackgroundColor,
+    '--custom-theme-text-color': themePreferences.customTextColor,
+    '--custom-theme-surface': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.88)),
+    '--custom-theme-control': rgbaFromHex('#ffffff', Math.max(0.04, customSurfaceOpacity * 0.72)),
+    '--custom-theme-active': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.46)),
+    '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, Math.max(0.12, customSurfaceOpacity * 0.32)),
+    '--custom-theme-panel-blur': `${Math.min(18, 7 + customSurfaceOpacity * 11)}px`,
+  } as CSSProperties
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(themePreferences))
+    } catch {
+      // Theme preferences still apply for the current session when storage is unavailable.
+    }
+  }, [themePreferences])
 
   useEffect(() => {
     const container = messageContainer.current
@@ -465,7 +537,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const authorizationOptions: ComposerMenuOption[] = approvalPolicyOptions
 
   return (
-    <div className="remote-shell">
+    <div className={`remote-shell remote-shell--theme-${themePreferences.theme}`} style={themeStyle}>
       <aside className={`remote-sidebar${sidebarOpen ? ' remote-sidebar--open' : ''}`} aria-label="Codex 对话记录">
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><span className="remote-brand__mark">C</span><span className="remote-brand__copy"><strong>Codex Remote</strong><small>本机 Agent 工作台</small></span></div>
@@ -483,6 +555,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           {remote.threads.length === 0 && !remote.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
           {remote.loadingHistory && remote.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
+        <button className={`sidebar-settings${settingsOpen ? ' sidebar-settings--active' : ''}`} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}>
+          <Settings2 size={16} />
+          <span>设置</span>
+        </button>
         <footer className="remote-sidebar__footer">
           <i className={`status-dot status-dot--${remote.connection}`} />
           <span>{connectionLabel[remote.connection]}</span>
@@ -492,7 +568,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
 
-      <main className="remote-chat">
+      {settingsOpen ? (
+        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={() => setSettingsOpen(false)} />
+      ) : <main className="remote-chat">
         <header className="remote-chat__header">
           <div className="remote-chat__title-wrap">
             <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
@@ -591,8 +669,68 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             </div>
           </div>
         </form>
-      </main>
+      </main>}
     </div>
+  )
+}
+
+function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
+  const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
+    { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
+    { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
+    { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
+    { value: 'custom', label: '自定义颜色', description: '背景与文字', previewClass: 'theme-option__preview--custom' },
+  ]
+
+  return (
+    <main className="theme-settings-panel" aria-label="主题设置">
+      <header className="theme-settings-panel__header">
+        <div>
+          <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
+          <h1>设置</h1>
+          <p>主题偏好只保存在当前浏览器，不会影响 Codex 会话。</p>
+        </div>
+        <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
+      </header>
+
+      <div className="theme-settings-panel__content">
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading"><div><h2>主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-options" role="radiogroup" aria-label="界面主题">
+            {themeOptions.map((option) => (
+              <button
+                className={`theme-option${preferences.theme === option.value ? ' theme-option--active' : ''}`}
+                type="button"
+                role="radio"
+                aria-checked={preferences.theme === option.value}
+                key={option.value}
+                onClick={() => onChange({ ...preferences, theme: option.value })}
+              >
+                <span className={`theme-option__preview ${option.previewClass}`} style={option.value === 'custom' ? { background: preferences.customBackgroundColor } : undefined} aria-hidden="true" />
+                <span><strong>{option.label}</strong><small>{option.description}</small></span>
+              </button>
+            ))}
+          </div>
+
+          {preferences.theme === 'custom' ? (
+            <div className="theme-custom-controls">
+              <label className="theme-control-row">
+                <span><strong>背景颜色</strong><small>作为半透明面板背后的底色。</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label="自定义背景颜色" /><code>{preferences.customBackgroundColor}</code></span>
+              </label>
+              <label className="theme-control-row">
+                <span><strong>字体颜色</strong><small>应用于工作区界面文字和控件。</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customTextColor} onChange={(event) => onChange({ ...preferences, customTextColor: normalizeHexColor(event.target.value, preferences.customTextColor) })} aria-label="自定义字体颜色" /><code>{preferences.customTextColor}</code></span>
+              </label>
+              <label className="theme-control-row theme-control-row--stacked">
+                <span><strong>背景透明度</strong><small>数值越高，界面面板越透明。</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
+              </label>
+            </div>
+          ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
+        </section>
+      </div>
+    </main>
   )
 }
 
