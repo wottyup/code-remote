@@ -12,7 +12,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useCodexRemote } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity } from '../hooks/useCodexRemote'
 import type { CodexMessage, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
@@ -57,7 +57,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => {
     const container = messageContainer.current
     if (container) container.scrollTop = container.scrollHeight
-  }, [remote.messages, remote.isRunning])
+  }, [remote.messages, remote.isRunning, remote.activity])
 
   async function createThread() {
     setSidebarOpen(false)
@@ -89,6 +89,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const canSend = draft.trim().length > 0 && !sending && !remote.isRunning && remote.connection === 'connected'
+  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
 
   return (
     <div className="remote-shell">
@@ -140,7 +141,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} />)}
+          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} />)}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -153,7 +154,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               </div>
             </div>
           ) : null}
-          {remote.isRunning ? <div className="running-indicator"><LoaderCircle className="spin" size={15} /><span>Codex 正在处理</span></div> : null}
+          {remote.isRunning && !hasStreamingAssistant ? (
+            <div className="running-indicator" role="status" aria-live="polite">
+              <LoaderCircle className="spin" size={15} />
+              <span>{remote.activity?.label ?? '正在思考'}</span>
+              {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
+            </div>
+          ) : null}
         </section>
 
         {remote.error ? <div className="remote-error" role="alert"><AlertTriangle size={15} /><span>{remote.error}</span></div> : null}
@@ -170,12 +177,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   )
 }
 
-function MessageBubble({ message }: { message: CodexMessage }) {
+function MessageBubble({ message, activity }: { message: CodexMessage; activity: CodexActivity | null }) {
   return (
     <article className={`chat-message chat-message--${message.role}`}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
-        <div className="chat-message__meta"><strong>{message.role === 'user' ? '你' : 'Codex'}</strong>{message.streaming ? <span><LoaderCircle className="spin" size={12} />正在回复</span> : null}</div>
+        <div className="chat-message__meta">
+          <strong>{message.role === 'user' ? '你' : 'Codex'}</strong>
+          {message.streaming ? (
+            <span className="chat-message__activity" aria-live="polite">
+              <LoaderCircle className="spin" size={12} />{activity?.label ?? '正在回复'}
+              {activity?.detail ? <small title={activity.detail}>{activity.detail}</small> : null}
+            </span>
+          ) : null}
+        </div>
         <pre>{message.text}</pre>
         {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
       </div>

@@ -15,7 +15,46 @@ interface ApprovalRequest {
   params: Record<string, unknown>
 }
 
+export interface CodexActivity {
+  label: string
+  detail?: string
+}
+
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', error: null }
+
+function activityForItem(value: unknown): CodexActivity {
+  if (!value || typeof value !== 'object') return { label: '正在处理' }
+  const item = value as Record<string, unknown>
+  const toolName = [item.namespace, item.tool]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join('.')
+
+  switch (item.type) {
+    case 'reasoning': return { label: '正在思考' }
+    case 'plan': return { label: '正在整理执行计划' }
+    case 'agentMessage': return { label: '正在生成回复' }
+    case 'commandExecution': {
+      const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+      return { label: '正在执行命令', detail: command ? command.slice(0, 100) : undefined }
+    }
+    case 'fileChange': {
+      const count = Array.isArray(item.changes) ? item.changes.length : 0
+      return { label: '正在修改文件', detail: count > 0 ? `${count} 个文件` : undefined }
+    }
+    case 'mcpToolCall': {
+      const server = typeof item.server === 'string' ? item.server : ''
+      const tool = typeof item.tool === 'string' ? item.tool : ''
+      return { label: '正在调用 MCP 工具', detail: [server, tool].filter(Boolean).join(' · ') || undefined }
+    }
+    case 'dynamicToolCall': return { label: '正在调用工具', detail: toolName || undefined }
+    case 'webSearch': return { label: '正在搜索资料', detail: typeof item.query === 'string' ? item.query : undefined }
+    case 'imageView': return { label: '正在查看图片' }
+    case 'imageGeneration': return { label: '正在生成图片' }
+    case 'collabAgentToolCall': return { label: '正在协调子任务', detail: typeof item.tool === 'string' ? item.tool : undefined }
+    case 'subAgentActivity': return { label: '正在运行子任务' }
+    default: return { label: '正在处理' }
+  }
+}
 
 export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
@@ -24,12 +63,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [activeThread, setActiveThread] = useState<CodexThread | null>(null)
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
+  const [activity, setActivity] = useState<CodexActivity | null>(null)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const activeThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
+  const activityItemId = useRef<string | null>(null)
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -51,7 +92,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setMessages(messagesFromThread(thread))
       const turns = Array.isArray(thread.turns) ? thread.turns : []
       const latest = turns.at(-1) as Record<string, unknown> | undefined
-      setIsRunning(latest?.status === 'inProgress' || latest?.status === 'running')
+      const running = latest?.status === 'inProgress' || latest?.status === 'running'
+      setIsRunning(running)
+      if (activityItemId.current === null) setActivity(running ? { label: '正在思考' } : null)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setError(reason instanceof Error ? reason.message : '无法读取对话内容')
@@ -97,19 +140,40 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
 
     if (event.method === 'turn/started') {
       setIsRunning(true)
+      setActivity({ label: '正在思考' })
+      activityItemId.current = null
       return
     }
     if (event.method === 'turn/completed') {
       setIsRunning(false)
+      setActivity(null)
+      activityItemId.current = null
       if (activeThreadId.current) {
         void refreshThreads()
         void loadThread(activeThreadId.current)
       }
       return
     }
+    if (event.method === 'turn/plan/updated') {
+      setActivity({ label: '正在整理执行计划' })
+      return
+    }
+    if (event.method === 'reasoning/summaryTextDelta') {
+      setActivity({ label: '正在思考' })
+      return
+    }
+    if (event.method === 'item/started') {
+      const item = params.item as Record<string, unknown> | undefined
+      activityItemId.current = typeof item?.id === 'string' ? item.id : null
+      setIsRunning(true)
+      setActivity(activityForItem(item))
+      return
+    }
     if (event.method === 'item/agentMessage/delta') {
       const itemId = typeof params.itemId === 'string' ? params.itemId : `stream-${Date.now()}`
       const delta = typeof params.delta === 'string' ? params.delta : ''
+      activityItemId.current = itemId
+      setActivity({ label: '正在回复' })
       setMessages((current) => {
         const exists = current.some((message) => message.id === itemId)
         if (exists) {
@@ -123,8 +187,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
     if (event.method === 'item/completed') {
       const item = params.item as Record<string, unknown> | undefined
-      if (item?.type !== 'agentMessage') return
-      const itemId = typeof item.id === 'string' ? item.id : null
+      const itemId = typeof item?.id === 'string' ? item.id : null
+      if (item?.type !== 'agentMessage') {
+        if (itemId && activityItemId.current === itemId) {
+          activityItemId.current = null
+          setActivity({ label: '正在思考' })
+        }
+        return
+      }
       const text = typeof item.text === 'string' ? item.text : ''
       if (!itemId) return
       setMessages((current) => {
@@ -217,6 +287,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setActiveThread(thread)
     setMessages([])
     setIsRunning(false)
+    setActivity(null)
+    activityItemId.current = null
     setApproval(null)
     setLoadingHistory(true)
     try {
@@ -227,7 +299,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setMessages(messagesFromThread(data))
       const turns = Array.isArray(data.turns) ? data.turns : []
       const latest = turns.at(-1) as Record<string, unknown> | undefined
-      setIsRunning(latest?.status === 'inProgress' || latest?.status === 'running')
+      const running = latest?.status === 'inProgress' || latest?.status === 'running'
+      setIsRunning(running)
+      if (activityItemId.current === null) setActivity(running ? { label: '正在思考' } : null)
       setError(null)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
@@ -245,6 +319,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setActiveThread(thread)
       setMessages([])
       setIsRunning(false)
+      setActivity(null)
+      activityItemId.current = null
       setApproval(null)
       setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
       setError(null)
@@ -267,6 +343,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     const localId = `local-${Date.now()}`
     setMessages((current) => [...current, { id: localId, role: 'user', text, createdAt: new Date().toISOString() }])
     setIsRunning(true)
+    setActivity({ label: '正在思考' })
     setError(null)
     try {
       await codexRemoteClient.startTurn(token, thread.id, text)
@@ -275,6 +352,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
+      setActivity(null)
       setError(reason instanceof Error ? reason.message : '发送消息失败')
       return false
     }
@@ -305,6 +383,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     activeThread,
     messages,
     isRunning,
+    activity,
     loadingHistory,
     error,
     approval,
