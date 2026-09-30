@@ -14,7 +14,7 @@ class CodexRuntimeError(RuntimeError):
     pass
 
 
-ApprovalPolicy = Literal["onRequest", "unlessTrusted", "never"]
+ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 
 
 class CodexAppServer:
@@ -222,7 +222,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.24",
+                        "version": "0.0.25",
                     },
                     "capabilities": {
                         "experimentalApi": False,

@@ -49,7 +49,11 @@ interface ComposerPreferences {
 }
 
 function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
-  return value === 'onRequest' || value === 'unlessTrusted' || value === 'never' ? value : undefined
+  if (value === 'on-request' || value === 'untrusted' || value === 'never') return value
+  // Migrate values saved by versions 0.0.20–0.0.24.
+  if (value === 'onRequest') return 'on-request'
+  if (value === 'unlessTrusted') return 'untrusted'
+  return undefined
 }
 
 function readComposerPreferences(): ComposerPreferences {
@@ -90,8 +94,8 @@ function effortLabelOf(effort: string) {
 }
 
 const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
-  { value: 'onRequest', label: '请求批准' },
-  { value: 'unlessTrusted', label: '帮我批准' },
+  { value: 'on-request', label: '请求批准' },
+  { value: 'untrusted', label: '帮我批准' },
   { value: 'never', label: '完全访问权限' },
 ]
 
@@ -239,7 +243,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
   const [selectedEffort, setSelectedEffort] = useState(() => readComposerPreferences().effort ?? '')
-  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>(() => readComposerPreferences().approvalPolicy ?? 'onRequest')
+  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>(() => readComposerPreferences().approvalPolicy ?? 'on-request')
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -310,7 +314,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [chosenModel, effortOptions, remote.models.length, selectedEffort])
 
   useEffect(() => {
-    if (!selectedModel && !selectedEffort && selectedApprovalPolicy === 'onRequest') return
+    if (!selectedModel && !selectedEffort && selectedApprovalPolicy === 'on-request') return
     saveComposerPreferences({
       model: selectedModel || undefined,
       effort: selectedEffort || undefined,

@@ -59,7 +59,7 @@ export interface CodexRuntime {
   error: string | null
 }
 
-export type CodexApprovalPolicy = 'onRequest' | 'unlessTrusted' | 'never'
+export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
   type: string
