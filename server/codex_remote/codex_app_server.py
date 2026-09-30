@@ -99,7 +99,7 @@ class CodexAppServer:
             params["model"] = model
         if approval_policy:
             params["approvalPolicy"] = approval_policy
-            params["sandbox"] = "dangerFullAccess" if approval_policy == "never" else "workspaceWrite"
+            params["sandbox"] = "danger-full-access" if approval_policy == "never" else "workspace-write"
         result = await self.request("thread/start", params)
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
@@ -139,7 +139,7 @@ class CodexAppServer:
         if approval_policy:
             params["approvalPolicy"] = approval_policy
             params["sandboxPolicy"] = {
-                "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
+                "type": "danger-full-access" if approval_policy == "never" else "workspace-write",
             }
         result = await self.request("turn/start", params)
         turn = result.get("turn")
