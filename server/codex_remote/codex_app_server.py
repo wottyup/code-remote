@@ -155,6 +155,9 @@ class CodexAppServer:
                     stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    # thread/read returns a whole conversation as one JSONL line.
+                    # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
+                    limit=64 * 1024 * 1024,
                 )
             except OSError as error:
                 raise CodexRuntimeError(f"无法启动 Codex app-server：{error}") from error
@@ -167,7 +170,7 @@ class CodexAppServer:
                     "clientInfo": {
                         "name": "codex_remote_web",
                         "title": "Codex Remote Web",
-                        "version": "0.0.1",
+                        "version": "0.0.2",
                     },
                     "capabilities": {
                         "experimentalApi": False,

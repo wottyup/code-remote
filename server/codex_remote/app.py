@@ -65,7 +65,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         finally:
             await app_server.close()
 
-    app = FastAPI(title="Codex Remote", version="0.0.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.0.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.add_middleware(
