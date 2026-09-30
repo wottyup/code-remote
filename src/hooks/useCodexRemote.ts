@@ -21,7 +21,11 @@ export interface CodexActivity {
 }
 
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', error: null }
-const activeWriterError = '此对话已有一个 Codex 任务在运行，完成后再发送。'
+const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
+
+function isActiveWriterError(reason: unknown) {
+  return reason instanceof Error && /active writer/i.test(reason.message)
+}
 
 function activityForItem(value: unknown): CodexActivity {
   if (!value || typeof value !== 'object') return { label: '正在处理' }
@@ -111,9 +115,19 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       } else if (activityItemId.current === null) {
         setActivity(running ? { label: '正在思考' } : null)
       }
+      return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-      setError(reason instanceof Error ? reason.message : '无法读取对话内容')
+      if (isActiveWriterError(reason)) {
+        writerConflictRef.current = true
+        setWriterConflict(true)
+        setIsRunning(true)
+        setActivity({ label: '此对话已有其他 Codex 实例在运行' })
+        setError(activeWriterError)
+      } else {
+        setError(reason instanceof Error ? reason.message : '无法读取对话内容')
+      }
+      return false
     }
   }, [onUnauthorized, token])
 
@@ -287,8 +301,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
           resumedThreadId.current = null
           setActiveThread(latest)
           setLoadingHistory(true)
-          await codexRemoteClient.resumeThread(token, latest.id)
-          resumedThreadId.current = latest.id
           await loadThread(latest.id)
           if (!disposed) setLoadingHistory(false)
         }
@@ -329,25 +341,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setApproval(null)
     setLoadingHistory(true)
     try {
-      await codexRemoteClient.resumeThread(token, thread.id)
-      resumedThreadId.current = thread.id
-      const data = await codexRemoteClient.readThread(token, thread.id)
+      const loaded = await loadThread(thread.id)
       if (requestId !== loadRequest.current) return
-      setActiveThread(data)
-      setMessages(messagesFromThread(data))
-      const turns = Array.isArray(data.turns) ? data.turns : []
-      const latest = turns.at(-1) as Record<string, unknown> | undefined
-      const running = latest?.status === 'inProgress' || latest?.status === 'running'
-      setIsRunning(running)
-      if (activityItemId.current === null) setActivity(running ? { label: '正在思考' } : null)
-      setError(null)
+      if (loaded) setError(null)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (requestId === loadRequest.current) setError(reason instanceof Error ? reason.message : '恢复对话失败')
     } finally {
       if (requestId === loadRequest.current) setLoadingHistory(false)
     }
-  }, [onUnauthorized, token])
+  }, [loadThread, onUnauthorized])
 
   const createThread = useCallback(async () => {
     setLoadingHistory(true)
@@ -410,11 +413,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setIsRunning(false)
       setActivity(null)
       const message = reason instanceof Error ? reason.message : '发送消息失败'
-      if (/active writer/i.test(message)) {
+      if (isActiveWriterError(reason)) {
         writerConflictRef.current = true
         setWriterConflict(true)
         setIsRunning(true)
-        setActivity({ label: '此对话已有 Codex 任务在运行' })
+        setActivity({ label: '此对话已有其他 Codex 实例在运行' })
         setError(activeWriterError)
       } else {
         setError(/thread not found/i.test(message)
