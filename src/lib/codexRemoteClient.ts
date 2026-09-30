@@ -148,6 +148,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     if (!turnValue || typeof turnValue !== 'object') continue
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
+    let assistantMessage: CodexMessage | null = null
     for (const itemValue of turn.items) {
       if (!itemValue || typeof itemValue !== 'object') continue
       const item = itemValue as Record<string, unknown>
@@ -155,6 +156,14 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const text = item.type === 'userMessage' ? plainText(item.content) : plainText(item.text)
       const images = item.type === 'userMessage' ? imagesFromContent(item.content) : []
       if (!text && images.length === 0) continue
+
+      if (item.type === 'agentMessage' && assistantMessage) {
+        assistantMessage.text = assistantMessage.text
+          ? `${assistantMessage.text}\n\n${text}`
+          : text
+        continue
+      }
+
       messages.push({
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: item.type === 'userMessage' ? 'user' : 'assistant',
@@ -162,6 +171,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         createdAt: timestamp(turn.startedAt),
         ...(images.length > 0 ? { images } : {}),
       })
+      assistantMessage = item.type === 'agentMessage' ? messages.at(-1)! : null
     }
   }
   return messages
