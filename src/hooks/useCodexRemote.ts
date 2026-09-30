@@ -21,6 +21,7 @@ export interface CodexActivity {
 }
 
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', error: null }
+const activeWriterError = '此对话已有一个 Codex 任务在运行，完成后再发送。'
 
 function activityForItem(value: unknown): CodexActivity {
   if (!value || typeof value !== 'object') return { label: '正在处理' }
@@ -64,6 +65,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
+  const [writerConflict, setWriterConflict] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
@@ -72,6 +74,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
+  const writerConflictRef = useRef(false)
+  const writerRefreshTimer = useRef<number | undefined>(undefined)
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -95,7 +99,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const latest = turns.at(-1) as Record<string, unknown> | undefined
       const running = latest?.status === 'inProgress' || latest?.status === 'running'
       setIsRunning(running)
-      if (activityItemId.current === null) setActivity(running ? { label: '正在思考' } : null)
+      if (writerConflictRef.current) {
+        if (running) {
+          setActivity({ label: '此对话已有 Codex 任务在运行' })
+        } else {
+          writerConflictRef.current = false
+          setWriterConflict(false)
+          setActivity(null)
+          setError((current) => current === activeWriterError ? null : current)
+        }
+      } else if (activityItemId.current === null) {
+        setActivity(running ? { label: '正在思考' } : null)
+      }
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setError(reason instanceof Error ? reason.message : '无法读取对话内容')
@@ -105,6 +120,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const handleEvent = useCallback((event: RemoteEvent) => {
     if (event.type === 'threads.changed') {
       void refreshThreads()
+      if (writerConflictRef.current && activeThreadId.current) {
+        if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+        writerRefreshTimer.current = window.setTimeout(() => {
+          writerRefreshTimer.current = undefined
+          if (writerConflictRef.current && activeThreadId.current) void loadThread(activeThreadId.current)
+        }, 700)
+      }
       return
     }
     if (event.type === 'connection') {
@@ -141,12 +163,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (eventThreadId && eventThreadId !== activeThreadId.current) return
 
     if (event.method === 'turn/started') {
+      writerConflictRef.current = false
+      setWriterConflict(false)
+      setError((current) => current === activeWriterError ? null : current)
       setIsRunning(true)
       setActivity({ label: '正在思考' })
       activityItemId.current = null
       return
     }
     if (event.method === 'turn/completed') {
+      writerConflictRef.current = false
+      setWriterConflict(false)
+      setError((current) => current === activeWriterError ? null : current)
       setIsRunning(false)
       setActivity(null)
       activityItemId.current = null
@@ -281,6 +309,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       disposed = true
       socketGeneration += 1
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       socketRef.current?.close()
       socketRef.current = null
     }
@@ -294,6 +323,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setMessages([])
     setIsRunning(false)
     setActivity(null)
+    writerConflictRef.current = false
+    setWriterConflict(false)
     activityItemId.current = null
     setApproval(null)
     setLoadingHistory(true)
@@ -328,6 +359,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setMessages([])
       setIsRunning(false)
       setActivity(null)
+      writerConflictRef.current = false
+      setWriterConflict(false)
       activityItemId.current = null
       setApproval(null)
       setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
@@ -353,6 +386,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setMessages((current) => [...current, { id: localId, role: 'user', text, createdAt: new Date().toISOString() }])
     setIsRunning(true)
     setActivity({ label: '正在思考' })
+    writerConflictRef.current = false
+    setWriterConflict(false)
     setError(null)
     try {
       if (resumedThreadId.current !== thread.id) {
@@ -375,9 +410,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setIsRunning(false)
       setActivity(null)
       const message = reason instanceof Error ? reason.message : '发送消息失败'
-      setError(/thread not found/i.test(message)
-        ? '本机 Codex 已找不到这条对话。草稿仍保留，请新建对话后重新发送。'
-        : message)
+      if (/active writer/i.test(message)) {
+        writerConflictRef.current = true
+        setWriterConflict(true)
+        setIsRunning(true)
+        setActivity({ label: '此对话已有 Codex 任务在运行' })
+        setError(activeWriterError)
+      } else {
+        setError(/thread not found/i.test(message)
+          ? '本机 Codex 已找不到这条对话。草稿仍保留，请新建对话后重新发送。'
+          : message)
+      }
       return false
     }
   }, [activeThread, createThread, loadingHistory, onUnauthorized, token])
@@ -400,6 +443,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     return sent
   }, [approval])
 
+  const refreshActiveThread = useCallback(() => {
+    if (activeThreadId.current) void loadThread(activeThreadId.current)
+  }, [loadThread])
+
   return {
     connection,
     runtime,
@@ -408,6 +455,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     messages,
     isRunning,
     activity,
+    writerConflict,
     loadingHistory,
     error,
     approval,
@@ -417,5 +465,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     sendMessage,
     interrupt,
     respondToApproval,
+    refreshActiveThread,
   }
 }
