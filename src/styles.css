@@ -288,13 +288,22 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .welcome-state__eyebrow { margin-bottom: 11px; font-size: 7px; letter-spacing: .15em; }
   .welcome-state p { max-width: 290px; font-size: 11px; line-height: 1.6; }
   .prompt-suggestions { display: grid; width: min(100%, 290px); }
-  .message-composer { width: auto; max-width: none; margin-right: 16px; margin-bottom: max(8px, env(safe-area-inset-bottom)); margin-left: 16px; padding: 11px 11px 8px; border-radius: 20px; }
+  .message-composer { width: auto; min-width: 0; max-width: none; margin-right: 16px; margin-bottom: max(8px, env(safe-area-inset-bottom)); margin-left: 16px; padding: 11px 11px 8px; border-radius: 20px; }
   .composer-editor { min-height: 46px; }
   .message-composer textarea { padding-top: 9px; padding-bottom: 9px; font-size: 13px; }
-  .message-composer__footer { min-height: 31px; margin-top: 4px; }
+  .message-composer__footer { display: grid; min-width: 0; min-height: 31px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 4px; }
+  .composer-preferences { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, .7fr) minmax(0, 1.15fr); gap: 5px; overflow: hidden; }
+  .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
+  .composer-actions { min-width: 0; gap: 4px; }
+  .send-button, .stop-button, .attach-button { padding-inline: 6px; }
   .composer-hint { display: none; }
   .remote-error { width: auto; max-width: none; margin-right: 16px; margin-left: 16px; }
   .pair-card { padding: 25px 22px; }
+}
+
+@media (max-width: 420px) {
+  .connection-label { padding-inline: 7px; }
+  .connection-label span { display: none; }
 }
 
 .remote-shell--theme-light { color-scheme: light; --line: #e4e8ed; --muted: #737b86; background: #f7f8fa; color: #20252d; }
