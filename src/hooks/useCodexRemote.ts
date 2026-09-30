@@ -140,6 +140,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [activeThread, setActiveThread] = useState<CodexThread | null>(null)
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
   const [fileChanges, setFileChanges] = useState<CodexFileChange[]>([])
   const [writerConflict, setWriterConflict] = useState(false)
@@ -152,8 +154,30 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
+  const turnStartedAtRef = useRef<number | null>(null)
   const writerConflictRef = useRef(false)
   const writerRefreshTimer = useRef<number | undefined>(undefined)
+
+  const beginTurnTimer = useCallback(() => {
+    if (turnStartedAtRef.current !== null) return
+    const startedAt = Date.now()
+    turnStartedAtRef.current = startedAt
+    setTurnStartedAt(startedAt)
+    setLastTurnDurationMs(null)
+  }, [])
+
+  const finishTurnTimer = useCallback(() => {
+    const startedAt = turnStartedAtRef.current
+    turnStartedAtRef.current = null
+    setTurnStartedAt(null)
+    if (startedAt !== null) setLastTurnDurationMs(Math.max(0, Date.now() - startedAt))
+  }, [])
+
+  const clearTurnTimer = useCallback(() => {
+    turnStartedAtRef.current = null
+    setTurnStartedAt(null)
+    setLastTurnDurationMs(null)
+  }, [])
 
   const refreshThreads = useCallback(async () => {
     try {
@@ -275,6 +299,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(true)
+      beginTurnTimer()
       setActivity({ label: '正在思考' })
       setFileChanges([])
       activityItemId.current = null
@@ -286,6 +311,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(false)
+      finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
       if (activeThreadId.current) {
@@ -363,7 +389,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [loadThread, refreshThreads])
+  }, [beginTurnTimer, finishTurnTimer, loadThread, refreshThreads])
 
   useEffect(() => {
     let disposed = false
@@ -439,6 +465,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setActiveThread(thread)
     setMessages([])
     setIsRunning(false)
+    clearTurnTimer()
     setActivity(null)
     setFileChanges([])
     writerConflictRef.current = false
@@ -456,7 +483,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       if (requestId === loadRequest.current) setLoadingHistory(false)
     }
-  }, [loadThread, onUnauthorized])
+  }, [clearTurnTimer, loadThread, onUnauthorized])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
     setLoadingHistory(true)
@@ -468,6 +495,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setActiveThread(thread)
       setMessages([])
       setIsRunning(false)
+      clearTurnTimer()
       setActivity(null)
       setFileChanges([])
       writerConflictRef.current = false
@@ -484,7 +512,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       setLoadingHistory(false)
     }
-  }, [onUnauthorized, token])
+  }, [clearTurnTimer, onUnauthorized, token])
 
   const sendMessage = useCallback(async (input: {
     prompt: string
@@ -514,6 +542,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       createdAt: new Date().toISOString(),
     }])
     setIsRunning(true)
+    beginTurnTimer()
     setActivity({ label: '正在思考' })
     writerConflictRef.current = false
     setWriterConflict(false)
@@ -551,6 +580,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
+      clearTurnTimer()
       setActivity(null)
       const message = reason instanceof Error ? reason.message : '发送消息失败'
       if (isActiveWriterError(reason)) {
@@ -566,7 +596,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [activeThread, createThread, loadingHistory, onUnauthorized, token])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, loadingHistory, onUnauthorized, token])
 
   const interrupt = useCallback(async () => {
     if (!activeThread) return
@@ -598,6 +628,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     activeThread,
     messages,
     isRunning,
+    turnStartedAt,
+    lastTurnDurationMs,
     activity,
     fileChanges,
     writerConflict,
