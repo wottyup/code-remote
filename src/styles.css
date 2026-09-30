@@ -325,6 +325,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .theme-option:hover, .remote-shell--theme-light .theme-option--active { border-color: #9eafc2; background: #edf2f6; }
 .remote-shell--theme-light .theme-option strong { color: #35404c; }
 .remote-shell--theme-light .theme-option small { color: #8a949e; }
+.remote-shell--theme-light .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { border-color: #aebdce; background: #e9eff5; }
+.remote-shell--theme-light .composer-menu__trigger > svg, .remote-shell--theme-light .composer-menu__label { color: #7b8794; }
+.remote-shell--theme-light .composer-menu__popover { border-color: #d9e0e7; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 35px rgba(35, 45, 58, .16), inset 0 1px 0 #fff; }
+.remote-shell--theme-light .composer-menu__option { color: #4d5965; }
+.remote-shell--theme-light .composer-menu__option:hover, .remote-shell--theme-light .composer-menu__option--selected { background: #e9eff5; color: #25303b; }
+.remote-shell--theme-light .composer-menu__option > svg { color: #5d7697; }
+.remote-shell--theme-light .send-button:not(:disabled) { background: #394858; color: #fff; }
+.remote-shell--theme-light .stop-button, .remote-shell--theme-light .attach-button { border-color: #d8e0e8; background: #f4f6f8; color: #46515d; }
+.remote-shell--theme-light .send-button:disabled, .remote-shell--theme-light .attach-button:disabled, .remote-shell--theme-light .attach-button--disabled { background: #e7ebef; color: #a1aab3; }
+.remote-shell--theme-light .composer-menu__empty { color: #7d8792; }
 
 .remote-shell--theme-warm { color-scheme: light; --line: #e8ded2; --muted: #88796a; background: #f3ebdf; color: #40362c; }
 .remote-shell--theme-warm .remote-sidebar { border-color: #e8ded2; background: #f8f1e8; }
@@ -355,6 +365,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .theme-option:hover, .remote-shell--theme-warm .theme-option--active { border-color: #c9aa88; background: #f5e9da; }
 .remote-shell--theme-warm .theme-option strong { color: #514335; }
 .remote-shell--theme-warm .theme-option small { color: #998979; }
+.remote-shell--theme-warm .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-warm .composer-menu--open .composer-menu__trigger { border-color: #c9aa88; background: #f2e5d5; }
+.remote-shell--theme-warm .composer-menu__trigger > svg, .remote-shell--theme-warm .composer-menu__label { color: #9a8168; }
+.remote-shell--theme-warm .composer-menu__popover { border-color: #e0cfbb; background: rgba(255, 250, 243, .98); box-shadow: 0 16px 35px rgba(98, 75, 52, .16), inset 0 1px 0 #fffdf9; }
+.remote-shell--theme-warm .composer-menu__option { color: #76604c; }
+.remote-shell--theme-warm .composer-menu__option:hover, .remote-shell--theme-warm .composer-menu__option--selected { background: #f2e5d5; color: #4a392b; }
+.remote-shell--theme-warm .composer-menu__option > svg { color: #9a7048; }
+.remote-shell--theme-warm .send-button:not(:disabled) { background: #6f5843; color: #fffaf3; }
+.remote-shell--theme-warm .stop-button, .remote-shell--theme-warm .attach-button { border-color: #e4d4c2; background: #fbf3e9; color: #624d3b; }
+.remote-shell--theme-warm .send-button:disabled, .remote-shell--theme-warm .attach-button:disabled, .remote-shell--theme-warm .attach-button--disabled { background: #eadfD2; color: #b2a18d; }
+.remote-shell--theme-warm .composer-menu__empty { color: #8b7d6d; }
 
 .remote-shell--theme-custom { color: var(--custom-theme-text-color); background: var(--custom-theme-background); }
 .remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .remote-chat, .remote-shell--theme-custom .theme-settings-panel { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
@@ -375,6 +395,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .theme-settings-card__heading, .remote-shell--theme-custom .theme-custom-controls { border-color: var(--custom-theme-border); }
 .remote-shell--theme-custom .theme-option { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
+.remote-shell--theme-custom .composer-menu__trigger > svg, .remote-shell--theme-custom .composer-menu__label { color: var(--custom-theme-text-color); opacity: .72; }
+.remote-shell--theme-custom .composer-menu__popover { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: 0 16px 35px rgba(0, 0, 0, .16); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .composer-menu__option { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .composer-menu__option:hover, .remote-shell--theme-custom .composer-menu__option--selected { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .composer-menu__option > svg { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .send-button:not(:disabled) { border: 1px solid var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .stop-button, .remote-shell--theme-custom .attach-button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .send-button:disabled, .remote-shell--theme-custom .attach-button:disabled, .remote-shell--theme-custom .attach-button--disabled { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); opacity: .5; }
+.remote-shell--theme-custom .composer-menu__empty { color: var(--custom-theme-text-color); opacity: .7; }
 
 @media (max-width: 700px) {
   .theme-settings-panel { grid-template-rows: 94px minmax(0, 1fr); }
