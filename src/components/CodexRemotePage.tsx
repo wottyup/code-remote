@@ -1,0 +1,184 @@
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  AlertTriangle,
+  Check,
+  LoaderCircle,
+  Menu,
+  MessageSquare,
+  Plus,
+  RefreshCw,
+  Send,
+  ShieldCheck,
+  Square,
+  X,
+} from 'lucide-react'
+import { useCodexRemote } from '../hooks/useCodexRemote'
+import type { CodexMessage, CodexThread } from '../lib/codexRemoteClient'
+
+interface Props {
+  token: string
+  onUnauthorized: () => void
+  onUnpair: () => void
+}
+
+const connectionLabel = {
+  connecting: '正在连接',
+  connected: 'Codex 已连接',
+  disconnected: '连接已断开',
+  unavailable: 'Codex 不可用',
+}
+
+function titleOf(thread: CodexThread) {
+  const title = thread.name || thread.preview || '新对话'
+  return title.length > 72 ? `${title.slice(0, 69)}…` : title
+}
+
+function timeOf(thread: CodexThread) {
+  const value = thread.updatedAt ?? thread.createdAt
+  if (typeof value !== 'number' && typeof value !== 'string') return ''
+  const date = typeof value === 'number'
+    ? new Date(value > 10_000_000_000 ? value : value * 1000)
+    : new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  const today = new Date()
+  return date.toDateString() === today.toDateString()
+    ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(date)
+    : new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date)
+}
+
+export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
+  const remote = useCodexRemote(token, onUnauthorized)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const messageContainer = useRef<HTMLDivElement>(null)
+  const composer = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    const container = messageContainer.current
+    if (container) container.scrollTop = container.scrollHeight
+  }, [remote.messages, remote.isRunning])
+
+  async function createThread() {
+    setSidebarOpen(false)
+    await remote.createThread()
+    composer.current?.focus()
+  }
+
+  async function selectThread(thread: CodexThread) {
+    setSidebarOpen(false)
+    await remote.selectThread(thread)
+  }
+
+  async function send(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const prompt = draft.trim()
+    if (!prompt || sending || remote.isRunning || remote.connection !== 'connected') return
+    setSending(true)
+    if (await remote.sendMessage(prompt)) setDraft('')
+    setSending(false)
+    composer.current?.focus()
+  }
+
+  function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      event.currentTarget.form?.requestSubmit()
+    }
+  }
+
+  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const canSend = draft.trim().length > 0 && !sending && !remote.isRunning && remote.connection === 'connected'
+
+  return (
+    <div className="remote-shell">
+      <aside className={`remote-sidebar${sidebarOpen ? ' remote-sidebar--open' : ''}`} aria-label="Codex 对话记录">
+        <div className="remote-sidebar__heading">
+          <div className="remote-brand"><span className="remote-brand__mark">C</span><span>Codex Remote</span></div>
+          <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
+        </div>
+        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected'}><Plus size={17} /><span>新建对话</span></button>
+        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote.refreshThreads()}><RefreshCw size={14} /></button></div>
+        <nav className="thread-list">
+          {remote.threads.map((thread) => (
+            <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
+              <MessageSquare size={15} />
+              <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><small>{timeOf(thread)}</small></span>
+            </button>
+          ))}
+          {remote.threads.length === 0 && !remote.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
+          {remote.loadingHistory && remote.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+        </nav>
+        <footer className="remote-sidebar__footer">
+          <i className={`status-dot status-dot--${remote.connection}`} />
+          <span>{connectionLabel[remote.connection]}</span>
+          <button type="button" onClick={onUnpair}>退出</button>
+        </footer>
+      </aside>
+
+      {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+
+      <main className="remote-chat">
+        <header className="remote-chat__header">
+          <div className="remote-chat__title-wrap">
+            <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
+            <div className="remote-chat__title"><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          </div>
+          <div className={`connection-label connection-label--${remote.connection}`}><i className={`status-dot status-dot--${remote.connection}`} /><span>{connectionLabel[remote.connection]}</span></div>
+        </header>
+
+        <section className="message-stream" ref={messageContainer} aria-live="polite" aria-label="Codex 对话">
+          {remote.messages.length === 0 && !remote.loadingHistory ? (
+            <div className="welcome-state">
+              <span className="welcome-state__mark">C</span>
+              <h1>你想在本机项目中完成什么？</h1>
+              <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
+              <div className="prompt-suggestions">
+                <button type="button" onClick={() => setDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
+                <button type="button" onClick={() => setDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
+              </div>
+            </div>
+          ) : null}
+          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
+          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} />)}
+          {remote.approval ? (
+            <div className="approval-card" role="alert">
+              <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
+              <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
+              {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
+              {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
+              <div className="approval-card__actions">
+                <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
+                <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
+              </div>
+            </div>
+          ) : null}
+          {remote.isRunning ? <div className="running-indicator"><LoaderCircle className="spin" size={15} /><span>Codex 正在处理</span></div> : null}
+        </section>
+
+        {remote.error ? <div className="remote-error" role="alert"><AlertTriangle size={15} /><span>{remote.error}</span></div> : null}
+
+        <form className="message-composer" onSubmit={(event) => void send(event)}>
+          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.isRunning || sending} placeholder={remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
+          <div className="message-composer__footer">
+            <span><ShieldCheck size={14} />本机 Codex · Enter 发送，Shift+Enter 换行</span>
+            {remote.isRunning ? <button className="stop-button" type="button" onClick={() => void remote.interrupt()}><Square size={13} fill="currentColor" />停止</button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>}
+          </div>
+        </form>
+      </main>
+    </div>
+  )
+}
+
+function MessageBubble({ message }: { message: CodexMessage }) {
+  return (
+    <article className={`chat-message chat-message--${message.role}`}>
+      <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
+      <div className="chat-message__body">
+        <div className="chat-message__meta"><strong>{message.role === 'user' ? '你' : 'Codex'}</strong>{message.streaming ? <span><LoaderCircle className="spin" size={12} />正在回复</span> : null}</div>
+        <pre>{message.text}</pre>
+        {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
+      </div>
+    </article>
+  )
+}
