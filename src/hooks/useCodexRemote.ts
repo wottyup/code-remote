@@ -69,6 +69,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const activeThreadId = useRef<string | null>(null)
+  const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
 
@@ -107,6 +108,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.type === 'connection') {
+      if (!event.connected) resumedThreadId.current = null
       setRuntime({
         available: Boolean(event.available),
         connected: Boolean(event.connected),
@@ -227,6 +229,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }, (nextState) => {
         if (disposed || currentGeneration !== socketGeneration) return
         setConnection(nextState)
+        if (nextState !== 'connected') resumedThreadId.current = null
         if (nextState === 'connected') {
           retryDelay = 500
           void refreshThreads()
@@ -253,9 +256,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         if (nextThreads.length > 0 && !activeThreadId.current) {
           const latest = nextThreads[0]
           activeThreadId.current = latest.id
+          resumedThreadId.current = null
           setActiveThread(latest)
           setLoadingHistory(true)
           await codexRemoteClient.resumeThread(token, latest.id)
+          resumedThreadId.current = latest.id
           await loadThread(latest.id)
           if (!disposed) setLoadingHistory(false)
         }
@@ -284,6 +289,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const selectThread = useCallback(async (thread: CodexThread) => {
     const requestId = ++loadRequest.current
     activeThreadId.current = thread.id
+    resumedThreadId.current = null
     setActiveThread(thread)
     setMessages([])
     setIsRunning(false)
@@ -293,6 +299,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setLoadingHistory(true)
     try {
       await codexRemoteClient.resumeThread(token, thread.id)
+      resumedThreadId.current = thread.id
       const data = await codexRemoteClient.readThread(token, thread.id)
       if (requestId !== loadRequest.current) return
       setActiveThread(data)
@@ -316,6 +323,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     try {
       const thread = await codexRemoteClient.createThread(token)
       activeThreadId.current = thread.id
+      resumedThreadId.current = thread.id
       setActiveThread(thread)
       setMessages([])
       setIsRunning(false)
@@ -335,6 +343,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [onUnauthorized, token])
 
   const sendMessage = useCallback(async (prompt: string) => {
+    if (loadingHistory) return false
     let thread = activeThread
     if (!thread) thread = await createThread()
     if (!thread) return false
@@ -346,17 +355,32 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setActivity({ label: '正在思考' })
     setError(null)
     try {
-      await codexRemoteClient.startTurn(token, thread.id, text)
+      if (resumedThreadId.current !== thread.id) {
+        await codexRemoteClient.resumeThread(token, thread.id)
+        resumedThreadId.current = thread.id
+      }
+      try {
+        await codexRemoteClient.startTurn(token, thread.id, text)
+      } catch (reason) {
+        if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
+        resumedThreadId.current = null
+        await codexRemoteClient.resumeThread(token, thread.id)
+        resumedThreadId.current = thread.id
+        await codexRemoteClient.startTurn(token, thread.id, text)
+      }
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
       setActivity(null)
-      setError(reason instanceof Error ? reason.message : '发送消息失败')
+      const message = reason instanceof Error ? reason.message : '发送消息失败'
+      setError(/thread not found/i.test(message)
+        ? '本机 Codex 已找不到这条对话。草稿仍保留，请新建对话后重新发送。'
+        : message)
       return false
     }
-  }, [activeThread, createThread, onUnauthorized, token])
+  }, [activeThread, createThread, loadingHistory, onUnauthorized, token])
 
   const interrupt = useCallback(async () => {
     if (!activeThread) return

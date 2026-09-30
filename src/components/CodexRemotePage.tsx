@@ -73,7 +73,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = draft.trim()
-    if (!prompt || sending || remote.isRunning || remote.connection !== 'connected') return
+    if (!prompt || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
     setSending(true)
     if (await remote.sendMessage(prompt)) setDraft('')
     setSending(false)
@@ -88,7 +88,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const canSend = draft.trim().length > 0 && !sending && !remote.isRunning && remote.connection === 'connected'
+  const canSend = draft.trim().length > 0 && !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
 
   return (
@@ -98,7 +98,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           <div className="remote-brand"><span className="remote-brand__mark">C</span><span>Codex Remote</span></div>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected'}><Plus size={17} /><span>新建对话</span></button>
+        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={17} /><span>新建对话</span></button>
         <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote.refreshThreads()}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
           {remote.threads.map((thread) => (
@@ -166,7 +166,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         {remote.error ? <div className="remote-error" role="alert"><AlertTriangle size={15} /><span>{remote.error}</span></div> : null}
 
         <form className="message-composer" onSubmit={(event) => void send(event)}>
-          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.isRunning || sending} placeholder={remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
+          <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} rows={2} aria-label="发送消息给 Codex" />
           <div className="message-composer__footer">
             <span><ShieldCheck size={14} />本机 Codex · Enter 发送，Shift+Enter 换行</span>
             {remote.isRunning ? <button className="stop-button" type="button" onClick={() => void remote.interrupt()}><Square size={13} fill="currentColor" />停止</button> : <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>}
