@@ -29,6 +29,18 @@ function isActiveWriterError(reason: unknown) {
   return reason instanceof Error && /active writer/i.test(reason.message)
 }
 
+function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
+  const previousImageMessages = current.filter((message) => message.role === 'user' && message.images?.length)
+  const used = new Set<string>()
+  return next.map((message) => {
+    if (message.role !== 'user' || message.images?.length) return message
+    const previous = previousImageMessages.find((candidate) => !used.has(candidate.id) && candidate.text === message.text)
+    if (!previous) return message
+    used.add(previous.id)
+    return { ...message, images: previous.images }
+  })
+}
+
 function activityForItem(value: unknown): CodexActivity {
   if (!value || typeof value !== 'object') return { label: '正在处理' }
   const item = value as Record<string, unknown>
@@ -112,7 +124,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const thread = await codexRemoteClient.readThread(token, threadId)
       if (activeThreadId.current !== threadId) return
       setActiveThread(thread)
-      setMessages(messagesFromThread(thread))
+      const loadedMessages = messagesFromThread(thread)
+      setMessages((current) => preserveCurrentImages(loadedMessages, current))
       const turns = Array.isArray(thread.turns) ? thread.turns : []
       const latest = turns.at(-1) as Record<string, unknown> | undefined
       const running = latest?.status === 'inProgress' || latest?.status === 'running'
