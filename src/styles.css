@@ -228,7 +228,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-menu__popover { max-width: min(270px, calc(100vw - 24px)); }
   .remote-chat__title span { max-width: 47vw; }
   .connection-label span { display: none; }
-  .message-stream { gap: 21px; padding: 20px 8px 18px; }
+  .message-stream { gap: 21px; padding: 20px 16px 18px; }
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__content { font-size: 12px; }
@@ -236,9 +236,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .approval-card { width: 100%; margin-inline: 0; }
   .welcome-state p { max-width: 290px; font-size: 11px; line-height: 1.6; }
   .prompt-suggestions { display: grid; width: min(100%, 290px); }
-  .message-composer { width: calc(100% - 16px); margin-bottom: max(8px, env(safe-area-inset-bottom)); padding: 8px 8px 6px; }
+  .message-composer { width: calc(100% - 32px); margin-bottom: max(8px, env(safe-area-inset-bottom)); padding: 8px 8px 6px; }
   .composer-editor { min-height: 42px; }
   .composer-hint { display: none; }
-  .remote-error { width: calc(100% - 16px); }
+  .remote-error { width: calc(100% - 32px); }
   .pair-card { padding: 25px 22px; }
 }
