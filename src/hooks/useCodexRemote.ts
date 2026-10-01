@@ -249,6 +249,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const interruptInFlightThreadId = useRef<string | null>(null)
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
+  const historyRevision = useRef(0)
   const activityItemId = useRef<string | null>(null)
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
@@ -301,10 +302,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const loadThread = useCallback(async (threadId: string) => {
+  const loadThread = useCallback(async (threadId: string, revision = historyRevision.current) => {
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
-      if (activeThreadId.current !== threadId) return
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
       persistActiveThreadId(thread.id)
       setActiveThread(thread)
       const loadedMessages = messagesFromThread(thread)
@@ -340,6 +341,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
       if (isActiveWriterError(reason)) {
         writerConflictRef.current = true
         setWriterConflict(true)
@@ -436,6 +438,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const turn = params.turn as Record<string, unknown> | undefined
       const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
       if (turnThreadId && turnThreadId !== activeThreadId.current) return
+      historyRevision.current += 1
       const turnId = typeof turn?.id === 'string'
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : null
@@ -474,9 +477,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
-      if (activeThreadId.current) {
+      const refreshThreadId = activeThreadId.current
+      const refreshRevision = ++historyRevision.current
+      if (refreshThreadId) {
         void refreshThreads()
-        void loadThread(activeThreadId.current)
+        void loadThread(refreshThreadId, refreshRevision)
       }
       return
     }
@@ -648,6 +653,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     const requestId = ++loadRequest.current
+    const threadRevision = ++historyRevision.current
     activeThreadId.current = thread.id
     persistActiveThreadId(thread.id)
     streamingAssistantMessageId.current = null
@@ -670,7 +676,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setApproval(null)
     setLoadingHistory(true)
     try {
-      const loaded = await loadThread(thread.id)
+      const loaded = await loadThread(thread.id, threadRevision)
       if (requestId !== loadRequest.current) return
       if (loaded) setError(null)
     } catch (reason) {
@@ -682,6 +688,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [clearTurnTimer, loadThread, onUnauthorized])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
+    historyRevision.current += 1
     setLoadingHistory(true)
     try {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
@@ -744,6 +751,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (interruptRequestedThreadId.current === thread.id) void dispatchInterrupt(thread.id, turnId)
     }
     const localId = `local-${Date.now()}`
+    historyRevision.current += 1
     setMessages((current) => [...current, {
       id: localId,
       role: 'user',
@@ -793,6 +801,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      historyRevision.current += 1
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
       activeTurnId.current = null
