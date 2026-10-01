@@ -448,19 +448,28 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
+    const previousDraft = draft
+    const previousImages = attachedImages
+    const previousDocument = attachedDocument
+    const previousAttachmentError = attachmentError
     setSending(true)
-    if (await remote.sendMessage({
+    setDraft('')
+    setAttachedImages([])
+    setAttachedDocument(null)
+    setAttachmentError(null)
+    const sent = await remote.sendMessage({
       prompt,
-      images: attachedImages,
-      document: attachedDocument || undefined,
+      images: previousImages,
+      document: previousDocument || undefined,
       model: selectedModel || undefined,
       effort: selectedEffort || undefined,
       approvalPolicy: selectedApprovalPolicy,
-    })) {
-      setDraft('')
-      setAttachedImages([])
-      setAttachedDocument(null)
-      setAttachmentError(null)
+    })
+    if (!sent) {
+      setDraft(previousDraft)
+      setAttachedImages(previousImages)
+      setAttachedDocument(previousDocument)
+      setAttachmentError(previousAttachmentError)
     }
     setSending(false)
     composer.current?.focus()
