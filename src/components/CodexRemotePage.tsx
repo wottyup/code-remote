@@ -877,10 +877,12 @@ function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
 }
 
 function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: () => void }) {
+  const showCopyAction = Boolean(message.text || message.documents?.length)
+
   return (
     <article className={`chat-message chat-message--${message.role}`}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
-      <div className="chat-message__body">
+      <div className={`chat-message__body${message.role === 'user' && showCopyAction ? ' chat-message__body--copy-outside' : ''}`}>
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {message.streaming ? (
@@ -894,7 +896,7 @@ function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMe
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
         {message.text ? <MessageContent text={message.text} /> : null}
         {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
-        {message.text || message.documents?.length ? <div className="chat-message__actions"><button type="button" onClick={onCopy}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
+        {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={onCopy}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
   )
