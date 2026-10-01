@@ -1,0 +1,23 @@
+[Unit]
+Description=Codex Remote development service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/code
+Environment=HOME=/root
+Environment=CODEX_REMOTE_WORKSPACE=/code/codex-remote
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/pnpm --filter codex-remote dev
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=15
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
