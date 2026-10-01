@@ -42,6 +42,7 @@ const maxLongPasteChars = 24_000
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
+const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const composerDraftStorageKey = 'codex-remote.composer-draft'
 
 interface ComposerPreferences {
@@ -49,6 +50,8 @@ interface ComposerPreferences {
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
 }
+
+type ThreadComposerPreferences = Record<string, ComposerPreferences>
 
 type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
 
@@ -109,17 +112,35 @@ function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
   return undefined
 }
 
+function composerPreferencesFrom(value: unknown): ComposerPreferences {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  const parsed = value as Record<string, unknown>
+  const preferences: ComposerPreferences = {}
+  if (typeof parsed.model === 'string' && parsed.model) preferences.model = parsed.model
+  if (typeof parsed.effort === 'string' && parsed.effort) preferences.effort = parsed.effort
+  const approvalPolicy = approvalPolicyOf(parsed.approvalPolicy)
+  if (approvalPolicy) preferences.approvalPolicy = approvalPolicy
+  return preferences
+}
+
+function mergeComposerPreferences(current: ComposerPreferences, changes: Partial<ComposerPreferences>) {
+  return composerPreferencesFrom({ ...current, ...changes })
+}
+
+function resolvedComposerPreferences(defaults: ComposerPreferences, threadPreferences?: ComposerPreferences): ComposerPreferences {
+  return {
+    model: threadPreferences?.model ?? defaults.model,
+    effort: threadPreferences?.effort ?? defaults.effort,
+    approvalPolicy: threadPreferences?.approvalPolicy ?? defaults.approvalPolicy,
+  }
+}
+
 function readComposerPreferences(): ComposerPreferences {
   if (typeof window === 'undefined') return {}
   try {
     const value = window.localStorage.getItem(composerPreferencesStorageKey)
     if (!value) return {}
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    return {
-      model: typeof parsed.model === 'string' ? parsed.model : undefined,
-      effort: typeof parsed.effort === 'string' ? parsed.effort : undefined,
-      approvalPolicy: approvalPolicyOf(parsed.approvalPolicy),
-    }
+    return composerPreferencesFrom(JSON.parse(value))
   } catch {
     return {}
   }
@@ -129,6 +150,33 @@ function saveComposerPreferences(preferences: ComposerPreferences) {
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(composerPreferencesStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Ignore storage restrictions; the composer still works for this session.
+  }
+}
+
+function readThreadComposerPreferences(): ThreadComposerPreferences {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(threadComposerPreferencesStorageKey)
+    if (!value) return {}
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const preferences: ThreadComposerPreferences = {}
+    for (const [threadId, savedPreferences] of Object.entries(parsed as Record<string, unknown>)) {
+      if (!threadId || threadId.length > 512) continue
+      preferences[threadId] = composerPreferencesFrom(savedPreferences)
+    }
+    return preferences
+  } catch {
+    return {}
+  }
+}
+
+function saveThreadComposerPreferences(preferences: ThreadComposerPreferences) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(threadComposerPreferencesStorageKey, JSON.stringify(preferences))
   } catch {
     // Ignore storage restrictions; the composer still works for this session.
   }
@@ -315,9 +363,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [draft, setDraft] = useState(readComposerDraft)
   const [sending, setSending] = useState(false)
-  const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
-  const [selectedEffort, setSelectedEffort] = useState(() => readComposerPreferences().effort ?? '')
-  const [selectedApprovalPolicy, setSelectedApprovalPolicy] = useState<CodexApprovalPolicy>(() => readComposerPreferences().approvalPolicy ?? 'on-request')
+  const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
+  const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -328,6 +375,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
 
+  const activeThreadId = remote.activeThread?.id
+  const activeComposerPreferences = activeThreadId
+    ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
+    : defaultComposerPreferences
+  const selectedModel = activeComposerPreferences.model ?? ''
+  const selectedEffort = activeComposerPreferences.effort ?? ''
+  const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
   const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = chosenModel?.supportedReasoningEfforts ?? []
   const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
@@ -352,6 +406,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => {
     saveComposerDraft(draft)
   }, [draft])
+
+  useEffect(() => {
+    saveComposerPreferences(defaultComposerPreferences)
+  }, [defaultComposerPreferences])
+
+  useEffect(() => {
+    saveThreadComposerPreferences(threadComposerPreferences)
+  }, [threadComposerPreferences])
 
   useEffect(() => {
     const container = messageContainer.current
@@ -395,31 +457,44 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     if (remote.models.length === 0) return
     if (selectedModel && remote.models.some((model) => modelIdOf(model) === selectedModel)) return
     const defaultModel = remote.models.find((model) => model.isDefault) ?? remote.models[0]
-    setSelectedModel(modelIdOf(defaultModel))
+    updateComposerPreferences({ model: modelIdOf(defaultModel) })
   }, [remote.models, selectedModel])
 
   useEffect(() => {
     if (remote.models.length === 0 || !chosenModel) return
     if (effortOptions.length === 0) {
-      setSelectedEffort('')
+      updateComposerPreferences({ effort: undefined })
       return
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
-    setSelectedEffort(chosenModel?.defaultReasoningEffort ?? effortOptions[0].reasoningEffort)
+    updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
   }, [chosenModel, effortOptions, remote.models.length, selectedEffort])
 
-  useEffect(() => {
-    if (!selectedModel && !selectedEffort && selectedApprovalPolicy === 'on-request') return
-    saveComposerPreferences({
-      model: selectedModel || undefined,
-      effort: selectedEffort || undefined,
-      approvalPolicy: selectedApprovalPolicy,
-    })
-  }, [selectedApprovalPolicy, selectedEffort, selectedModel])
+  function updateComposerPreferences(changes: Partial<ComposerPreferences>) {
+    if (!activeThreadId) {
+      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
+      return
+    }
+    setThreadComposerPreferences((current) => ({
+      ...current,
+      [activeThreadId]: mergeComposerPreferences(
+        resolvedComposerPreferences(defaultComposerPreferences, current[activeThreadId]),
+        changes,
+      ),
+    }))
+  }
+
+  function rememberThreadComposerPreferences(threadId: string, preferences: ComposerPreferences) {
+    if (!threadId) return
+    const snapshot = composerPreferencesFrom(preferences)
+    setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
+  }
 
   async function createThread() {
     setSidebarOpen(false)
-    await remote.createThread(selectedModel || undefined, selectedApprovalPolicy)
+    const preferences = composerPreferencesFrom(activeComposerPreferences)
+    const thread = await remote.createThread(preferences.model, preferences.approvalPolicy)
+    if (thread) rememberThreadComposerPreferences(thread.id, preferences)
     composer.current?.focus()
   }
 
@@ -440,6 +515,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const previousImages = attachedImages
     const previousDocument = attachedDocument
     const previousAttachmentError = attachmentError
+    const preferences = composerPreferencesFrom(activeComposerPreferences)
     setSending(true)
     setDraft('')
     setAttachedImages([])
@@ -449,9 +525,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       prompt,
       images: previousImages,
       document: previousDocument || undefined,
-      model: selectedModel || undefined,
-      effort: selectedEffort || undefined,
-      approvalPolicy: selectedApprovalPolicy,
+      model: preferences.model,
+      effort: preferences.effort,
+      approvalPolicy: preferences.approvalPolicy,
+      onThreadCreated: (thread) => rememberThreadComposerPreferences(thread.id, preferences),
     })
     if (!sent) {
       setDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
@@ -673,9 +750,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           </div>
           <div className="message-composer__footer">
             <div className="composer-preferences">
-              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={setSelectedModel} />
-              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || effortOptions.length === 0} onChange={setSelectedEffort} />
-              <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(value) => setSelectedApprovalPolicy(value as CodexApprovalPolicy)} />
+              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={(model) => updateComposerPreferences({ model })} />
+              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || effortOptions.length === 0} onChange={(effort) => updateComposerPreferences({ effort })} />
+              <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(approvalPolicy) => updateComposerPreferences({ approvalPolicy: approvalPolicy as CodexApprovalPolicy })} />
               <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
             </div>
             <div className="composer-actions">

@@ -647,6 +647,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     model?: string
     effort?: string
     approvalPolicy?: CodexApprovalPolicy
+    onThreadCreated?: (thread: CodexThread) => void
   }) => {
     if (loadingHistory) return false
     const text = input.prompt.trim()
@@ -656,7 +657,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       : ''
     const requestText = `${text}${documentText}`.trim()
     let thread = activeThread
-    if (!thread) thread = await createThread(input.model, input.approvalPolicy)
+    if (!thread) {
+      thread = await createThread(input.model, input.approvalPolicy)
+      if (thread) input.onThreadCreated?.(thread)
+    }
     if (!thread) return false
     const rememberStartedTurn = (turnId: string | null) => {
       if (!turnId) return
