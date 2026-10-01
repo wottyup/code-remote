@@ -139,7 +139,7 @@ class CodexAppServer:
         if approval_policy:
             params["approvalPolicy"] = approval_policy
             params["sandboxPolicy"] = {
-                "type": "danger-full-access" if approval_policy == "never" else "workspace-write",
+                "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
         result = await self.request("turn/start", params)
         turn = result.get("turn")
