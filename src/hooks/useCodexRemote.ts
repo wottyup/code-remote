@@ -41,6 +41,15 @@ export interface CodexFileChange {
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 const activeThreadStorageKey = 'codex-remote.active-thread-id'
+const activeThreadCacheStorageKey = 'codex-remote.active-thread-cache'
+const maxCachedHistoryCharacters = 600_000
+const maxCachedMessageCharacters = 120_000
+
+interface PersistedActiveThread {
+  threadId: string
+  thread: CodexThread
+  messages: CodexMessage[]
+}
 
 function readPersistedActiveThreadId() {
   try {
@@ -56,6 +65,70 @@ function persistActiveThreadId(threadId: string) {
     window.localStorage.setItem(activeThreadStorageKey, threadId)
   } catch {
     // The current conversation remains available until the page is closed.
+  }
+}
+
+function readPersistedActiveThreadCache(threadId: string | null): PersistedActiveThread | null {
+  if (!threadId) return null
+  try {
+    const value = window.localStorage.getItem(activeThreadCacheStorageKey)
+    if (!value) return null
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    if (parsed.threadId !== threadId || !parsed.thread || typeof parsed.thread !== 'object' || !Array.isArray(parsed.messages)) return null
+    const thread = parsed.thread as Record<string, unknown>
+    if (thread.id !== threadId) return null
+    const messages = parsed.messages.flatMap((value) => {
+      if (!value || typeof value !== 'object') return []
+      const message = value as Record<string, unknown>
+      if (typeof message.id !== 'string' || (message.role !== 'user' && message.role !== 'assistant') || typeof message.text !== 'string' || typeof message.createdAt !== 'string') return []
+      return [{
+        id: message.id,
+        role: message.role,
+        text: message.text,
+        createdAt: message.createdAt,
+      } as CodexMessage]
+    })
+    return { threadId, thread: thread as unknown as CodexThread, messages }
+  } catch {
+    return null
+  }
+}
+
+function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[]) {
+  try {
+    const cachedMessages: CodexMessage[] = []
+    let cachedCharacters = 0
+    for (const message of [...messages].reverse()) {
+      const text = message.text.length > maxCachedMessageCharacters
+        ? `${message.text.slice(0, maxCachedMessageCharacters - 1)}…`
+        : message.text
+      const compactMessage = {
+        id: message.id,
+        role: message.role,
+        text,
+        createdAt: message.createdAt,
+      } as CodexMessage
+      const messageCharacters = text.length + 128
+      if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
+      cachedMessages.unshift(compactMessage)
+      cachedCharacters += messageCharacters
+    }
+    const compactThread: CodexThread = {
+      id: thread.id,
+      ...(thread.name !== undefined ? { name: thread.name } : {}),
+      ...(thread.preview !== undefined ? { preview: thread.preview } : {}),
+      ...(thread.cwd !== undefined ? { cwd: thread.cwd } : {}),
+      ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+      ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
+      ...(thread.status !== undefined ? { status: thread.status } : {}),
+    }
+    window.localStorage.setItem(activeThreadCacheStorageKey, JSON.stringify({
+      threadId: thread.id,
+      thread: compactThread,
+      messages: cachedMessages,
+    }))
+  } catch {
+    // Cached history is an optimization; the server remains the source of truth.
   }
 }
 
@@ -152,12 +225,13 @@ function activityForItem(value: unknown): CodexActivity {
 
 export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [initialActiveThreadId] = useState(readPersistedActiveThreadId)
+  const [initialCachedThread] = useState(() => readPersistedActiveThreadCache(initialActiveThreadId))
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)
   const [threads, setThreads] = useState<CodexThread[]>([])
   const [models, setModels] = useState<CodexModel[]>([])
-  const [activeThread, setActiveThread] = useState<CodexThread | null>(null)
-  const [messages, setMessages] = useState<CodexMessage[]>([])
+  const [activeThread, setActiveThread] = useState<CodexThread | null>(() => initialCachedThread?.thread ?? null)
+  const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
   const [isRunning, setIsRunning] = useState(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
@@ -234,6 +308,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       persistActiveThreadId(thread.id)
       setActiveThread(thread)
       const loadedMessages = messagesFromThread(thread)
+      persistActiveThreadCache(thread, loadedMessages)
       setMessages((current) => preserveCurrentImages(loadedMessages, current))
       const turns = Array.isArray(thread.turns) ? thread.turns : []
       const latest = turns.at(-1) as Record<string, unknown> | undefined
@@ -503,8 +578,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         if (nextState !== 'connected') resumedThreadId.current = null
         if (nextState === 'connected') {
           retryDelay = 500
-          void refreshThreads()
           void restoreActiveThread()
+          void refreshThreads()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
           if (retryTimer !== undefined) return
           retryTimer = window.setTimeout(() => {
@@ -543,9 +618,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         if (disposed) return
         setRuntime(nextRuntime)
         connect()
-        await Promise.all([refreshThreads(), refreshModels()])
-        if (disposed) return
-        await restoreActiveThread()
+        void restoreActiveThread()
+        void refreshThreads()
+        void refreshModels()
       } catch (reason) {
         if (disposed) return
         if (reason instanceof RemoteApiError && reason.status === 401) {
@@ -581,8 +656,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     interruptRequestedThreadId.current = null
     interruptInFlightThreadId.current = null
     resumedThreadId.current = null
-    setActiveThread(thread)
-    setMessages([])
+    const cachedThread = readPersistedActiveThreadCache(thread.id)
+    setActiveThread(cachedThread ? { ...cachedThread.thread, ...thread } : thread)
+    setMessages(cachedThread?.messages ?? [])
     setIsRunning(false)
     setIsInterrupting(false)
     clearTurnTimer()
