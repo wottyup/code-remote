@@ -35,6 +35,16 @@ pnpm --filter codex-remote dev
 
 网页开发服务器把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
 
+Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter codex-remote dev`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
+
+```powershell
+$env:CODEX_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.cmd"
+$env:CODEX_REMOTE_WORKSPACE = "C:\path\to\your\project"
+pnpm --filter codex-remote dev
+```
+
+后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
+
 受信任设备的令牌摘要保存于 `~/.codex/codex-remote/trusted-devices.json`，原始令牌和配对码不会写入该文件。网页中的“退出”会撤销当前设备；如果设备遗失，可停止服务后删除该文件，再启动服务使所有设备重新配对。可用 `CODEX_REMOTE_AUTH_FILE` 设置该状态文件的位置。
 
 ## 工作目录和历史会话

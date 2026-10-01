@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import shutil
 from pathlib import Path
 from typing import Any, Literal
@@ -41,7 +42,7 @@ class CodexAppServer:
 
     def status(self) -> dict[str, Any]:
         return {
-            "available": shutil.which(self.command) is not None,
+            "available": self._resolve_executable() is not None,
             "connected": self.connected,
             "workspace": str(self.workspace),
             "error": None,
@@ -192,7 +193,7 @@ class CodexAppServer:
             if self.connected:
                 return
             await self._stop_process()
-            executable = shutil.which(self.command)
+            executable = self._resolve_executable()
             if not executable:
                 raise CodexRuntimeError(f"找不到 Codex CLI：{self.command}")
             if not self.workspace.is_dir():
@@ -237,6 +238,16 @@ class CodexAppServer:
                 if isinstance(error, CodexRuntimeError):
                     raise
                 raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+
+    def _resolve_executable(self) -> str | None:
+        candidates = [self.command]
+        if os.name == "nt" and not Path(self.command).suffix:
+            candidates.extend((f"{self.command}.cmd", f"{self.command}.exe"))
+        for candidate in candidates:
+            executable = shutil.which(candidate)
+            if executable:
+                return executable
+        return None
 
     async def _request(self, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
         request_id = f"codex-remote-{self._request_id}"
