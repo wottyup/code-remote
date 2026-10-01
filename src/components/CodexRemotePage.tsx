@@ -35,7 +35,10 @@ const connectionLabel = {
 }
 
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const themeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
+const maxThemeImageSize = 2 * 1024 * 1024
+const maxThemeImageDataUrlLength = Math.ceil(maxThemeImageSize * 4 / 3) + 256
 const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
@@ -60,6 +63,7 @@ interface ThemePreferences {
   customBackgroundColor: string
   customTextColor: string
   customBackgroundTransparency: number
+  customBackgroundImage?: string
 }
 
 const themePreferencesStorageKey = 'codex-remote.theme-preferences'
@@ -78,6 +82,11 @@ function normalizeTransparency(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
 }
 
+function normalizeThemeBackgroundImage(value: unknown) {
+  if (typeof value !== 'string' || value.length > maxThemeImageDataUrlLength) return undefined
+  return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
+}
+
 function readThemePreferences(): ThemePreferences {
   if (typeof window === 'undefined') return defaultThemePreferences
   try {
@@ -85,11 +94,13 @@ function readThemePreferences(): ThemePreferences {
     if (!value) return defaultThemePreferences
     const parsed = JSON.parse(value) as Record<string, unknown>
     const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' ? parsed.theme : defaultThemePreferences.theme
+    const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
     return {
       theme,
       customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
       customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
       customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
+      ...(customBackgroundImage ? { customBackgroundImage } : {}),
     }
   } catch {
     return defaultThemePreferences
@@ -231,6 +242,19 @@ function readImage(file: File): Promise<CodexImageAttachment> {
         return
       }
       resolve({ name: file.name || 'image', mediaType: file.type as CodexImageAttachment['mediaType'], data: result.slice(separator + 1) })
+    }
+    reader.readAsDataURL(file)
+  })
+}
+
+function readThemeBackgroundImage(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`))
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? normalizeThemeBackgroundImage(reader.result) : undefined
+      if (result) resolve(result)
+      else reject(new Error('背景图片格式无效或图片过大。'))
     }
     reader.readAsDataURL(file)
   })
@@ -387,6 +411,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
   const themeStyle = {
     '--custom-theme-background': themePreferences.customBackgroundColor,
+    '--custom-theme-background-image': themePreferences.customBackgroundImage
+      ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${themePreferences.customBackgroundImage}")`
+      : 'none',
     '--custom-theme-text-color': themePreferences.customTextColor,
     '--custom-theme-surface': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.88)),
     '--custom-theme-control': rgbaFromHex('#ffffff', Math.max(0.04, customSurfaceOpacity * 0.72)),
@@ -776,12 +803,32 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 }
 
 function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
+  const [imageError, setImageError] = useState<string | null>(null)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
-    { value: 'custom', label: '自定义颜色', description: '背景与文字', previewClass: 'theme-option__preview--custom' },
+    { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
+
+  async function updateBackgroundImage(file: File | undefined) {
+    setImageError(null)
+    if (!file) return
+    if (!themeImageTypes.has(file.type)) {
+      setImageError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
+      return
+    }
+    if (file.size > maxThemeImageSize) {
+      setImageError('背景图片不能超过 2 MB。')
+      return
+    }
+    try {
+      const customBackgroundImage = await readThemeBackgroundImage(file)
+      onChange({ ...preferences, customBackgroundImage })
+    } catch (reason) {
+      setImageError(reason instanceof Error ? reason.message : '背景图片读取失败。')
+    }
+  }
 
   return (
     <main className="theme-settings-panel" aria-label="主题设置">
@@ -807,7 +854,18 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                 key={option.value}
                 onClick={() => onChange({ ...preferences, theme: option.value })}
               >
-                <span className={`theme-option__preview ${option.previewClass}`} style={option.value === 'custom' ? { background: preferences.customBackgroundColor } : undefined} aria-hidden="true" />
+                <span
+                  className={`theme-option__preview ${option.previewClass}`}
+                  style={option.value === 'custom' ? {
+                    backgroundColor: preferences.customBackgroundColor,
+                    backgroundImage: preferences.customBackgroundImage
+                      ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`
+                      : 'none',
+                    backgroundPosition: 'center',
+                    backgroundSize: 'cover',
+                  } : undefined}
+                  aria-hidden="true"
+                />
                 <span><strong>{option.label}</strong><small>{option.description}</small></span>
               </button>
             ))}
@@ -827,6 +885,32 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                 <span><strong>背景透明度</strong><small>数值越高，界面面板越透明。</small></span>
                 <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
               </label>
+              <div className="theme-control-row theme-image-row">
+                <span><strong>背景图片</strong><small>仅保存在当前浏览器，最大 2 MB。</small></span>
+                <span className="theme-image-input">
+                  <span className={`theme-image-preview${preferences.customBackgroundImage ? '' : ' theme-image-preview--empty'}`}>
+                    {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt="当前背景图片预览" /> : <span>未设置</span>}
+                  </span>
+                  <span className="theme-image-actions">
+                    <label className="theme-image-upload">
+                      <ImagePlus size={14} />
+                      <span>选择图片</span>
+                      <input
+                        type="file"
+                        accept="image/png,image/jpeg,image/webp,image/gif"
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0]
+                          event.currentTarget.value = ''
+                          void updateBackgroundImage(file)
+                        }}
+                        aria-label="上传背景图片"
+                      />
+                    </label>
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined }) }}><X size={13} />清除</button> : null}
+                  </span>
+                </span>
+              </div>
+              {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
         </section>
