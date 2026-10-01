@@ -173,6 +173,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
+  const streamingAssistantMessageId = useRef<string | null>(null)
+  const streamingAssistantParts = useRef(new Map<string, string>())
   const turnStartedAtRef = useRef<number | null>(null)
   const writerConflictRef = useRef(false)
   const writerRefreshTimer = useRef<number | undefined>(undefined)
@@ -236,6 +238,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const latestTurnId = typeof latest?.id === 'string' ? latest.id : null
       if (running && latestTurnId) activeTurnId.current = latestTurnId
       else if (!running) activeTurnId.current = null
+      if (!running) {
+        streamingAssistantMessageId.current = null
+        streamingAssistantParts.current.clear()
+      }
       setIsRunning(running)
       if (writerConflictRef.current) {
         if (running) {
@@ -330,6 +336,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : null
       if (turnId) activeTurnId.current = turnId
+      streamingAssistantMessageId.current = null
+      streamingAssistantParts.current.clear()
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
@@ -346,6 +354,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(false)
+      setMessages((current) => current.map((message) => message.streaming ? { ...message, streaming: false } : message))
+      streamingAssistantMessageId.current = null
+      streamingAssistantParts.current.clear()
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
@@ -388,16 +399,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (event.method === 'item/agentMessage/delta') {
       const itemId = typeof params.itemId === 'string' ? params.itemId : `stream-${Date.now()}`
       const delta = typeof params.delta === 'string' ? params.delta : ''
+      const part = streamingAssistantParts.current.get(itemId) ?? ''
+      streamingAssistantParts.current.set(itemId, part + delta)
+      const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? Date.now()}`
+      streamingAssistantMessageId.current = messageId
+      const text = [...streamingAssistantParts.current.values()].join('')
       activityItemId.current = itemId
       setActivity({ label: '正在回复' })
       setMessages((current) => {
-        const exists = current.some((message) => message.id === itemId)
-        if (exists) {
-          return current.map((message) => message.id === itemId
-            ? { ...message, text: message.text + delta, streaming: true }
-            : message)
-        }
-        return [...current, { id: itemId, role: 'assistant', text: delta, createdAt: new Date().toISOString(), streaming: true }]
+        const exists = current.some((message) => message.id === messageId)
+        if (exists) return current.map((message) => message.id === messageId ? { ...message, text, streaming: true } : message)
+        return [...current, { id: messageId, role: 'assistant', text, createdAt: new Date().toISOString(), streaming: true }]
       })
       return
     }
@@ -415,11 +427,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       const text = typeof item.text === 'string' ? item.text : ''
       if (!itemId) return
+      streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
+      const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? itemId}`
+      streamingAssistantMessageId.current = messageId
+      const combinedText = [...streamingAssistantParts.current.values()].join('')
       setMessages((current) => {
-        const exists = current.some((message) => message.id === itemId)
-        if (!exists && !text) return current
-        if (!exists) return [...current, { id: itemId, role: 'assistant', text, createdAt: new Date().toISOString() }]
-        return current.map((message) => message.id === itemId ? { ...message, text: text || message.text, streaming: false } : message)
+        const exists = current.some((message) => message.id === messageId)
+        if (!exists && !combinedText) return current
+        if (!exists) return [...current, { id: messageId, role: 'assistant', text: combinedText, createdAt: new Date().toISOString(), streaming: true }]
+        return current.map((message) => message.id === messageId ? { ...message, text: combinedText, streaming: true } : message)
       })
       return
     }
@@ -520,6 +536,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     const requestId = ++loadRequest.current
     activeThreadId.current = thread.id
     persistActiveThreadId(thread.id)
+    streamingAssistantMessageId.current = null
+    streamingAssistantParts.current.clear()
     activeTurnId.current = null
     resumedThreadId.current = null
     setActiveThread(thread)
@@ -551,6 +569,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
       activeThreadId.current = thread.id
       persistActiveThreadId(thread.id)
+      streamingAssistantMessageId.current = null
+      streamingAssistantParts.current.clear()
       activeTurnId.current = null
       resumedThreadId.current = thread.id
       setActiveThread(thread)
