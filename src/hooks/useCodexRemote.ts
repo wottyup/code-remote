@@ -24,6 +24,11 @@ export interface CodexActivity {
   detail?: string
 }
 
+export interface CodexThreadCompletion {
+  threadId: string
+  completedAt: number
+}
+
 export interface CodexFileChangeEntry {
   path: string
   kind?: string
@@ -242,6 +247,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
+  const [completedThreadIds, setCompletedThreadIds] = useState<string[]>([])
+  const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const activeThreadId = useRef<string | null>(initialActiveThreadId)
   const activeTurnId = useRef<string | null>(null)
@@ -277,6 +284,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     turnStartedAtRef.current = null
     setTurnStartedAt(null)
     setLastTurnDurationMs(null)
+  }, [])
+
+  const clearThreadCompletion = useCallback((threadId: string) => {
+    if (!threadId) return
+    setCompletedThreadIds((current) => current.includes(threadId) ? current.filter((id) => id !== threadId) : current)
+    setLatestThreadCompletion((current) => current?.threadId === threadId ? null : current)
+  }, [])
+
+  const markThreadCompletion = useCallback((threadId: string) => {
+    if (!threadId || threadId === activeThreadId.current) return
+    setCompletedThreadIds((current) => current.includes(threadId) ? current : [...current, threadId])
+    setLatestThreadCompletion({ threadId, completedAt: Date.now() })
   }, [])
 
   const refreshThreads = useCallback(async () => {
@@ -431,11 +450,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (event.type !== 'notification' || !event.method) return
 
     const params = event.params ?? {}
-    const eventThreadId = typeof params.threadId === 'string' ? params.threadId : null
-    if (eventThreadId && eventThreadId !== activeThreadId.current) return
+    const eventTurn = params.turn as Record<string, unknown> | undefined
+    const eventThreadId = typeof params.threadId === 'string'
+      ? params.threadId
+      : typeof eventTurn?.threadId === 'string' ? eventTurn.threadId : null
+    if (eventThreadId && eventThreadId !== activeThreadId.current) {
+      if (event.method === 'turn/started') {
+        clearThreadCompletion(eventThreadId)
+        void refreshThreads()
+      } else if (event.method === 'turn/completed') {
+        markThreadCompletion(eventThreadId)
+        void refreshThreads()
+      } else if (event.method === 'thread/name/updated') {
+        void refreshThreads()
+      }
+      return
+    }
 
     if (event.method === 'turn/started') {
-      const turn = params.turn as Record<string, unknown> | undefined
+      const turn = eventTurn
       const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
       if (turnThreadId && turnThreadId !== activeThreadId.current) return
       historyRevision.current += 1
@@ -459,7 +492,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'turn/completed') {
-      const turn = params.turn as Record<string, unknown> | undefined
+      const turn = eventTurn
       const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
       if (turnThreadId && turnThreadId !== activeThreadId.current) return
       activeTurnId.current = null
@@ -559,7 +592,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [beginTurnTimer, dispatchInterrupt, finishTurnTimer, loadThread, refreshThreads])
+  }, [beginTurnTimer, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, loadThread, markThreadCompletion, refreshThreads])
 
   useEffect(() => {
     let disposed = false
@@ -654,6 +687,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const selectThread = useCallback(async (thread: CodexThread) => {
     const requestId = ++loadRequest.current
     const threadRevision = ++historyRevision.current
+    clearThreadCompletion(thread.id)
     activeThreadId.current = thread.id
     persistActiveThreadId(thread.id)
     streamingAssistantMessageId.current = null
@@ -685,7 +719,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       if (requestId === loadRequest.current) setLoadingHistory(false)
     }
-  }, [clearTurnTimer, loadThread, onUnauthorized])
+  }, [clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
     historyRevision.current += 1
@@ -866,6 +900,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     loadingHistory,
     error,
     approval,
+    completedThreadIds,
+    latestThreadCompletion,
     refreshThreads,
     refreshModels,
     selectThread,
@@ -873,6 +909,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     sendMessage,
     interrupt,
     respondToApproval,
+    clearThreadCompletion,
     refreshActiveThread,
   }
 }

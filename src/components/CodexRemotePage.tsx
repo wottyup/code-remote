@@ -398,6 +398,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const composer = useRef<HTMLTextAreaElement>(null)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
+  const completionToastTimer = useRef<number | undefined>(undefined)
+  const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
 
   const activeThreadId = remote.activeThread?.id
   const activeComposerPreferences = activeThreadId
@@ -441,6 +443,26 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => {
     saveThreadComposerPreferences(threadComposerPreferences)
   }, [threadComposerPreferences])
+
+  useEffect(() => {
+    const completion = remote.latestThreadCompletion
+    if (!completion) {
+      setCompletionToast(null)
+      return
+    }
+    setCompletionToast(completion)
+    const timer = window.setTimeout(() => {
+      if (completionToastTimer.current === timer) completionToastTimer.current = undefined
+      setCompletionToast((current) => current?.completedAt === completion.completedAt ? null : current)
+    }, 6_500)
+    completionToastTimer.current = timer
+    return () => {
+      if (completionToastTimer.current === timer) {
+        window.clearTimeout(timer)
+        completionToastTimer.current = undefined
+      }
+    }
+  }, [remote.latestThreadCompletion])
 
   useEffect(() => {
     const container = messageContainer.current
@@ -517,6 +539,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }
 
+  function dismissCompletionToast() {
+    if (completionToastTimer.current !== undefined) {
+      window.clearTimeout(completionToastTimer.current)
+      completionToastTimer.current = undefined
+    }
+    setCompletionToast(null)
+  }
+
   async function createThread() {
     setSidebarOpen(false)
     const preferences = composerPreferencesFrom(activeComposerPreferences)
@@ -527,7 +557,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   async function selectThread(thread: CodexThread) {
     setSidebarOpen(false)
+    if (completionToast?.threadId === thread.id) dismissCompletionToast()
     await remote.selectThread(thread)
+  }
+
+  function openCompletedThread() {
+    if (!completionToast) return
+    const thread = remote.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
+    void selectThread(thread)
   }
 
   async function send(event: FormEvent<HTMLFormElement>) {
@@ -654,6 +691,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
   const canAttachImages = canCompose && modelSupportsImages
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
+  const completionThreadTitle = completionThread ? titleOf(completionThread) : '一条对话'
   const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
     const id = modelIdOf(model)
     if (!id) return []
@@ -667,6 +706,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   return (
     <div className={`remote-shell remote-shell--theme-${themePreferences.theme}`} style={themeStyle}>
+      {completionToast ? (
+        <div className="thread-completion-toast" role="status" aria-live="polite">
+          <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
+            <span className="thread-completion-toast__icon"><Check size={15} strokeWidth={2.8} /></span>
+            <span className="thread-completion-toast__copy"><strong>{completionThreadTitle} 已完成回复</strong><small>点击查看这条对话</small></span>
+          </button>
+          <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={dismissCompletionToast}><X size={15} /></button>
+        </div>
+      ) : null}
       <aside className={`remote-sidebar${sidebarOpen ? ' remote-sidebar--open' : ''}`} aria-label="Codex 对话记录">
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><span className="remote-brand__mark">C</span><span className="remote-brand__copy"><strong>Codex Remote</strong><small>本机 Agent 工作台</small></span></div>
@@ -678,7 +726,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           {remote.threads.map((thread) => (
             <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
               <MessageSquare size={15} />
-              <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><small>{timeOf(thread)}</small></span>
+              <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
             </button>
           ))}
           {remote.threads.length === 0 && !remote.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
