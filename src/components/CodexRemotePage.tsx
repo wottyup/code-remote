@@ -42,6 +42,7 @@ const maxLongPasteChars = 24_000
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
+const composerDraftStorageKey = 'codex-remote.composer-draft'
 
 interface ComposerPreferences {
   model?: string
@@ -142,6 +143,25 @@ function saveComposerPreferences(preferences: ComposerPreferences) {
     window.localStorage.setItem(composerPreferencesStorageKey, JSON.stringify(preferences))
   } catch {
     // Ignore storage restrictions; the composer still works for this session.
+  }
+}
+
+function readComposerDraft() {
+  if (typeof window === 'undefined') return ''
+  try {
+    return window.localStorage.getItem(composerDraftStorageKey) ?? ''
+  } catch {
+    return ''
+  }
+}
+
+function saveComposerDraft(draft: string) {
+  if (typeof window === 'undefined') return
+  try {
+    if (draft) window.localStorage.setItem(composerDraftStorageKey, draft)
+    else window.localStorage.removeItem(composerDraftStorageKey)
+  } catch {
+    // The composer still works for this session when storage is unavailable.
   }
 }
 
@@ -305,7 +325,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
-  const [draft, setDraft] = useState('')
+  const [draft, setDraft] = useState(readComposerDraft)
   const [sending, setSending] = useState(false)
   const [selectedModel, setSelectedModel] = useState(() => readComposerPreferences().model ?? '')
   const [selectedEffort, setSelectedEffort] = useState(() => readComposerPreferences().effort ?? '')
@@ -340,6 +360,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       // Theme preferences still apply for the current session when storage is unavailable.
     }
   }, [themePreferences])
+
+  useEffect(() => {
+    saveComposerDraft(draft)
+  }, [draft])
 
   useEffect(() => {
     const container = messageContainer.current

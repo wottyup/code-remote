@@ -461,6 +461,27 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       })
     }
 
+    let wasHidden = document.visibilityState === 'hidden'
+    const resumeFromBackground = () => {
+      if (disposed) return
+      retryDelay = 500
+      connect()
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        wasHidden = true
+        return
+      }
+      if (!wasHidden) return
+      wasHidden = false
+      resumeFromBackground()
+    }
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) resumeFromBackground()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pageshow', handlePageShow)
+
     void (async () => {
       try {
         const nextRuntime = await codexRemoteClient.status(token)
@@ -490,6 +511,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       socketRef.current?.close()
       socketRef.current = null
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pageshow', handlePageShow)
     }
   }, [handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, token])
 
