@@ -773,7 +773,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ) : null}
           <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
             <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
-            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected'} placeholder={remote.loadingHistory ? '正在恢复对话，可先编辑草稿…' : remote.connection !== 'connected' ? '等待本机 Codex 连接…' : remote.isRunning || sending ? 'Codex 正在回复，可继续编辑下一条消息…' : '给 Codex 发送消息…'} aria-label="发送消息给 Codex" />
+            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected'} placeholder={remote.connection !== 'connected' ? '等待本机 Codex 连接…' : '给 Codex 发送消息…'} aria-label="发送消息给 Codex" />
           </div>
           <div className="message-composer__footer">
             <div className="composer-preferences">
