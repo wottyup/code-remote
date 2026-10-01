@@ -240,6 +240,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .attach-button--native:focus-within { border-color: #8da4d5; box-shadow: 0 0 0 2px rgba(141, 164, 213, .22); }
 .attach-button--disabled .image-input { cursor: not-allowed; }
 .stop-button { border: 1px solid #454950; background: #282a30; color: #c9cbd1; font-size: 9px; }
+.stop-button:disabled { cursor: wait; opacity: .62; }
 .spin { animation: spin .85s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 

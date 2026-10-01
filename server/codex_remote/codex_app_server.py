@@ -33,6 +33,7 @@ class CodexAppServer:
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
+        self._pending_turn_starts: dict[str, asyncio.Future[str | None]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
 
@@ -142,14 +143,37 @@ class CodexAppServer:
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
-        result = await self.request("turn/start", params)
-        turn = result.get("turn")
-        if isinstance(turn, dict) and isinstance(turn.get("id"), str):
-            self._active_turn_ids[thread_id] = turn["id"]
-        return result
+        pending_start = asyncio.get_running_loop().create_future()
+        self._pending_turn_starts[thread_id] = pending_start
+        try:
+            result = await self.request("turn/start", params)
+            turn = result.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+            if turn_id:
+                self._active_turn_ids[thread_id] = turn_id
+            if not pending_start.done():
+                pending_start.set_result(turn_id)
+            return result
+        except Exception:
+            if not pending_start.done():
+                pending_start.set_result(None)
+            raise
+        finally:
+            if self._pending_turn_starts.get(thread_id) is pending_start:
+                self._pending_turn_starts.pop(thread_id, None)
 
     async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
-        active_turn_id = turn_id or self._active_turn_ids.get(thread_id)
+        active_turn_id = self._active_turn_ids.get(thread_id)
+        if not active_turn_id:
+            pending_start = self._pending_turn_starts.get(thread_id)
+            if pending_start:
+                try:
+                    pending_turn_id = await asyncio.wait_for(asyncio.shield(pending_start), timeout=5)
+                except TimeoutError:
+                    pending_turn_id = None
+                active_turn_id = self._active_turn_ids.get(thread_id) or pending_turn_id or turn_id
+            else:
+                active_turn_id = turn_id
         if not active_turn_id:
             raise CodexRuntimeError("Codex 当前没有可中断的任务")
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
@@ -169,10 +193,11 @@ class CodexAppServer:
     async def close(self) -> None:
         process = self._process
         self._initialized = False
-        if process is None:
-            return
         self._server_requests.clear()
         self._active_turn_ids.clear()
+        self._finish_pending_turn_starts()
+        if process is None:
+            return
         if process.stdin and not process.stdin.is_closing():
             process.stdin.close()
         try:
@@ -356,6 +381,9 @@ class CodexAppServer:
                 thread_id = candidate if isinstance(candidate, str) else None
             if method == "turn/started" and thread_id and turn_id:
                 self._active_turn_ids[thread_id] = turn_id
+                pending_start = self._pending_turn_starts.get(thread_id)
+                if pending_start and not pending_start.done():
+                    pending_start.set_result(turn_id)
             elif method == "turn/completed" and turn_id:
                 if thread_id:
                     if self._active_turn_ids.get(thread_id) == turn_id:
@@ -374,6 +402,12 @@ class CodexAppServer:
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(CodexRuntimeError(message))
+
+    def _finish_pending_turn_starts(self) -> None:
+        for future in self._pending_turn_starts.values():
+            if not future.done():
+                future.set_result(None)
+        self._pending_turn_starts.clear()
 
     async def _cancel_io_tasks(self) -> None:
         for task in (self._reader_task, self._stderr_task):
@@ -394,6 +428,7 @@ class CodexAppServer:
         self._initialized = False
         self._server_requests.clear()
         self._active_turn_ids.clear()
+        self._finish_pending_turn_starts()
         if process and process.returncode is None:
             process.terminate()
             try:

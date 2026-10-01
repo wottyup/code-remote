@@ -159,6 +159,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [activeThread, setActiveThread] = useState<CodexThread | null>(null)
   const [messages, setMessages] = useState<CodexMessage[]>([])
   const [isRunning, setIsRunning] = useState(false)
+  const [isInterrupting, setIsInterrupting] = useState(false)
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
@@ -170,6 +171,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const activeThreadId = useRef<string | null>(initialActiveThreadId)
   const activeTurnId = useRef<string | null>(null)
+  const interruptRequestedThreadId = useRef<string | null>(null)
+  const interruptInFlightThreadId = useRef<string | null>(null)
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const activityItemId = useRef<string | null>(null)
@@ -241,6 +244,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (!running) {
         streamingAssistantMessageId.current = null
         streamingAssistantParts.current.clear()
+        if (interruptRequestedThreadId.current === threadId) {
+          interruptRequestedThreadId.current = null
+          setIsInterrupting(false)
+        }
       }
       setIsRunning(running)
       if (writerConflictRef.current) {
@@ -268,6 +275,26 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         setError(reason instanceof Error ? reason.message : '无法读取对话内容')
       }
       return false
+    }
+  }, [onUnauthorized, token])
+
+  const dispatchInterrupt = useCallback(async (threadId: string, turnId: string) => {
+    if (interruptRequestedThreadId.current !== threadId || interruptInFlightThreadId.current === threadId) return false
+    interruptInFlightThreadId.current = threadId
+    try {
+      const result = await codexRemoteClient.interrupt(token, threadId, turnId)
+      if (!result.interrupted) throw new Error('Codex 没有接受停止请求')
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (interruptRequestedThreadId.current === threadId) {
+        interruptRequestedThreadId.current = null
+        setIsInterrupting(false)
+        setError(reason instanceof Error ? reason.message : '停止 Codex 任务失败')
+      }
+      return false
+    } finally {
+      if (interruptInFlightThreadId.current === threadId) interruptInFlightThreadId.current = null
     }
   }, [onUnauthorized, token])
 
@@ -332,10 +359,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
 
     if (event.method === 'turn/started') {
       const turn = params.turn as Record<string, unknown> | undefined
+      const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
+      if (turnThreadId && turnThreadId !== activeThreadId.current) return
       const turnId = typeof turn?.id === 'string'
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : null
-      if (turnId) activeTurnId.current = turnId
+      if (turnId) {
+        activeTurnId.current = turnId
+        if (turnThreadId && interruptRequestedThreadId.current === turnThreadId) void dispatchInterrupt(turnThreadId, turnId)
+      }
       streamingAssistantMessageId.current = null
       streamingAssistantParts.current.clear()
       writerConflictRef.current = false
@@ -343,13 +375,20 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(true)
       beginTurnTimer()
-      setActivity({ label: '正在思考' })
+      setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
       setFileChanges([])
       activityItemId.current = null
       return
     }
     if (event.method === 'turn/completed') {
+      const turn = params.turn as Record<string, unknown> | undefined
+      const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
+      if (turnThreadId && turnThreadId !== activeThreadId.current) return
       activeTurnId.current = null
+      if (!turnThreadId || interruptRequestedThreadId.current === turnThreadId) {
+        interruptRequestedThreadId.current = null
+        setIsInterrupting(false)
+      }
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
@@ -440,7 +479,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [beginTurnTimer, finishTurnTimer, loadThread, refreshThreads])
+  }, [beginTurnTimer, dispatchInterrupt, finishTurnTimer, loadThread, refreshThreads])
 
   useEffect(() => {
     let disposed = false
@@ -539,10 +578,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     streamingAssistantMessageId.current = null
     streamingAssistantParts.current.clear()
     activeTurnId.current = null
+    interruptRequestedThreadId.current = null
+    interruptInFlightThreadId.current = null
     resumedThreadId.current = null
     setActiveThread(thread)
     setMessages([])
     setIsRunning(false)
+    setIsInterrupting(false)
     clearTurnTimer()
     setActivity(null)
     setFileChanges([])
@@ -572,10 +614,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       streamingAssistantMessageId.current = null
       streamingAssistantParts.current.clear()
       activeTurnId.current = null
+      interruptRequestedThreadId.current = null
+      interruptInFlightThreadId.current = null
       resumedThreadId.current = thread.id
       setActiveThread(thread)
       setMessages([])
       setIsRunning(false)
+      setIsInterrupting(false)
       clearTurnTimer()
       setActivity(null)
       setFileChanges([])
@@ -613,6 +658,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     let thread = activeThread
     if (!thread) thread = await createThread(input.model, input.approvalPolicy)
     if (!thread) return false
+    const rememberStartedTurn = (turnId: string | null) => {
+      if (!turnId) return
+      activeTurnId.current = turnId
+      if (interruptRequestedThreadId.current === thread.id) void dispatchInterrupt(thread.id, turnId)
+    }
     const localId = `local-${Date.now()}`
     setMessages((current) => [...current, {
       id: localId,
@@ -622,7 +672,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       ...(input.document ? { documents: [{ ...input.document, charCount: input.document.content.length }] } : {}),
       createdAt: new Date().toISOString(),
     }])
+    activeTurnId.current = null
+    interruptRequestedThreadId.current = null
+    interruptInFlightThreadId.current = null
     setIsRunning(true)
+    setIsInterrupting(false)
     beginTurnTimer()
     setActivity({ label: '正在思考' })
     writerConflictRef.current = false
@@ -641,7 +695,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
           effort: input.effort,
           approvalPolicy: input.approvalPolicy,
         })
-        if (turnResult.turn_id) activeTurnId.current = turnResult.turn_id
+        rememberStartedTurn(turnResult.turn_id)
       } catch (reason) {
         if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
         resumedThreadId.current = null
@@ -654,13 +708,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
           effort: input.effort,
           approvalPolicy: input.approvalPolicy,
         })
-        if (turnResult.turn_id) activeTurnId.current = turnResult.turn_id
+        rememberStartedTurn(turnResult.turn_id)
       }
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
+      activeTurnId.current = null
+      interruptRequestedThreadId.current = null
+      interruptInFlightThreadId.current = null
+      setIsInterrupting(false)
       clearTurnTimer()
       setActivity(null)
       const message = reason instanceof Error ? reason.message : '发送消息失败'
@@ -677,17 +735,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, loadingHistory, onUnauthorized, token])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, loadingHistory, onUnauthorized, token])
 
   const interrupt = useCallback(async () => {
-    if (!activeThread) return
-    try {
-      await codexRemoteClient.interrupt(token, activeThread.id, activeTurnId.current)
-    } catch (reason) {
-      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-      setError(reason instanceof Error ? reason.message : '停止 Codex 任务失败')
-    }
-  }, [activeThread, onUnauthorized, token])
+    const threadId = activeThread?.id ?? activeThreadId.current
+    if (!threadId || !isRunning || isInterrupting) return false
+    interruptRequestedThreadId.current = threadId
+    setIsInterrupting(true)
+    setActivity({ label: '正在停止…' })
+    const turnId = activeTurnId.current
+    if (!turnId) return true
+    return dispatchInterrupt(threadId, turnId)
+  }, [activeThread, dispatchInterrupt, isInterrupting, isRunning])
 
   const respondToApproval = useCallback((decision: 'accept' | 'decline' | 'cancel') => {
     if (!approval) return false
@@ -709,6 +768,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     activeThread,
     messages,
     isRunning,
+    isInterrupting,
     turnStartedAt,
     lastTurnDurationMs,
     activity,

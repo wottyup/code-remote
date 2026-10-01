@@ -454,10 +454,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       approvalPolicy: selectedApprovalPolicy,
     })
     if (!sent) {
-      setDraft(previousDraft)
-      setAttachedImages(previousImages)
-      setAttachedDocument(previousDocument)
-      setAttachmentError(previousAttachmentError)
+      setDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
+      setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
+      setAttachedDocument((current) => current ?? previousDocument)
+      setAttachmentError((current) => current ?? previousAttachmentError)
     }
     setSending(false)
     composer.current?.focus()
@@ -496,10 +496,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }
 
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault()
-      event.currentTarget.form?.requestSubmit()
-    }
+    const canSubmit = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null)
+      && !sending
+      && !remote.loadingHistory
+      && !remote.isRunning
+      && remote.connection === 'connected'
+    if (event.key !== 'Enter' || event.shiftKey || !canSubmit) return
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -665,7 +669,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ) : null}
           <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
             <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
-            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory || remote.isRunning || sending} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection === 'connected' ? '给 Codex 发送消息…' : '等待本机 Codex 连接…'} aria-label="发送消息给 Codex" />
+            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected' || remote.loadingHistory} placeholder={remote.loadingHistory ? '正在恢复对话…' : remote.connection !== 'connected' ? '等待本机 Codex 连接…' : remote.isRunning || sending ? 'Codex 正在回复，可继续编辑下一条消息…' : '给 Codex 发送消息…'} aria-label="发送消息给 Codex" />
           </div>
           <div className="message-composer__footer">
             <div className="composer-preferences">
@@ -682,7 +686,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               {remote.writerConflict ? (
                 <button className="stop-button" type="button" onClick={remote.refreshActiveThread}><RefreshCw size={13} />刷新状态</button>
               ) : remote.isRunning ? (
-                <button className="stop-button" type="button" onClick={() => void remote.interrupt()}><Square size={13} fill="currentColor" />停止</button>
+                <button className="stop-button" type="button" onClick={() => void remote.interrupt()} disabled={remote.isInterrupting}>{remote.isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{remote.isInterrupting ? '停止中' : '停止'}</button>
               ) : (
                 <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
               )}
