@@ -101,18 +101,6 @@ function rgbaFromHex(hex: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
 }
 
-function formatDuration(durationMs: number) {
-  const seconds = Math.max(0, Math.floor(durationMs / 1000))
-  const hours = Math.floor(seconds / 3_600)
-  const minutes = Math.floor((seconds % 3_600) / 60)
-  const remainingSeconds = seconds % 60
-  return [
-    hours > 0 ? `${hours}小时` : '',
-    minutes > 0 ? `${minutes}分钟` : '',
-    `${remainingSeconds}秒`,
-  ].filter(Boolean).join(' ')
-}
-
 function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
   if (value === 'on-request' || value === 'untrusted' || value === 'never') return value
   // Migrate values saved by versions 0.0.20–0.0.24.
@@ -630,7 +618,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
           {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={() => void copyMessage(message)} />)}
           {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
-          <TurnDuration startedAt={remote.turnStartedAt} completedDurationMs={remote.lastTurnDurationMs} />
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -886,26 +873,6 @@ function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
         </button>
       ) : null}
     </article>
-  )
-}
-
-function TurnDuration({ startedAt, completedDurationMs }: { startedAt: number | null; completedDurationMs: number | null }) {
-  const [now, setNow] = useState(() => Date.now())
-
-  useEffect(() => {
-    if (startedAt === null) return
-    setNow(Date.now())
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [startedAt])
-
-  const durationMs = startedAt === null ? completedDurationMs : Math.max(0, now - startedAt)
-  if (durationMs === null) return null
-
-  return (
-    <div className="turn-duration">
-      <span>{startedAt === null ? '用时' : '已用'} {formatDuration(durationMs)}</span>
-    </div>
   )
 }
 
