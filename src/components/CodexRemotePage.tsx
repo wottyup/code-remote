@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -380,23 +380,299 @@ function ComposerMenu({
   )
 }
 
+type RemoteConnection = keyof typeof connectionLabel
+
+interface ComposerSendInput {
+  prompt: string
+  images: CodexImageAttachment[]
+  document?: CodexDocumentAttachment
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+}
+
+interface ComposerHandle {
+  replaceDraft(value: string): void
+}
+
+interface MessageComposerProps {
+  connection: RemoteConnection
+  loadingHistory: boolean
+  isRunning: boolean
+  isInterrupting: boolean
+  writerConflict: boolean
+  modelSupportsImages: boolean
+  selectedModel: string
+  selectedEffort: string
+  selectedApprovalPolicy: CodexApprovalPolicy
+  modelOptions: ComposerMenuOption[]
+  reasoningOptions: ComposerMenuOption[]
+  authorizationOptions: ComposerMenuOption[]
+  onModelChange: (model: string) => void
+  onEffortChange: (effort: string) => void
+  onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onSend: (input: ComposerSendInput) => Promise<boolean>
+  onInterrupt: () => void
+  onRefresh: () => void
+}
+
+const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  connection,
+  loadingHistory,
+  isRunning,
+  isInterrupting,
+  writerConflict,
+  modelSupportsImages,
+  selectedModel,
+  selectedEffort,
+  selectedApprovalPolicy,
+  modelOptions,
+  reasoningOptions,
+  authorizationOptions,
+  onModelChange,
+  onEffortChange,
+  onApprovalPolicyChange,
+  onSend,
+  onInterrupt,
+  onRefresh,
+}, ref) {
+  const [draft, setDraft] = useState(readComposerDraft)
+  const [sending, setSending] = useState(false)
+  const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [composerHeight, setComposerHeight] = useState(72)
+  const composer = useRef<HTMLTextAreaElement>(null)
+  const draftRef = useRef(draft)
+  const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const inputIsComposing = useRef(false)
+
+  const updateDraft = useCallback((next: string | ((current: string) => string)) => {
+    setDraft((current) => {
+      const value = typeof next === 'function' ? next(current) : next
+      draftRef.current = value
+      return value
+    })
+  }, [])
+
+  useImperativeHandle(ref, () => ({
+    replaceDraft(value) {
+      updateDraft(value)
+      window.requestAnimationFrame(() => composer.current?.focus())
+    },
+  }), [updateDraft])
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => saveComposerDraft(draft), 260)
+    return () => window.clearTimeout(timer)
+  }, [draft])
+
+  useEffect(() => {
+    const persistDraft = () => saveComposerDraft(draftRef.current)
+    window.addEventListener('pagehide', persistDraft)
+    return () => {
+      window.removeEventListener('pagehide', persistDraft)
+      persistDraft()
+    }
+  }, [])
+
+  useEffect(() => {
+    const moveResize = (event: globalThis.PointerEvent) => {
+      const resize = resizeState.current
+      if (!resize) return
+      const nextHeight = resize.startHeight + resize.startY - event.clientY
+      setComposerHeight(Math.min(maxComposerHeight, Math.max(minComposerHeight, nextHeight)))
+    }
+    const endResize = () => {
+      resizeState.current = null
+      document.body.style.removeProperty('cursor')
+      document.body.style.removeProperty('user-select')
+    }
+    window.addEventListener('pointermove', moveResize)
+    window.addEventListener('pointerup', endResize)
+    window.addEventListener('pointercancel', endResize)
+    return () => {
+      window.removeEventListener('pointermove', moveResize)
+      window.removeEventListener('pointerup', endResize)
+      window.removeEventListener('pointercancel', endResize)
+      endResize()
+    }
+  }, [])
+
+  const canCompose = !sending && !loadingHistory && !isRunning && connection === 'connected'
+  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
+  const canAttachImages = canCompose && modelSupportsImages
+
+  async function attachImages(files: File[]) {
+    if (files.length === 0) return
+    if (!modelSupportsImages) {
+      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
+      return
+    }
+    const unsupported = files.find((file) => !imageTypes.has(file.type as CodexImageAttachment['mediaType']))
+    if (unsupported) {
+      setAttachmentError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
+      return
+    }
+    const oversized = files.find((file) => file.size > maxImageSize)
+    if (oversized) {
+      setAttachmentError('单张图片不能超过 8 MB。')
+      return
+    }
+    const remaining = maxImagesPerTurn - attachedImages.length
+    if (remaining <= 0) {
+      setAttachmentError('单条消息最多附加 4 张图片。')
+      return
+    }
+    const chosen = files.slice(0, remaining)
+    try {
+      const next = await Promise.all(chosen.map(readImage))
+      setAttachedImages((current) => [...current, ...next].slice(0, maxImagesPerTurn))
+      setAttachmentError(files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
+    }
+  }
+
+  async function send(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const prompt = draft.trim()
+    if ((!prompt && attachedImages.length === 0 && !attachedDocument) || !canCompose) return
+    if (!modelSupportsImages && attachedImages.length > 0) {
+      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
+      return
+    }
+    const previousDraft = draft
+    const previousImages = attachedImages
+    const previousDocument = attachedDocument
+    const previousAttachmentError = attachmentError
+    setSending(true)
+    updateDraft('')
+    setAttachedImages([])
+    setAttachedDocument(null)
+    setAttachmentError(null)
+    const sent = await onSend({
+      prompt,
+      images: previousImages,
+      document: previousDocument || undefined,
+      model: selectedModel || undefined,
+      effort: selectedEffort || undefined,
+      approvalPolicy: selectedApprovalPolicy,
+    })
+    if (!sent) {
+      updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
+      setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
+      setAttachedDocument((current) => current ?? previousDocument)
+      setAttachmentError((current) => current ?? previousAttachmentError)
+    }
+    setSending(false)
+  }
+
+  function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
+    // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
+    if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (event.key !== 'Enter' || event.shiftKey || !canSend) return
+    event.preventDefault()
+    event.currentTarget.form?.requestSubmit()
+  }
+
+  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const directFiles = Array.from(event.clipboardData.files)
+    const itemFiles = Array.from(event.clipboardData.items)
+      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
+      .filter((file): file is File => file !== null)
+    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    if (images.length > 0) {
+      event.preventDefault()
+      void attachImages(images)
+      return
+    }
+    const pastedText = event.clipboardData.getData('text/plain')
+    if (pastedText.length < longPasteThreshold) return
+    event.preventDefault()
+    if (pastedText.length > maxLongPasteChars) {
+      setAttachmentError(`粘贴内容过长，最多支持 ${maxLongPasteChars.toLocaleString()} 个字符。`)
+      return
+    }
+    setAttachedDocument({ name: 'pasted-content.md', content: pastedText })
+    setAttachmentError(null)
+  }
+
+  function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault()
+    resizeState.current = { startY: event.clientY, startHeight: composerHeight }
+    document.body.style.cursor = 'ns-resize'
+    document.body.style.userSelect = 'none'
+  }
+
+  return (
+    <form className={`message-composer${isRunning ? ' message-composer--running' : ''}`} onSubmit={(event) => void send(event)}>
+      {attachedImages.length > 0 ? (
+        <div className="composer-images" aria-label="待发送图片">
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+        </div>
+      ) : null}
+      {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
+      {attachedDocument ? (
+        <div className="composer-document" aria-label="待发送文档">
+          <FileText size={16} />
+          <span><strong>{attachedDocument.name}</strong><small>{attachedDocument.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
+          <button type="button" onClick={() => setAttachedDocument(null)} aria-label="移除文档"><X size={13} /></button>
+        </div>
+      ) : null}
+      <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
+        <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
+        <textarea
+          ref={composer}
+          value={draft}
+          onChange={(event) => updateDraft(event.target.value)}
+          onCompositionStart={() => { inputIsComposing.current = true }}
+          onCompositionEnd={() => { inputIsComposing.current = false }}
+          onBlur={() => { inputIsComposing.current = false }}
+          onKeyDownCapture={(event) => {
+            if (inputIsComposing.current && event.key === 'Escape') event.stopPropagation()
+          }}
+          onKeyDown={handleInputKey}
+          onPaste={handlePaste}
+          placeholder="给 Codex 发送消息…"
+          aria-label="发送消息给 Codex"
+        />
+      </div>
+      <div className="message-composer__footer">
+        <div className="composer-preferences">
+          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || modelOptions.length === 0} onChange={onModelChange} />
+          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || reasoningOptions.length === 0} onChange={onEffortChange} />
+          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
+        </div>
+        <div className="composer-actions">
+          <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
+            <ImagePlus size={16} />
+            <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
+          </span>
+          {writerConflict ? (
+            <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
+          ) : isRunning ? (
+            <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button>
+          ) : (
+            <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+          )}
+        </div>
+      </div>
+    </form>
+  )
+}))
+
 export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const remote = useCodexRemote(token, onUnauthorized)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
-  const [draft, setDraft] = useState(readComposerDraft)
-  const [sending, setSending] = useState(false)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
-  const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
-  const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
-  const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [composerHeight, setComposerHeight] = useState(72)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
-  const composer = useRef<HTMLTextAreaElement>(null)
-  const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const composerHandle = useRef<ComposerHandle>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const completionToastTimer = useRef<number | undefined>(undefined)
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
@@ -409,7 +685,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const selectedEffort = activeComposerPreferences.effort ?? ''
   const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
   const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
-  const effortOptions = chosenModel?.supportedReasoningEfforts ?? []
+  const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
   const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
   const themeStyle = {
     '--custom-theme-background': themePreferences.customBackgroundColor,
@@ -424,6 +700,38 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     '--custom-theme-panel-blur': `${Math.min(18, 7 + customSurfaceOpacity * 11)}px`,
   } as CSSProperties
 
+  const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
+    if (!activeThreadId) {
+      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
+      return
+    }
+    setThreadComposerPreferences((current) => ({
+      ...current,
+      [activeThreadId]: mergeComposerPreferences(
+        resolvedComposerPreferences(defaultComposerPreferences, current[activeThreadId]),
+        changes,
+      ),
+    }))
+  }, [activeThreadId, defaultComposerPreferences])
+
+  const rememberThreadComposerPreferences = useCallback((threadId: string, preferences: ComposerPreferences) => {
+    if (!threadId) return
+    const snapshot = composerPreferencesFrom(preferences)
+    setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
+  }, [])
+
+  const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
+  const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
+  const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
+
+  const sendComposerMessage = useCallback((input: ComposerSendInput) => {
+    const preferences = composerPreferencesFrom(input)
+    return remote.sendMessage({
+      ...input,
+      onThreadCreated: (thread) => rememberThreadComposerPreferences(thread.id, preferences),
+    })
+  }, [rememberThreadComposerPreferences, remote.sendMessage])
+
   useEffect(() => {
     try {
       window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(themePreferences))
@@ -431,10 +739,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       // Theme preferences still apply for the current session when storage is unavailable.
     }
   }, [themePreferences])
-
-  useEffect(() => {
-    saveComposerDraft(draft)
-  }, [draft])
 
   useEffect(() => {
     saveComposerPreferences(defaultComposerPreferences)
@@ -471,7 +775,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || !remote.isRunning) return
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || !remote.isRunning) return
       event.preventDefault()
       void remote.interrupt()
     }
@@ -479,27 +783,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     return () => document.removeEventListener('keydown', interruptOnEscape)
   }, [remote.interrupt, remote.isRunning])
 
-  useEffect(() => {
-    const moveResize = (event: globalThis.PointerEvent) => {
-      const resize = resizeState.current
-      if (!resize) return
-      const nextHeight = resize.startHeight + resize.startY - event.clientY
-      setComposerHeight(Math.min(maxComposerHeight, Math.max(minComposerHeight, nextHeight)))
-    }
-    const endResize = () => {
-      resizeState.current = null
-      document.body.style.removeProperty('cursor')
-      document.body.style.removeProperty('user-select')
-    }
-    window.addEventListener('pointermove', moveResize)
-    window.addEventListener('pointerup', endResize)
-    window.addEventListener('pointercancel', endResize)
-    return () => {
-      window.removeEventListener('pointermove', moveResize)
-      window.removeEventListener('pointerup', endResize)
-      window.removeEventListener('pointercancel', endResize)
-      if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
-    }
+  useEffect(() => () => {
+    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
   }, [])
 
   useEffect(() => {
@@ -507,7 +792,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     if (selectedModel && remote.models.some((model) => modelIdOf(model) === selectedModel)) return
     const defaultModel = remote.models.find((model) => model.isDefault) ?? remote.models[0]
     updateComposerPreferences({ model: modelIdOf(defaultModel) })
-  }, [remote.models, selectedModel])
+  }, [remote.models, selectedModel, updateComposerPreferences])
 
   useEffect(() => {
     if (remote.models.length === 0 || !chosenModel) return
@@ -517,27 +802,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
     updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
-  }, [chosenModel, effortOptions, remote.models.length, selectedEffort])
-
-  function updateComposerPreferences(changes: Partial<ComposerPreferences>) {
-    if (!activeThreadId) {
-      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
-      return
-    }
-    setThreadComposerPreferences((current) => ({
-      ...current,
-      [activeThreadId]: mergeComposerPreferences(
-        resolvedComposerPreferences(defaultComposerPreferences, current[activeThreadId]),
-        changes,
-      ),
-    }))
-  }
-
-  function rememberThreadComposerPreferences(threadId: string, preferences: ComposerPreferences) {
-    if (!threadId) return
-    const snapshot = composerPreferencesFrom(preferences)
-    setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
-  }
+  }, [chosenModel, effortOptions, remote.models.length, selectedEffort, updateComposerPreferences])
 
   function dismissCompletionToast() {
     if (completionToastTimer.current !== undefined) {
@@ -552,7 +817,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const preferences = composerPreferencesFrom(activeComposerPreferences)
     const thread = await remote.createThread(preferences.model, preferences.approvalPolicy)
     if (thread) rememberThreadComposerPreferences(thread.id, preferences)
-    composer.current?.focus()
   }
 
   async function selectThread(thread: CodexThread) {
@@ -567,115 +831,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     void selectThread(thread)
   }
 
-  async function send(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const prompt = draft.trim()
-    if ((!prompt && attachedImages.length === 0 && !attachedDocument) || sending || remote.loadingHistory || remote.isRunning || remote.connection !== 'connected') return
-    if (!modelSupportsImages && attachedImages.length > 0) {
-      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
-      return
-    }
-    const previousDraft = draft
-    const previousImages = attachedImages
-    const previousDocument = attachedDocument
-    const previousAttachmentError = attachmentError
-    const preferences = composerPreferencesFrom(activeComposerPreferences)
-    setSending(true)
-    setDraft('')
-    setAttachedImages([])
-    setAttachedDocument(null)
-    setAttachmentError(null)
-    const sent = await remote.sendMessage({
-      prompt,
-      images: previousImages,
-      document: previousDocument || undefined,
-      model: preferences.model,
-      effort: preferences.effort,
-      approvalPolicy: preferences.approvalPolicy,
-      onThreadCreated: (thread) => rememberThreadComposerPreferences(thread.id, preferences),
-    })
-    if (!sent) {
-      setDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
-      setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
-      setAttachedDocument((current) => current ?? previousDocument)
-      setAttachmentError((current) => current ?? previousAttachmentError)
-    }
-    setSending(false)
-    composer.current?.focus()
-  }
-
-  async function attachImages(files: File[]) {
-    if (files.length === 0) return
-    if (!modelSupportsImages) {
-      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
-      return
-    }
-    const candidates = files
-    const unsupported = candidates.find((file) => !imageTypes.has(file.type as CodexImageAttachment['mediaType']))
-    if (unsupported) {
-      setAttachmentError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
-      return
-    }
-    const oversized = candidates.find((file) => file.size > maxImageSize)
-    if (oversized) {
-      setAttachmentError('单张图片不能超过 8 MB。')
-      return
-    }
-    const remaining = maxImagesPerTurn - attachedImages.length
-    if (remaining <= 0) {
-      setAttachmentError('单条消息最多附加 4 张图片。')
-      return
-    }
-    const chosen = candidates.slice(0, remaining)
-    try {
-      const next = await Promise.all(chosen.map(readImage))
-      setAttachedImages((current) => [...current, ...next].slice(0, maxImagesPerTurn))
-      setAttachmentError(candidates.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
-    } catch (reason) {
-      setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
-    }
-  }
-
-  function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    const canSubmit = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null)
-      && !sending
-      && !remote.loadingHistory
-      && !remote.isRunning
-      && remote.connection === 'connected'
-    if (event.key !== 'Enter' || event.shiftKey || !canSubmit) return
-    event.preventDefault()
-    event.currentTarget.form?.requestSubmit()
-  }
-
-  function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
-    const directFiles = Array.from(event.clipboardData.files)
-    const itemFiles = Array.from(event.clipboardData.items)
-      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
-      .filter((file): file is File => file !== null)
-    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
-    if (images.length > 0) {
-      event.preventDefault()
-      void attachImages(images)
-      return
-    }
-    const pastedText = event.clipboardData.getData('text/plain')
-    if (pastedText.length < longPasteThreshold) return
-    event.preventDefault()
-    if (pastedText.length > maxLongPasteChars) {
-      setAttachmentError(`粘贴内容过长，最多支持 ${maxLongPasteChars.toLocaleString()} 个字符。`)
-      return
-    }
-    setAttachedDocument({ name: 'pasted-content.md', content: pastedText })
-    setAttachmentError(null)
-  }
-
-  function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault()
-    resizeState.current = { startY: event.clientY, startHeight: composerHeight }
-    document.body.style.cursor = 'ns-resize'
-    document.body.style.userSelect = 'none'
-  }
-
   async function copyMessage(message: CodexMessage) {
     const documentText = message.documents?.map((document) => `\n\n${document.name}\n${document.content}`).join('') ?? ''
     const value = `${message.text}${documentText}`.trim()
@@ -687,22 +842,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
-  const canCompose = !sending && !remote.loadingHistory && !remote.isRunning && remote.connection === 'connected'
-  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
-  const canAttachImages = canCompose && modelSupportsImages
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
   const completionThreadTitle = completionThread ? titleOf(completionThread) : '一条对话'
-  const modelOptions: ComposerMenuOption[] = remote.models.flatMap((model) => {
+  const modelOptions = useMemo<ComposerMenuOption[]>(() => remote.models.flatMap((model) => {
     const id = modelIdOf(model)
     if (!id) return []
     return [{ value: id, label: modelLabelOf(model) }]
-  })
-  const reasoningOptions: ComposerMenuOption[] = effortOptions.map((option) => ({
+  }), [remote.models])
+  const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
-  }))
-  const authorizationOptions: ComposerMenuOption[] = approvalPolicyOptions
+  })), [effortOptions])
 
   return (
     <div className={`remote-shell remote-shell--theme-${themePreferences.theme}`} style={themeStyle}>
@@ -766,8 +917,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               <h1>你想在本机项目中完成什么？</h1>
               <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
               <div className="prompt-suggestions">
-                <button type="button" onClick={() => setDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
-                <button type="button" onClick={() => setDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
+                <button type="button" onClick={() => composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
+                <button type="button" onClick={() => composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
               </div>
             </div>
           ) : null}
@@ -805,46 +956,27 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           </div>
         ) : null}
 
-        <form className={`message-composer${remote.isRunning ? ' message-composer--running' : ''}`} onSubmit={(event) => void send(event)}>
-          {attachedImages.length > 0 ? (
-            <div className="composer-images" aria-label="待发送图片">
-              {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
-            </div>
-          ) : null}
-          {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-          {attachedDocument ? (
-            <div className="composer-document" aria-label="待发送文档">
-              <FileText size={16} />
-              <span><strong>{attachedDocument.name}</strong><small>{attachedDocument.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
-              <button type="button" onClick={() => setAttachedDocument(null)} aria-label="移除文档"><X size={13} /></button>
-            </div>
-          ) : null}
-          <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
-            <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
-            <textarea ref={composer} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={handleInputKey} onPaste={handlePaste} disabled={remote.connection !== 'connected'} placeholder={remote.connection !== 'connected' ? '等待本机 Codex 连接…' : '给 Codex 发送消息…'} aria-label="发送消息给 Codex" />
-          </div>
-          <div className="message-composer__footer">
-            <div className="composer-preferences">
-              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || remote.models.length === 0} onChange={(model) => updateComposerPreferences({ model })} />
-              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || effortOptions.length === 0} onChange={(effort) => updateComposerPreferences({ effort })} />
-              <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(approvalPolicy) => updateComposerPreferences({ approvalPolicy: approvalPolicy as CodexApprovalPolicy })} />
-              <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
-            </div>
-            <div className="composer-actions">
-              <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
-                <ImagePlus size={16} />
-                <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
-              </span>
-              {remote.writerConflict ? (
-                <button className="stop-button" type="button" onClick={remote.refreshActiveThread}><RefreshCw size={13} />刷新状态</button>
-              ) : remote.isRunning ? (
-                <button className="stop-button" type="button" onClick={() => void remote.interrupt()} disabled={remote.isInterrupting}>{remote.isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{remote.isInterrupting ? '停止中' : '停止'}</button>
-              ) : (
-                <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
-              )}
-            </div>
-          </div>
-        </form>
+        <MessageComposer
+          ref={composerHandle}
+          connection={remote.connection}
+          loadingHistory={remote.loadingHistory}
+          isRunning={remote.isRunning}
+          isInterrupting={remote.isInterrupting}
+          writerConflict={remote.writerConflict}
+          modelSupportsImages={modelSupportsImages}
+          selectedModel={selectedModel}
+          selectedEffort={selectedEffort}
+          selectedApprovalPolicy={selectedApprovalPolicy}
+          modelOptions={modelOptions}
+          reasoningOptions={reasoningOptions}
+          authorizationOptions={approvalPolicyOptions}
+          onModelChange={changeModel}
+          onEffortChange={changeEffort}
+          onApprovalPolicyChange={changeApprovalPolicy}
+          onSend={sendComposerMessage}
+          onInterrupt={remote.interrupt}
+          onRefresh={remote.refreshActiveThread}
+        />
       </main>}
     </div>
   )
