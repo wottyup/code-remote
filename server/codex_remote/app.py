@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from watchfiles import awatch
 
-from .codex_app_server import ApprovalPolicy, CodexAppServer, CodexRuntimeError
+from .codex_app_server import ApprovalPolicy, CodexAppServer, CodexHandoffBusyError, CodexRuntimeError
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +362,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def list_models() -> list[dict[str, Any]]:
         try:
             return await app_server.list_models()
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/handoff")
+    async def handoff_to_local_codex() -> dict[str, bool]:
+        try:
+            await app_server.handoff_to_local_codex()
+            return {"handedOff": True}
+        except CodexHandoffBusyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/reclaim")
+    async def reclaim_for_remote() -> dict[str, Any]:
+        try:
+            return await app_server.reclaim_for_remote()
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

@@ -15,6 +15,10 @@ class CodexRuntimeError(RuntimeError):
     pass
 
 
+class CodexHandoffBusyError(CodexRuntimeError):
+    """The remote App Server still has a turn that must not be interrupted."""
+
+
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 
 
@@ -28,6 +32,7 @@ class CodexAppServer:
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
+        self._handoff_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
         self._request_id = 1
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
@@ -36,16 +41,26 @@ class CodexAppServer:
         self._pending_turn_starts: dict[str, asyncio.Future[str | None]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
+        self._handed_off = False
 
     @property
     def connected(self) -> bool:
         return self._initialized and self._process is not None and self._process.returncode is None
+
+    @property
+    def handed_off(self) -> bool:
+        return self._handed_off
+
+    @property
+    def has_active_turns(self) -> bool:
+        return bool(self._active_turn_ids or self._pending_turn_starts)
 
     def status(self) -> dict[str, Any]:
         return {
             "available": self._resolve_executable() is not None,
             "connected": self.connected,
             "workspace": str(self.workspace),
+            "handedOff": self._handed_off,
             "error": None,
         }
 
@@ -70,6 +85,30 @@ class CodexAppServer:
     async def connect(self) -> dict[str, Any]:
         await self._ensure_started()
         return self.status()
+
+    async def handoff_to_local_codex(self) -> None:
+        """Release the remote-owned App Server without stopping the web service.
+
+        `thread/unsubscribe` has a long inactivity grace period, so immediate
+        handoff requires ending this transport.  While handed off, ordinary
+        requests are rejected so browser prefetch or reconnect activity cannot
+        immediately create a new remote owner.
+        """
+        async with self._handoff_lock:
+            if self.has_active_turns:
+                raise CodexHandoffBusyError("网页端仍有 Codex 任务在运行，请先停止或等待回复完成后再交还。")
+            self._handed_off = True
+            try:
+                await self.close()
+            except Exception:
+                self._handed_off = False
+                raise
+
+    async def reclaim_for_remote(self) -> dict[str, Any]:
+        """Allow the web client to start a fresh App Server on its next request."""
+        async with self._handoff_lock:
+            self._handed_off = False
+            return self.status()
 
     async def list_threads(self) -> list[dict[str, Any]]:
         result = await self.request("thread/list", {"limit": 100})
@@ -187,6 +226,7 @@ class CodexAppServer:
         await self._write({"id": request_id, "result": {"decision": decision}})
 
     async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        self._raise_if_handed_off()
         await self._ensure_started()
         return await self._request(method, params, timeout=90)
 
@@ -214,7 +254,9 @@ class CodexAppServer:
         self._fail_pending("Codex app-server 已关闭")
 
     async def _ensure_started(self) -> None:
+        self._raise_if_handed_off()
         async with self._start_lock:
+            self._raise_if_handed_off()
             if self.connected:
                 return
             await self._stop_process()
@@ -257,7 +299,7 @@ class CodexAppServer:
                 }, timeout=20)
                 await self._write({"method": "initialized", "params": {}})
                 self._initialized = True
-                await self._emit({"type": "connection", "connected": True, "workspace": str(self.workspace)})
+                await self._emit({"type": "connection", **self.status()})
             except Exception as error:
                 await self._stop_process()
                 if isinstance(error, CodexRuntimeError):
@@ -273,6 +315,10 @@ class CodexAppServer:
             if executable:
                 return executable
         return None
+
+    def _raise_if_handed_off(self) -> None:
+        if self._handed_off:
+            raise CodexRuntimeError("网页端已交还给本机 Codex，请先在网页端选择“重新接管”。")
 
     async def _request(self, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
         request_id = f"codex-remote-{self._request_id}"
@@ -318,7 +364,11 @@ class CodexAppServer:
             if process is self._process:
                 self._initialized = False
                 self._fail_pending("Codex app-server 已断开")
-                await self._emit({"type": "connection", "connected": False, "error": "Codex app-server 已断开"})
+                await self._emit({
+                    "type": "connection",
+                    **self.status(),
+                    "error": "Codex app-server 已断开",
+                })
 
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None

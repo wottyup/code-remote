@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from codex_remote.codex_app_server import CodexAppServer
+from codex_remote.codex_app_server import CodexAppServer, CodexHandoffBusyError, CodexRuntimeError
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -77,6 +77,47 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {"threadId": "thread-id", "turnId": "turn-id"},
             ),
         )
+
+    async def test_handoff_closes_an_idle_remote_runtime_and_blocks_background_requests(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.close = AsyncMock()
+
+        await app_server.handoff_to_local_codex()
+
+        self.assertTrue(app_server.handed_off)
+        self.assertTrue(app_server.status()["handedOff"])
+        app_server.close.assert_awaited_once()
+        with self.assertRaises(CodexRuntimeError):
+            await app_server.request("thread/list", {"limit": 100})
+
+    async def test_handoff_refuses_to_interrupt_an_active_or_starting_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.close = AsyncMock()
+        app_server._active_turn_ids["thread-id"] = "turn-id"
+
+        with self.assertRaises(CodexHandoffBusyError):
+            await app_server.handoff_to_local_codex()
+
+        self.assertFalse(app_server.handed_off)
+        app_server.close.assert_not_awaited()
+
+        app_server._active_turn_ids.clear()
+        app_server._pending_turn_starts["thread-id"] = asyncio.get_running_loop().create_future()
+        with self.assertRaises(CodexHandoffBusyError):
+            await app_server.handoff_to_local_codex()
+
+        self.assertFalse(app_server.handed_off)
+        app_server.close.assert_not_awaited()
+
+    async def test_reclaim_allows_remote_requests_again(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.close = AsyncMock()
+        await app_server.handoff_to_local_codex()
+
+        runtime = await app_server.reclaim_for_remote()
+
+        self.assertFalse(app_server.handed_off)
+        self.assertFalse(runtime["handedOff"])
 
 
 if __name__ == "__main__":

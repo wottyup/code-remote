@@ -39,6 +39,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row:hover { border-color: rgba(146, 157, 184, .12); background: rgba(38, 41, 49, .72); color: #eceef1; }
 .thread-row--active { border-color: rgba(170, 186, 255, .16); background: linear-gradient(100deg, rgba(87, 100, 148, .28), rgba(41, 44, 53, .6)); color: #f0f1f3; box-shadow: inset 2px 0 0 #aabaff; }
 .thread-row--active > svg { color: #d3d6dc; }
+.thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
 .thread-row__copy strong { overflow: hidden; color: inherit; font-size: 11.5px; font-weight: 520; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
 .thread-row__meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; }
@@ -54,6 +55,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .status-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: #d19a4a; }
 .status-dot--connected { background: #6fc18d; box-shadow: 0 0 8px rgba(81, 173, 115, .42); }
 .status-dot--disconnected, .status-dot--unavailable { background: #cb7478; }
+.status-dot--handoff { background: #7aa8e6; box-shadow: 0 0 8px rgba(112, 163, 226, .42); }
 
 .remote-chat { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-rows: 70px minmax(0, 1fr) auto auto; overflow: hidden; background: radial-gradient(ellipse at 58% -10%, rgba(94, 105, 147, .1), transparent 40%), #101114; }
 .remote-chat__header { grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; min-width: 0; padding: 0 27px; border-bottom: 1px solid var(--line); background: rgba(15, 17, 21, .72); box-shadow: 0 8px 28px rgba(0, 0, 0, .08); }
@@ -66,6 +68,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .connection-label { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid rgba(146, 157, 184, .16); border-radius: 999px; background: rgba(27, 30, 37, .72); color: #878d97; font-size: 9px; }
 .connection-label--connected { color: #9abea7; }
 .connection-label--unavailable, .connection-label--disconnected { color: #ca9294; }
+.connection-label--handoff { border-color: rgba(122, 168, 230, .3); color: #9cc3f2; background: rgba(46, 72, 111, .3); }
+.handoff-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; min-height: 28px; padding: 0 9px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 7px; background: rgba(35, 39, 49, .72); color: #b9c1cf; cursor: pointer; font-size: 9px; white-space: nowrap; }
+.handoff-button:hover:not(:disabled) { border-color: rgba(170, 186, 255, .58); background: rgba(61, 70, 95, .72); color: #f0f3f8; }
+.handoff-button--reclaim { border-color: rgba(112, 163, 226, .38); background: rgba(49, 81, 125, .42); color: #b7d5fa; }
+.handoff-button:disabled { cursor: not-allowed; opacity: .48; }
+.handoff-notice { display: grid; gap: 5px; width: min(100%, 840px); margin: 0 auto; padding: 11px 13px; border: 1px solid rgba(112, 163, 226, .34); border-radius: 10px; background: rgba(35, 57, 88, .38); color: #bed8fb; font-size: 10px; line-height: 1.55; }
+.handoff-notice strong { color: #dceaff; font-size: 11px; font-weight: 620; }
+.handoff-notice span { color: #9eb9de; }
 .thread-completion-toast { position: fixed; z-index: 50; top: max(14px, calc(env(safe-area-inset-top) + 8px)); left: 50%; display: flex; width: min(calc(100vw - 32px), 410px); min-height: 58px; align-items: stretch; padding: 6px; border: 1px solid rgba(112, 201, 143, .34); border-radius: 13px; background: rgba(22, 35, 28, .97); color: #e5f4e9; box-shadow: 0 18px 45px rgba(0, 0, 0, .3), 0 0 0 1px rgba(93, 203, 133, .05); transform: translateX(-50%); animation: thread-completion-toast-enter .22s ease-out; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 .thread-completion-toast__open { display: flex; min-width: 0; flex: 1; align-items: center; gap: 9px; padding: 3px 7px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .thread-completion-toast__open:hover { background: rgba(123, 213, 154, .11); }
@@ -302,6 +312,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-menu__popover { max-width: min(270px, calc(100vw - 24px)); }
   .remote-chat__title span { max-width: 47vw; }
   .connection-label { min-width: 0; max-width: 100%; padding: 5px 8px; font-size: 8px; }
+  .handoff-button { min-height: 27px; gap: 4px; padding-inline: 7px; font-size: 8px; }
+  .handoff-notice { padding: 10px 11px; font-size: 9.5px; }
   .connection-label span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .message-stream { gap: 21px; padding: 24px 16px 18px; }
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }

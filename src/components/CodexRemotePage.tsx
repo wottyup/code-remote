@@ -879,6 +879,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     await remote.selectThread(thread)
   }
 
+  async function handoffToLocalCodex() {
+    if (!remote.activeThread || remote.isRunning || remote.isInterrupting || remote.handoffInProgress) return
+    const confirmed = window.confirm('交还后网页端会停止持有已加载的 Codex 会话，网页不会自动重新连接。开发服务、SSH 和配对不会重启。确认交还给本机 Codex？')
+    if (!confirmed) return
+    await remote.handoffToLocalCodex()
+  }
+
+  async function reclaimForRemote() {
+    if (remote.handoffInProgress) return
+    const confirmed = window.confirm('重新接管后网页端会恢复连接。请确认本机 Codex 不再运行需要保留的任务。')
+    if (!confirmed) return
+    await remote.reclaimForRemote()
+  }
+
   function openCompletedThread() {
     if (!completionToast) return
     const thread = remote.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
@@ -895,6 +909,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
@@ -925,11 +940,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           <div className="remote-brand"><span className="remote-brand__mark">C</span><span className="remote-brand__copy"><strong>Codex Remote</strong><small>本机 Agent 工作台</small></span></div>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected' || remote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
-        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote.refreshThreads()}><RefreshCw size={14} /></button></div>
+        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.handedOff || remote.connection !== 'connected' || remote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
+        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote.refreshThreads()} disabled={remote.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
           {remote.threads.map((thread) => (
-            <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
+            <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} disabled={remote.handedOff} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
               <MessageSquare size={15} />
               <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
             </button>
@@ -942,8 +957,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           <span>设置</span>
         </button>
         <footer className="remote-sidebar__footer">
-          <i className={`status-dot status-dot--${remote.connection}`} />
-          <span>{connectionLabel[remote.connection]}</span>
+          <i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} />
+          <span>{currentConnectionLabel}</span>
           <button type="button" onClick={() => void onUnpair()}>退出</button>
         </footer>
       </aside>
@@ -959,11 +974,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             <div className="remote-chat__title"><span className="remote-chat__eyebrow">当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
           </div>
           <div className="remote-chat__controls">
-            <div className={`connection-label connection-label--${remote.connection}`}><i className={`status-dot status-dot--${remote.connection}`} /><span>{connectionLabel[remote.connection]}</span></div>
+            <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
+            {remote.handedOff ? (
+              <button className="handoff-button handoff-button--reclaim" type="button" onClick={() => void reclaimForRemote()} disabled={remote.handoffInProgress}>{remote.handoffInProgress ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}{remote.handoffInProgress ? '接管中' : '重新接管'}</button>
+            ) : remote.activeThread ? (
+              <button className="handoff-button" type="button" onClick={() => void handoffToLocalCodex()} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
+            ) : null}
           </div>
         </header>
 
         <section className="message-stream" ref={messageContainer} aria-live="polite" aria-label="Codex 对话">
+          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
               <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
@@ -1014,7 +1035,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           key={composerDraftScope}
           ref={composerHandle}
           draftScope={composerDraftScope}
-          connection={remote.connection}
+          connection={remote.handedOff ? 'disconnected' : remote.connection}
           loadingHistory={remote.loadingHistory}
           isRunning={remote.isRunning}
           isInterrupting={remote.isInterrupting}

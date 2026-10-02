@@ -56,6 +56,7 @@ export interface CodexRuntime {
   available: boolean
   connected: boolean
   workspace: string
+  handedOff: boolean
   error: string | null
 }
 
@@ -68,6 +69,7 @@ export interface RemoteEvent {
   connected?: boolean
   available?: boolean
   workspace?: string
+  handedOff?: boolean
   error?: string | null
   request_id?: string | number
   message?: string
@@ -219,6 +221,12 @@ export const codexRemoteClient = {
   },
   models(token: string) {
     return request<CodexModel[]>(token, '/api/v1/codex/models')
+  },
+  handoffToLocalCodex(token: string) {
+    return request<{ handedOff: true }>(token, '/api/v1/codex/handoff', { method: 'POST' })
+  },
+  reclaimForRemote(token: string) {
+    return request<CodexRuntime>(token, '/api/v1/codex/reclaim', { method: 'POST' })
   },
   createThread(token: string, model?: string, approvalPolicy?: CodexApprovalPolicy) {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
