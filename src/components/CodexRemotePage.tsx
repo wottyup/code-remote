@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -46,7 +46,9 @@ const minComposerHeight = 45
 const maxComposerHeight = 260
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
-const composerDraftStorageKey = 'codex-remote.composer-draft'
+const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
+const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
+const newThreadComposerDraftScope = 'new'
 
 interface ComposerPreferences {
   model?: string
@@ -193,20 +195,38 @@ function saveThreadComposerPreferences(preferences: ThreadComposerPreferences) {
   }
 }
 
-function readComposerDraft() {
+function composerDraftScopeForThread(threadId?: string) {
+  return threadId ? `thread:${threadId}` : newThreadComposerDraftScope
+}
+
+function composerDraftStorageKeyFor(scope: string) {
+  return `${composerDraftStoragePrefix}${encodeURIComponent(scope)}`
+}
+
+function readComposerDraft(scope: string) {
   if (typeof window === 'undefined') return ''
   try {
-    return window.localStorage.getItem(composerDraftStorageKey) ?? ''
+    const storageKey = composerDraftStorageKeyFor(scope)
+    const savedDraft = window.localStorage.getItem(storageKey)
+    if (savedDraft !== null) return savedDraft
+    // Keep an existing draft from older versions, but assign it to the first
+    // active scope instead of continuing to leak it into every conversation.
+    const legacyDraft = window.localStorage.getItem(legacyComposerDraftStorageKey)
+    if (!legacyDraft) return ''
+    window.localStorage.setItem(storageKey, legacyDraft)
+    window.localStorage.removeItem(legacyComposerDraftStorageKey)
+    return legacyDraft
   } catch {
     return ''
   }
 }
 
-function saveComposerDraft(draft: string) {
+function saveComposerDraft(scope: string, draft: string) {
   if (typeof window === 'undefined') return
   try {
-    if (draft) window.localStorage.setItem(composerDraftStorageKey, draft)
-    else window.localStorage.removeItem(composerDraftStorageKey)
+    const storageKey = composerDraftStorageKeyFor(scope)
+    if (draft) window.localStorage.setItem(storageKey, draft)
+    else window.localStorage.removeItem(storageKey)
   } catch {
     // The composer still works for this session when storage is unavailable.
   }
@@ -393,9 +413,11 @@ interface ComposerSendInput {
 
 interface ComposerHandle {
   replaceDraft(value: string): void
+  adoptUnassignedDraft(threadId: string): void
 }
 
 interface MessageComposerProps {
+  draftScope: string
   connection: RemoteConnection
   loadingHistory: boolean
   isRunning: boolean
@@ -417,6 +439,7 @@ interface MessageComposerProps {
 }
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  draftScope,
   connection,
   loadingHistory,
   isRunning,
@@ -436,7 +459,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onInterrupt,
   onRefresh,
 }, ref) {
-  const [draft, setDraft] = useState(readComposerDraft)
+  const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
@@ -444,6 +467,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [composerHeight, setComposerHeight] = useState(72)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const draftSaveTimer = useRef<number | undefined>(undefined)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const inputIsComposing = useRef(false)
 
@@ -460,21 +484,44 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       updateDraft(value)
       window.requestAnimationFrame(() => composer.current?.focus())
     },
-  }), [updateDraft])
+    adoptUnassignedDraft(threadId) {
+      const targetScope = composerDraftScopeForThread(threadId)
+      const unassignedDraft = draftScope === newThreadComposerDraftScope
+        ? draftRef.current
+        : readComposerDraft(newThreadComposerDraftScope)
+      if (!unassignedDraft) return
+      saveComposerDraft(targetScope, unassignedDraft)
+      // The old keyed composer may unmount immediately after this callback.
+      // Keep its cleanup from restoring the transferred text to the new-chat scope.
+      if (draftScope === newThreadComposerDraftScope) {
+        if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
+        draftSaveTimer.current = undefined
+        draftRef.current = ''
+      }
+      saveComposerDraft(newThreadComposerDraftScope, '')
+      if (draftScope === targetScope) updateDraft(unassignedDraft)
+    },
+  }), [draftScope, updateDraft])
 
   useEffect(() => {
-    const timer = window.setTimeout(() => saveComposerDraft(draft), 260)
-    return () => window.clearTimeout(timer)
-  }, [draft])
+    if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
+    const timer = window.setTimeout(() => saveComposerDraft(draftScope, draft), 260)
+    draftSaveTimer.current = timer
+    return () => {
+      if (draftSaveTimer.current !== timer) return
+      window.clearTimeout(timer)
+      draftSaveTimer.current = undefined
+    }
+  }, [draft, draftScope])
 
-  useEffect(() => {
-    const persistDraft = () => saveComposerDraft(draftRef.current)
+  useLayoutEffect(() => {
+    const persistDraft = () => saveComposerDraft(draftScope, draftRef.current)
     window.addEventListener('pagehide', persistDraft)
     return () => {
       window.removeEventListener('pagehide', persistDraft)
       persistDraft()
     }
-  }, [])
+  }, [draftScope])
 
   useEffect(() => {
     const moveResize = (event: globalThis.PointerEvent) => {
@@ -678,6 +725,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
 
   const activeThreadId = remote.activeThread?.id
+  const composerDraftScope = composerDraftScopeForThread(activeThreadId)
   const activeComposerPreferences = activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences
@@ -728,7 +776,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const preferences = composerPreferencesFrom(input)
     return remote.sendMessage({
       ...input,
-      onThreadCreated: (thread) => rememberThreadComposerPreferences(thread.id, preferences),
+      onThreadCreated: (thread) => {
+        composerHandle.current?.adoptUnassignedDraft(thread.id)
+        rememberThreadComposerPreferences(thread.id, preferences)
+      },
     })
   }, [rememberThreadComposerPreferences, remote.sendMessage])
 
@@ -816,7 +867,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     setSidebarOpen(false)
     const preferences = composerPreferencesFrom(activeComposerPreferences)
     const thread = await remote.createThread(preferences.model, preferences.approvalPolicy)
-    if (thread) rememberThreadComposerPreferences(thread.id, preferences)
+    if (thread) {
+      if (!activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
+      rememberThreadComposerPreferences(thread.id, preferences)
+    }
   }
 
   async function selectThread(thread: CodexThread) {
@@ -957,7 +1011,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         ) : null}
 
         <MessageComposer
+          key={composerDraftScope}
           ref={composerHandle}
+          draftScope={composerDraftScope}
           connection={remote.connection}
           loadingHistory={remote.loadingHistory}
           isRunning={remote.isRunning}

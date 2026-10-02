@@ -53,6 +53,7 @@ const maxInMemoryThreadCacheEntries = 6
 const maxInMemoryThreadCacheCharacters = 1_200_000
 const maxBackgroundPrefetchThreads = 3
 const backgroundPrefetchDelayMs = 120
+const cachedActiveThreadRefreshDelayMs = 180
 
 interface PersistedActiveThread {
   threadId: string
@@ -197,6 +198,51 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
   })
 }
 
+function sameMessageImages(left: CodexMessage['images'], right: CodexMessage['images']) {
+  const leftItems = left ?? []
+  const rightItems = right ?? []
+  return leftItems.length === rightItems.length && leftItems.every((image, index) =>
+    image.name === rightItems[index]?.name && image.previewUrl === rightItems[index]?.previewUrl,
+  )
+}
+
+function sameMessageDocuments(left: CodexMessage['documents'], right: CodexMessage['documents']) {
+  const leftItems = left ?? []
+  const rightItems = right ?? []
+  return leftItems.length === rightItems.length && leftItems.every((document, index) =>
+    document.name === rightItems[index]?.name
+      && document.content === rightItems[index]?.content
+      && document.charCount === rightItems[index]?.charCount,
+  )
+}
+
+function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
+  return left.length === right.length && left.every((message, index) => {
+    const candidate = right[index]
+    if (!candidate) return false
+    return message.id === candidate.id
+      && message.role === candidate.role
+      && message.text === candidate.text
+      && Boolean(message.streaming) === Boolean(candidate.streaming)
+      && sameMessageImages(message.images, candidate.images)
+      && sameMessageDocuments(message.documents, candidate.documents)
+  })
+}
+
+function sameActiveThread(left: CodexThread | null, right: CodexThread) {
+  return left?.id === right.id
+    && left.name === right.name
+    && left.preview === right.preview
+    && left.cwd === right.cwd
+    && left.updatedAt === right.updatedAt
+    && left.createdAt === right.createdAt
+    && left.status?.type === right.status?.type
+}
+
+function sameActivity(left: CodexActivity | null, right: CodexActivity | null) {
+  return left?.label === right?.label && left?.detail === right?.detail
+}
+
 function fileChangeForItem(value: unknown): CodexFileChange | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
@@ -312,6 +358,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const prefetchingThreadIds = useRef(new Set<string>())
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
+  const cachedActiveThreadRefreshTimer = useRef<number | undefined>(undefined)
 
   const beginTurnTimer = useCallback(() => {
     if (turnStartedAtRef.current !== null) return
@@ -441,18 +488,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
-  const loadThread = useCallback(async (threadId: string, revision = historyRevision.current) => {
+  const loadThread = useCallback(async (threadId: string, revision = historyRevision.current, silent = false) => {
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
       if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
       persistActiveThreadId(thread.id)
-      setActiveThread(thread)
+      setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
       const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
       persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
       cacheThreadSnapshot(thread, cachedMessages, { running, turnId: latestTurnId })
-      setMessages((current) => preserveCurrentImages(cachedMessages, current))
+      setMessages((current) => {
+        const next = preserveCurrentImages(cachedMessages, current)
+        return sameMessages(current, next) ? current : next
+      })
       if (running && latestTurnId) activeTurnId.current = latestTurnId
       else if (!running) activeTurnId.current = null
       if (!running) {
@@ -474,7 +524,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
           setError((current) => current === activeWriterError ? null : current)
         }
       } else if (activityItemId.current === null) {
-        setActivity(running ? { label: '正在思考' } : null)
+        const nextActivity = running ? { label: '正在思考' } : null
+        setActivity((current) => sameActivity(current, nextActivity) ? current : nextActivity)
       }
       return true
     } catch (reason) {
@@ -486,7 +537,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         setIsRunning(true)
         setActivity({ label: '此对话已有其他 Codex 实例在运行' })
         setError(activeWriterError)
-      } else {
+      } else if (!silent) {
         setError(reason instanceof Error ? reason.message : '无法读取对话内容')
       }
       return false
@@ -810,6 +861,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
+      if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
       socketRef.current?.close()
       socketRef.current = null
       document.removeEventListener('visibilitychange', handleVisibilityChange)
@@ -818,6 +870,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
+    if (!thread.id) return
+    if (thread.id === activeThreadId.current) {
+      clearThreadCompletion(thread.id)
+      return
+    }
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
     const previousThread = activeThread
     cacheVisibleThread()
     const requestId = ++loadRequest.current
@@ -859,10 +920,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     activityItemId.current = null
     setApproval(null)
     setLoadingHistory(!cachedThread)
+    if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
+
+    if (cachedThread) {
+      // The cache is already on screen. Verify it after the switch settles,
+      // but do not turn this background request into a second visible refresh.
+      cachedActiveThreadRefreshTimer.current = window.setTimeout(() => {
+        cachedActiveThreadRefreshTimer.current = undefined
+        void (async () => {
+          const loaded = await loadThread(thread.id, threadRevision, true)
+          if (requestId === loadRequest.current && loaded) setError(null)
+        })()
+      }, cachedActiveThreadRefreshDelayMs)
+      return
+    }
+
     try {
-      const loadingThread = loadThread(thread.id, threadRevision)
-      if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
-      const loaded = await loadingThread
+      const loaded = await loadThread(thread.id, threadRevision)
       if (requestId !== loadRequest.current) return
       if (loaded) setError(null)
     } catch (reason) {
@@ -874,6 +948,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, prefetchThread])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
     const previousThread = activeThread
     cacheVisibleThread()
     historyRevision.current += 1
