@@ -992,43 +992,45 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         </header>
 
         <section className="message-stream" ref={messageContainer} aria-live="polite" aria-label="Codex 对话">
-          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
-          {remote.messages.length === 0 && !remote.loadingHistory ? (
-            <div className="welcome-state">
-              <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
-              <span className="welcome-state__mark">C</span>
-              <h1>你想在本机项目中完成什么？</h1>
-              <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
-              <div className="prompt-suggestions">
-                <button type="button" onClick={() => composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
-                <button type="button" onClick={() => composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
+          <div className="message-stream__content">
+            {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
+            {remote.messages.length === 0 && !remote.loadingHistory ? (
+              <div className="welcome-state">
+                <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
+                <span className="welcome-state__mark">C</span>
+                <h1>你想在本机项目中完成什么？</h1>
+                <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
+                <div className="prompt-suggestions">
+                  <button type="button" onClick={() => composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
+                  <button type="button" onClick={() => composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
+                </div>
               </div>
-            </div>
-          ) : null}
-          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />)}
-          {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
-          {remote.approval ? (
-            <div className="approval-card" role="alert">
-              <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
-              <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
-              {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
-              {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
-              <div className="approval-card__actions">
-                <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
-                <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
+            ) : null}
+            {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
+            {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />)}
+            {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
+            {remote.approval ? (
+              <div className="approval-card" role="alert">
+                <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
+                <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
+                {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
+                {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
+                <div className="approval-card__actions">
+                  <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
+                  <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
+                </div>
               </div>
-            </div>
-          ) : null}
-          {remote.isRunning && !hasStreamingAssistant ? (
-            <div className="running-indicator" role="status" aria-live="polite">
-              <span className="running-indicator__activity">
-                <LoaderCircle className="spin" size={15} />
-                <span>{remote.activity?.label ?? '正在思考'}</span>
-                {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
-              </span>
-            </div>
-          ) : null}
+            ) : null}
+            {remote.isRunning && !hasStreamingAssistant ? (
+              <div className="running-indicator" role="status" aria-live="polite">
+                <span className="running-indicator__activity">
+                  <LoaderCircle className="spin" size={15} />
+                  <span>{remote.activity?.label ?? '正在思考'}</span>
+                  {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
+                </span>
+              </div>
+            ) : null}
+          </div>
         </section>
 
         {remote.error ? (
