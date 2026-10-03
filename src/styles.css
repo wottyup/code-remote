@@ -178,8 +178,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message--user .chat-message__actions { justify-content: flex-end; }
 .chat-message--user .chat-message__body--copy-outside { position: relative; margin-bottom: 31px; }
 .chat-message--user .chat-message__body--copy-outside .chat-message__actions { position: absolute; right: 0; bottom: -31px; margin-top: 0; }
-.stream-cursor { display: inline-block; width: 6px; height: 13px; margin: 3px 0 0 1px; vertical-align: text-bottom; background: #d3d6dc; animation: cursor-blink 1s steps(2, start) infinite; }
-@keyframes cursor-blink { to { visibility: hidden; } }
 .running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -13px auto 0; }
 .running-indicator__activity { grid-column: 1; display: flex; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100%; color: #9298a2; font-size: 11px; }

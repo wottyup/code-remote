@@ -1176,7 +1176,13 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
   )
 }
 
-function MessageContent({ text }: { text: string }) {
+function stripStandaloneSeparators(text: string) {
+  // Codex sometimes emits terminal-style divider rows outside code blocks. They
+  // are not message content, and render as a full-width line on narrow screens.
+  return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
+}
+
+function MessageContent({ text, hideStandaloneSeparators = false }: { text: string; hideStandaloneSeparators?: boolean }) {
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
   let cursor = 0
@@ -1191,9 +1197,11 @@ function MessageContent({ text }: { text: string }) {
 
   return (
     <div className="chat-message__content">
-      {blocks.map((block, index) => block.type === 'code'
-        ? <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
-        : <div className="chat-message__text" key={`text-${index}`}>{block.value}</div>)}
+      {blocks.map((block, index) => {
+        if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
+        const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
+        return value ? <div className="chat-message__text" key={`text-${index}`}>{value}</div> : null
+      })}
     </div>
   )
 }
@@ -1316,8 +1324,7 @@ function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMe
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
-        {message.text ? <MessageContent text={message.text} /> : null}
-        {message.streaming ? <i className="stream-cursor" aria-hidden="true" /> : null}
+        {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} /> : null}
         {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={onCopy}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
