@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import {
   codexRemoteClient,
   messagesFromThread,
@@ -54,6 +54,7 @@ const maxInMemoryThreadCacheCharacters = 1_200_000
 const maxBackgroundPrefetchThreads = 3
 const backgroundPrefetchDelayMs = 120
 const cachedActiveThreadRefreshDelayMs = 180
+const streamingRenderIntervalMs = 48
 
 interface PersistedActiveThread {
   threadId: string
@@ -354,6 +355,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const activityItemId = useRef<string | null>(null)
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
+  const streamingRenderTimer = useRef<number | undefined>(undefined)
+  const streamingRenderGeneration = useRef(0)
   const turnStartedAtRef = useRef<number | null>(null)
   const writerConflictRef = useRef(false)
   const writerRefreshTimer = useRef<number | undefined>(undefined)
@@ -389,6 +392,51 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setTurnStartedAt(null)
     setLastTurnDurationMs(null)
   }, [])
+
+  const resetStreamingAssistant = useCallback(() => {
+    streamingRenderGeneration.current += 1
+    if (streamingRenderTimer.current !== undefined) {
+      window.clearTimeout(streamingRenderTimer.current)
+      streamingRenderTimer.current = undefined
+    }
+    streamingAssistantMessageId.current = null
+    streamingAssistantParts.current.clear()
+  }, [])
+
+  const flushStreamingAssistant = useCallback((synchronous = false) => {
+    if (streamingRenderTimer.current !== undefined) {
+      window.clearTimeout(streamingRenderTimer.current)
+      streamingRenderTimer.current = undefined
+    }
+    const messageId = streamingAssistantMessageId.current
+    const text = [...streamingAssistantParts.current.values()].join('')
+    if (!messageId || !text) return
+    const renderGeneration = streamingRenderGeneration.current
+    const update = () => {
+      setMessages((current) => {
+        // A delayed transition from a previous turn must never recreate an
+        // assistant bubble after the active thread has already changed.
+        if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
+        const previousIndex = current.findIndex((message) => message.id === messageId)
+        if (previousIndex < 0) return [...current, { id: messageId, role: 'assistant', text, createdAt: new Date().toISOString(), streaming: true }]
+        const previous = current[previousIndex]
+        if (previous.text === text && previous.streaming) return current
+        const next = [...current]
+        next[previousIndex] = { ...previous, text, streaming: true }
+        return next
+      })
+    }
+    if (synchronous) update()
+    else startTransition(update)
+  }, [])
+
+  const scheduleStreamingAssistantRender = useCallback(() => {
+    if (streamingRenderTimer.current !== undefined) return
+    streamingRenderTimer.current = window.setTimeout(() => {
+      streamingRenderTimer.current = undefined
+      flushStreamingAssistant()
+    }, streamingRenderIntervalMs)
+  }, [flushStreamingAssistant])
 
   const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Pick<ThreadCacheEntry, 'running' | 'turnId'>) => {
     const characters = cachedHistoryCharacters(nextMessages)
@@ -520,8 +568,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (running && latestTurnId) activeTurnId.current = latestTurnId
       else if (!running) activeTurnId.current = null
       if (!running) {
-        streamingAssistantMessageId.current = null
-        streamingAssistantParts.current.clear()
+        resetStreamingAssistant()
         if (interruptRequestedThreadId.current === threadId) {
           interruptRequestedThreadId.current = null
           setIsInterrupting(false)
@@ -556,7 +603,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [cacheThreadSnapshot, onUnauthorized, token])
+  }, [cacheThreadSnapshot, onUnauthorized, resetStreamingAssistant, token])
 
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
@@ -686,8 +733,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         activeTurnId.current = turnId
         if (turnThreadId && interruptRequestedThreadId.current === turnThreadId) void dispatchInterrupt(turnThreadId, turnId)
       }
-      streamingAssistantMessageId.current = null
-      streamingAssistantParts.current.clear()
+      resetStreamingAssistant()
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
@@ -711,9 +757,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(false)
+      // Commit the accumulated text before finalizing the turn. This avoids a
+      // trailing timer/transition from recreating a stale streaming message.
+      flushStreamingAssistant(true)
       setMessages((current) => current.map((message) => message.streaming ? { ...message, streaming: false } : message))
-      streamingAssistantMessageId.current = null
-      streamingAssistantParts.current.clear()
+      resetStreamingAssistant()
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
@@ -762,14 +810,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       streamingAssistantParts.current.set(itemId, part + delta)
       const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? Date.now()}`
       streamingAssistantMessageId.current = messageId
-      const text = [...streamingAssistantParts.current.values()].join('')
       activityItemId.current = itemId
-      setActivity({ label: '正在回复' })
-      setMessages((current) => {
-        const exists = current.some((message) => message.id === messageId)
-        if (exists) return current.map((message) => message.id === messageId ? { ...message, text, streaming: true } : message)
-        return [...current, { id: messageId, role: 'assistant', text, createdAt: new Date().toISOString(), streaming: true }]
-      })
+      setActivity((current) => current?.label === '正在回复' && !current.detail ? current : { label: '正在回复' })
+      scheduleStreamingAssistantRender()
       return
     }
     if (event.method === 'item/completed') {
@@ -789,17 +832,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
       const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? itemId}`
       streamingAssistantMessageId.current = messageId
-      const combinedText = [...streamingAssistantParts.current.values()].join('')
-      setMessages((current) => {
-        const exists = current.some((message) => message.id === messageId)
-        if (!exists && !combinedText) return current
-        if (!exists) return [...current, { id: messageId, role: 'assistant', text: combinedText, createdAt: new Date().toISOString(), streaming: true }]
-        return current.map((message) => message.id === messageId ? { ...message, text: combinedText, streaming: true } : message)
-      })
+      scheduleStreamingAssistantRender()
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [beginTurnTimer, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreads, setHandoffState, updateCachedThreadRunState])
+  }, [beginTurnTimer, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, updateCachedThreadRunState])
 
   useEffect(() => {
     let disposed = false
@@ -897,6 +934,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
       if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      if (streamingRenderTimer.current !== undefined) {
+        window.clearTimeout(streamingRenderTimer.current)
+        streamingRenderTimer.current = undefined
+      }
       socketRef.current?.close()
       socketRef.current = null
       if (reconnectRef.current === connect) reconnectRef.current = () => {}
@@ -923,8 +964,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     clearThreadCompletion(thread.id)
     activeThreadId.current = thread.id
     persistActiveThreadId(thread.id)
-    streamingAssistantMessageId.current = null
-    streamingAssistantParts.current.clear()
+    resetStreamingAssistant()
     activeTurnId.current = null
     interruptRequestedThreadId.current = null
     interruptInFlightThreadId.current = null
@@ -982,7 +1022,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       if (requestId === loadRequest.current) setLoadingHistory(false)
     }
-  }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, prefetchThread])
+  }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, prefetchThread, resetStreamingAssistant])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
     if (handedOffRef.current) {
@@ -1002,8 +1042,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       activeThreadId.current = thread.id
       persistActiveThreadId(thread.id)
       if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
-      streamingAssistantMessageId.current = null
-      streamingAssistantParts.current.clear()
+      resetStreamingAssistant()
       activeTurnId.current = null
       interruptRequestedThreadId.current = null
       interruptInFlightThreadId.current = null
@@ -1029,7 +1068,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       setLoadingHistory(false)
     }
-  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, prefetchThread, token])
+  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, prefetchThread, resetStreamingAssistant, token])
 
   const sendMessage = useCallback(async (input: {
     prompt: string

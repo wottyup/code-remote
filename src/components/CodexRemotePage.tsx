@@ -34,6 +34,8 @@ const connectionLabel = {
   unavailable: 'Codex 不可用',
 }
 
+const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
+const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const themeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
@@ -315,8 +317,8 @@ function timeOf(thread: CodexThread) {
   if (Number.isNaN(date.getTime())) return ''
   const today = new Date()
   return date.toDateString() === today.toDateString()
-    ? new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' }).format(date)
-    : new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' }).format(date)
+    ? threadTimeFormatter.format(date)
+    : threadDateFormatter.format(date)
 }
 
 interface ComposerMenuOption {
@@ -721,6 +723,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const messageContainer = useRef<HTMLDivElement>(null)
   const composerHandle = useRef<ComposerHandle>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
+  const scrollAnimationFrame = useRef<number | undefined>(undefined)
   const completionToastTimer = useRef<number | undefined>(undefined)
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
 
@@ -820,8 +823,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote.latestThreadCompletion])
 
   useEffect(() => {
-    const container = messageContainer.current
-    if (container) container.scrollTop = container.scrollHeight
+    if (scrollAnimationFrame.current !== undefined) return
+    scrollAnimationFrame.current = window.requestAnimationFrame(() => {
+      scrollAnimationFrame.current = undefined
+      const container = messageContainer.current
+      if (container) container.scrollTop = container.scrollHeight
+    })
   }, [remote.messages, remote.isRunning, remote.activity])
 
   useEffect(() => {
@@ -836,6 +843,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   useEffect(() => () => {
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
   }, [])
 
   useEffect(() => {
@@ -899,14 +907,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     void selectThread(thread)
   }
 
-  async function copyMessage(message: CodexMessage) {
+  const copyMessage = useCallback(async (message: CodexMessage) => {
     const documentText = message.documents?.map((document) => `\n\n${document.name}\n${document.content}`).join('') ?? ''
     const value = `${message.text}${documentText}`.trim()
     if (!value || !(await copyText(value))) return
     setCopiedMessageId(message.id)
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
-  }
+  }, [])
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
@@ -998,7 +1006,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={() => void copyMessage(message)} />)}
+          {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />)}
           {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
           {remote.approval ? (
             <div className="approval-card" role="alert">
@@ -1232,7 +1240,7 @@ function CodeBlock({ value, language }: { value: string; language?: string }) {
   )
 }
 
-function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
+const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const files = [...changes.reduce((entries, change) => {
@@ -1304,9 +1312,9 @@ function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
       ) : null}
     </article>
   )
-}
+})
 
-function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: () => void }) {
+const MessageBubble = memo(function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   const showCopyAction = Boolean(message.text || message.documents?.length)
 
   return (
@@ -1325,8 +1333,8 @@ function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMe
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} /> : null}
-        {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={onCopy}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
+        {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
   )
-}
+})
