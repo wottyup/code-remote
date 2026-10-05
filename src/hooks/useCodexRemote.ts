@@ -43,7 +43,35 @@ export interface CodexFileChange {
   changes: CodexFileChangeEntry[]
 }
 
+export interface QueuedTurnMessage {
+  id: string
+  text: string
+  images: CodexImageAttachment[]
+  document?: CodexDocumentAttachment
+  createdAt: string
+}
+
+interface QueuedTurnPayload extends QueuedTurnMessage {
+  requestText: string
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+}
+
+interface SendMessageInput {
+  prompt: string
+  images: CodexImageAttachment[]
+  document?: CodexDocumentAttachment
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  onThreadCreated?: (thread: CodexThread) => void
+}
+
 type FileChangesByTurn = Record<string, CodexFileChange[]>
+type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
+
+const emptyQueuedMessages: QueuedTurnMessage[] = []
 
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
@@ -190,6 +218,40 @@ function latestTurnState(thread: { turns?: unknown[] }) {
 
 function isActiveWriterError(reason: unknown) {
   return reason instanceof Error && /active writer/i.test(reason.message)
+}
+
+function queuedMessageId() {
+  return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
+  const text = input.prompt.trim()
+  const documentText = input.document
+    ? `\n\n[附件文档：${input.document.name}]\n${input.document.content}\n[/附件文档]`
+    : ''
+  return {
+    id: queuedMessageId(),
+    text,
+    requestText: `${text}${documentText}`.trim(),
+    images: input.images,
+    ...(input.document ? { document: input.document } : {}),
+    ...(input.model ? { model: input.model } : {}),
+    ...(input.effort ? { effort: input.effort } : {}),
+    ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    createdAt: new Date().toISOString(),
+  }
+}
+
+function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: string | null): CodexMessage {
+  return {
+    id: payload.id,
+    role: 'user',
+    text: payload.text,
+    images: payload.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
+    ...(payload.document ? { documents: [{ ...payload.document, charCount: payload.document.content.length }] } : {}),
+    createdAt: payload.createdAt,
+    ...(turnId ? { turnId } : {}),
+  }
 }
 
 function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
@@ -436,6 +498,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
   const [completedThreadIds, setCompletedThreadIds] = useState<string[]>([])
   const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
+  const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const reconnectRef = useRef<() => void>(() => {})
   const handedOffRef = useRef(false)
@@ -460,10 +523,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
   const cachedActiveThreadRefreshTimer = useRef<number | undefined>(undefined)
+  const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
+  const queuedTurnStartsInFlight = useRef(new Set<string>())
+  const queuedTurnSteersInFlight = useRef(new Set<string>())
 
   const setHandoffState = useCallback((next: boolean) => {
     handedOffRef.current = next
     setHandedOff(next)
+  }, [])
+
+  const updateQueuedMessages = useCallback((threadId: string, update: (current: QueuedTurnPayload[]) => QueuedTurnPayload[]) => {
+    const current = queuedMessagesByThreadRef.current[threadId] ?? []
+    const next = update(current)
+    if (next === current) return current
+    const nextByThread = { ...queuedMessagesByThreadRef.current }
+    if (next.length > 0) nextByThread[threadId] = next
+    else delete nextByThread[threadId]
+    queuedMessagesByThreadRef.current = nextByThread
+    setQueuedMessagesByThread(nextByThread)
+    return next
   }, [])
 
   const beginTurnTimer = useCallback(() => {
@@ -769,6 +847,134 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [onUnauthorized, token])
 
+  const requestTurnStart = useCallback(async (threadId: string, payload: QueuedTurnPayload) => {
+    const start = () => codexRemoteClient.startTurn(token, threadId, {
+      prompt: payload.requestText,
+      images: payload.images,
+      model: payload.model,
+      effort: payload.effort,
+      approvalPolicy: payload.approvalPolicy,
+    })
+    if (resumedThreadId.current !== threadId) {
+      await codexRemoteClient.resumeThread(token, threadId)
+      resumedThreadId.current = threadId
+    }
+    try {
+      return await start()
+    } catch (reason) {
+      if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
+      resumedThreadId.current = null
+      await codexRemoteClient.resumeThread(token, threadId)
+      resumedThreadId.current = threadId
+      return start()
+    }
+  }, [token])
+
+  const appendQueuedMessageToActiveThread = useCallback((threadId: string, payload: QueuedTurnPayload, turnId?: string | null) => {
+    if (activeThreadId.current !== threadId) return
+    const localMessage = localMessageFromQueuedPayload(payload, turnId)
+    setMessages((current) => current.some((message) => message.id === localMessage.id)
+      ? current
+      : [...current, localMessage])
+  }, [])
+
+  const startQueuedMessage = useCallback(async (threadId: string, messageId: string) => {
+    if (handedOffRef.current) return false
+    if (queuedTurnStartsInFlight.current.has(threadId)) return false
+    const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (!payload) return false
+    // A current active turn must only receive a steer request. This guard also
+    // prevents a late completion event from opening a concurrent turn.
+    if (activeThreadId.current === threadId && activeTurnId.current) return false
+    queuedTurnStartsInFlight.current.add(threadId)
+    const affectsActiveThread = activeThreadId.current === threadId
+    if (affectsActiveThread) historyRevision.current += 1
+    try {
+      const turnResult = await requestTurnStart(threadId, payload)
+      updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
+      if (activeThreadId.current === threadId) {
+        const turnId = turnResult.turn_id
+        if (turnId) activeTurnId.current = turnId
+        appendQueuedMessageToActiveThread(threadId, payload, turnId)
+        interruptRequestedThreadId.current = null
+        interruptInFlightThreadId.current = null
+        setIsInterrupting(false)
+        setIsRunning(true)
+        beginTurnTimer()
+        setActivity({ label: '正在思考' })
+        writerConflictRef.current = false
+        setWriterConflict(false)
+      }
+      if (activeThreadId.current === threadId) setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (activeThreadId.current === threadId) {
+        const message = reason instanceof Error ? reason.message : '发送排队消息失败'
+        if (isActiveWriterError(reason)) {
+          writerConflictRef.current = true
+          setWriterConflict(true)
+          setIsRunning(true)
+          setActivity({ label: '此对话已有其他 Codex 实例在运行' })
+          setError(activeWriterError)
+        } else {
+          setError(/thread not found/i.test(message)
+            ? '本机 Codex 已找不到这条对话。排队消息仍保留，请新建对话后重新发送。'
+            : message)
+        }
+      }
+      return false
+    } finally {
+      queuedTurnStartsInFlight.current.delete(threadId)
+    }
+  }, [appendQueuedMessageToActiveThread, beginTurnTimer, onUnauthorized, requestTurnStart, updateQueuedMessages])
+
+  const startNextQueuedMessage = useCallback(async (threadId: string) => {
+    const next = queuedMessagesByThreadRef.current[threadId]?.[0]
+    return next ? startQueuedMessage(threadId, next.id) : false
+  }, [startQueuedMessage])
+
+  const sendQueuedMessageNow = useCallback(async (messageId: string) => {
+    if (handedOffRef.current) {
+      setError('网页端已交还给本机 Codex，请先重新接管网页端。')
+      return false
+    }
+    const threadId = activeThreadId.current
+    if (!threadId || queuedTurnStartsInFlight.current.has(threadId)) return false
+    const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (!payload) return false
+    const requestKey = `${threadId}:${messageId}`
+    if (queuedTurnSteersInFlight.current.has(requestKey)) return false
+    queuedTurnSteersInFlight.current.add(requestKey)
+    try {
+      const result = await codexRemoteClient.steerTurn(token, threadId, {
+        prompt: payload.requestText,
+        images: payload.images,
+      })
+      updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
+      appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      // The active reply may have completed in the interval before the click
+      // reached the server. Preserve the item and start it as the next turn.
+      if (reason instanceof RemoteApiError && reason.status === 409) return startQueuedMessage(threadId, messageId)
+      if (activeThreadId.current === threadId) {
+        setError(reason instanceof Error ? reason.message : '立即发送排队消息失败')
+      }
+      return false
+    } finally {
+      queuedTurnSteersInFlight.current.delete(requestKey)
+    }
+  }, [appendQueuedMessageToActiveThread, onUnauthorized, startQueuedMessage, token, updateQueuedMessages])
+
+  const removeQueuedMessage = useCallback((messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId) return
+    updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== messageId))
+  }, [updateQueuedMessages])
+
   const restoreActiveThread = useCallback(async () => {
     if (handedOffRef.current) return
     const threadId = activeThreadId.current
@@ -849,6 +1055,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       } else if (event.method === 'turn/completed') {
         updateCachedThreadRunState(eventThreadId, false, null)
         markThreadCompletion(eventThreadId)
+        void startNextQueuedMessage(eventThreadId)
         void prefetchThread({ id: eventThreadId }, true)
         void refreshThreads()
       } else if (event.method === 'turn/workspaceChanges') {
@@ -922,6 +1129,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       activityItemId.current = null
       const refreshThreadId = activeThreadId.current
       const refreshRevision = ++historyRevision.current
+      const queuedThreadId = turnThreadId ?? refreshThreadId
+      // Start only one queued item for each completed turn. Starting it bumps
+      // the history revision, so the just-completed snapshot cannot overwrite
+      // the optimistic queued user message while its new turn is starting.
+      if (queuedThreadId) void startNextQueuedMessage(queuedThreadId)
       if (refreshThreadId) {
         void refreshThreads()
         void loadThread(refreshThreadId, refreshRevision)
@@ -1001,7 +1213,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
 
   useEffect(() => {
     let disposed = false
@@ -1240,32 +1452,30 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }
   }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, prefetchThread, resetStreamingAssistant, token])
 
-  const sendMessage = useCallback(async (input: {
-    prompt: string
-    images: CodexImageAttachment[]
-    document?: CodexDocumentAttachment
-    model?: string
-    effort?: string
-    approvalPolicy?: CodexApprovalPolicy
-    onThreadCreated?: (thread: CodexThread) => void
-  }) => {
+  const sendMessage = useCallback(async (input: SendMessageInput) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
       return false
     }
-    const text = input.prompt.trim()
-    if (!text && input.images.length === 0 && !input.document) return false
-    const documentText = input.document
-      ? `\n\n[附件文档：${input.document.name}]\n${input.document.content}\n[/附件文档]`
-      : ''
-    const requestText = `${text}${documentText}`.trim()
+    const payload = queuedPayloadFromInput(input)
+    if (!payload.text && payload.images.length === 0 && !payload.document) return false
     let thread = activeThread
     if (!thread) {
       thread = await createThread(input.model, input.approvalPolicy)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
-    const localId = `local-${Date.now()}`
+    const threadIsReplying = thread.id === activeThreadId.current && (isRunning || activeTurnId.current !== null)
+    const hasQueuedMessages = (queuedMessagesByThreadRef.current[thread.id]?.length ?? 0) > 0
+    if (threadIsReplying || hasQueuedMessages) {
+      updateQueuedMessages(thread.id, (current) => [...current, payload])
+      setError(null)
+      // A failed automatic start leaves the queue intact. A later normal
+      // submission is a useful retry that still preserves message order.
+      if (!threadIsReplying) void startNextQueuedMessage(thread.id)
+      return true
+    }
+    const localId = payload.id
     const rememberStartedTurn = (turnId: string | null) => {
       if (!turnId) return
       activeTurnId.current = turnId
@@ -1275,14 +1485,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (interruptRequestedThreadId.current === thread.id) void dispatchInterrupt(thread.id, turnId)
     }
     historyRevision.current += 1
-    setMessages((current) => [...current, {
-      id: localId,
-      role: 'user',
-      text,
-      images: input.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
-      ...(input.document ? { documents: [{ ...input.document, charCount: input.document.content.length }] } : {}),
-      createdAt: new Date().toISOString(),
-    }])
+    setMessages((current) => [...current, localMessageFromQueuedPayload(payload)])
     activeTurnId.current = null
     interruptRequestedThreadId.current = null
     interruptInFlightThreadId.current = null
@@ -1294,33 +1497,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     setWriterConflict(false)
     setError(null)
     try {
-      if (resumedThreadId.current !== thread.id) {
-        await codexRemoteClient.resumeThread(token, thread.id)
-        resumedThreadId.current = thread.id
-      }
-      try {
-        const turnResult = await codexRemoteClient.startTurn(token, thread.id, {
-          prompt: requestText,
-          images: input.images,
-          model: input.model,
-          effort: input.effort,
-          approvalPolicy: input.approvalPolicy,
-        })
-        rememberStartedTurn(turnResult.turn_id)
-      } catch (reason) {
-        if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
-        resumedThreadId.current = null
-        await codexRemoteClient.resumeThread(token, thread.id)
-        resumedThreadId.current = thread.id
-        const turnResult = await codexRemoteClient.startTurn(token, thread.id, {
-          prompt: requestText,
-          images: input.images,
-          model: input.model,
-          effort: input.effort,
-          approvalPolicy: input.approvalPolicy,
-        })
-        rememberStartedTurn(turnResult.turn_id)
-      }
+      const turnResult = await requestTurnStart(thread.id, payload)
+      rememberStartedTurn(turnResult.turn_id)
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
@@ -1347,7 +1525,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, onUnauthorized, token])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, isRunning, onUnauthorized, requestTurnStart, startNextQueuedMessage, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
@@ -1363,8 +1541,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
 
   const handoffToLocalCodex = useCallback(async () => {
     if (handoffInProgress || handedOffRef.current) return false
-    if (isRunning || isInterrupting) {
-      setError('当前网页端任务尚未结束，不能交还给本机 Codex。')
+    const hasQueuedMessages = Object.values(queuedMessagesByThreadRef.current).some((messages) => messages.length > 0)
+    if (isRunning || isInterrupting || hasQueuedMessages) {
+      setError('当前网页端任务或排队消息尚未结束，不能交还给本机 Codex。')
       return false
     }
     setHandoffInProgress(true)
@@ -1434,6 +1613,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     models,
     activeThread,
     messages,
+    queuedMessages: activeThread ? queuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages,
     isRunning,
     isInterrupting,
     turnStartedAt,
@@ -1453,6 +1633,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     selectThread,
     createThread,
     sendMessage,
+    sendQueuedMessageNow,
+    removeQueuedMessage,
     interrupt,
     handoffToLocalCodex,
     reclaimForRemote,

@@ -260,6 +260,22 @@ export const codexRemoteClient = {
       }),
     })
   },
+  steerTurn(token: string, threadId: string, input: {
+    prompt: string
+    images: CodexImageAttachment[]
+  }) {
+    return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/steer`, {
+      method: 'POST',
+      body: JSON.stringify({
+        prompt: input.prompt,
+        images: input.images.map((image) => ({
+          name: image.name,
+          media_type: image.mediaType,
+          data: image.data,
+        })),
+      }),
+    })
+  },
   interrupt(token: string, threadId: string, turnId?: string | null) {
     return request<{ interrupted: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, {
       method: 'POST',

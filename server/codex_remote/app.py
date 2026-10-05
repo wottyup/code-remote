@@ -22,7 +22,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from watchfiles import awatch
 
-from .codex_app_server import ApprovalPolicy, CodexAppServer, CodexHandoffBusyError, CodexRuntimeError
+from .codex_app_server import (
+    ApprovalPolicy,
+    CodexAppServer,
+    CodexHandoffBusyError,
+    CodexNoActiveTurnError,
+    CodexRuntimeError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +97,11 @@ class TurnRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approval_policy: ApprovalPolicy | None = None
+
+
+class SteerRequest(BaseModel):
+    prompt: str = Field(default="", max_length=32_000)
+    images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
 
 
 class InterruptRequest(BaseModel):
@@ -436,6 +447,30 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             await app_server.interrupt(thread_id, body.turn_id if body else None)
             return {"interrupted": True}
         except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads/{thread_id}/steer")
+    async def steer_turn(thread_id: str, body: SteerRequest) -> dict[str, str | None]:
+        prompt = body.prompt.strip()
+        if not prompt and not body.images:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
+        image_paths = save_turn_images(body.images, image_directory)
+        try:
+            result = await app_server.steer_turn(thread_id, prompt, image_paths)
+            turn_id = result.get("turnId")
+            if not isinstance(turn_id, str):
+                turn = result.get("turn")
+                turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+            return {"turn_id": turn_id}
+        except CodexNoActiveTurnError as error:
+            for path in image_paths:
+                with suppress(FileNotFoundError):
+                    path.unlink()
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexRuntimeError as error:
+            for path in image_paths:
+                with suppress(FileNotFoundError):
+                    path.unlink()
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.websocket("/api/v1/codex/ws")

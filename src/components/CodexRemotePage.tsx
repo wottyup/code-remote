@@ -18,7 +18,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexFileChange } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexFileChange, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import type { CodexApprovalPolicy, CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
@@ -435,6 +435,9 @@ interface MessageComposerProps {
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
   onSend: (input: ComposerSendInput) => Promise<boolean>
+  queuedMessages: QueuedTurnMessage[]
+  onSendQueuedNow: (messageId: string) => Promise<boolean>
+  onRemoveQueued: (messageId: string) => void
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -456,6 +459,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onEffortChange,
   onApprovalPolicyChange,
   onSend,
+  queuedMessages,
+  onSendQueuedNow,
+  onRemoveQueued,
   onInterrupt,
   onRefresh,
 }, ref) {
@@ -465,6 +471,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(72)
+  const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
   const draftSaveTimer = useRef<number | undefined>(undefined)
@@ -546,7 +553,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }, [])
 
-  const canCompose = !sending && !isRunning && connection === 'connected'
+  const canCompose = !sending && !writerConflict && connection === 'connected'
+  const canConfigure = canCompose && !isRunning
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
   const canAttachImages = canCompose && modelSupportsImages
 
@@ -615,6 +623,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setSending(false)
   }
 
+  async function sendQueuedNow(messageId: string) {
+    if (sendingQueuedId) return
+    setSendingQueuedId(messageId)
+    try {
+      await onSendQueuedNow(messageId)
+    } finally {
+      setSendingQueuedId((current) => current === messageId ? null : current)
+    }
+  }
+
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
     if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
@@ -667,6 +685,32 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <button type="button" onClick={() => setAttachedDocument(null)} aria-label="移除文档"><X size={13} /></button>
         </div>
       ) : null}
+      {queuedMessages.length > 0 ? (
+        <div className="composer-queue" aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
+          <div className="composer-queue__heading">
+            <span>已排队 {queuedMessages.length} 条</span>
+            <small>{isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
+          </div>
+          <div className="composer-queue__list">
+            {queuedMessages.map((message, index) => {
+              const sendingNow = sendingQueuedId === message.id
+              const summary = message.text || (message.document
+                ? `附件文档：${message.document.name}`
+                : `${message.images.length} 张图片`)
+              return (
+                <div className="composer-queue__item" key={message.id}>
+                  <span className="composer-queue__index">{index + 1}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
+                  <button className="composer-queue__send" type="button" disabled={sendingNow} onClick={() => void sendQueuedNow(message.id)} title="立即发送给当前 Codex 回复">
+                    {sendingNow ? <LoaderCircle className="spin" size={12} /> : <Send size={12} />}<span>立即发送</span>
+                  </button>
+                  <button className="composer-queue__remove" type="button" disabled={sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ) : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
         <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
         <textarea
@@ -687,9 +731,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       </div>
       <div className="message-composer__footer">
         <div className="composer-preferences">
-          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canCompose || modelOptions.length === 0} onChange={onModelChange} />
-          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canCompose || reasoningOptions.length === 0} onChange={onEffortChange} />
-          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} onChange={onModelChange} />
+          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} onChange={onEffortChange} />
+          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
         </div>
         <div className="composer-actions">
@@ -699,10 +743,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
           {writerConflict ? (
             <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-          ) : isRunning ? (
-            <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button>
           ) : (
-            <button className="send-button" type="submit" disabled={!canSend} aria-label="发送消息">{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+            <>
+              {isRunning ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
+              <button className={`send-button${isRunning ? ' send-button--queue' : ''}`} type="submit" disabled={!canSend} aria-label={isRunning ? '将消息加入发送队列' : '发送消息'} title={isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+            </>
           )}
         </div>
       </div>
@@ -1168,6 +1213,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           onEffortChange={changeEffort}
           onApprovalPolicyChange={changeApprovalPolicy}
           onSend={sendComposerMessage}
+          queuedMessages={remote.queuedMessages}
+          onSendQueuedNow={remote.sendQueuedMessageNow}
+          onRemoveQueued={remote.removeQueuedMessage}
           onInterrupt={remote.interrupt}
           onRefresh={remote.refreshActiveThread}
         />

@@ -22,6 +22,10 @@ class CodexHandoffBusyError(CodexRuntimeError):
     """The remote App Server still has a turn that must not be interrupted."""
 
 
+class CodexNoActiveTurnError(CodexRuntimeError):
+    """A request that requires an active turn arrived after it had finished."""
+
+
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 
 
@@ -340,18 +344,47 @@ class CodexAppServer:
             if self._pending_turn_starts.get(thread_id) is pending_start:
                 self._pending_turn_starts.pop(thread_id, None)
 
-    async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
+    async def _active_turn_id(self, thread_id: str) -> str | None:
         active_turn_id = self._active_turn_ids.get(thread_id)
+        if active_turn_id:
+            return active_turn_id
+        pending_start = self._pending_turn_starts.get(thread_id)
+        if not pending_start:
+            return None
+        try:
+            pending_turn_id = await asyncio.wait_for(asyncio.shield(pending_start), timeout=5)
+        except TimeoutError:
+            pending_turn_id = None
+        return self._active_turn_ids.get(thread_id) or pending_turn_id
+
+    async def steer_turn(
+        self,
+        thread_id: str,
+        prompt: str,
+        image_paths: list[Path] | None = None,
+    ) -> dict[str, Any]:
+        """Append input to the current turn without starting a concurrent turn."""
+        if len(prompt) > 32_000:
+            raise CodexRuntimeError("消息不能超过 32000 个字符")
+        images = image_paths or []
+        if not prompt.strip() and not images:
+            raise CodexRuntimeError("请填写消息或附加图片")
+        active_turn_id = await self._active_turn_id(thread_id)
         if not active_turn_id:
-            pending_start = self._pending_turn_starts.get(thread_id)
-            if pending_start:
-                try:
-                    pending_turn_id = await asyncio.wait_for(asyncio.shield(pending_start), timeout=5)
-                except TimeoutError:
-                    pending_turn_id = None
-                active_turn_id = self._active_turn_ids.get(thread_id) or pending_turn_id or turn_id
-            else:
-                active_turn_id = turn_id
+            raise CodexNoActiveTurnError("Codex 当前没有可立即发送的回复")
+        input_items: list[dict[str, Any]] = []
+        if prompt.strip():
+            input_items.append({"type": "text", "text": prompt})
+        input_items.extend({"type": "localImage", "path": str(path)} for path in images)
+        return await self.request("turn/steer", {
+            "threadId": thread_id,
+            "input": input_items,
+            # Always use the runtime's ID, not a potentially stale browser ID.
+            "expectedTurnId": active_turn_id,
+        })
+
+    async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
+        active_turn_id = await self._active_turn_id(thread_id) or turn_id
         if not active_turn_id:
             raise CodexRuntimeError("Codex 当前没有可中断的任务")
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
@@ -589,9 +622,9 @@ class CodexAppServer:
                             self._active_turn_ids.pop(active_thread_id, None)
                             completed_thread_id = active_thread_id
                             break
-            await self._emit({"type": "notification", "method": method, "params": params})
             if method == "turn/completed" and completed_thread_id:
                 await self._complete_workspace_change_watch(completed_thread_id, completed_turn_id)
+            await self._emit({"type": "notification", "method": method, "params": params})
 
     async def _emit(self, event: dict[str, Any]) -> None:
         for queue in tuple(self._subscribers):
