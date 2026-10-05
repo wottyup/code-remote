@@ -721,11 +721,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
   const messageContainer = useRef<HTMLDivElement>(null)
+  const messageContent = useRef<HTMLDivElement>(null)
   const composerHandle = useRef<ComposerHandle>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
   const followMessageStream = useRef(true)
   const forceMessageStreamBottomFor = useRef<string | null>(null)
+  const forceMessageStreamBottomVersion = useRef(0)
+  const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
   const completionToastTimer = useRef<number | undefined>(undefined)
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -778,12 +781,42 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
 
-  const scrollToBottom = useCallback(() => {
-    followMessageStream.current = true
-    setShowScrollToBottom(false)
+  const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
     if (container) container.scrollTop = container.scrollHeight
   }, [])
+
+  const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
+    forceMessageStreamBottomFor.current = threadId ?? null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) {
+      window.clearTimeout(forceMessageStreamBottomTimer.current)
+      forceMessageStreamBottomTimer.current = undefined
+    }
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+  }, [])
+
+  const scrollToBottom = useCallback(() => {
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+    positionMessageStreamAtBottom()
+  }, [positionMessageStreamAtBottom])
+
+  const settleForcedMessageStreamBottom = useCallback(() => {
+    const threadId = activeThreadId
+    if (!threadId || remote.loadingHistory || forceMessageStreamBottomFor.current !== threadId) return
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    const version = forceMessageStreamBottomVersion.current
+    let timer: number | undefined
+    timer = window.setTimeout(() => {
+      if (forceMessageStreamBottomVersion.current === version && forceMessageStreamBottomFor.current === threadId) {
+        forceMessageStreamBottomFor.current = null
+      }
+      if (forceMessageStreamBottomTimer.current === timer) forceMessageStreamBottomTimer.current = undefined
+    }, 360)
+    forceMessageStreamBottomTimer.current = timer
+  }, [activeThreadId, remote.loadingHistory])
 
   const handleMessageScroll = useCallback(() => {
     const container = messageContainer.current
@@ -795,9 +828,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [activeThreadId])
 
   const sendComposerMessage = useCallback((input: ComposerSendInput) => {
-    followMessageStream.current = true
-    forceMessageStreamBottomFor.current = activeThreadId ?? null
-    setShowScrollToBottom(false)
+    forceMessageStreamToBottom(activeThreadId)
     const preferences = composerPreferencesFrom(input)
     return remote.sendMessage({
       ...input,
@@ -806,7 +837,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         rememberThreadComposerPreferences(thread.id, preferences)
       },
     })
-  }, [activeThreadId, rememberThreadComposerPreferences, remote.sendMessage])
+  }, [activeThreadId, forceMessageStreamToBottom, rememberThreadComposerPreferences, remote.sendMessage])
 
   useEffect(() => {
     try {
@@ -845,26 +876,46 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote.latestThreadCompletion])
 
   useLayoutEffect(() => {
-    followMessageStream.current = true
-    forceMessageStreamBottomFor.current = activeThreadId ?? null
-    setShowScrollToBottom(false)
-  }, [activeThreadId])
+    forceMessageStreamToBottom(activeThreadId)
+  }, [activeThreadId, forceMessageStreamToBottom])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
     if (!forceToBottom && !followMessageStream.current) return
+    // Do this during layout, rather than only on the next animation frame: the
+    // history list can replace a short loading state with a long conversation
+    // in one commit.
+    positionMessageStreamAtBottom()
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+    if (forceToBottom) settleForcedMessageStreamBottom()
+
     if (scrollAnimationFrame.current !== undefined) return
     scrollAnimationFrame.current = window.requestAnimationFrame(() => {
       scrollAnimationFrame.current = undefined
-      const container = messageContainer.current
       const forced = forceMessageStreamBottomFor.current === activeThreadId
-      if (!container || (!forced && !followMessageStream.current)) return
-      container.scrollTop = container.scrollHeight
+      if (!forced && !followMessageStream.current) return
+      positionMessageStreamAtBottom()
       followMessageStream.current = true
-      if (forced && (!remote.loadingHistory || remote.messages.length > 0)) forceMessageStreamBottomFor.current = null
       setShowScrollToBottom(false)
+      if (forced) settleForcedMessageStreamBottom()
     })
-  }, [activeThreadId, remote.messages, remote.isRunning, remote.activity, remote.loadingHistory])
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
+
+  useLayoutEffect(() => {
+    const content = messageContent.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
+      if (!forceToBottom && !followMessageStream.current) return
+      positionMessageStreamAtBottom()
+      followMessageStream.current = true
+      setShowScrollToBottom(false)
+      if (forceToBottom) settleForcedMessageStreamBottom()
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [activeThreadId, positionMessageStreamAtBottom, settingsOpen, settleForcedMessageStreamBottom])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -879,6 +930,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => () => {
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
     if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
   }, [])
 
   useEffect(() => {
@@ -920,9 +972,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     setSidebarOpen(false)
     if (completionToast?.threadId === thread.id) dismissCompletionToast()
     if (thread.id !== activeThreadId) {
-      followMessageStream.current = true
-      forceMessageStreamBottomFor.current = thread.id
-      setShowScrollToBottom(false)
+      forceMessageStreamToBottom(thread.id)
     }
     await remote.selectThread(thread)
   }
@@ -1032,7 +1082,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         </header>
 
         <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label="Codex 对话">
-          <div className="message-stream__content">
+          <div className="message-stream__content" ref={messageContent}>
             {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
             {remote.messages.length === 0 && !remote.loadingHistory ? (
               <div className="welcome-state">
