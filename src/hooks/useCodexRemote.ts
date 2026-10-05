@@ -247,7 +247,8 @@ function sameActivity(left: CodexActivity | null, right: CodexActivity | null) {
 function fileChangeForItem(value: unknown): CodexFileChange | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
-  if (item.type !== 'fileChange') return null
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  if (itemType !== 'filechange') return null
   const rawChanges = item.changes
   const changes = Array.isArray(rawChanges)
     ? rawChanges
@@ -258,23 +259,25 @@ function fileChangeForItem(value: unknown): CodexFileChange | null {
     if (typeof value === 'string') return [{ path: value, additions: 0, deletions: 0 }]
     if (!value || typeof value !== 'object') return []
     const change = value as Record<string, unknown>
-    const path = [change.path, change.filePath, change.filename]
+    const path = [change.path, change.filePath, change.filename, change.move_path, change.movePath]
       .find((part): part is string => typeof part === 'string' && part.length > 0)
     if (!path) return []
-    const diff = typeof change.diff === 'string' ? change.diff : typeof change.patch === 'string' ? change.patch : undefined
+    const diff = [change.diff, change.patch, change.unified_diff, change.unifiedDiff]
+      .find((part): part is string => typeof part === 'string')
     const diffLines = diff?.split('\n') ?? []
     return [{
       path,
-      kind: typeof change.kind === 'string' ? change.kind : undefined,
+      kind: typeof change.kind === 'string' ? change.kind : typeof change.type === 'string' ? change.type : undefined,
       diff,
       additions: diffLines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length,
       deletions: diffLines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length,
     }]
   })
   if (entries.length === 0) return null
+  const status = typeof item.status === 'string' ? item.status.toLowerCase() : ''
   return {
     id: typeof item.id === 'string' ? item.id : `file-change-${Date.now()}`,
-    status: item.status === 'completed' ? 'completed' : 'inProgress',
+    status: status === 'completed' || status === 'complete' ? 'completed' : 'inProgress',
     changes: entries,
   }
 }
@@ -283,6 +286,18 @@ function upsertFileChange(current: CodexFileChange[], next: CodexFileChange) {
   const index = current.findIndex((change) => change.id === next.id)
   if (index < 0) return [...current, next]
   return current.map((change, currentIndex) => currentIndex === index ? next : change)
+}
+
+function fileChangesFromLatestTurn(thread: { turns?: unknown[] }) {
+  const turns = Array.isArray(thread.turns) ? thread.turns : []
+  const latestTurn = turns.at(-1)
+  if (!latestTurn || typeof latestTurn !== 'object') return []
+  const items = (latestTurn as Record<string, unknown>).items
+  if (!Array.isArray(items)) return []
+  return items.reduce<CodexFileChange[]>((changes, item) => {
+    const fileChange = fileChangeForItem(item)
+    return fileChange ? upsertFileChange(changes, fileChange) : changes
+  }, [])
 }
 
 function activityForItem(value: unknown): CodexActivity {
@@ -558,6 +573,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
       const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
+      const historicalFileChanges = fileChangesFromLatestTurn(thread)
       persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
       cacheThreadSnapshot(thread, cachedMessages, { running, turnId: latestTurnId })
@@ -565,6 +581,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         const next = preserveCurrentImages(cachedMessages, current)
         return sameMessages(current, next) ? current : next
       })
+      // The live event can be missed during a reconnect or hot update. Recover
+      // the latest turn's file-change card from thread/read when it is present.
+      if (historicalFileChanges.length > 0) setFileChanges(historicalFileChanges)
       if (running && latestTurnId) activeTurnId.current = latestTurnId
       else if (!running) activeTurnId.current = null
       if (!running) {
