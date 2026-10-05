@@ -298,6 +298,64 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
   })
 }
 
+function mergeStreamingText(current: string, incoming: string) {
+  if (!current) return incoming
+  if (!incoming) return current
+  if (incoming.startsWith(current)) return incoming
+  if (current.startsWith(incoming)) return current
+
+  // A thread/read snapshot can overlap with the deltas already received on
+  // the socket. Reuse that overlap instead of rendering the shared prefix as
+  // a second assistant bubble.
+  const maxOverlap = Math.min(current.length, incoming.length)
+  for (let length = maxOverlap; length > 0; length -= 1) {
+    if (current.endsWith(incoming.slice(0, length))) return current + incoming.slice(length)
+  }
+  return current + incoming
+}
+
+function isAssistantMessageForTurn(message: CodexMessage, turnId: string | null, messageId: string) {
+  return message.role === 'assistant' && (message.id === messageId || (turnId !== null && message.turnId === turnId))
+}
+
+function assistantTextForTurn(messages: CodexMessage[], turnId: string | null, messageId: string) {
+  return messages.reduce((text, message) => isAssistantMessageForTurn(message, turnId, messageId)
+    ? mergeStreamingText(text, message.text)
+    : text, '')
+}
+
+function collapseAssistantMessagesForTurn(messages: CodexMessage[], turnId: string | null, messageId: string, incomingText: string) {
+  const matching = messages.filter((message) => isAssistantMessageForTurn(message, turnId, messageId))
+  const text = mergeStreamingText(assistantTextForTurn(messages, turnId, messageId), incomingText)
+  if (matching.length === 0 && !text) return messages
+
+  const source = matching.find((message) => message.id === messageId) ?? matching.at(-1)
+  const merged: CodexMessage = {
+    ...(source ?? {}),
+    id: messageId,
+    role: 'assistant',
+    text,
+    createdAt: source?.createdAt ?? new Date().toISOString(),
+    streaming: true,
+    ...(turnId ? { turnId } : {}),
+  }
+  let inserted = false
+  const next = messages.flatMap((message) => {
+    if (!isAssistantMessageForTurn(message, turnId, messageId)) return [message]
+    if (inserted) return []
+    inserted = true
+    return [merged]
+  })
+  return inserted ? next : [...next, merged]
+}
+
+function streamingAssistantText(parts: Map<string, string>) {
+  // Codex can emit commentary and a final answer as separate agentMessage
+  // items in one turn. Match the restored-history presentation by preserving
+  // a paragraph boundary between those items.
+  return [...parts.values()].filter(Boolean).join('\n\n')
+}
+
 function sameActiveThread(left: CodexThread | null, right: CodexThread) {
   return left?.id === right.id
     && left.name === right.name
@@ -603,7 +661,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       streamingRenderTimer.current = undefined
     }
     const messageId = streamingAssistantMessageId.current
-    const text = [...streamingAssistantParts.current.values()].join('')
+    const text = streamingAssistantText(streamingAssistantParts.current)
     if (!messageId || !text) return
     const renderGeneration = streamingRenderGeneration.current
     const update = () => {
@@ -611,25 +669,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         // A delayed transition from a previous turn must never recreate an
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
-        const previousIndex = current.findIndex((message) => message.id === messageId)
-        if (previousIndex < 0) return [...current, {
-          id: messageId,
-          role: 'assistant',
-          text,
-          createdAt: new Date().toISOString(),
-          streaming: true,
-          ...(turnId ? { turnId } : {}),
-        }]
-        const previous = current[previousIndex]
-        if (previous.text === text && previous.streaming) return current
-        const next = [...current]
-        next[previousIndex] = {
-          ...previous,
-          text,
-          streaming: true,
-          ...(!previous.turnId && turnId ? { turnId } : {}),
-        }
-        return next
+        const next = collapseAssistantMessagesForTurn(current, turnId, messageId, text)
+        return sameMessages(current, next) ? current : next
       })
     }
     if (synchronous) update()
@@ -778,13 +819,31 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       )
       persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
+      // A history read can finish while a reply is streaming (for example
+      // after reconnecting). Give that partial server message the same stable
+      // bubble as the socket stream instead of rendering both versions.
+      const runningMessageId = running && latestTurnId
+        ? streamingAssistantMessageId.current ?? `streaming-assistant-${latestTurnId}`
+        : null
+      if (runningMessageId && !streamingAssistantMessageId.current) {
+        streamingAssistantMessageId.current = runningMessageId
+      }
+      const streamedText = streamingAssistantText(streamingAssistantParts.current)
       cacheThreadSnapshot(thread, cachedMessages, {
         running,
         turnId: latestTurnId,
         fileChangesByTurn: historicalFileChangesByTurn,
       })
       setMessages((current) => {
-        const next = preserveCurrentImages(cachedMessages, current)
+        const loaded = preserveCurrentImages(cachedMessages, current)
+        const next = runningMessageId
+          ? collapseAssistantMessagesForTurn(
+            loaded,
+            latestTurnId,
+            runningMessageId,
+            mergeStreamingText(assistantTextForTurn(current, latestTurnId, runningMessageId), streamedText),
+          )
+          : loaded
         return sameMessages(current, next) ? current : next
       })
       // Rebuild every turn's card from thread/read after a reconnect or hot
