@@ -421,7 +421,6 @@ interface ComposerHandle {
 interface MessageComposerProps {
   draftScope: string
   connection: RemoteConnection
-  loadingHistory: boolean
   isRunning: boolean
   isInterrupting: boolean
   writerConflict: boolean
@@ -443,7 +442,6 @@ interface MessageComposerProps {
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   draftScope,
   connection,
-  loadingHistory,
   isRunning,
   isInterrupting,
   writerConflict,
@@ -548,7 +546,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }, [])
 
-  const canCompose = !sending && !loadingHistory && !isRunning && connection === 'connected'
+  const canCompose = !sending && !isRunning && connection === 'connected'
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
   const canAttachImages = canCompose && modelSupportsImages
 
@@ -1156,7 +1154,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           ref={composerHandle}
           draftScope={composerDraftScope}
           connection={remote.handedOff ? 'disconnected' : remote.connection}
-          loadingHistory={remote.loadingHistory}
           isRunning={remote.isRunning}
           isInterrupting={remote.isInterrupting}
           writerConflict={remote.writerConflict}

@@ -417,7 +417,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [handoffInProgress, setHandoffInProgress] = useState(false)
   const [threads, setThreads] = useState<CodexThread[]>([])
   const [models, setModels] = useState<CodexModel[]>([])
-  const [activeThread, setActiveThread] = useState<CodexThread | null>(() => initialCachedThread?.thread ?? null)
+  // Keep the saved thread ID available before its history has finished
+  // loading. This gives the composer a stable draft scope and lets a new turn
+  // start without waiting for a large thread/read response.
+  const [activeThread, setActiveThread] = useState<CodexThread | null>(() =>
+    initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null),
+  )
   const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
   const [isRunning, setIsRunning] = useState(false)
   const [isInterrupting, setIsInterrupting] = useState(false)
@@ -1248,7 +1253,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
       return false
     }
-    if (loadingHistory) return false
     const text = input.prompt.trim()
     if (!text && input.images.length === 0 && !input.document) return false
     const documentText = input.document
@@ -1343,7 +1347,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, loadingHistory, onUnauthorized, token])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, onUnauthorized, token])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
