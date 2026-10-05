@@ -1061,7 +1061,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     return indexes
   }, [remote.messages])
   const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
-    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn])
+    // The server reports file paths before it emits turn/completed. Keep that
+    // data ready, but do not place the summary card into a still-running turn.
+    .filter(([turnId, changes]) => turnId !== remote.runningTurnId && !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
   const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
   const completionThreadTitle = completionThread ? titleOf(completionThread) : '一条对话'
   const modelOptions = useMemo<ComposerMenuOption[]>(() => remote.models.flatMap((model) => {
@@ -1150,7 +1152,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             ) : null}
             {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
             {remote.messages.map((message, index) => {
-              const changes = message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
+              const changes = message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index
                 ? remote.fileChangesByTurn[message.turnId]
                 : undefined
               return (
@@ -1421,7 +1423,6 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
   const additions = files.reduce((total, item) => total + item.additions, 0)
   const deletions = files.reduce((total, item) => total + item.deletions, 0)
   const hasLineStats = additions > 0 || deletions > 0
-  const inProgress = changes.some((change) => change.status === 'inProgress')
   const showAll = expanded || reviewing
   const visibleFiles = showAll ? files : files.slice(0, 1)
   const hiddenCount = files.length - 1
@@ -1436,11 +1437,11 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
   }
 
   return (
-    <article className={`file-change-card${inProgress ? ' file-change-card--inProgress' : ''}`}>
+    <article className="file-change-card">
       <header className="file-change-card__heading">
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
-          <strong>{inProgress ? '正在编辑' : '已编辑'} {files.length} 个文件</strong>
+          <strong>本次已编辑 {files.length} 个文件</strong>
           {hasLineStats ? <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span> : null}
         </div>
         <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
