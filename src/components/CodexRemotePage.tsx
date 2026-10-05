@@ -725,6 +725,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const copyResetTimer = useRef<number | undefined>(undefined)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
   const followMessageStream = useRef(true)
+  const forceMessageStreamBottomFor = useRef<string | null>(null)
   const completionToastTimer = useRef<number | undefined>(undefined)
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
@@ -777,23 +778,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
 
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = 'smooth') => {
+  const scrollToBottom = useCallback(() => {
     followMessageStream.current = true
     setShowScrollToBottom(false)
     const container = messageContainer.current
-    if (container) container.scrollTo({ top: container.scrollHeight, behavior })
+    if (container) container.scrollTop = container.scrollHeight
   }, [])
 
   const handleMessageScroll = useCallback(() => {
     const container = messageContainer.current
     if (!container) return
+    if (forceMessageStreamBottomFor.current === activeThreadId) return
     const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
     followMessageStream.current = atBottom
     setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
-  }, [])
+  }, [activeThreadId])
 
   const sendComposerMessage = useCallback((input: ComposerSendInput) => {
     followMessageStream.current = true
+    forceMessageStreamBottomFor.current = activeThreadId ?? null
     setShowScrollToBottom(false)
     const preferences = composerPreferencesFrom(input)
     return remote.sendMessage({
@@ -803,7 +806,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         rememberThreadComposerPreferences(thread.id, preferences)
       },
     })
-  }, [rememberThreadComposerPreferences, remote.sendMessage])
+  }, [activeThreadId, rememberThreadComposerPreferences, remote.sendMessage])
 
   useEffect(() => {
     try {
@@ -841,22 +844,27 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     }
   }, [remote.latestThreadCompletion])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     followMessageStream.current = true
+    forceMessageStreamBottomFor.current = activeThreadId ?? null
     setShowScrollToBottom(false)
   }, [activeThreadId])
 
   useEffect(() => {
-    if (!followMessageStream.current) return
+    const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
+    if (!forceToBottom && !followMessageStream.current) return
     if (scrollAnimationFrame.current !== undefined) return
     scrollAnimationFrame.current = window.requestAnimationFrame(() => {
       scrollAnimationFrame.current = undefined
       const container = messageContainer.current
-      if (!container || !followMessageStream.current) return
+      const forced = forceMessageStreamBottomFor.current === activeThreadId
+      if (!container || (!forced && !followMessageStream.current)) return
       container.scrollTop = container.scrollHeight
+      followMessageStream.current = true
+      if (forced && (!remote.loadingHistory || remote.messages.length > 0)) forceMessageStreamBottomFor.current = null
       setShowScrollToBottom(false)
     })
-  }, [remote.messages, remote.isRunning, remote.activity])
+  }, [activeThreadId, remote.messages, remote.isRunning, remote.activity, remote.loadingHistory])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -911,6 +919,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   async function selectThread(thread: CodexThread) {
     setSidebarOpen(false)
     if (completionToast?.threadId === thread.id) dismissCompletionToast()
+    if (thread.id !== activeThreadId) {
+      followMessageStream.current = true
+      forceMessageStreamBottomFor.current = thread.id
+      setShowScrollToBottom(false)
+    }
     await remote.selectThread(thread)
   }
 
