@@ -31,6 +31,7 @@ export interface CodexMessage {
   role: 'user' | 'assistant'
   text: string
   createdAt: string
+  turnId?: string
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
   streaming?: boolean
@@ -150,16 +151,18 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     if (!turnValue || typeof turnValue !== 'object') continue
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
+    const turnId = typeof turn.id === 'string' ? turn.id : undefined
     let assistantMessage: CodexMessage | null = null
     for (const itemValue of turn.items) {
       if (!itemValue || typeof itemValue !== 'object') continue
       const item = itemValue as Record<string, unknown>
-      if (item.type !== 'userMessage' && item.type !== 'agentMessage') continue
-      const text = item.type === 'userMessage' ? plainText(item.content) : plainText(item.text)
-      const images = item.type === 'userMessage' ? imagesFromContent(item.content) : []
+      const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
+      const text = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
+      const images = itemType === 'usermessage' ? imagesFromContent(item.content) : []
       if (!text && images.length === 0) continue
 
-      if (item.type === 'agentMessage' && assistantMessage) {
+      if (itemType === 'agentmessage' && assistantMessage) {
         assistantMessage.text = assistantMessage.text
           ? `${assistantMessage.text}\n\n${text}`
           : text
@@ -168,12 +171,13 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
 
       messages.push({
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
-        role: item.type === 'userMessage' ? 'user' : 'assistant',
+        role: itemType === 'usermessage' ? 'user' : 'assistant',
         text,
         createdAt: timestamp(turn.startedAt),
+        ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
       })
-      assistantMessage = item.type === 'agentMessage' ? messages.at(-1)! : null
+      assistantMessage = itemType === 'agentmessage' ? messages.at(-1)! : null
     }
   }
   return messages

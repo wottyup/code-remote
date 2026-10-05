@@ -1,4 +1,4 @@
-import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -865,7 +865,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const timer = window.setTimeout(() => {
       if (completionToastTimer.current === timer) completionToastTimer.current = undefined
       setCompletionToast((current) => current?.completedAt === completion.completedAt ? null : current)
-    }, 6_500)
+    }, 2_800)
     completionToastTimer.current = timer
     return () => {
       if (completionToastTimer.current === timer) {
@@ -1010,6 +1010,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
   const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const lastMessageIndexByTurn = useMemo(() => {
+    const indexes = new Map<string, number>()
+    remote.messages.forEach((message, index) => {
+      if (message.turnId) indexes.set(message.turnId, index)
+    })
+    return indexes
+  }, [remote.messages])
+  const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
+    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn])
   const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
   const completionThreadTitle = completionThread ? titleOf(completionThread) : '一条对话'
   const modelOptions = useMemo<ComposerMenuOption[]>(() => remote.models.flatMap((model) => {
@@ -1097,8 +1106,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               </div>
             ) : null}
             {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-            {remote.messages.map((message) => <MessageBubble key={message.id} message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />)}
-            {remote.fileChanges.length > 0 ? <FileChangeCard changes={remote.fileChanges} /> : null}
+            {remote.messages.map((message, index) => {
+              const changes = message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
+                ? remote.fileChangesByTurn[message.turnId]
+                : undefined
+              return (
+                <Fragment key={message.id}>
+                  <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />
+                  {changes?.length ? <FileChangeCard changes={changes} /> : null}
+                </Fragment>
+              )
+            })}
+            {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} />)}
             {remote.approval ? (
               <div className="approval-card" role="alert">
                 <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -1356,10 +1375,11 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
   }, new Map<string, CodexFileChange['changes'][number]>()).values()]
   const additions = files.reduce((total, item) => total + item.additions, 0)
   const deletions = files.reduce((total, item) => total + item.deletions, 0)
+  const hasLineStats = additions > 0 || deletions > 0
   const inProgress = changes.some((change) => change.status === 'inProgress')
   const showAll = expanded || reviewing
-  const visibleFiles = showAll ? files : files.slice(0, 3)
-  const hiddenCount = files.length - 3
+  const visibleFiles = showAll ? files : files.slice(0, 1)
+  const hiddenCount = files.length - 1
 
   function toggleFiles() {
     if (showAll) {
@@ -1376,7 +1396,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
           <strong>{inProgress ? '正在编辑' : '已编辑'} {files.length} 个文件</strong>
-          <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span>
+          {hasLineStats ? <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span> : null}
         </div>
         <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
           {reviewing ? '收起审核' : '审核'}
@@ -1387,7 +1407,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
               <span title={item.path}>{item.path}</span>
-              <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span>
+              {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
             </div>
             {reviewing ? (
               item.diff
@@ -1399,7 +1419,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
       </div>
       {hiddenCount > 0 ? (
         <button className="file-change-card__more" type="button" aria-expanded={showAll} onClick={toggleFiles}>
-          {showAll ? '收起文件' : `再显示 ${hiddenCount} 个文件`}
+          {showAll ? '收起文件' : `查看另外 ${hiddenCount} 个文件`}
           <ChevronDown size={14} />
         </button>
       ) : null}

@@ -5,8 +5,11 @@ import json
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+from watchfiles import Change, DefaultFilter, awatch
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +23,44 @@ class CodexHandoffBusyError(CodexRuntimeError):
 
 
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
+
+
+@dataclass
+class WorkspaceChangeWatch:
+    stop_event: asyncio.Event
+    task: asyncio.Task[dict[str, str]]
+
+
+_IGNORED_WORKSPACE_PARTS = frozenset({
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "node_modules",
+})
+
+
+def merge_workspace_change(changes: dict[str, str], path: str, change: Change) -> None:
+    """Keep the net file operation for one turn without exposing temporary writes."""
+    next_kind = "add" if change == Change.added else "delete" if change == Change.deleted else "update"
+    previous_kind = changes.get(path)
+    if next_kind == "delete":
+        if previous_kind == "add":
+            changes.pop(path, None)
+        else:
+            changes[path] = "delete"
+    elif next_kind == "add":
+        changes[path] = "update" if previous_kind == "delete" else previous_kind or "add"
+    elif previous_kind != "add":
+        changes[path] = "update"
+
+
+def workspace_change_entries(changes: dict[str, str]) -> list[dict[str, str]]:
+    return [{"path": path, "kind": kind} for path, kind in sorted(changes.items())]
 
 
 class CodexAppServer:
@@ -39,6 +80,11 @@ class CodexAppServer:
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
         self._pending_turn_starts: dict[str, asyncio.Future[str | None]] = {}
+        self._workspace_change_watches: dict[str, WorkspaceChangeWatch] = {}
+        # Command-based edits do not always produce a native FileChange item.
+        # Keep their watcher fallback per completed turn so a later turn never
+        # replaces a card that belongs to an earlier reply in the same thread.
+        self._workspace_change_results: dict[str, dict[str, list[dict[str, str]]]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
         self._handed_off = False
@@ -120,6 +166,19 @@ class CodexAppServer:
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 没有返回该对话内容")
+        turns = thread.get("turns")
+        workspace_changes = self._workspace_change_results.get(thread_id, {})
+        turn_ids = {
+            turn.get("id")
+            for turn in turns if isinstance(turn, dict) and isinstance(turn.get("id"), str)
+        } if isinstance(turns, list) else set()
+        matched_workspace_changes = {
+            turn_id: changes
+            for turn_id, changes in workspace_changes.items()
+            if turn_id in turn_ids and changes
+        }
+        if matched_workspace_changes:
+            thread["codexRemoteWorkspaceChanges"] = matched_workspace_changes
         return thread
 
     async def list_models(self) -> list[dict[str, Any]]:
@@ -154,6 +213,84 @@ class CodexAppServer:
             raise CodexRuntimeError("Codex 无法恢复该对话")
         return thread
 
+    async def _watch_workspace_changes(self, stop_event: asyncio.Event) -> dict[str, str]:
+        changes: dict[str, str] = {}
+        try:
+            async for batch in awatch(
+                self.workspace,
+                watch_filter=DefaultFilter(),
+                debounce=80,
+                step=20,
+                stop_event=stop_event,
+                ignore_permission_denied=True,
+            ):
+                for change, changed_path in batch:
+                    path = Path(changed_path)
+                    try:
+                        relative = path.resolve().relative_to(self.workspace)
+                    except ValueError:
+                        continue
+                    if (
+                        not relative.parts
+                        or any(part in _IGNORED_WORKSPACE_PARTS for part in relative.parts)
+                        or (change != Change.deleted and path.is_dir())
+                    ):
+                        continue
+                    merge_workspace_change(changes, relative.as_posix(), change)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Unable to watch Codex workspace changes", exc_info=True)
+        return changes
+
+    async def _start_workspace_change_watch(self, thread_id: str) -> None:
+        await self._stop_workspace_change_watch(thread_id)
+        stop_event = asyncio.Event()
+        task = asyncio.create_task(self._watch_workspace_changes(stop_event))
+        self._workspace_change_watches[thread_id] = WorkspaceChangeWatch(stop_event=stop_event, task=task)
+        # Let awatch register before turn/start can begin writing files.
+        await asyncio.sleep(0)
+
+    async def _stop_workspace_change_watch(self, thread_id: str, *, collect: bool = False) -> dict[str, str]:
+        watch = self._workspace_change_watches.pop(thread_id, None)
+        if watch is None:
+            return {}
+        if collect:
+            # Let the small debounce window flush the final write before closing.
+            await asyncio.sleep(0.1)
+        watch.stop_event.set()
+        try:
+            return await asyncio.wait_for(watch.task, timeout=1)
+        except TimeoutError:
+            watch.task.cancel()
+            try:
+                await watch.task
+            except asyncio.CancelledError:
+                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Unable to stop Codex workspace change watch", exc_info=True)
+        return {}
+
+    async def _complete_workspace_change_watch(self, thread_id: str, turn_id: str | None) -> None:
+        changes = workspace_change_entries(await self._stop_workspace_change_watch(thread_id, collect=True))
+        # A watcher result without a turn ID cannot be placed beside a reply
+        # reliably, so do not expose it as a misleading global card.
+        if not changes or not turn_id:
+            return
+        self._workspace_change_results.setdefault(thread_id, {})[turn_id] = changes
+        await self._emit({
+            "type": "notification",
+            "method": "turn/workspaceChanges",
+            "params": {"threadId": thread_id, "turnId": turn_id, "changes": changes},
+        })
+
+    async def _clear_workspace_change_watches(self) -> None:
+        for thread_id in tuple(self._workspace_change_watches):
+            await self._stop_workspace_change_watch(thread_id)
+        self._workspace_change_results.clear()
+
     async def start_turn(
         self,
         thread_id: str,
@@ -182,6 +319,7 @@ class CodexAppServer:
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
+        await self._start_workspace_change_watch(thread_id)
         pending_start = asyncio.get_running_loop().create_future()
         self._pending_turn_starts[thread_id] = pending_start
         try:
@@ -194,6 +332,7 @@ class CodexAppServer:
                 pending_start.set_result(turn_id)
             return result
         except Exception:
+            await self._stop_workspace_change_watch(thread_id)
             if not pending_start.done():
                 pending_start.set_result(None)
             raise
@@ -236,6 +375,7 @@ class CodexAppServer:
         self._server_requests.clear()
         self._active_turn_ids.clear()
         self._finish_pending_turn_starts()
+        await self._clear_workspace_change_watches()
         if process is None:
             return
         if process.stdin and not process.stdin.is_closing():
@@ -429,20 +569,29 @@ class CodexAppServer:
             if not isinstance(thread_id, str) and isinstance(turn, dict):
                 candidate = turn.get("threadId")
                 thread_id = candidate if isinstance(candidate, str) else None
+            completed_thread_id: str | None = None
+            completed_turn_id: str | None = turn_id
             if method == "turn/started" and thread_id and turn_id:
                 self._active_turn_ids[thread_id] = turn_id
                 pending_start = self._pending_turn_starts.get(thread_id)
                 if pending_start and not pending_start.done():
                     pending_start.set_result(turn_id)
-            elif method == "turn/completed" and turn_id:
-                if thread_id:
+            elif method == "turn/completed":
+                completed_thread_id = thread_id
+                if turn_id and thread_id:
                     if self._active_turn_ids.get(thread_id) == turn_id:
                         self._active_turn_ids.pop(thread_id, None)
-                else:
+                elif thread_id:
+                    completed_turn_id = self._active_turn_ids.pop(thread_id, None)
+                elif turn_id:
                     for active_thread_id, active_turn_id in tuple(self._active_turn_ids.items()):
                         if active_turn_id == turn_id:
                             self._active_turn_ids.pop(active_thread_id, None)
+                            completed_thread_id = active_thread_id
+                            break
             await self._emit({"type": "notification", "method": method, "params": params})
+            if method == "turn/completed" and completed_thread_id:
+                await self._complete_workspace_change_watch(completed_thread_id, completed_turn_id)
 
     async def _emit(self, event: dict[str, Any]) -> None:
         for queue in tuple(self._subscribers):
@@ -479,6 +628,7 @@ class CodexAppServer:
         self._server_requests.clear()
         self._active_turn_ids.clear()
         self._finish_pending_turn_starts()
+        await self._clear_workspace_change_watches()
         if process and process.returncode is None:
             process.terminate()
             try:

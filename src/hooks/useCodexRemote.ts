@@ -43,6 +43,8 @@ export interface CodexFileChange {
   changes: CodexFileChangeEntry[]
 }
 
+type FileChangesByTurn = Record<string, CodexFileChange[]>
+
 const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 const activeThreadStorageKey = 'codex-remote.active-thread-id'
@@ -65,6 +67,7 @@ interface PersistedActiveThread {
 interface ThreadCacheEntry {
   thread: CodexThread
   messages: CodexMessage[]
+  fileChangesByTurn: FileChangesByTurn
   running: boolean
   turnId: string | null
   characters: number
@@ -105,6 +108,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
         role: message.role,
         text: message.text,
         createdAt: message.createdAt,
+        ...(typeof message.turnId === 'string' ? { turnId: message.turnId } : {}),
       } as CodexMessage]
     })
     return { threadId, thread: thread as unknown as CodexThread, messages }
@@ -138,6 +142,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         role: message.role,
         text,
         createdAt: message.createdAt,
+        ...(message.turnId ? { turnId: message.turnId } : {}),
       } as CodexMessage
       const messageCharacters = text.length + 128
       if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
@@ -224,6 +229,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
     return message.id === candidate.id
       && message.role === candidate.role
       && message.text === candidate.text
+      && message.turnId === candidate.turnId
       && Boolean(message.streaming) === Boolean(candidate.streaming)
       && sameMessageImages(message.images, candidate.images)
       && sameMessageDocuments(message.documents, candidate.documents)
@@ -288,16 +294,84 @@ function upsertFileChange(current: CodexFileChange[], next: CodexFileChange) {
   return current.map((change, currentIndex) => currentIndex === index ? next : change)
 }
 
-function fileChangesFromLatestTurn(thread: { turns?: unknown[] }) {
-  const turns = Array.isArray(thread.turns) ? thread.turns : []
-  const latestTurn = turns.at(-1)
-  if (!latestTurn || typeof latestTurn !== 'object') return []
-  const items = (latestTurn as Record<string, unknown>).items
-  if (!Array.isArray(items)) return []
+function mergeWorkspaceFileChange(current: CodexFileChange[], next: CodexFileChange) {
+  const withoutPreviousWorkspaceChange = current.filter((change) => change.id !== next.id)
+  const knownPaths = new Set(withoutPreviousWorkspaceChange.flatMap((change) => change.changes.map((entry) => entry.path)))
+  const missingChanges = next.changes.filter((entry) => !knownPaths.has(entry.path))
+  return missingChanges.length > 0
+    ? [...withoutPreviousWorkspaceChange, { ...next, changes: missingChanges }]
+    : withoutPreviousWorkspaceChange
+}
+
+function isWorkspaceFileChange(change: CodexFileChange) {
+  return change.id.startsWith('workspace-change-')
+}
+
+function mergeTurnFileChanges(current: CodexFileChange[], incoming: CodexFileChange[]) {
+  let nativeChanges: CodexFileChange[] = []
+  const workspaceChanges: CodexFileChange[] = []
+  for (const change of [...current, ...incoming]) {
+    if (isWorkspaceFileChange(change)) workspaceChanges.push(change)
+    else nativeChanges = upsertFileChange(nativeChanges, change)
+  }
+  return workspaceChanges.reduce(
+    (merged, change) => mergeWorkspaceFileChange(merged, change),
+    nativeChanges,
+  )
+}
+
+function mergeFileChangesByTurn(current: FileChangesByTurn, incoming: FileChangesByTurn) {
+  let merged = current
+  for (const [turnId, changes] of Object.entries(incoming)) {
+    const nextChanges = mergeTurnFileChanges(current[turnId] ?? [], changes)
+    if (nextChanges === current[turnId]) continue
+    if (merged === current) merged = { ...current }
+    if (nextChanges.length > 0) merged[turnId] = nextChanges
+    else delete merged[turnId]
+  }
+  return merged
+}
+
+function workspaceFileChange(turnId: string, changes: unknown): CodexFileChange | null {
+  if (!Array.isArray(changes) || changes.length === 0) return null
+  return fileChangeForItem({
+    type: 'fileChange',
+    id: `workspace-change-${turnId}`,
+    status: 'completed',
+    changes,
+  })
+}
+
+function nativeFileChangesFromItems(items: unknown[]): CodexFileChange[] {
   return items.reduce<CodexFileChange[]>((changes, item) => {
     const fileChange = fileChangeForItem(item)
     return fileChange ? upsertFileChange(changes, fileChange) : changes
   }, [])
+}
+
+function workspaceChangesForTurn(value: unknown, turnId: string): CodexFileChange | null {
+  if (!value || typeof value !== 'object') return null
+  const workspaceChanges = value as Record<string, unknown>
+  if (Array.isArray(workspaceChanges.changes)) {
+    return workspaceChanges.turnId === turnId ? workspaceFileChange(turnId, workspaceChanges.changes) : null
+  }
+  return workspaceFileChange(turnId, workspaceChanges[turnId])
+}
+
+function fileChangesFromThread(thread: { turns?: unknown[] }) {
+  const turns = Array.isArray(thread.turns) ? thread.turns : []
+  const workspaceChanges = (thread as Record<string, unknown>).codexRemoteWorkspaceChanges
+  return turns.reduce<FileChangesByTurn>((groups, turnValue, index) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${index}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    const nativeChanges = nativeFileChangesFromItems(items)
+    const workspaceChange = workspaceChangesForTurn(workspaceChanges, turnId)
+    const changes = workspaceChange ? mergeTurnFileChanges(nativeChanges, [workspaceChange]) : nativeChanges
+    if (changes.length > 0) groups[turnId] = changes
+    return groups
+  }, {})
 }
 
 function activityForItem(value: unknown): CodexActivity {
@@ -350,7 +424,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
-  const [fileChanges, setFileChanges] = useState<CodexFileChange[]>([])
+  const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
   const [writerConflict, setWriterConflict] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
   const [error, setError] = useState<string | null>(null)
@@ -418,7 +492,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     streamingAssistantParts.current.clear()
   }, [])
 
-  const flushStreamingAssistant = useCallback((synchronous = false) => {
+  const addFileChangeToTurn = useCallback((turnId: string | null, fileChange: CodexFileChange) => {
+    if (!turnId) return
+    setFileChangesByTurn((current) => {
+      return mergeFileChangesByTurn(current, { [turnId]: [fileChange] })
+    })
+  }, [])
+
+  const flushStreamingAssistant = useCallback((synchronous = false, turnId = activeTurnId.current) => {
     if (streamingRenderTimer.current !== undefined) {
       window.clearTimeout(streamingRenderTimer.current)
       streamingRenderTimer.current = undefined
@@ -433,11 +514,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
         const previousIndex = current.findIndex((message) => message.id === messageId)
-        if (previousIndex < 0) return [...current, { id: messageId, role: 'assistant', text, createdAt: new Date().toISOString(), streaming: true }]
+        if (previousIndex < 0) return [...current, {
+          id: messageId,
+          role: 'assistant',
+          text,
+          createdAt: new Date().toISOString(),
+          streaming: true,
+          ...(turnId ? { turnId } : {}),
+        }]
         const previous = current[previousIndex]
         if (previous.text === text && previous.streaming) return current
         const next = [...current]
-        next[previousIndex] = { ...previous, text, streaming: true }
+        next[previousIndex] = {
+          ...previous,
+          text,
+          streaming: true,
+          ...(!previous.turnId && turnId ? { turnId } : {}),
+        }
         return next
       })
     }
@@ -453,7 +546,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     }, streamingRenderIntervalMs)
   }, [flushStreamingAssistant])
 
-  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Pick<ThreadCacheEntry, 'running' | 'turnId'>) => {
+  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn'>) => {
     const characters = cachedHistoryCharacters(nextMessages)
     const cache = threadHistoryCache.current
     const previous = cache.get(thread.id)
@@ -462,6 +555,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     cache.set(thread.id, {
       thread: compactThread(thread),
       messages: nextMessages,
+      fileChangesByTurn: state?.fileChangesByTurn ?? previous?.fileChangesByTurn ?? {},
       running: state?.running ?? previous?.running ?? threadIsRunning(thread),
       turnId: state?.turnId ?? previous?.turnId ?? null,
       characters,
@@ -499,8 +593,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     try {
       const loadedThread = await codexRemoteClient.readThread(token, thread.id)
       if (thread.id === activeThreadId.current) return
-      const loadedMessages = preserveCurrentImages(messagesFromThread(loadedThread), cache.get(thread.id)?.messages ?? [])
-      cacheThreadSnapshot(loadedThread, loadedMessages, latestTurnState(loadedThread))
+      const cachedThread = cache.get(thread.id)
+      const loadedMessages = preserveCurrentImages(messagesFromThread(loadedThread), cachedThread?.messages ?? [])
+      cacheThreadSnapshot(loadedThread, loadedMessages, {
+        ...latestTurnState(loadedThread),
+        fileChangesByTurn: mergeFileChangesByTurn(
+          cachedThread?.fileChangesByTurn ?? {},
+          fileChangesFromThread(loadedThread),
+        ),
+      })
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
     } finally {
@@ -573,17 +674,24 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
       const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
-      const historicalFileChanges = fileChangesFromLatestTurn(thread)
+      const historicalFileChangesByTurn = mergeFileChangesByTurn(
+        threadHistoryCache.current.get(thread.id)?.fileChangesByTurn ?? {},
+        fileChangesFromThread(thread),
+      )
       persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
-      cacheThreadSnapshot(thread, cachedMessages, { running, turnId: latestTurnId })
+      cacheThreadSnapshot(thread, cachedMessages, {
+        running,
+        turnId: latestTurnId,
+        fileChangesByTurn: historicalFileChangesByTurn,
+      })
       setMessages((current) => {
         const next = preserveCurrentImages(cachedMessages, current)
         return sameMessages(current, next) ? current : next
       })
-      // The live event can be missed during a reconnect or hot update. Recover
-      // the latest turn's file-change card from thread/read when it is present.
-      if (historicalFileChanges.length > 0) setFileChanges(historicalFileChanges)
+      // Rebuild every turn's card from thread/read after a reconnect or hot
+      // update, rather than keeping only the last global file-change state.
+      setFileChangesByTurn(historicalFileChangesByTurn)
       if (running && latestTurnId) activeTurnId.current = latestTurnId
       else if (!running) activeTurnId.current = null
       if (!running) {
@@ -628,8 +736,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
     // An unopened thread has no history to restore yet; keep its loading state truthful.
     if (messages.length === 0 && !threadHistoryCache.current.has(activeThread.id)) return
-    cacheThreadSnapshot(activeThread, messages, { running: isRunning, turnId: activeTurnId.current })
-  }, [activeThread, cacheThreadSnapshot, isRunning, messages])
+    cacheThreadSnapshot(activeThread, messages, {
+      running: isRunning,
+      turnId: activeTurnId.current,
+      fileChangesByTurn,
+    })
+  }, [activeThread, cacheThreadSnapshot, fileChangesByTurn, isRunning, messages])
 
   const dispatchInterrupt = useCallback(async (threadId: string, turnId: string) => {
     if (handedOffRef.current) return false
@@ -734,6 +846,19 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         markThreadCompletion(eventThreadId)
         void prefetchThread({ id: eventThreadId }, true)
         void refreshThreads()
+      } else if (event.method === 'turn/workspaceChanges') {
+        const turnId = typeof params.turnId === 'string' ? params.turnId : null
+        const fileChange = turnId ? workspaceFileChange(turnId, params.changes) : null
+        const cachedThread = threadHistoryCache.current.get(eventThreadId)
+        if (turnId && fileChange && cachedThread) {
+          cacheThreadSnapshot(cachedThread.thread, cachedThread.messages, {
+            running: cachedThread.running,
+            turnId: cachedThread.turnId,
+            fileChangesByTurn: mergeFileChangesByTurn(cachedThread.fileChangesByTurn, { [turnId]: [fileChange] }),
+          })
+        } else if (turnId && fileChange) {
+          void prefetchThread({ id: eventThreadId }, true)
+        }
       } else if (event.method === 'thread/name/updated') {
         void refreshThreads()
       }
@@ -759,7 +884,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setIsRunning(true)
       beginTurnTimer()
       setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
-      setFileChanges([])
       activityItemId.current = null
       return
     }
@@ -767,6 +891,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const turn = eventTurn
       const turnThreadId = eventThreadId ?? (typeof turn?.threadId === 'string' ? turn.threadId : activeThreadId.current)
       if (turnThreadId && turnThreadId !== activeThreadId.current) return
+      const completedTurnId = typeof turn?.id === 'string'
+        ? turn.id
+        : typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       activeTurnId.current = null
       if (!turnThreadId || interruptRequestedThreadId.current === turnThreadId) {
         interruptRequestedThreadId.current = null
@@ -778,8 +905,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setIsRunning(false)
       // Commit the accumulated text before finalizing the turn. This avoids a
       // trailing timer/transition from recreating a stale streaming message.
-      flushStreamingAssistant(true)
-      setMessages((current) => current.map((message) => message.streaming ? { ...message, streaming: false } : message))
+      flushStreamingAssistant(true, completedTurnId)
+      setMessages((current) => current.map((message) => message.streaming ? {
+        ...message,
+        streaming: false,
+        ...(!message.turnId && completedTurnId ? { turnId: completedTurnId } : {}),
+      } : message))
       resetStreamingAssistant()
       finishTurnTimer()
       setActivity(null)
@@ -790,6 +921,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         void refreshThreads()
         void loadThread(refreshThreadId, refreshRevision)
       }
+      return
+    }
+    if (event.method === 'turn/workspaceChanges') {
+      const turnId = typeof params.turnId === 'string' ? params.turnId : null
+      const fileChange = turnId ? workspaceFileChange(turnId, params.changes) : null
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
       return
     }
     if (event.method === 'turn/plan/updated') {
@@ -803,7 +940,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (event.method === 'item/started') {
       const item = params.item as Record<string, unknown> | undefined
       const fileChange = fileChangeForItem(item)
-      if (fileChange) setFileChanges((current) => upsertFileChange(current, fileChange))
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
       activityItemId.current = typeof item?.id === 'string' ? item.id : null
       setIsRunning(true)
       setActivity(activityForItem(item))
@@ -817,7 +955,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         status: 'inProgress',
         changes: params.changes,
       })
-      if (fileChange) setFileChanges((current) => upsertFileChange(current, fileChange))
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (fileChange) addFileChangeToTurn(turnId, fileChange)
       setIsRunning(true)
       setActivity({ label: '正在修改文件', detail: fileChange ? `${fileChange.changes.length} 个文件` : undefined })
       return
@@ -837,16 +976,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (event.method === 'item/completed') {
       const item = params.item as Record<string, unknown> | undefined
       const fileChange = fileChangeForItem(item)
-      if (fileChange) setFileChanges((current) => upsertFileChange(current, { ...fileChange, status: 'completed' }))
+      const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (fileChange) addFileChangeToTurn(turnId, { ...fileChange, status: 'completed' })
       const itemId = typeof item?.id === 'string' ? item.id : null
-      if (item?.type !== 'agentMessage') {
+      const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType !== 'agentmessage') {
         if (itemId && activityItemId.current === itemId) {
           activityItemId.current = null
           setActivity({ label: '正在思考' })
         }
         return
       }
-      const text = typeof item.text === 'string' ? item.text : ''
+      const text = typeof item?.text === 'string' ? item.text : ''
       if (!itemId) return
       streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
       const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? itemId}`
@@ -855,7 +996,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [beginTurnTimer, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, updateCachedThreadRunState])
 
   useEffect(() => {
     let disposed = false
@@ -994,10 +1135,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       threadHistoryCache.current.set(thread.id, memoryCache)
     }
     const persistedCache = memoryCache ? null : readPersistedActiveThreadCache(thread.id)
-    if (persistedCache) cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, { running: false, turnId: null })
+    if (persistedCache) cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, {
+      fileChangesByTurn: {},
+      running: false,
+      turnId: null,
+    })
     const cachedThread = memoryCache ?? (persistedCache ? {
       thread: persistedCache.thread,
       messages: persistedCache.messages,
+      fileChangesByTurn: {},
       running: false,
       turnId: null,
       characters: cachedHistoryCharacters(persistedCache.messages),
@@ -1005,12 +1151,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     const cachedRunning = Boolean(cachedThread?.running || threadIsRunning(thread))
     setActiveThread(cachedThread ? { ...cachedThread.thread, ...thread } : thread)
     setMessages(cachedThread?.messages ?? [])
+    setFileChangesByTurn(cachedThread?.fileChangesByTurn ?? {})
     setIsRunning(cachedRunning)
     activeTurnId.current = cachedRunning ? cachedThread?.turnId ?? null : null
     setIsInterrupting(false)
     clearTurnTimer()
     setActivity(null)
-    setFileChanges([])
     writerConflictRef.current = false
     setWriterConflict(false)
     activityItemId.current = null
@@ -1072,7 +1218,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setIsInterrupting(false)
       clearTurnTimer()
       setActivity(null)
-      setFileChanges([])
+      setFileChangesByTurn({})
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
@@ -1115,12 +1261,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
+    const localId = `local-${Date.now()}`
     const rememberStartedTurn = (turnId: string | null) => {
       if (!turnId) return
       activeTurnId.current = turnId
+      setMessages((current) => current.map((message) => message.id === localId && !message.turnId
+        ? { ...message, turnId }
+        : message))
       if (interruptRequestedThreadId.current === thread.id) void dispatchInterrupt(thread.id, turnId)
     }
-    const localId = `local-${Date.now()}`
     historyRevision.current += 1
     setMessages((current) => [...current, {
       id: localId,
@@ -1286,7 +1435,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     turnStartedAt,
     lastTurnDurationMs,
     activity,
-    fileChanges,
+    fileChangesByTurn,
     writerConflict,
     handedOff,
     handoffInProgress,

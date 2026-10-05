@@ -5,7 +5,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
 
-from codex_remote.codex_app_server import CodexAppServer, CodexHandoffBusyError, CodexRuntimeError
+from watchfiles import Change
+
+from codex_remote.codex_app_server import (
+    CodexAppServer,
+    CodexHandoffBusyError,
+    CodexRuntimeError,
+    merge_workspace_change,
+    workspace_change_entries,
+)
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
@@ -118,6 +126,40 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(app_server.handed_off)
         self.assertFalse(runtime["handedOff"])
+
+    async def test_read_thread_keeps_workspace_changes_for_each_completed_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(return_value={"thread": {
+            "id": "thread-id",
+            "turns": [{"id": "turn-one"}, {"id": "turn-two"}],
+        }})
+        app_server._workspace_change_results["thread-id"] = {
+            "turn-one": [{"path": "src/one.ts", "kind": "update"}],
+            "turn-two": [{"path": "src/two.ts", "kind": "add"}],
+            "stale-turn": [{"path": "src/old.ts", "kind": "delete"}],
+        }
+
+        thread = await app_server.read_thread("thread-id")
+
+        self.assertEqual(thread["codexRemoteWorkspaceChanges"], {
+            "turn-one": [{"path": "src/one.ts", "kind": "update"}],
+            "turn-two": [{"path": "src/two.ts", "kind": "add"}],
+        })
+
+
+class WorkspaceChangeMergeTests(unittest.TestCase):
+    def test_workspace_change_merge_keeps_only_the_final_file_operation(self) -> None:
+        changes: dict[str, str] = {}
+
+        merge_workspace_change(changes, "src/new.ts", Change.added)
+        merge_workspace_change(changes, "src/new.ts", Change.modified)
+        merge_workspace_change(changes, "src/new.ts", Change.deleted)
+        merge_workspace_change(changes, "src/existing.ts", Change.deleted)
+        merge_workspace_change(changes, "src/existing.ts", Change.added)
+
+        self.assertEqual(workspace_change_entries(changes), [
+            {"path": "src/existing.ts", "kind": "update"},
+        ])
 
 
 if __name__ == "__main__":
