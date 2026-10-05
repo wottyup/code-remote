@@ -1349,7 +1349,7 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
-function MessageContent({ text, hideStandaloneSeparators = false }: { text: string; hideStandaloneSeparators?: boolean }) {
+function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
   let cursor = 0
@@ -1365,7 +1365,7 @@ function MessageContent({ text, hideStandaloneSeparators = false }: { text: stri
   return (
     <div className="chat-message__content">
       {blocks.map((block, index) => {
-        if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
+        if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} showCopy={showCodeCopy} />
         const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
         return value ? <div className="chat-message__text" key={`text-${index}`}>{value}</div> : null
       })}
@@ -1373,7 +1373,7 @@ function MessageContent({ text, hideStandaloneSeparators = false }: { text: stri
   )
 }
 
-function CodeBlock({ value, language }: { value: string; language?: string }) {
+function CodeBlock({ value, language, showCopy = true }: { value: string; language?: string; showCopy?: boolean }) {
   const [copied, setCopied] = useState(false)
   const resetTimer = useRef<number | undefined>(undefined)
 
@@ -1391,10 +1391,10 @@ function CodeBlock({ value, language }: { value: string; language?: string }) {
   return (
     <pre className="chat-message__code">
       <code data-language={language}>{value}</code>
-      <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
+      {showCopy ? <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
         {copied ? <Check size={13} /> : <Copy size={13} />}
         {copied ? '已复制' : '复制'}
-      </button>
+      </button> : null}
     </pre>
   )
 }
@@ -1474,7 +1474,9 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
 })
 
 const MessageBubble = memo(function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
-  const showCopyAction = Boolean(message.text || message.documents?.length)
+  // A streaming answer is incomplete, so none of its copy controls should be
+  // available until Codex has finished the turn.
+  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
@@ -1491,7 +1493,7 @@ const MessageBubble = memo(function MessageBubble({ message, activity, copied, o
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
-        {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} /> : null}
+        {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
