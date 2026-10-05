@@ -1,4 +1,5 @@
 :root {
+  --app-viewport-height: 100vh;
   color: #e9ebef;
   background: #101114;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -15,7 +16,16 @@ button, textarea, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid #8da4d5; outline-offset: 2px; }
 
-.remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; display: grid; width: 100%; height: 100vh; height: 100dvh; min-height: 0; grid-template-columns: 284px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; background: #101114; color: #e9ebef; }
+.app-recovery { display: grid; width: 100%; min-height: var(--app-viewport-height); place-items: center; padding: max(22px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); background: radial-gradient(ellipse at 50% 25%, rgba(93, 107, 164, .16), transparent 45%), #101114; }
+.app-recovery__card { display: grid; width: min(100%, 340px); justify-items: center; gap: 10px; padding: 25px 22px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 16px; background: rgba(24, 27, 34, .94); box-shadow: 0 20px 55px rgba(0, 0, 0, .32); text-align: center; }
+.app-recovery__mark { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgba(170, 186, 255, .35); border-radius: 11px; background: rgba(105, 123, 194, .16); color: #dce3ff; font-size: 15px; font-weight: 700; }
+.app-recovery h1 { margin: 4px 0 0; color: #eef1f7; font-size: 16px; font-weight: 630; }
+.app-recovery p { margin: 0; color: #9ba3b3; font-size: 11px; line-height: 1.6; }
+.app-recovery__actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.app-recovery__actions button { min-height: 31px; padding: 0 10px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 7px; background: #292e3a; color: #d6dce9; cursor: pointer; font-size: 10px; }
+.app-recovery__actions button:first-child { border-color: rgba(159, 177, 255, .48); background: #586aa4; color: #fff; }
+.app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
+.remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: 284px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); overflow: hidden; background: #101114; color: #e9ebef; }
 .remote-sidebar { z-index: 2; display: flex; min-width: 0; flex-direction: column; padding: 17px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
 .remote-sidebar__heading { display: flex; align-items: center; justify-content: space-between; min-height: 35px; margin: 0 4px 18px; }
 .remote-brand { display: flex; align-items: center; gap: 10px; color: #f0f1f4; letter-spacing: -.02em; }
