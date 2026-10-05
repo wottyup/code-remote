@@ -500,6 +500,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
   const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
+  const connectionRef = useRef<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const reconnectRef = useRef<() => void>(() => {})
   const handedOffRef = useRef(false)
   const activeThreadId = useRef<string | null>(initialActiveThreadId)
@@ -530,6 +531,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const setHandoffState = useCallback((next: boolean) => {
     handedOffRef.current = next
     setHandedOff(next)
+  }, [])
+
+  const setConnectionState = useCallback((next: 'connecting' | 'connected' | 'disconnected' | 'unavailable') => {
+    connectionRef.current = next
+    setConnection(next)
   }, [])
 
   const updateQueuedMessages = useCallback((threadId: string, update: (current: QueuedTurnPayload[]) => QueuedTurnPayload[]) => {
@@ -1008,7 +1014,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const eventHandedOff = event.handedOff ?? handedOffRef.current
       if (eventHandedOff) {
         setHandoffState(true)
-        setConnection('disconnected')
+        setConnectionState('disconnected')
       }
       setRuntime({
         available: Boolean(event.available),
@@ -1213,7 +1219,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
 
   useEffect(() => {
     let disposed = false
@@ -1221,8 +1227,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     let retryDelay = 500
     let socketGeneration = 0
 
-    const connect = () => {
+    const connect = (force = false) => {
       if (disposed || handedOffRef.current) return
+      if (!force && socketRef.current && connectionRef.current === 'connected') return
       if (retryTimer !== undefined) {
         window.clearTimeout(retryTimer)
         retryTimer = undefined
@@ -1234,10 +1241,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }, (nextState) => {
         if (disposed || currentGeneration !== socketGeneration) return
         if (handedOffRef.current) {
-          setConnection('disconnected')
+          setConnectionState('disconnected')
           return
         }
-        setConnection(nextState)
+        setConnectionState(nextState)
         if (nextState !== 'connected') resumedThreadId.current = null
         if (nextState === 'connected') {
           retryDelay = 500
@@ -1256,10 +1263,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     reconnectRef.current = connect
 
     let wasHidden = document.visibilityState === 'hidden'
-    const resumeFromBackground = () => {
+    let lastBackgroundReconnectAt = 0
+    const resumeFromBackground = (force = false) => {
       if (disposed || handedOffRef.current) return
+      // Mobile browsers can fire visibilitychange and pageshow back-to-back.
+      // Avoid replacing a healthy socket (and reloading the whole history)
+      // merely because the page returned to the foreground.
+      if (!force && connectionRef.current !== 'disconnected' && connectionRef.current !== 'unavailable') return
+      const now = Date.now()
+      if (now - lastBackgroundReconnectAt < 800) return
+      lastBackgroundReconnectAt = now
       retryDelay = 500
-      connect()
+      connect(force)
     }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
@@ -1271,7 +1286,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       resumeFromBackground()
     }
     const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) resumeFromBackground()
+      if (event.persisted) resumeFromBackground(true)
     }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pageshow', handlePageShow)
@@ -1283,7 +1298,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         setRuntime(nextRuntime)
         setHandoffState(nextRuntime.handedOff)
         if (nextRuntime.handedOff) {
-          setConnection('disconnected')
+          setConnectionState('disconnected')
           setLoadingHistory(false)
           return
         }
@@ -1298,7 +1313,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
           return
         }
         setError(reason instanceof Error ? reason.message : '无法连接本机服务')
-        setConnection('unavailable')
+        setConnectionState('unavailable')
         connect()
         setLoadingHistory(false)
       }
@@ -1321,7 +1336,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
     }
-  }, [handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setHandoffState, token])
+  }, [handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
@@ -1556,7 +1571,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setApproval(null)
       setHandoffState(true)
       setRuntime((current) => ({ ...current, connected: false, handedOff: true, error: null }))
-      setConnection('disconnected')
+      setConnectionState('disconnected')
       setError(null)
       socketRef.current?.close()
       socketRef.current = null
@@ -1568,7 +1583,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       setHandoffInProgress(false)
     }
-  }, [handoffInProgress, isInterrupting, isRunning, onUnauthorized, setHandoffState, token])
+  }, [handoffInProgress, isInterrupting, isRunning, onUnauthorized, setConnectionState, setHandoffState, token])
 
   const reclaimForRemote = useCallback(async () => {
     if (handoffInProgress || !handedOffRef.current) return false
@@ -1577,7 +1592,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const nextRuntime = await codexRemoteClient.reclaimForRemote(token)
       setHandoffState(false)
       setRuntime(nextRuntime)
-      setConnection('connecting')
+      setConnectionState('connecting')
       setError(null)
       reconnectRef.current()
       void restoreActiveThread()
@@ -1591,7 +1606,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       setHandoffInProgress(false)
     }
-  }, [handoffInProgress, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setHandoffState, token])
+  }, [handoffInProgress, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const respondToApproval = useCallback((decision: 'accept' | 'decline' | 'cancel') => {
     if (!approval) return false
