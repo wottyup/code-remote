@@ -77,6 +77,7 @@ const emptyRuntime: CodexRuntime = { available: false, connected: false, workspa
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 const activeThreadStorageKey = 'codex-remote.active-thread-id'
 const activeThreadCacheStorageKey = 'codex-remote.active-thread-cache'
+const queuedMessagesStorageKey = 'codex-remote.queued-messages'
 const maxCachedHistoryCharacters = 600_000
 const maxCachedMessageCharacters = 120_000
 const maxInMemoryThreadCacheEntries = 6
@@ -85,6 +86,10 @@ const maxBackgroundPrefetchThreads = 3
 const backgroundPrefetchDelayMs = 120
 const cachedActiveThreadRefreshDelayMs = 180
 const streamingRenderIntervalMs = 48
+const maxPersistedQueuedStorageCharacters = 3_500_000
+const maxPersistedQueuedThreads = 24
+const maxPersistedQueuedMessagesPerThread = 30
+const maxPersistedQueuedTextCharacters = 240_000
 
 interface PersistedActiveThread {
   threadId: string
@@ -224,21 +229,114 @@ function queuedMessageId() {
   return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function queuedRequestText(text: string, document?: CodexDocumentAttachment) {
+  const documentText = document
+    ? `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`
+    : ''
+  return `${text}${documentText}`.trim()
+}
+
 function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
   const text = input.prompt.trim()
-  const documentText = input.document
-    ? `\n\n[附件文档：${input.document.name}]\n${input.document.content}\n[/附件文档]`
-    : ''
   return {
     id: queuedMessageId(),
     text,
-    requestText: `${text}${documentText}`.trim(),
+    requestText: queuedRequestText(text, input.document),
     images: input.images,
     ...(input.document ? { document: input.document } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
     createdAt: new Date().toISOString(),
+  }
+}
+
+function persistedQueuedImage(value: unknown): CodexImageAttachment | null {
+  if (!value || typeof value !== 'object') return null
+  const image = value as Record<string, unknown>
+  const name = typeof image.name === 'string' ? image.name.slice(0, 512) : ''
+  const mediaType = image.mediaType
+  const data = image.data
+  if (!name || (mediaType !== 'image/png' && mediaType !== 'image/jpeg' && mediaType !== 'image/webp' && mediaType !== 'image/gif')) return null
+  if (typeof data !== 'string' || data.length === 0 || data.length > maxPersistedQueuedStorageCharacters) return null
+  return { name, mediaType, data }
+}
+
+function persistedQueuedDocument(value: unknown): CodexDocumentAttachment | undefined {
+  if (!value || typeof value !== 'object') return undefined
+  const document = value as Record<string, unknown>
+  if (typeof document.name !== 'string' || typeof document.content !== 'string') return undefined
+  if (!document.name || document.name.length > 512 || document.content.length > maxPersistedQueuedTextCharacters) return undefined
+  return { name: document.name, content: document.content }
+}
+
+function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
+  if (!value || typeof value !== 'object') return null
+  const payload = value as Record<string, unknown>
+  const id = typeof payload.id === 'string' ? payload.id : ''
+  const text = typeof payload.text === 'string' ? payload.text : ''
+  const createdAt = typeof payload.createdAt === 'string' ? payload.createdAt : ''
+  if (!id || id.length > 256 || text.length > maxPersistedQueuedTextCharacters || !createdAt || createdAt.length > 128) return null
+  const images = Array.isArray(payload.images)
+    ? payload.images.flatMap((image) => {
+      const parsed = persistedQueuedImage(image)
+      return parsed ? [parsed] : []
+    }).slice(0, 4)
+    : []
+  const document = persistedQueuedDocument(payload.document)
+  if (!text && images.length === 0 && !document) return null
+  const model = typeof payload.model === 'string' && payload.model.length <= 256 ? payload.model : undefined
+  const effort = typeof payload.effort === 'string' && payload.effort.length <= 64 ? payload.effort : undefined
+  const approvalPolicy = payload.approvalPolicy === 'on-request' || payload.approvalPolicy === 'untrusted' || payload.approvalPolicy === 'never'
+    ? payload.approvalPolicy
+    : undefined
+  return {
+    id,
+    text,
+    requestText: queuedRequestText(text, document),
+    images,
+    ...(document ? { document } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+    ...(approvalPolicy ? { approvalPolicy } : {}),
+    createdAt,
+  }
+}
+
+function readPersistedQueuedMessages(): QueuedMessagesByThread {
+  if (typeof window === 'undefined') return {}
+  try {
+    const value = window.localStorage.getItem(queuedMessagesStorageKey)
+    if (!value || value.length > maxPersistedQueuedStorageCharacters) return {}
+    const parsed = JSON.parse(value)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const queues: QueuedMessagesByThread = {}
+    for (const [threadId, entries] of Object.entries(parsed as Record<string, unknown>).slice(0, maxPersistedQueuedThreads)) {
+      if (!threadId || threadId.length > 512 || !Array.isArray(entries)) continue
+      const messages = entries.flatMap((entry) => {
+        const payload = persistedQueuedPayload(entry)
+        return payload ? [payload] : []
+      }).slice(0, maxPersistedQueuedMessagesPerThread)
+      if (messages.length > 0) queues[threadId] = messages
+    }
+    return queues
+  } catch {
+    return {}
+  }
+}
+
+function persistQueuedMessages(queues: QueuedMessagesByThread) {
+  if (typeof window === 'undefined') return
+  try {
+    if (Object.keys(queues).length === 0) {
+      window.localStorage.removeItem(queuedMessagesStorageKey)
+      return
+    }
+    const value = JSON.stringify(queues)
+    if (value.length > maxPersistedQueuedStorageCharacters) return
+    window.localStorage.setItem(queuedMessagesStorageKey, value)
+  } catch {
+    // Queues remain usable in the current page if browser storage is blocked.
   }
 }
 
@@ -560,7 +658,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
   const [completedThreadIds, setCompletedThreadIds] = useState<string[]>([])
   const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
-  const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
+  const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>(readPersistedQueuedMessages)
+  // A restored queue may start only after a fresh thread/read confirms that
+  // the matching Codex turn is idle. Cached UI alone is not authoritative.
+  const [queueRecoveryReadyThreadId, setQueueRecoveryReadyThreadId] = useState<string | null>(null)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const connectionRef = useRef<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const reconnectRef = useRef<() => void>(() => {})
@@ -586,7 +687,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
   const cachedActiveThreadRefreshTimer = useRef<number | undefined>(undefined)
-  const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
+  const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>(queuedMessagesByThread)
   const queuedTurnStartsInFlight = useRef(new Set<string>())
   const queuedTurnSteersInFlight = useRef(new Set<string>())
 
@@ -614,6 +715,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     else delete nextByThread[threadId]
     queuedMessagesByThreadRef.current = nextByThread
     setQueuedMessagesByThread(nextByThread)
+    persistQueuedMessages(nextByThread)
     return next
   }, [])
 
@@ -858,6 +960,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         }
       }
       setIsRunning(running)
+      setQueueRecoveryReadyThreadId(running ? null : thread.id)
       if (writerConflictRef.current) {
         if (running) {
           setActivity({ label: '此对话已有 Codex 任务在运行' })
@@ -972,6 +1075,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         interruptRequestedThreadId.current = null
         interruptInFlightThreadId.current = null
         setIsInterrupting(false)
+        setQueueRecoveryReadyThreadId(null)
         setIsRunning(true)
         beginTurnTimer()
         setActivity({ label: '正在思考' })
@@ -1047,6 +1151,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     if (!threadId) return
     updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== messageId))
   }, [updateQueuedMessages])
+
+  useEffect(() => {
+    const threadId = activeThread?.id
+    const queued = threadId ? queuedMessagesByThread[threadId] : undefined
+    if (
+      !threadId
+      || queueRecoveryReadyThreadId !== threadId
+      || !queued?.length
+      || loadingHistory
+      || connection !== 'connected'
+      || handedOff
+      || isRunning
+      || isInterrupting
+      || writerConflict
+    ) return
+    void startNextQueuedMessage(threadId)
+  }, [activeThread?.id, connection, handedOff, isInterrupting, isRunning, loadingHistory, queueRecoveryReadyThreadId, queuedMessagesByThread, startNextQueuedMessage, writerConflict])
 
   const restoreActiveThread = useCallback(async () => {
     if (handedOffRef.current) return
@@ -1162,6 +1283,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         setActiveTurnId(turnId)
         if (turnThreadId && interruptRequestedThreadId.current === turnThreadId) void dispatchInterrupt(turnThreadId, turnId)
       }
+      setQueueRecoveryReadyThreadId(null)
       resetStreamingAssistant()
       writerConflictRef.current = false
       setWriterConflict(false)
@@ -1188,6 +1310,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(false)
+      setQueueRecoveryReadyThreadId(turnThreadId ?? activeThreadId.current)
       // Commit the accumulated text before finalizing the turn. This avoids a
       // trailing timer/transition from recreating a stale streaming message.
       flushStreamingAssistant(true, completedTurnId)
@@ -1423,6 +1546,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     clearThreadCompletion(thread.id)
     activeThreadId.current = thread.id
     persistActiveThreadId(thread.id)
+    setQueueRecoveryReadyThreadId(null)
     resetStreamingAssistant()
     setActiveTurnId(null)
     interruptRequestedThreadId.current = null
@@ -1505,6 +1629,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
       activeThreadId.current = thread.id
       persistActiveThreadId(thread.id)
+      setQueueRecoveryReadyThreadId(null)
       if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
       resetStreamingAssistant()
       setActiveTurnId(null)
@@ -1569,6 +1694,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     historyRevision.current += 1
     setMessages((current) => [...current, localMessageFromQueuedPayload(payload)])
     setActiveTurnId(null)
+    setQueueRecoveryReadyThreadId(null)
     interruptRequestedThreadId.current = null
     interruptInFlightThreadId.current = null
     setIsRunning(true)
