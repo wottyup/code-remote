@@ -540,6 +540,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom :is(button, textarea, select, input:not([type='color']):not([type='range']):not([type='file'])) { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); -webkit-text-fill-color: var(--custom-theme-text-color); caret-color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .message-composer textarea::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); opacity: 1; }
+.remote-shell--theme-custom .composer-hint { color: var(--custom-theme-text-color); opacity: .72; }
+.remote-shell--theme-custom .composer-hint svg { color: var(--custom-theme-text-color); }
 
 @media (max-width: 700px) {
   .theme-settings-panel { grid-template-rows: 94px minmax(0, 1fr); }
