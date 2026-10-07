@@ -840,10 +840,12 @@ function RemoteChatPane({
   }, [positionMessageStreamAtBottom])
 
   useLayoutEffect(() => {
+    if (!active) return
     forceMessageStreamToBottom(activeThreadId)
-  }, [activeThreadId, forceMessageStreamToBottom])
+  }, [active, activeThreadId, forceMessageStreamToBottom])
 
   useLayoutEffect(() => {
+    if (!active) return
     const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
     if (!forceToBottom && !followMessageStream.current) return
     positionMessageStreamAtBottom()
@@ -860,9 +862,10 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
+  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
 
   useLayoutEffect(() => {
+    if (!active) return
     const content = messageContent.current
     if (!content || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
@@ -875,7 +878,7 @@ function RemoteChatPane({
     })
     observer.observe(content)
     return () => observer.disconnect()
-  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+  }, [active, activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
 
   useEffect(() => () => {
     if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
@@ -975,8 +978,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1) })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2) })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const [sidebarOpen, setSidebarOpen] = useState(false)

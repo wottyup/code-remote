@@ -602,6 +602,16 @@ class CodexAppServer:
             if not isinstance(thread_id, str) and isinstance(turn, dict):
                 candidate = turn.get("threadId")
                 thread_id = candidate if isinstance(candidate, str) else None
+            # Some app-server item notifications carry only turnId. Resolve
+            # that turn against the active-turn map before broadcasting so
+            # multiple browser panes can route deltas to the right thread.
+            if not isinstance(thread_id, str) and turn_id:
+                thread_id = next(
+                    (candidate_thread_id for candidate_thread_id, candidate_turn_id in self._active_turn_ids.items() if candidate_turn_id == turn_id),
+                    None,
+                )
+            if isinstance(thread_id, str) and params.get("threadId") != thread_id:
+                params = {**params, "threadId": thread_id}
             completed_thread_id: str | None = None
             completed_turn_id: str | None = turn_id
             if method == "turn/started" and thread_id and turn_id:

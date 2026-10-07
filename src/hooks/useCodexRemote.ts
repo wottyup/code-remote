@@ -111,6 +111,10 @@ export interface UseCodexRemoteOptions {
   persistActiveThread?: boolean
   /** Keep the socket and background requests closed while a pane is hidden. */
   enabled?: boolean
+  /** Keep list/model/history warm-up work in the primary controller only. */
+  loadThreads?: boolean
+  loadModels?: boolean
+  prefetchHistory?: boolean
 }
 
 function readPersistedActiveThreadId() {
@@ -636,6 +640,9 @@ function activityForItem(value: unknown): CodexActivity {
 export function useCodexRemote(token: string, onUnauthorized: () => void, options: UseCodexRemoteOptions = {}) {
   const persistActiveThread = options.persistActiveThread ?? true
   const enabled = options.enabled ?? true
+  const loadThreads = options.loadThreads ?? true
+  const loadModels = options.loadModels ?? true
+  const prefetchHistory = options.prefetchHistory ?? true
   const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : null)
   const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
@@ -833,7 +840,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [])
 
   const prefetchThread = useCallback(async (thread: CodexThread, force = false) => {
-    if (handedOffRef.current) return
+    if (!prefetchHistory || handedOffRef.current) return
     if (!thread.id || thread.id === activeThreadId.current) return
     const cache = threadHistoryCache.current
     const cached = cache.get(thread.id)
@@ -863,10 +870,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         void prefetchThread({ id: thread.id }, true)
       }
     }
-  }, [cacheThreadSnapshot, onUnauthorized, token])
+  }, [cacheThreadSnapshot, onUnauthorized, prefetchHistory, token])
 
   const scheduleThreadPrefetch = useCallback((nextThreads: CodexThread[]) => {
-    if (handedOffRef.current) return
+    if (!prefetchHistory || handedOffRef.current) return
     const candidates = nextThreads
       .filter((thread) => thread.id !== activeThreadId.current)
       .slice(0, maxBackgroundPrefetchThreads)
@@ -878,7 +885,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         for (const thread of candidates) await prefetchThread(thread)
       })()
     }, backgroundPrefetchDelayMs)
-  }, [prefetchThread])
+  }, [prefetchHistory, prefetchThread])
 
   const clearThreadCompletion = useCallback((threadId: string) => {
     if (!threadId) return
@@ -893,7 +900,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [])
 
   const refreshThreads = useCallback(async () => {
-    if (handedOffRef.current) return null
+    if (!loadThreads || handedOffRef.current) return null
     try {
       const next = await codexRemoteClient.threads(token)
       setThreads(next)
@@ -904,10 +911,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError(reason instanceof Error ? reason.message : '无法读取对话记录')
       return null
     }
-  }, [onUnauthorized, scheduleThreadPrefetch, token])
+  }, [loadThreads, onUnauthorized, scheduleThreadPrefetch, token])
 
   const refreshModels = useCallback(async () => {
-    if (handedOffRef.current) return null
+    if (!loadModels || handedOffRef.current) return null
     try {
       const next = await codexRemoteClient.models(token)
       setModels(next)
@@ -916,7 +923,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       return null
     }
-  }, [onUnauthorized, token])
+  }, [loadModels, onUnauthorized, token])
 
   const loadThread = useCallback(async (threadId: string, revision = historyRevision.current, silent = false) => {
     if (handedOffRef.current) return false
@@ -1250,10 +1257,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventThreadId = typeof params.threadId === 'string'
       ? params.threadId
       : typeof eventTurn?.threadId === 'string' ? eventTurn.threadId : null
+    const eventTurnId = typeof eventTurn?.id === 'string'
+      ? eventTurn.id
+      : typeof params.turnId === 'string' ? params.turnId : null
+    // Older app-server notifications can omit threadId on item deltas. When
+    // that happens, use the active turn as the second routing key so a second
+    // pane does not render another pane's stream.
+    if (!eventThreadId && eventTurnId && eventTurnId !== activeTurnId.current) return
     if (eventThreadId && eventThreadId !== activeThreadId.current) {
-      const eventTurnId = typeof eventTurn?.id === 'string'
-        ? eventTurn.id
-        : typeof params.turnId === 'string' ? params.turnId : null
       if (event.method === 'turn/started') {
         updateCachedThreadRunState(eventThreadId, true, eventTurnId)
         clearThreadCompletion(eventThreadId)
@@ -1456,7 +1467,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         if (nextState === 'connected') {
           retryDelay = 500
           void restoreActiveThread()
-          void refreshThreads()
+          if (loadThreads) void refreshThreads()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
           if (retryTimer !== undefined) return
           retryTimer = window.setTimeout(() => {
@@ -1511,8 +1522,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         }
         connect()
         void restoreActiveThread()
-        void refreshThreads()
-        void refreshModels()
+        if (loadThreads) void refreshThreads()
+        if (loadModels) void refreshModels()
       } catch (reason) {
         if (disposed) return
         if (reason instanceof RemoteApiError && reason.status === 401) {
@@ -1543,7 +1554,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
     }
-  }, [enabled, handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+  }, [enabled, handleEvent, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
