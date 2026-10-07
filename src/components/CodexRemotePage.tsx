@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -18,7 +18,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexFileChange, type QueuedTurnMessage } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import type { CodexApprovalPolicy, CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
 
 interface Props {
@@ -755,28 +755,246 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   )
 }))
 
+interface RemoteChatPaneProps {
+  remote: CodexRemoteController
+  active: boolean
+  canClose: boolean
+  onActivate: () => void
+  onClose: () => void
+  onCreateThread: () => void
+  onHandoff: () => void
+  onReclaim: () => void
+  onOpenSidebar: () => void
+  composerHandle: RefObject<ComposerHandle | null>
+  copiedMessageId: string | null
+  onCopy: (message: CodexMessage) => void | Promise<void>
+}
+
+function RemoteChatPane({
+  remote,
+  active,
+  canClose,
+  onActivate,
+  onClose,
+  onCreateThread,
+  onHandoff,
+  onReclaim,
+  onOpenSidebar,
+  composerHandle,
+  copiedMessageId,
+  onCopy,
+}: RemoteChatPaneProps) {
+  const messageContainer = useRef<HTMLDivElement>(null)
+  const messageContent = useRef<HTMLDivElement>(null)
+  const scrollAnimationFrame = useRef<number | undefined>(undefined)
+  const forceMessageStreamBottomFor = useRef<string | null>(null)
+  const forceMessageStreamBottomVersion = useRef(0)
+  const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
+  const followMessageStream = useRef(true)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const activeThreadId = remote.activeThread?.id
+
+  const positionMessageStreamAtBottom = useCallback(() => {
+    const container = messageContainer.current
+    if (container) container.scrollTop = container.scrollHeight
+  }, [])
+
+  const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
+    forceMessageStreamBottomFor.current = threadId ?? null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) {
+      window.clearTimeout(forceMessageStreamBottomTimer.current)
+      forceMessageStreamBottomTimer.current = undefined
+    }
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+  }, [])
+
+  const settleForcedMessageStreamBottom = useCallback(() => {
+    const threadId = activeThreadId
+    if (!threadId || remote.loadingHistory || forceMessageStreamBottomFor.current !== threadId) return
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    const version = forceMessageStreamBottomVersion.current
+    const timer = window.setTimeout(() => {
+      if (forceMessageStreamBottomVersion.current === version && forceMessageStreamBottomFor.current === threadId) {
+        forceMessageStreamBottomFor.current = null
+      }
+      if (forceMessageStreamBottomTimer.current === timer) forceMessageStreamBottomTimer.current = undefined
+    }, 360)
+    forceMessageStreamBottomTimer.current = timer
+  }, [activeThreadId, remote.loadingHistory])
+
+  const handleMessageScroll = useCallback(() => {
+    const container = messageContainer.current
+    if (!container) return
+    if (forceMessageStreamBottomFor.current === activeThreadId) return
+    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
+    followMessageStream.current = atBottom
+    setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
+  }, [activeThreadId])
+
+  const scrollToBottom = useCallback(() => {
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+    positionMessageStreamAtBottom()
+  }, [positionMessageStreamAtBottom])
+
+  useLayoutEffect(() => {
+    forceMessageStreamToBottom(activeThreadId)
+  }, [activeThreadId, forceMessageStreamToBottom])
+
+  useLayoutEffect(() => {
+    const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
+    if (!forceToBottom && !followMessageStream.current) return
+    positionMessageStreamAtBottom()
+    followMessageStream.current = true
+    setShowScrollToBottom(false)
+    if (forceToBottom) settleForcedMessageStreamBottom()
+    if (scrollAnimationFrame.current !== undefined) return
+    scrollAnimationFrame.current = window.requestAnimationFrame(() => {
+      scrollAnimationFrame.current = undefined
+      const forced = forceMessageStreamBottomFor.current === activeThreadId
+      if (!forced && !followMessageStream.current) return
+      positionMessageStreamAtBottom()
+      followMessageStream.current = true
+      setShowScrollToBottom(false)
+      if (forced) settleForcedMessageStreamBottom()
+    })
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
+
+  useLayoutEffect(() => {
+    const content = messageContent.current
+    if (!content || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
+      if (!forceToBottom && !followMessageStream.current) return
+      positionMessageStreamAtBottom()
+      followMessageStream.current = true
+      setShowScrollToBottom(false)
+      if (forceToBottom) settleForcedMessageStreamBottom()
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+
+  useEffect(() => () => {
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+  }, [])
+
+  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
+  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const lastMessageIndexByTurn = useMemo(() => {
+    const indexes = new Map<string, number>()
+    remote.messages.forEach((message, index) => {
+      if (message.turnId) indexes.set(message.turnId, index)
+    })
+    return indexes
+  }, [remote.messages])
+  const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
+    .filter(([turnId, changes]) => turnId !== remote.runningTurnId && !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
+
+  return (
+    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+      <header className="remote-chat__header">
+        <div className="remote-chat__title-wrap">
+          <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+        </div>
+        <div className="remote-chat__controls">
+          <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
+          {remote.handedOff ? (
+            <button className="handoff-button handoff-button--reclaim" type="button" onClick={(event) => { event.stopPropagation(); onReclaim() }} disabled={remote.handoffInProgress}>{remote.handoffInProgress ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}{remote.handoffInProgress ? '接管中' : '重新接管'}</button>
+          ) : remote.activeThread ? (
+            <button className="handoff-button" type="button" onClick={(event) => { event.stopPropagation(); onHandoff() }} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
+          ) : null}
+          <button className="pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} disabled={!canClose} aria-label="关闭并发窗口" title={canClose ? '关闭窗口' : '至少保留一个窗口'}><X size={15} /></button>
+        </div>
+      </header>
+
+      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} Codex 对话`}>
+        <div className="message-stream__content" ref={messageContent}>
+          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
+          {remote.messages.length === 0 && !remote.loadingHistory ? (
+            <div className="welcome-state">
+              <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
+              <span className="welcome-state__mark">C</span>
+              <h1>你想在本机项目中完成什么？</h1>
+              <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
+              <div className="prompt-suggestions">
+                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。') }}>了解这个项目</button>
+                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。') }}>检查代码问题</button>
+              </div>
+            </div>
+          ) : null}
+          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
+          {remote.messages.map((message, index) => {
+            const changes = message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index
+              ? remote.fileChangesByTurn[message.turnId]
+              : undefined
+            return (
+              <Fragment key={message.id}>
+                <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                {changes?.length ? <FileChangeCard changes={changes} /> : null}
+              </Fragment>
+            )
+          })}
+          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} />)}
+          {remote.approval ? (
+            <div className="approval-card" role="alert">
+              <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
+              <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
+              {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
+              {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
+              <div className="approval-card__actions">
+                <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
+                <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
+              </div>
+            </div>
+          ) : null}
+          {remote.isRunning && !hasStreamingAssistant ? (
+            <div className="running-indicator" role="status" aria-live="polite">
+              <span className="running-indicator__activity"><LoaderCircle className="spin" size={15} /><span>{remote.activity?.label ?? '正在思考'}</span>{remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}</span>
+            </div>
+          ) : null}
+        </div>
+      </section>
+      {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
+      {remote.error ? (
+        <div className="remote-error" role="alert">
+          <AlertTriangle size={15} /><span>{remote.error}</span>
+          {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
+        </div>
+      ) : null}
+    </main>
+  )
+}
+
 export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
-  const remote = useCodexRemote(token, onUnauthorized)
+  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
+  const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
+  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1) })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2) })
+  const remotes = [remote0, remote1, remote2]
+  const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
-  const messageContainer = useRef<HTMLDivElement>(null)
-  const messageContent = useRef<HTMLDivElement>(null)
+  const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
+  const [paneNotice, setPaneNotice] = useState<string | null>(null)
+  const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const composerHandle = useRef<ComposerHandle>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
-  const scrollAnimationFrame = useRef<number | undefined>(undefined)
-  const followMessageStream = useRef(true)
-  const forceMessageStreamBottomFor = useRef<string | null>(null)
-  const forceMessageStreamBottomVersion = useRef(0)
-  const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
-  const completionToastTimer = useRef<number | undefined>(undefined)
-  const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const paneNoticeTimer = useRef<number | undefined>(undefined)
+  const paneGrid = useRef<HTMLDivElement>(null)
+  const paneRects = useRef(new Map<number, DOMRect>())
 
-  const activeThreadId = remote.activeThread?.id
+  const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
   const activeComposerPreferences = activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
@@ -784,20 +1002,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const selectedModel = activeComposerPreferences.model ?? ''
   const selectedEffort = activeComposerPreferences.effort ?? ''
   const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
-  const chosenModel = remote.models.find((model) => modelIdOf(model) === selectedModel)
+  const availableModels = useMemo(() => {
+    const source = remotes.find((remote) => remote.models.length > 0)
+    return source?.models ?? []
+  }, [remote0.models, remote1.models, remote2.models])
+  const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
   const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
   const themeStyle = {
     '--custom-theme-background': themePreferences.customBackgroundColor,
     '--custom-theme-background-image': themePreferences.customBackgroundImage
-      ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${themePreferences.customBackgroundImage}")`
+      ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + themePreferences.customBackgroundImage + '")'
       : 'none',
     '--custom-theme-text-color': themePreferences.customTextColor,
     '--custom-theme-surface': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.88)),
     '--custom-theme-control': rgbaFromHex('#ffffff', Math.max(0.04, customSurfaceOpacity * 0.72)),
     '--custom-theme-active': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.46)),
     '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, Math.max(0.12, customSurfaceOpacity * 0.32)),
-    '--custom-theme-panel-blur': `${Math.min(18, 7 + customSurfaceOpacity * 11)}px`,
+    '--custom-theme-panel-blur': Math.min(18, 7 + customSurfaceOpacity * 11) + 'px',
   } as CSSProperties
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
@@ -824,64 +1046,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
 
-  const positionMessageStreamAtBottom = useCallback(() => {
-    const container = messageContainer.current
-    if (container) container.scrollTop = container.scrollHeight
-  }, [])
-
-  const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
-    forceMessageStreamBottomFor.current = threadId ?? null
-    forceMessageStreamBottomVersion.current += 1
-    if (forceMessageStreamBottomTimer.current !== undefined) {
-      window.clearTimeout(forceMessageStreamBottomTimer.current)
-      forceMessageStreamBottomTimer.current = undefined
-    }
-    followMessageStream.current = true
-    setShowScrollToBottom(false)
-  }, [])
-
-  const scrollToBottom = useCallback(() => {
-    followMessageStream.current = true
-    setShowScrollToBottom(false)
-    positionMessageStreamAtBottom()
-  }, [positionMessageStreamAtBottom])
-
-  const settleForcedMessageStreamBottom = useCallback(() => {
-    const threadId = activeThreadId
-    if (!threadId || remote.loadingHistory || forceMessageStreamBottomFor.current !== threadId) return
-    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
-    const version = forceMessageStreamBottomVersion.current
-    let timer: number | undefined
-    timer = window.setTimeout(() => {
-      if (forceMessageStreamBottomVersion.current === version && forceMessageStreamBottomFor.current === threadId) {
-        forceMessageStreamBottomFor.current = null
-      }
-      if (forceMessageStreamBottomTimer.current === timer) forceMessageStreamBottomTimer.current = undefined
-    }, 360)
-    forceMessageStreamBottomTimer.current = timer
-  }, [activeThreadId, remote.loadingHistory])
-
-  const handleMessageScroll = useCallback(() => {
-    const container = messageContainer.current
-    if (!container) return
-    if (forceMessageStreamBottomFor.current === activeThreadId) return
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
-    followMessageStream.current = atBottom
-    setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
-  }, [activeThreadId])
-
-  const sendComposerMessage = useCallback((input: ComposerSendInput) => {
-    forceMessageStreamToBottom(activeThreadId)
-    const preferences = composerPreferencesFrom(input)
-    return remote.sendMessage({
-      ...input,
-      onThreadCreated: (thread) => {
-        composerHandle.current?.adoptUnassignedDraft(thread.id)
-        rememberThreadComposerPreferences(thread.id, preferences)
-      },
-    })
-  }, [activeThreadId, forceMessageStreamToBottom, rememberThreadComposerPreferences, remote.sendMessage])
-
   useEffect(() => {
     try {
       window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(themePreferences))
@@ -897,331 +1061,317 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => {
     saveThreadComposerPreferences(threadComposerPreferences)
   }, [threadComposerPreferences])
-
   useEffect(() => {
-    const completion = remote.latestThreadCompletion
-    if (!completion) {
-      setCompletionToast(null)
-      return
+    if (!threadContextMenu) return
+    const closeMenu = () => setThreadContextMenu(null)
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setThreadContextMenu(null)
     }
-    setCompletionToast(completion)
-    const timer = window.setTimeout(() => {
-      if (completionToastTimer.current === timer) completionToastTimer.current = undefined
-      setCompletionToast((current) => current?.completedAt === completion.completedAt ? null : current)
-    }, 2_800)
-    completionToastTimer.current = timer
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
     return () => {
-      if (completionToastTimer.current === timer) {
-        window.clearTimeout(timer)
-        completionToastTimer.current = undefined
-      }
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
     }
-  }, [remote.latestThreadCompletion])
-
-  useLayoutEffect(() => {
-    forceMessageStreamToBottom(activeThreadId)
-  }, [activeThreadId, forceMessageStreamToBottom])
-
-  useLayoutEffect(() => {
-    const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
-    if (!forceToBottom && !followMessageStream.current) return
-    // Do this during layout, rather than only on the next animation frame: the
-    // history list can replace a short loading state with a long conversation
-    // in one commit.
-    positionMessageStreamAtBottom()
-    followMessageStream.current = true
-    setShowScrollToBottom(false)
-    if (forceToBottom) settleForcedMessageStreamBottom()
-
-    if (scrollAnimationFrame.current !== undefined) return
-    scrollAnimationFrame.current = window.requestAnimationFrame(() => {
-      scrollAnimationFrame.current = undefined
-      const forced = forceMessageStreamBottomFor.current === activeThreadId
-      if (!forced && !followMessageStream.current) return
-      positionMessageStreamAtBottom()
-      followMessageStream.current = true
-      setShowScrollToBottom(false)
-      if (forced) settleForcedMessageStreamBottom()
-    })
-  }, [activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
-
-  useLayoutEffect(() => {
-    const content = messageContent.current
-    if (!content || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
-      const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
-      if (!forceToBottom && !followMessageStream.current) return
-      positionMessageStreamAtBottom()
-      followMessageStream.current = true
-      setShowScrollToBottom(false)
-      if (forceToBottom) settleForcedMessageStreamBottom()
-    })
-    observer.observe(content)
-    return () => observer.disconnect()
-  }, [activeThreadId, positionMessageStreamAtBottom, settingsOpen, settleForcedMessageStreamBottom])
+  }, [threadContextMenu])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || !remote.isRunning) return
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || !activeRemote.isRunning) return
       event.preventDefault()
-      void remote.interrupt()
+      void activeRemote.interrupt()
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [remote.interrupt, remote.isRunning])
-
-  useEffect(() => () => {
-    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
-    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
-    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
-  }, [])
+  }, [activeRemote.isRunning, activeRemote.interrupt])
 
   useEffect(() => {
-    if (remote.models.length === 0) return
-    if (selectedModel && remote.models.some((model) => modelIdOf(model) === selectedModel)) return
-    const defaultModel = remote.models.find((model) => model.isDefault) ?? remote.models[0]
+    if (availableModels.length === 0) return
+    if (selectedModel && availableModels.some((model) => modelIdOf(model) === selectedModel)) return
+    const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0]
     updateComposerPreferences({ model: modelIdOf(defaultModel) })
-  }, [remote.models, selectedModel, updateComposerPreferences])
+  }, [availableModels, selectedModel, updateComposerPreferences])
 
   useEffect(() => {
-    if (remote.models.length === 0 || !chosenModel) return
+    if (availableModels.length === 0 || !chosenModel) return
     if (effortOptions.length === 0) {
-      updateComposerPreferences({ effort: undefined })
+      if (selectedEffort) updateComposerPreferences({ effort: undefined })
       return
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
     updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
-  }, [chosenModel, effortOptions, remote.models.length, selectedEffort, updateComposerPreferences])
+  }, [availableModels.length, chosenModel, effortOptions, selectedEffort, updateComposerPreferences])
 
-  function dismissCompletionToast() {
-    if (completionToastTimer.current !== undefined) {
-      window.clearTimeout(completionToastTimer.current)
-      completionToastTimer.current = undefined
-    }
-    setCompletionToast(null)
+  useEffect(() => {
+    const completions = remotes
+      .map((remote) => remote.latestThreadCompletion)
+      .filter((completion): completion is { threadId: string; completedAt: number } => Boolean(completion))
+      .sort((left, right) => right.completedAt - left.completedAt)
+    const latest = completions[0]
+    if (!latest) return
+    setCompletionToast(latest)
+    const timer = window.setTimeout(() => {
+      setCompletionToast((current) => current?.completedAt === latest.completedAt ? null : current)
+    }, 2_800)
+    return () => window.clearTimeout(timer)
+  }, [remote0.latestThreadCompletion, remote1.latestThreadCompletion, remote2.latestThreadCompletion])
+
+  useLayoutEffect(() => {
+    const grid = paneGrid.current
+    if (!grid) return
+    const previous = paneRects.current
+    const next = new Map<number, DOMRect>()
+    grid.querySelectorAll<HTMLElement>('[data-pane-index]').forEach((node) => {
+      const index = Number(node.dataset.paneIndex)
+      const rect = node.getBoundingClientRect()
+      next.set(index, rect)
+      const before = previous.get(index)
+      if (!before) return
+      const deltaX = before.left - rect.left
+      const deltaY = before.top - rect.top
+      if (Math.abs(deltaX) < 1 && Math.abs(deltaY) < 1) return
+      if (typeof node.animate === 'function') {
+        node.animate([
+          { transform: 'translate(' + deltaX + 'px, ' + deltaY + 'px)' },
+          { transform: 'translate(0, 0)' },
+        ], { duration: 220, easing: 'cubic-bezier(.22, .8, .25, 1)' })
+      }
+    })
+    paneRects.current = next
+  }, [openPaneIndexes])
+
+  useEffect(() => () => {
+    if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
+    if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
+  }, [])
+
+  function showPaneNotice(message: string) {
+    setPaneNotice(message)
+    if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
+    paneNoticeTimer.current = window.setTimeout(() => {
+      paneNoticeTimer.current = undefined
+      setPaneNotice(null)
+    }, 2_400)
+  }
+
+  function paneIndexForThread(threadId: string) {
+    return openPaneIndexes.find((index) => remotes[index]?.activeThread?.id === threadId)
+  }
+
+  async function createThreadForPane(paneIndex = selectedPaneIndex) {
+    const target = remotes[paneIndex] ?? remote0
+    const targetThreadId = target.activeThread?.id
+    const targetPreferences = targetThreadId
+      ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
+      : activeComposerPreferences
+    const thread = await target.createThread(targetPreferences.model, targetPreferences.approvalPolicy)
+    if (!thread) return null
+    if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
+    rememberThreadComposerPreferences(thread.id, targetPreferences)
+    return thread
   }
 
   async function createThread() {
     setSidebarOpen(false)
-    const preferences = composerPreferencesFrom(activeComposerPreferences)
-    const thread = await remote.createThread(preferences.model, preferences.approvalPolicy)
-    if (thread) {
-      if (!activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
-      rememberThreadComposerPreferences(thread.id, preferences)
-    }
+    await createThreadForPane(selectedPaneIndex)
   }
 
   async function selectThread(thread: CodexThread) {
     setSidebarOpen(false)
-    if (completionToast?.threadId === thread.id) dismissCompletionToast()
-    if (thread.id !== activeThreadId) {
-      forceMessageStreamToBottom(thread.id)
+    setThreadContextMenu(null)
+    const existingPane = paneIndexForThread(thread.id)
+    if (existingPane !== undefined) {
+      setSelectedPaneIndex(existingPane)
+      return
     }
-    await remote.selectThread(thread)
+    const targetIndex = openPaneIndexes.includes(selectedPaneIndex) ? selectedPaneIndex : (openPaneIndexes[0] ?? 0)
+    setSelectedPaneIndex(targetIndex)
+    await remotes[targetIndex].selectThread(thread)
   }
 
-  async function handoffToLocalCodex() {
-    if (!remote.activeThread || remote.isRunning || remote.isInterrupting || remote.handoffInProgress) return
+  async function openConcurrentThread(thread: CodexThread) {
+    setThreadContextMenu(null)
+    const existingPane = paneIndexForThread(thread.id)
+    if (existingPane !== undefined) {
+      setSelectedPaneIndex(existingPane)
+      return
+    }
+    const freePane = [0, 1, 2].find((index) => !openPaneIndexes.includes(index))
+    if (freePane === undefined) {
+      showPaneNotice('最多同时打开 3 个对话窗口')
+      return
+    }
+    setOpenPaneIndexes((current) => [...current, freePane])
+    setSelectedPaneIndex(freePane)
+    await remotes[freePane].selectThread(thread)
+  }
+  function closePane(paneIndex: number) {
+    if (openPaneIndexes.length <= 1) return
+    const position = openPaneIndexes.indexOf(paneIndex)
+    const nextOpen = openPaneIndexes.filter((index) => index !== paneIndex)
+    setOpenPaneIndexes(nextOpen)
+    if (selectedPaneIndex === paneIndex) {
+      setSelectedPaneIndex(nextOpen[Math.min(Math.max(position, 0), nextOpen.length - 1)] ?? nextOpen[0] ?? 0)
+    }
+  }
+
+  function activatePane(paneIndex: number) {
+    if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
+  }
+
+  async function handoffToLocalCodex(paneIndex = selectedPaneIndex) {
+    const target = remotes[paneIndex]
+    if (!target.activeThread || target.isRunning || target.isInterrupting || target.handoffInProgress) return
     const confirmed = window.confirm('交还后网页端会停止持有已加载的 Codex 会话，网页不会自动重新连接。开发服务、SSH 和配对不会重启。确认交还给本机 Codex？')
     if (!confirmed) return
-    await remote.handoffToLocalCodex()
+    await target.handoffToLocalCodex()
   }
 
-  async function reclaimForRemote() {
-    if (remote.handoffInProgress) return
+  async function reclaimForRemote(paneIndex = selectedPaneIndex) {
+    const target = remotes[paneIndex]
+    if (target.handoffInProgress) return
     const confirmed = window.confirm('重新接管后网页端会恢复连接。请确认本机 Codex 不再运行需要保留的任务。')
     if (!confirmed) return
-    await remote.reclaimForRemote()
+    await target.reclaimForRemote()
   }
 
   function openCompletedThread() {
     if (!completionToast) return
-    const thread = remote.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
+    const thread = remote0.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
     void selectThread(thread)
+    setCompletionToast(null)
   }
 
   const copyMessage = useCallback(async (message: CodexMessage) => {
-    const documentText = message.documents?.map((document) => `\n\n${document.name}\n${document.content}`).join('') ?? ''
-    const value = `${message.text}${documentText}`.trim()
+    const documentText = message.documents?.map((document) => '\n\n' + document.name + '\n' + document.content).join('') ?? ''
+    const value = (message.text + documentText).trim()
     if (!value || !(await copyText(value))) return
     setCopiedMessageId(message.id)
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
   }, [])
 
-  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
-  const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
-  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
-  const lastMessageIndexByTurn = useMemo(() => {
-    const indexes = new Map<string, number>()
-    remote.messages.forEach((message, index) => {
-      if (message.turnId) indexes.set(message.turnId, index)
+  const sendComposerMessage = useCallback((input: ComposerSendInput) => {
+    const target = remotes[selectedPaneIndex] ?? remote0
+    const preferences = composerPreferencesFrom(input)
+    return target.sendMessage({
+      ...input,
+      onThreadCreated: (thread) => {
+        composerHandle.current?.adoptUnassignedDraft(thread.id)
+        rememberThreadComposerPreferences(thread.id, preferences)
+      },
     })
-    return indexes
-  }, [remote.messages])
-  const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
-    // The server reports file paths before it emits turn/completed. Keep that
-    // data ready, but do not place the summary card into a still-running turn.
-    .filter(([turnId, changes]) => turnId !== remote.runningTurnId && !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
-  const completionThread = completionToast ? remote.threads.find((thread) => thread.id === completionToast.threadId) : null
-  const completionThreadTitle = completionThread ? titleOf(completionThread) : '一条对话'
-  const modelOptions = useMemo<ComposerMenuOption[]>(() => remote.models.flatMap((model) => {
+  }, [rememberThreadComposerPreferences, remote0, remote1, remote2, selectedPaneIndex])
+
+  const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
+  const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : connectionLabel[activeRemote.connection]
+  const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
+  const modelOptions = useMemo<ComposerMenuOption[]>(() => availableModels.flatMap((model) => {
     const id = modelIdOf(model)
-    if (!id) return []
-    return [{ value: id, label: modelLabelOf(model) }]
-  }), [remote.models])
+    return id ? [{ value: id, label: modelLabelOf(model) }] : []
+  }), [availableModels])
   const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
 
   return (
-    <div className={`remote-shell remote-shell--theme-${themePreferences.theme}`} style={themeStyle}>
+    <div className={'remote-shell remote-shell--theme-' + themePreferences.theme} style={themeStyle}>
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
             <span className="thread-completion-toast__icon"><Check size={15} strokeWidth={2.8} /></span>
-            <span className="thread-completion-toast__copy"><strong>{completionThreadTitle} 已完成回复</strong><small>点击查看这条对话</small></span>
+            <span className="thread-completion-toast__copy"><strong>一条对话已完成回复</strong><small>点击查看这条对话</small></span>
           </button>
-          <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={dismissCompletionToast}><X size={15} /></button>
+          <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={() => setCompletionToast(null)}><X size={15} /></button>
         </div>
       ) : null}
-      <aside className={`remote-sidebar${sidebarOpen ? ' remote-sidebar--open' : ''}`} aria-label="Codex 对话记录">
+      {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
+      <aside className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '')} aria-label="Codex 对话记录">
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><span className="remote-brand__mark">C</span><span className="remote-brand__copy"><strong>Codex Remote</strong><small>本机 Agent 工作台</small></span></div>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={remote.handedOff || remote.connection !== 'connected' || remote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
-        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote.refreshThreads()} disabled={remote.handedOff}><RefreshCw size={14} /></button></div>
+        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
+        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
-          {remote.threads.map((thread) => (
-            <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} disabled={remote.handedOff} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
-              <MessagesSquare size={15} />
-              <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
-            </button>
-          ))}
-          {remote.threads.length === 0 && !remote.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
-          {remote.loadingHistory && remote.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {remote0.threads.map((thread) => {
+            const paneIndex = paneIndexForThread(thread.id)
+            const isActive = paneIndex === selectedPaneIndex
+            return (
+              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
+                <MessagesSquare size={15} />
+                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
+                {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
+              </button>
+            )
+          })}
+          {remote0.threads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
+          {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
-        <button className={`sidebar-settings${settingsOpen ? ' sidebar-settings--active' : ''}`} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}>
-          <Settings2 size={16} />
-          <span>设置</span>
-        </button>
-        <footer className="remote-sidebar__footer">
-          <i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} />
-          <span>{currentConnectionLabel}</span>
-          <button type="button" onClick={() => void onUnpair()}>退出</button>
-        </footer>
+        <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}><Settings2 size={16} /><span>设置</span></button>
+        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} /><span>{currentConnectionLabel}</span><button type="button" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      {threadContextMenu ? (
+        <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+          <button type="button" role="menuitem" onClick={() => void openConcurrentThread(threadContextMenu.thread)}><MessagesSquare size={14} />并发打开</button>
+          <button type="button" role="menuitem" onClick={() => void selectThread(threadContextMenu.thread)}><Check size={14} />切换到此对话</button>
+        </div>
+      ) : null}
 
       {settingsOpen ? (
         <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={() => setSettingsOpen(false)} />
-      ) : <main className="remote-chat">
-        <header className="remote-chat__header">
-          <div className="remote-chat__title-wrap">
-            <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={() => setSidebarOpen(true)}><Menu size={20} /></button>
-            <div className="remote-chat__title"><span className="remote-chat__eyebrow">当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
-          </div>
-          <div className="remote-chat__controls">
-            <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
-            {remote.handedOff ? (
-              <button className="handoff-button handoff-button--reclaim" type="button" onClick={() => void reclaimForRemote()} disabled={remote.handoffInProgress}>{remote.handoffInProgress ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}{remote.handoffInProgress ? '接管中' : '重新接管'}</button>
-            ) : remote.activeThread ? (
-              <button className="handoff-button" type="button" onClick={() => void handoffToLocalCodex()} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
-            ) : null}
-          </div>
-        </header>
-
-        <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label="Codex 对话">
-          <div className="message-stream__content" ref={messageContent}>
-            {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
-            {remote.messages.length === 0 && !remote.loadingHistory ? (
-              <div className="welcome-state">
-                <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
-                <span className="welcome-state__mark">C</span>
-                <h1>你想在本机项目中完成什么？</h1>
-                <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
-                <div className="prompt-suggestions">
-                  <button type="button" onClick={() => composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。')}>了解这个项目</button>
-                  <button type="button" onClick={() => composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。')}>检查代码问题</button>
-                </div>
+      ) : (
+        <section className="remote-workspace">
+          <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
+            {openPaneIndexes.map((paneIndex) => (
+              <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
+                <RemoteChatPane
+                  remote={remotes[paneIndex]}
+                  active={paneIndex === selectedPaneIndex}
+                  canClose={openPaneIndexes.length > 1}
+                  onActivate={() => activatePane(paneIndex)}
+                  onClose={() => closePane(paneIndex)}
+                  onCreateThread={() => void createThreadForPane(paneIndex)}
+                  onHandoff={() => void handoffToLocalCodex(paneIndex)}
+                  onReclaim={() => void reclaimForRemote(paneIndex)}
+                  onOpenSidebar={() => setSidebarOpen(true)}
+                  composerHandle={composerHandle}
+                  copiedMessageId={copiedMessageId}
+                  onCopy={copyMessage}
+                />
               </div>
-            ) : null}
-            {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-            {remote.messages.map((message, index) => {
-              const changes = message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index
-                ? remote.fileChangesByTurn[message.turnId]
-                : undefined
-              return (
-                <Fragment key={message.id}>
-                  <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={copyMessage} />
-                  {changes?.length ? <FileChangeCard changes={changes} /> : null}
-                </Fragment>
-              )
-            })}
-            {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} />)}
-            {remote.approval ? (
-              <div className="approval-card" role="alert">
-                <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
-                <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
-                {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
-                {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
-                <div className="approval-card__actions">
-                  <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
-                  <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
-                </div>
-              </div>
-            ) : null}
-            {remote.isRunning && !hasStreamingAssistant ? (
-              <div className="running-indicator" role="status" aria-live="polite">
-                <span className="running-indicator__activity">
-                  <LoaderCircle className="spin" size={15} />
-                  <span>{remote.activity?.label ?? '正在思考'}</span>
-                  {remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}
-                </span>
-              </div>
-            ) : null}
+            ))}
           </div>
+          <MessageComposer
+            key={composerDraftScope}
+            ref={composerHandle}
+            draftScope={composerDraftScope}
+            connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
+            isRunning={activeRemote.isRunning}
+            isInterrupting={activeRemote.isInterrupting}
+            writerConflict={activeRemote.writerConflict}
+            modelSupportsImages={modelSupportsImages}
+            selectedModel={selectedModel}
+            selectedEffort={selectedEffort}
+            selectedApprovalPolicy={selectedApprovalPolicy}
+            modelOptions={modelOptions}
+            reasoningOptions={reasoningOptions}
+            authorizationOptions={approvalPolicyOptions}
+            onModelChange={changeModel}
+            onEffortChange={changeEffort}
+            onApprovalPolicyChange={changeApprovalPolicy}
+            onSend={sendComposerMessage}
+            queuedMessages={activeRemote.queuedMessages}
+            onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+            onRemoveQueued={activeRemote.removeQueuedMessage}
+            onInterrupt={activeRemote.interrupt}
+            onRefresh={activeRemote.refreshActiveThread}
+          />
         </section>
-        {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={() => scrollToBottom()} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
-
-        {remote.error ? (
-          <div className="remote-error" role="alert">
-            <AlertTriangle size={15} />
-            <span>{remote.error}</span>
-            {remote.writerConflict ? <button type="button" onClick={() => void createThread()} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
-          </div>
-        ) : null}
-
-        <MessageComposer
-          key={composerDraftScope}
-          ref={composerHandle}
-          draftScope={composerDraftScope}
-          connection={remote.handedOff ? 'disconnected' : remote.connection}
-          isRunning={remote.isRunning}
-          isInterrupting={remote.isInterrupting}
-          writerConflict={remote.writerConflict}
-          modelSupportsImages={modelSupportsImages}
-          selectedModel={selectedModel}
-          selectedEffort={selectedEffort}
-          selectedApprovalPolicy={selectedApprovalPolicy}
-          modelOptions={modelOptions}
-          reasoningOptions={reasoningOptions}
-          authorizationOptions={approvalPolicyOptions}
-          onModelChange={changeModel}
-          onEffortChange={changeEffort}
-          onApprovalPolicyChange={changeApprovalPolicy}
-          onSend={sendComposerMessage}
-          queuedMessages={remote.queuedMessages}
-          onSendQueuedNow={remote.sendQueuedMessageNow}
-          onRemoveQueued={remote.removeQueuedMessage}
-          onInterrupt={remote.interrupt}
-          onRefresh={remote.refreshActiveThread}
-        />
-      </main>}
+      )}
     </div>
   )
 }

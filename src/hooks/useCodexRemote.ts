@@ -106,6 +106,13 @@ interface ThreadCacheEntry {
   characters: number
 }
 
+export interface UseCodexRemoteOptions {
+  /** Keep the existing single-pane conversation in localStorage. */
+  persistActiveThread?: boolean
+  /** Keep the socket and background requests closed while a pane is hidden. */
+  enabled?: boolean
+}
+
 function readPersistedActiveThreadId() {
   try {
     const threadId = window.localStorage.getItem(activeThreadStorageKey)?.trim()
@@ -626,9 +633,11 @@ function activityForItem(value: unknown): CodexActivity {
   }
 }
 
-export function useCodexRemote(token: string, onUnauthorized: () => void) {
-  const [initialActiveThreadId] = useState(readPersistedActiveThreadId)
-  const [initialCachedThread] = useState(() => readPersistedActiveThreadCache(initialActiveThreadId))
+export function useCodexRemote(token: string, onUnauthorized: () => void, options: UseCodexRemoteOptions = {}) {
+  const persistActiveThread = options.persistActiveThread ?? true
+  const enabled = options.enabled ?? true
+  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : null)
+  const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)
   const [handedOff, setHandedOff] = useState(false)
@@ -715,9 +724,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     else delete nextByThread[threadId]
     queuedMessagesByThreadRef.current = nextByThread
     setQueuedMessagesByThread(nextByThread)
-    persistQueuedMessages(nextByThread)
+    // Secondary panes are short-lived views. Let the primary controller own
+    // the durable queue snapshot so three controllers cannot overwrite each
+    // other's localStorage copy while different threads are active.
+    if (persistActiveThread) persistQueuedMessages(nextByThread)
     return next
-  }, [])
+  }, [persistActiveThread])
 
   const beginTurnTimer = useCallback(() => {
     if (turnStartedAtRef.current !== null) return
@@ -911,7 +923,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
       if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
-      persistActiveThreadId(thread.id)
+      if (persistActiveThread) persistActiveThreadId(thread.id)
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
       const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
@@ -919,7 +931,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
         threadHistoryCache.current.get(thread.id)?.fileChangesByTurn ?? {},
         fileChangesFromThread(thread),
       )
-      persistActiveThreadCache(thread, cachedMessages)
+      if (persistActiveThread) persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
       // A history read can finish while a reply is streaming (for example
       // after reconnecting). Give that partial server message the same stable
@@ -989,7 +1001,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       }
       return false
     }
-  }, [cacheThreadSnapshot, onUnauthorized, resetStreamingAssistant, setActiveTurnId, token])
+  }, [cacheThreadSnapshot, onUnauthorized, persistActiveThread, resetStreamingAssistant, setActiveTurnId, token])
 
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
@@ -1412,6 +1424,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
   }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
 
   useEffect(() => {
+    if (!enabled) {
+      setConnectionState('disconnected')
+      setLoadingHistory(false)
+      return
+    }
     let disposed = false
     let retryTimer: number | undefined
     let retryDelay = 500
@@ -1526,7 +1543,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
     }
-  }, [handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+  }, [enabled, handleEvent, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
@@ -1545,7 +1562,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     const threadRevision = ++historyRevision.current
     clearThreadCompletion(thread.id)
     activeThreadId.current = thread.id
-    persistActiveThreadId(thread.id)
+    if (persistActiveThread) persistActiveThreadId(thread.id)
     setQueueRecoveryReadyThreadId(null)
     resetStreamingAssistant()
     setActiveTurnId(null)
@@ -1557,7 +1574,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
       threadHistoryCache.current.delete(thread.id)
       threadHistoryCache.current.set(thread.id, memoryCache)
     }
-    const persistedCache = memoryCache ? null : readPersistedActiveThreadCache(thread.id)
+    const persistedCache = memoryCache || !persistActiveThread ? null : readPersistedActiveThreadCache(thread.id)
     if (persistedCache) cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, {
       fileChangesByTurn: {},
       running: false,
@@ -1610,7 +1627,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       if (requestId === loadRequest.current) setLoadingHistory(false)
     }
-  }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, prefetchThread, resetStreamingAssistant, setActiveTurnId])
+  }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId])
 
   const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
     if (handedOffRef.current) {
@@ -1628,7 +1645,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     try {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
       activeThreadId.current = thread.id
-      persistActiveThreadId(thread.id)
+      if (persistActiveThread) persistActiveThreadId(thread.id)
       setQueueRecoveryReadyThreadId(null)
       if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
       resetStreamingAssistant()
@@ -1657,7 +1674,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     } finally {
       setLoadingHistory(false)
     }
-  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
+  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
 
   const sendMessage = useCallback(async (input: SendMessageInput) => {
     if (handedOffRef.current) {
@@ -1852,3 +1869,5 @@ export function useCodexRemote(token: string, onUnauthorized: () => void) {
     refreshActiveThread,
   }
 }
+
+export type CodexRemoteController = ReturnType<typeof useCodexRemote>
