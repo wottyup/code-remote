@@ -227,6 +227,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .file-change-card__more:hover { background: #303135; color: #ededee; }
 .file-change-card__more svg { transition: transform .18s ease; }
 .file-change-card__more[aria-expanded='true'] svg { transform: rotate(180deg); }
+@media (min-width: 701px) {
+  .file-change-card__summary strong { font-size: 12.5px; }
+  .file-change-card__stats, .file-change-card__file-stats { font-size: 10px; }
+  .file-change-card__review { min-height: 28px; font-size: 10px; }
+  .file-change-card__file-row > span:first-child { font-size: 11px; }
+  .file-change-card__file > pre { font-size: 10px; }
+  .file-change-card__file > small, .file-change-card__more { font-size: 9.5px; }
+}
 .remote-error { grid-row: 3; display: flex; align-items: center; gap: 8px; width: min(calc(100% - 44px), 840px); margin: 0 auto 8px; padding: 8px 10px; border: 1px solid rgba(173, 86, 91, .36); border-radius: 8px; background: rgba(66, 30, 34, .27); color: #dda0a3; font-size: 10px; }
 .remote-error span { flex: 1; }
 .remote-error button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 27px; padding: 0 8px; border: 1px solid rgba(197, 124, 128, .55); border-radius: 6px; background: rgba(83, 36, 40, .55); color: #efb2b5; cursor: pointer; font-size: 9px; }
