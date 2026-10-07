@@ -9,7 +9,7 @@ import {
   ImagePlus,
   LoaderCircle,
   Menu,
-  MessageSquare,
+  MessagesSquare,
   Plus,
   RefreshCw,
   Send,
@@ -1097,7 +1097,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         <nav className="thread-list">
           {remote.threads.map((thread) => (
             <button className={`thread-row${remote.activeThread?.id === thread.id ? ' thread-row--active' : ''}`} type="button" key={thread.id} onClick={() => void selectThread(thread)} disabled={remote.handedOff} aria-current={remote.activeThread?.id === thread.id ? 'page' : undefined}>
-              <MessageSquare size={15} />
+              <MessagesSquare size={15} />
               <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
             </button>
           ))}
