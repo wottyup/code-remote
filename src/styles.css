@@ -537,6 +537,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .composer-menu__empty { color: var(--custom-theme-text-color); opacity: .7; }
 .remote-shell--theme-custom .theme-image-upload, .remote-shell--theme-custom .theme-image-clear { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .theme-image-upload:hover, .remote-shell--theme-custom .theme-image-clear:hover { background: var(--custom-theme-active); }
+.remote-shell--theme-custom :is(button, textarea, select, input:not([type='color']):not([type='range']):not([type='file'])) { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); -webkit-text-fill-color: var(--custom-theme-text-color); caret-color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .message-composer textarea::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); opacity: 1; }
 
 @media (max-width: 700px) {
   .theme-settings-panel { grid-template-rows: 94px minmax(0, 1fr); }
