@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="一只可爱的猫咪插画">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fff1f5"/>
+      <stop offset="1" stop-color="#e9e4ff"/>
+    </linearGradient>
+    <linearGradient id="fur" x1="0" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#ffd7b5"/>
+      <stop offset="1" stop-color="#e99a72"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#8f7090" flood-opacity=".2"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="42" fill="url(#bg)"/>
+  <circle cx="95" cy="102" r="18" fill="#fff" opacity=".7"/>
+  <circle cx="421" cy="143" r="11" fill="#fff" opacity=".55"/>
+  <path d="M78 406 Q256 446 434 406" fill="none" stroke="#c3a9d0" stroke-width="8" stroke-linecap="round" opacity=".55"/>
+
+  <g filter="url(#shadow)">
+    <!-- tail -->
+    <path d="M391 350 C469 369 464 266 405 279 C444 293 429 332 386 316" fill="none" stroke="#d98261" stroke-width="27" stroke-linecap="round"/>
+    <path d="M391 350 C469 369 464 266 405 279" fill="none" stroke="#f4b184" stroke-width="8" stroke-linecap="round" opacity=".7"/>
+
+    <!-- body -->
+    <ellipse cx="258" cy="348" rx="126" ry="91" fill="url(#fur)" stroke="#9d5d52" stroke-width="6"/>
+    <ellipse cx="258" cy="371" rx="70" ry="52" fill="#ffe7cd" opacity=".8"/>
+
+    <!-- ears -->
+    <path d="M151 159 L162 62 L230 133 Z" fill="url(#fur)" stroke="#9d5d52" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M282 133 L350 62 L359 163 Z" fill="url(#fur)" stroke="#9d5d52" stroke-width="7" stroke-linejoin="round"/>
+    <path d="M171 126 L174 88 L207 130 Z" fill="#e995a7"/>
+    <path d="M304 130 L338 88 L342 126 Z" fill="#e995a7"/>
+
+    <!-- head -->
+    <ellipse cx="255" cy="213" rx="132" ry="119" fill="url(#fur)" stroke="#9d5d52" stroke-width="7"/>
+    <!-- forehead markings -->
+    <path d="M232 116 Q255 149 255 177 Q255 149 278 116" fill="none" stroke="#b96c58" stroke-width="10" stroke-linecap="round"/>
+    <path d="M205 130 Q222 153 229 175" fill="none" stroke="#b96c58" stroke-width="8" stroke-linecap="round"/>
+    <path d="M305 130 Q288 153 281 175" fill="none" stroke="#b96c58" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- eyes -->
+    <ellipse cx="204" cy="205" rx="23" ry="31" fill="#fffaf5"/>
+    <ellipse cx="306" cy="205" rx="23" ry="31" fill="#fffaf5"/>
+    <ellipse cx="207" cy="209" rx="10" ry="18" fill="#4c4050"/>
+    <ellipse cx="303" cy="209" rx="10" ry="18" fill="#4c4050"/>
+    <circle cx="211" cy="200" r="4" fill="#fff"/>
+    <circle cx="307" cy="200" r="4" fill="#fff"/>
+
+    <!-- muzzle -->
+    <ellipse cx="255" cy="263" rx="61" ry="43" fill="#ffe8d4" opacity=".9"/>
+    <path d="M242 252 Q255 242 268 252 Q255 270 242 252" fill="#9d5362" stroke="#824553" stroke-width="3"/>
+    <path d="M255 268 Q255 286 235 290 M255 268 Q255 286 275 290" fill="none" stroke="#824553" stroke-width="5" stroke-linecap="round"/>
+    <path d="M226 270 Q192 263 170 251 M226 281 Q190 282 166 291 M284 270 Q318 263 340 251 M284 281 Q320 282 344 291" fill="none" stroke="#9d5d52" stroke-width="4" stroke-linecap="round"/>
+
+    <!-- paws -->
+    <ellipse cx="210" cy="409" rx="35" ry="19" fill="#e99a72" stroke="#9d5d52" stroke-width="5"/>
+    <ellipse cx="307" cy="409" rx="35" ry="19" fill="#e99a72" stroke="#9d5d52" stroke-width="5"/>
+    <path d="M198 407v7 M211 405v9 M224 407v7 M295 407v7 M308 405v9 M321 407v7" stroke="#a96357" stroke-width="3" stroke-linecap="round"/>
+  </g>
+
+  <text x="256" y="468" text-anchor="middle" font-family="sans-serif" font-size="20" fill="#8a6b92">meow</text>
+</svg>
