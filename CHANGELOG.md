@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.83] - 增加 Codex Remote systemd 后台常驻运行
+
 ## [0.0.82] - 让 Android 返回手势按界面层级逐层关闭
 
 ## [0.0.81] - 支持 Android 网页聊天图片选择

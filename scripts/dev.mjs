@@ -5,11 +5,11 @@ import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const serverRoot = join(projectRoot, 'server')
+const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const isWindows = process.platform === 'win32'
 const configuredPython = process.env.CODEX_REMOTE_PYTHON
 const virtualEnvironmentPython = isWindows ? join(projectRoot, '.venv', 'Scripts', 'python.exe') : join(projectRoot, '.venv', 'bin', 'python')
 const python = configuredPython || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
-const packageManager = isWindows ? 'pnpm.cmd' : 'pnpm'
 
 let engine = null
 let vite = null
@@ -77,6 +77,9 @@ async function main() {
   if (!python) {
     throw new Error(`找不到 Python 虚拟环境，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON 指向 Python。`)
   }
+  if (!existsSync(viteEntrypoint)) {
+    throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)
+  }
 
   if (await engineReady()) {
     console.log('复用已运行的本机 Codex 引擎。')
@@ -101,7 +104,7 @@ async function main() {
     await waitForEngine()
   }
 
-  vite = spawn(packageManager, ['exec', 'vite'], {
+  vite = spawn(process.execPath, [viteEntrypoint], {
     cwd: projectRoot,
     env: process.env,
     stdio: 'inherit',

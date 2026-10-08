@@ -10,8 +10,8 @@ Group=root
 WorkingDirectory=/code
 Environment=HOME=/root
 Environment=CODEX_REMOTE_WORKSPACE=/code/codex-remote
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/bin/pnpm --filter codex-remote dev
+Environment=PATH=/usr/local/lib/node-v24.19.0-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/bin/node /code/codex-remote/scripts/dev.mjs
 Restart=always
 RestartSec=3
 KillMode=control-group
