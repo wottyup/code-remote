@@ -1,0 +1,338 @@
+package com.sevencnup.codexremote;
+
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Bundle;
+import android.text.InputType;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewGroup;
+import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.Space;
+import android.widget.TextView;
+
+import java.io.IOException;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+public class MainActivity extends Activity {
+    private static final String PREFS_NAME = "codex_remote_mobile";
+    private static final String ENDPOINT_KEY = "endpoint";
+    private static final int DARK = Color.rgb(16, 17, 20);
+    private static final int PANEL = Color.rgb(23, 25, 30);
+    private static final int TEXT = Color.rgb(239, 241, 246);
+    private static final int MUTED = Color.rgb(150, 157, 170);
+    private static final int ACCENT = Color.rgb(170, 186, 255);
+
+    private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private SharedPreferences preferences;
+    private FrameLayout root;
+    private WebView webView;
+    private EditText endpointInput;
+    private TextView endpointStatus;
+    private Button connectButton;
+    private String activeEndpoint;
+    private boolean checking;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().setStatusBarColor(DARK);
+        getWindow().setNavigationBarColor(DARK);
+        preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
+
+        String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
+        if (savedEndpoint != null && !savedEndpoint.isBlank()) {
+            checkAndOpen(savedEndpoint, true);
+        }
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private TextView text(String value, float size, int color) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        return view;
+    }
+
+    private LinearLayout.LayoutParams widthParams(int height) {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, height);
+    }
+
+    private LinearLayout.LayoutParams wrapParams() {
+        return new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+    }
+
+    private void showConnector(String initialEndpoint, String errorMessage) {
+        disposeWebView();
+        checking = false;
+        root = new FrameLayout(this);
+        root.setBackgroundColor(DARK);
+        setContentView(root);
+
+        ScrollView scrollView = new ScrollView(this);
+        scrollView.setFillViewport(true);
+        root.addView(scrollView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout page = new LinearLayout(this);
+        page.setOrientation(LinearLayout.VERTICAL);
+        page.setPadding(dp(24), dp(30), dp(24), dp(24));
+        scrollView.addView(page, widthParams(ViewGroup.LayoutParams.MATCH_PARENT));
+
+        Space topSpace = new Space(this);
+        page.addView(topSpace, widthParams(dp(40)));
+
+        TextView mark = text("C", 22, TEXT);
+        mark.setGravity(Gravity.CENTER);
+        mark.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        mark.setBackgroundColor(Color.rgb(48, 51, 58));
+        LinearLayout.LayoutParams markParams = new LinearLayout.LayoutParams(dp(46), dp(46));
+        markParams.bottomMargin = dp(22);
+        page.addView(mark, markParams);
+
+        TextView eyebrow = text("CODEX REMOTE · ANDROID", 10, MUTED);
+        eyebrow.setLetterSpacing(.12f);
+        page.addView(eyebrow, widthParams(dp(22)));
+
+        TextView title = text("连接本机 Codex", 25, TEXT);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        LinearLayout.LayoutParams titleParams = widthParams(dp(38));
+        titleParams.bottomMargin = dp(5);
+        page.addView(title, titleParams);
+
+        TextView description = text("先连接电脑上的 Codex Remote，再输入网页显示的匹配码。地址只需设置一次。", 13, MUTED);
+        description.setLineSpacing(0, 1.35f);
+        LinearLayout.LayoutParams descriptionParams = widthParams(dp(58));
+        descriptionParams.bottomMargin = dp(18);
+        page.addView(description, descriptionParams);
+
+        TextView label = text("电脑网页地址", 11, Color.rgb(195, 199, 208));
+        LinearLayout.LayoutParams labelParams = widthParams(dp(24));
+        labelParams.bottomMargin = dp(6);
+        page.addView(label, labelParams);
+
+        endpointInput = new EditText(this);
+        endpointInput.setSingleLine(true);
+        endpointInput.setText(initialEndpoint == null ? "" : initialEndpoint);
+        endpointInput.setHint("http://192.168.x.x:4173");
+        endpointInput.setHintTextColor(Color.rgb(96, 102, 113));
+        endpointInput.setTextColor(TEXT);
+        endpointInput.setTextSize(14);
+        endpointInput.setPadding(dp(13), 0, dp(13), 0);
+        endpointInput.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        endpointInput.setBackgroundColor(Color.rgb(17, 19, 23));
+        LinearLayout.LayoutParams inputParams = widthParams(dp(50));
+        inputParams.bottomMargin = dp(10);
+        page.addView(endpointInput, inputParams);
+
+        connectButton = new Button(this);
+        connectButton.setText("检测并连接");
+        connectButton.setTextSize(13);
+        connectButton.setTextColor(Color.rgb(25, 26, 30));
+        connectButton.setAllCaps(false);
+        connectButton.setBackgroundColor(Color.rgb(228, 229, 232));
+        connectButton.setOnClickListener(view -> checkAndOpen(endpointInput.getText().toString(), false));
+        LinearLayout.LayoutParams buttonParams = widthParams(dp(48));
+        buttonParams.bottomMargin = dp(12);
+        page.addView(connectButton, buttonParams);
+
+        endpointStatus = text(errorMessage == null ? "" : errorMessage, 11, errorMessage == null ? MUTED : Color.rgb(226, 154, 158));
+        endpointStatus.setLineSpacing(0, 1.3f);
+        page.addView(endpointStatus, widthParams(dp(44)));
+
+        TextView hint = text("电脑和手机需要在同一个局域网。启动网页服务后，终端会显示匹配码。", 10, Color.rgb(126, 132, 144));
+        hint.setLineSpacing(0, 1.3f);
+        LinearLayout.LayoutParams hintParams = widthParams(dp(42));
+        hintParams.topMargin = dp(24);
+        page.addView(hint, hintParams);
+    }
+
+    private String normalizeEndpoint(String raw) throws IllegalArgumentException {
+        String value = raw == null ? "" : raw.trim();
+        if (value.isEmpty()) {
+            throw new IllegalArgumentException("请输入电脑网页地址。 ");
+        }
+        if (!value.contains("://")) {
+            value = "http://" + value;
+        }
+        Uri uri = Uri.parse(value);
+        String scheme = uri.getScheme();
+        if (!("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme)) || uri.getHost() == null) {
+            throw new IllegalArgumentException("地址格式无效，请填写 http://电脑IP:4173。 ");
+        }
+        if (uri.getQuery() != null || uri.getFragment() != null) {
+            throw new IllegalArgumentException("地址不要包含查询参数或片段。 ");
+        }
+        String normalized = value.replaceAll("/+$", "");
+        return normalized;
+    }
+
+    private void checkAndOpen(String rawEndpoint, boolean automatic) {
+        if (checking) return;
+        final String endpoint;
+        try {
+            endpoint = normalizeEndpoint(rawEndpoint);
+        } catch (IllegalArgumentException error) {
+            if (endpointStatus != null) endpointStatus.setText(error.getMessage());
+            return;
+        }
+
+        checking = true;
+        if (connectButton != null) {
+            connectButton.setEnabled(false);
+            connectButton.setText("检测中…");
+        }
+        if (endpointStatus != null) {
+            endpointStatus.setText(automatic ? "正在恢复上次连接…" : "正在检测电脑网页服务…");
+            endpointStatus.setTextColor(MUTED);
+        }
+
+        networkExecutor.execute(() -> {
+            String failure = null;
+            try {
+                checkEndpoint(endpoint);
+            } catch (IOException | IllegalArgumentException error) {
+                failure = error.getMessage() == null ? "无法连接到电脑网页服务。" : error.getMessage();
+            }
+            String resultFailure = failure;
+            runOnUiThread(() -> {
+                checking = false;
+                if (resultFailure == null) {
+                    activeEndpoint = endpoint;
+                    preferences.edit().putString(ENDPOINT_KEY, endpoint).apply();
+                    showWebView(endpoint);
+                    return;
+                }
+                if (connectButton != null) {
+                    connectButton.setEnabled(true);
+                    connectButton.setText("检测并连接");
+                }
+                if (endpointStatus != null) {
+                    endpointStatus.setText(resultFailure + "\n请确认电脑服务已启动、端口为 4173，且手机和电脑在同一局域网。 ");
+                    endpointStatus.setTextColor(Color.rgb(226, 154, 158));
+                }
+            });
+        });
+    }
+
+    private void checkEndpoint(String endpoint) throws IOException {
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpoint + "/").openConnection();
+        connection.setRequestMethod("GET");
+        connection.setConnectTimeout(4500);
+        connection.setReadTimeout(4500);
+        connection.setInstanceFollowRedirects(true);
+        connection.setRequestProperty("User-Agent", "CodexRemoteAndroid/0.0.68");
+        try {
+            int status = connection.getResponseCode();
+            if (status < 200 || status >= 400) {
+                throw new IOException("网页服务返回 HTTP " + status + "。 ");
+            }
+        } finally {
+            connection.disconnect();
+        }
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void showWebView(String endpoint) {
+        root = new FrameLayout(this);
+        root.setBackgroundColor(DARK);
+        setContentView(root);
+
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        root.addView(shell, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
+        LinearLayout toolbar = new LinearLayout(this);
+        toolbar.setGravity(Gravity.CENTER_VERTICAL);
+        toolbar.setPadding(dp(14), 0, dp(8), 0);
+        toolbar.setBackgroundColor(PANEL);
+        shell.addView(toolbar, widthParams(dp(48)));
+
+        TextView title = text("Codex Remote", 14, TEXT);
+        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        toolbar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+
+        Button changeButton = new Button(this);
+        changeButton.setText("地址");
+        changeButton.setTextSize(11);
+        changeButton.setTextColor(ACCENT);
+        changeButton.setAllCaps(false);
+        changeButton.setBackgroundColor(Color.TRANSPARENT);
+        changeButton.setOnClickListener(view -> showConnector(activeEndpoint, null));
+        toolbar.addView(changeButton, new LinearLayout.LayoutParams(dp(62), dp(42)));
+
+        webView = new WebView(this);
+        WebSettings settings = webView.getSettings();
+        settings.setJavaScriptEnabled(true);
+        settings.setDomStorageEnabled(true);
+        settings.setDatabaseEnabled(true);
+        settings.setAllowFileAccess(false);
+        settings.setAllowContentAccess(false);
+        settings.setLoadsImagesAutomatically(true);
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
+        webView.setBackgroundColor(DARK);
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return false;
+            }
+
+            @Override
+            public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
+                if (request.isForMainFrame()) {
+                    runOnUiThread(() -> showConnector(activeEndpoint, "网页加载失败：" + error.getDescription()));
+                }
+            }
+        });
+        shell.addView(webView, new LinearLayout.LayoutParams(0, 0, 1));
+        webView.loadUrl(endpoint + "/");
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (webView != null && webView.getVisibility() == View.VISIBLE && webView.canGoBack()) {
+            webView.goBack();
+            return;
+        }
+        super.onBackPressed();
+    }
+
+    @Override
+    protected void onDestroy() {
+        disposeWebView();
+        networkExecutor.shutdownNow();
+        super.onDestroy();
+    }
+
+    private void disposeWebView() {
+        if (webView == null) return;
+        webView.stopLoading();
+        webView.destroy();
+        webView = null;
+    }
+}
