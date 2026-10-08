@@ -10,8 +10,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 68
-        versionName '0.0.68'
+        versionCode 70
+        versionName '0.0.70'
     }
 
     compileOptions {

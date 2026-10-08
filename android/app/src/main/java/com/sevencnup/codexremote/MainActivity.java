@@ -8,6 +8,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Build;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -89,6 +90,7 @@ public class MainActivity extends Activity {
         checking = false;
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
+        applySystemBarInsets(root);
         setContentView(root);
 
         ScrollView scrollView = new ScrollView(this);
@@ -244,7 +246,7 @@ public class MainActivity extends Activity {
         connection.setConnectTimeout(4500);
         connection.setReadTimeout(4500);
         connection.setInstanceFollowRedirects(true);
-        connection.setRequestProperty("User-Agent", "CodexRemoteAndroid/0.0.68");
+        connection.setRequestProperty("User-Agent", "CodexRemoteAndroid/0.0.69");
         try {
             int status = connection.getResponseCode();
             if (status < 200 || status >= 400) {
@@ -259,6 +261,7 @@ public class MainActivity extends Activity {
     private void showWebView(String endpoint) {
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
+        applySystemBarInsets(root);
         setContentView(root);
 
         LinearLayout shell = new LinearLayout(this);
@@ -309,7 +312,7 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        shell.addView(webView, new LinearLayout.LayoutParams(0, 0, 1));
+        shell.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
         webView.loadUrl(endpoint + "/");
     }
 
@@ -334,5 +337,24 @@ public class MainActivity extends Activity {
         webView.stopLoading();
         webView.destroy();
         webView = null;
+    }
+
+    private void applySystemBarInsets(FrameLayout container) {
+        container.setOnApplyWindowInsetsListener((view, insets) -> {
+            int top;
+            int bottom;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                android.graphics.Insets bars = insets.getInsets(
+                        android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
+                top = bars.top;
+                bottom = bars.bottom;
+            } else {
+                top = insets.getSystemWindowInsetTop();
+                bottom = insets.getSystemWindowInsetBottom();
+            }
+            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), bottom);
+            return insets;
+        });
+        container.requestApplyInsets();
     }
 }
