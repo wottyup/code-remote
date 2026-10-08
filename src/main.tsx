@@ -19,8 +19,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       // bottom when the native bridge is present; regular mobile browsers
       // still follow their resized visual viewport.
       const nativeBridge = 'CodexRemoteAndroid' in window
-      const pannedVisualBottom = Math.round(visualHeight + Math.max(0, viewport?.offsetTop ?? 0))
-      const height = nativeBridge ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
+      const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
+      const pannedVisualBottom = Math.round(visualHeight + offsetTop)
+      const nativeViewportIsPanned = nativeBridge && offsetTop > 1
+      const height = nativeViewportIsPanned ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
       // Do not replace a working viewport value with the occasional zero-sized
       // value that some mobile browsers report while returning from background.
       if (height < 160) return
