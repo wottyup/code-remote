@@ -59,6 +59,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .sidebar-settings { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; margin-top: auto; padding: 0 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #9299a5; cursor: pointer; font-size: 10px; text-align: left; }
 .sidebar-settings:hover, .sidebar-settings--active { border-color: rgba(146, 157, 184, .14); background: rgba(38, 41, 49, .7); color: #e4e7ee; }
 .sidebar-settings svg { color: #8b94a5; }
+.sidebar-endpoint { margin-top: 4px; }
 .remote-sidebar__footer { display: flex; align-items: center; gap: 8px; min-height: 40px; margin-top: 6px; padding: 8px 6px 0; border-top: 1px solid var(--line); color: #9298a2; font-size: 10px; }
 .remote-sidebar__footer button { margin-left: auto; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: #737a84; cursor: pointer; font-size: 10px; }
 .remote-sidebar__footer button:hover { background: #25272d; color: #d5d7dc; }

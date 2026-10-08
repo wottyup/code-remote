@@ -18,6 +18,7 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.webkit.JavascriptInterface;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -33,7 +34,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.71";
+    private static final String APP_VERSION = "0.0.72";
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
     private static final int DARK = Color.rgb(16, 17, 20);
@@ -265,31 +266,6 @@ public class MainActivity extends Activity {
         applySystemBarInsets(root);
         setContentView(root);
 
-        LinearLayout shell = new LinearLayout(this);
-        shell.setOrientation(LinearLayout.VERTICAL);
-        root.addView(shell, new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
-
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setGravity(Gravity.CENTER_VERTICAL);
-        toolbar.setPadding(dp(14), 0, dp(8), 0);
-        toolbar.setBackgroundColor(PANEL);
-        shell.addView(toolbar, widthParams(dp(48)));
-
-        TextView title = text("Codex Remote", 14, TEXT);
-        title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        toolbar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
-
-        Button changeButton = new Button(this);
-        changeButton.setText("地址");
-        changeButton.setTextSize(11);
-        changeButton.setTextColor(ACCENT);
-        changeButton.setAllCaps(false);
-        changeButton.setBackgroundColor(Color.TRANSPARENT);
-        changeButton.setOnClickListener(view -> showConnector(activeEndpoint, null));
-        toolbar.addView(changeButton, new LinearLayout.LayoutParams(dp(62), dp(42)));
-
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -300,6 +276,7 @@ public class MainActivity extends Activity {
         settings.setLoadsImagesAutomatically(true);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         webView.setBackgroundColor(DARK);
+        webView.addJavascriptInterface(new AndroidBridge(), "CodexRemoteAndroid");
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -313,9 +290,18 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        shell.addView(webView, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1));
+        root.addView(webView, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
         // Keep the WebView from reusing an older index.html after an APK update.
         webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
+    }
+
+    private final class AndroidBridge {
+        @JavascriptInterface
+        public void changeEndpoint() {
+            runOnUiThread(() -> showConnector(activeEndpoint, null));
+        }
     }
 
     @Override
