@@ -388,7 +388,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__content { font-size: 12px; }
-  .chat-message--user .chat-message__body { min-width: min(7rem, 100%); max-width: min(100%, 84vw); }
+  .chat-message--user .chat-message__body { min-width: 0; max-width: min(100%, 84vw); }
   .approval-card { width: 100%; margin-inline: 0; }
   .welcome-state { padding-inline: 4px; }
   .welcome-state__eyebrow { margin-bottom: 11px; font-size: 7px; letter-spacing: .15em; }
