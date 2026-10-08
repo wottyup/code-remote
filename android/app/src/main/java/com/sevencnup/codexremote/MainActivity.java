@@ -2,7 +2,10 @@ package com.sevencnup.codexremote;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ActivityNotFoundException;
+import android.content.ClipData;
 import android.content.Context;
+import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -17,10 +20,14 @@ import android.view.WindowManager;
 import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
+import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -32,11 +39,13 @@ import android.widget.TextView;
 import java.io.IOException;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.80";
+    private static final String APP_VERSION = "0.0.82";
+    private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
     private static final int DARK = Color.rgb(16, 17, 20);
@@ -54,6 +63,9 @@ public class MainActivity extends Activity {
     private Button connectButton;
     private String activeEndpoint;
     private boolean checking;
+    private boolean handlingBack;
+    private ValueCallback<Uri[]> pendingFileChooser;
+    private OnBackInvokedCallback backInvokedCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -65,6 +77,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        registerBackNavigationCallback();
         showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
 
         String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
@@ -290,6 +303,27 @@ public class MainActivity extends Activity {
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         webView.setBackgroundColor(DARK);
         webView.addJavascriptInterface(new AndroidBridge(), "CodexRemoteAndroid");
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                if (pendingFileChooser != null) {
+                    pendingFileChooser.onReceiveValue(null);
+                }
+                pendingFileChooser = filePathCallback;
+                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                picker.addCategory(Intent.CATEGORY_OPENABLE);
+                picker.setType("image/*");
+                picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                try {
+                    startActivityForResult(Intent.createChooser(picker, "选择图片"), FILE_CHOOSER_REQUEST_CODE);
+                } catch (ActivityNotFoundException error) {
+                    pendingFileChooser = null;
+                    filePathCallback.onReceiveValue(null);
+                }
+                return true;
+            }
+        });
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
@@ -311,6 +345,35 @@ public class MainActivity extends Activity {
                 1));
         // Keep the WebView from reusing an older index.html after an APK update.
         webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == FILE_CHOOSER_REQUEST_CODE) {
+            ValueCallback<Uri[]> callback = pendingFileChooser;
+            pendingFileChooser = null;
+            if (callback != null) {
+                callback.onReceiveValue(resultCode == RESULT_OK ? selectedUris(data) : null);
+            }
+            super.onActivityResult(requestCode, resultCode, data);
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private Uri[] selectedUris(Intent data) {
+        if (data == null) return null;
+        ClipData clipData = data.getClipData();
+        if (clipData != null && clipData.getItemCount() > 0) {
+            ArrayList<Uri> uris = new ArrayList<>(clipData.getItemCount());
+            for (int index = 0; index < clipData.getItemCount(); index++) {
+                Uri uri = clipData.getItemAt(index).getUri();
+                if (uri != null) uris.add(uri);
+            }
+            return uris.isEmpty() ? null : uris.toArray(new Uri[0]);
+        }
+        Uri uri = data.getData();
+        return uri == null ? null : new Uri[]{uri};
     }
 
     private final class AndroidBridge {
@@ -340,23 +403,70 @@ public class MainActivity extends Activity {
         }
     }
 
-    @Override
-    public void onBackPressed() {
-        if (webView != null && webView.getVisibility() == View.VISIBLE && webView.canGoBack()) {
-            webView.goBack();
+    private void registerBackNavigationCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
+        backInvokedCallback = this::handleBackNavigation;
+        getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                backInvokedCallback);
+    }
+
+    private void unregisterBackNavigationCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || backInvokedCallback == null) return;
+        getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backInvokedCallback);
+        backInvokedCallback = null;
+    }
+
+    private void handleBackNavigation() {
+        if (handlingBack) return;
+        WebView currentWebView = webView;
+        if (currentWebView == null || currentWebView.getVisibility() != View.VISIBLE) {
+            finish();
             return;
         }
-        super.onBackPressed();
+
+        handlingBack = true;
+        try {
+            currentWebView.evaluateJavascript(
+                    "(function(){try{return !!(window.CodexRemoteHandleBack && window.CodexRemoteHandleBack());}catch(error){return false;}})();",
+                    result -> {
+                        handlingBack = false;
+                        if (isFinishing() || currentWebView != webView) return;
+                        if ("true".equals(result)) return;
+                        if (currentWebView.canGoBack()) {
+                            currentWebView.goBack();
+                        } else {
+                            finish();
+                        }
+                    });
+        } catch (RuntimeException error) {
+            handlingBack = false;
+            if (currentWebView.canGoBack()) {
+                currentWebView.goBack();
+            } else {
+                finish();
+            }
+        }
+    }
+
+    @Override
+    public void onBackPressed() {
+        handleBackNavigation();
     }
 
     @Override
     protected void onDestroy() {
+        unregisterBackNavigationCallback();
         disposeWebView();
         networkExecutor.shutdownNow();
         super.onDestroy();
     }
 
     private void disposeWebView() {
+        if (pendingFileChooser != null) {
+            pendingFileChooser.onReceiveValue(null);
+            pendingFileChooser = null;
+        }
         if (webView == null) return;
         webView.stopLoading();
         webView.destroy();

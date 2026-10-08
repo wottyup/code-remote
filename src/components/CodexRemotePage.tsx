@@ -34,6 +34,7 @@ declare global {
       changeEndpoint?: () => void
       showKeyboard?: () => void
     }
+    CodexRemoteHandleBack?: () => boolean
   }
 }
 
@@ -342,6 +343,8 @@ function ComposerMenu({
   options,
   emptyLabel,
   disabled,
+  open,
+  onOpenChange,
   onChange,
 }: {
   label: string
@@ -349,19 +352,20 @@ function ComposerMenu({
   options: ComposerMenuOption[]
   emptyLabel: string
   disabled?: boolean
+  open: boolean
+  onOpenChange: (open: boolean) => void
   onChange: (value: string) => void
 }) {
-  const [open, setOpen] = useState(false)
   const root = useRef<HTMLDivElement>(null)
   const selected = options.find((option) => option.value === value)
 
   useEffect(() => {
     if (!open) return
     const closeOnOutside = (event: globalThis.PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setOpen(false)
+      if (!root.current?.contains(event.target as Node)) onOpenChange(false)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') onOpenChange(false)
     }
     document.addEventListener('pointerdown', closeOnOutside)
     document.addEventListener('keydown', closeOnEscape)
@@ -369,7 +373,7 @@ function ComposerMenu({
       document.removeEventListener('pointerdown', closeOnOutside)
       document.removeEventListener('keydown', closeOnEscape)
     }
-  }, [open])
+  }, [onOpenChange, open])
 
   return (
     <div className={`composer-menu${open ? ' composer-menu--open' : ''}`} ref={root}>
@@ -380,7 +384,7 @@ function ComposerMenu({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => onOpenChange(!open)}
       >
         <span className="composer-menu__label">{label}</span>
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
@@ -397,7 +401,7 @@ function ComposerMenu({
               aria-selected={option.value === value}
               onClick={() => {
                 onChange(option.value)
-                setOpen(false)
+                onOpenChange(false)
               }}
             >
               <span className="composer-menu__option-copy">
@@ -426,6 +430,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   adoptUnassignedDraft(threadId: string): void
+  closeOpenMenu(): boolean
 }
 
 interface MessageComposerProps {
@@ -482,11 +487,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(72)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
+  const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const inputIsComposing = useRef(false)
+
+  const changeOpenMenu = useCallback((next: 'model' | 'effort' | 'approval' | null) => {
+    openMenuRef.current = next
+    setOpenMenu(next)
+  }, [])
 
   const updateDraft = useCallback((next: string | ((current: string) => string)) => {
     setDraft((current) => {
@@ -518,7 +530,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       saveComposerDraft(newThreadComposerDraftScope, '')
       if (draftScope === targetScope) updateDraft(unassignedDraft)
     },
-  }), [draftScope, updateDraft])
+    closeOpenMenu() {
+      if (!openMenuRef.current) return false
+      changeOpenMenu(null)
+      return true
+    },
+  }), [changeOpenMenu, draftScope, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -745,9 +762,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       </div>
       <div className="message-composer__footer">
         <div className="composer-preferences">
-          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} onChange={onModelChange} />
-          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} onChange={onEffortChange} />
-          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
+          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
         </div>
         <div className="composer-actions">
@@ -1093,6 +1110,29 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [threadContextMenu])
+
+  useEffect(() => {
+    const handleBack = () => {
+      if (composerHandle.current?.closeOpenMenu()) return true
+      if (threadContextMenu) {
+        setThreadContextMenu(null)
+        return true
+      }
+      if (sidebarOpen) {
+        setSidebarOpen(false)
+        return true
+      }
+      if (settingsOpen) {
+        setSettingsOpen(false)
+        return true
+      }
+      return false
+    }
+    window.CodexRemoteHandleBack = handleBack
+    return () => {
+      if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
+    }
+  }, [settingsOpen, sidebarOpen, threadContextMenu])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
