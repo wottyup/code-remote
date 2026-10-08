@@ -32,6 +32,7 @@ declare global {
   interface Window {
     CodexRemoteAndroid?: {
       changeEndpoint?: () => void
+      showKeyboard?: () => void
     }
   }
 }
@@ -734,8 +735,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
+          onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
           placeholder="给 Codex 发送消息…"
           aria-label="发送消息给 Codex"
+          inputMode="text"
+          enterKeyHint="send"
         />
       </div>
       <div className="message-composer__footer">

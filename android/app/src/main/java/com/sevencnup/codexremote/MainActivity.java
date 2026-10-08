@@ -13,6 +13,8 @@ import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.WindowManager;
+import android.view.inputmethod.InputMethodManager;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -34,7 +36,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.72";
+    private static final String APP_VERSION = "0.0.76";
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
     private static final int DARK = Color.rgb(16, 17, 20);
@@ -56,6 +58,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(true);
+        }
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         getWindow().setStatusBarColor(DARK);
         getWindow().setNavigationBarColor(DARK);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -266,6 +272,13 @@ public class MainActivity extends Activity {
         applySystemBarInsets(root);
         setContentView(root);
 
+        LinearLayout shell = new LinearLayout(this);
+        shell.setOrientation(LinearLayout.VERTICAL);
+        shell.setBackgroundColor(DARK);
+        root.addView(shell, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT));
+
         webView = new WebView(this);
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -290,9 +303,12 @@ public class MainActivity extends Activity {
                 }
             }
         });
-        root.addView(webView, new FrameLayout.LayoutParams(
+        webView.setFocusable(true);
+        webView.setFocusableInTouchMode(true);
+        shell.addView(webView, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT));
+                0,
+                1));
         // Keep the WebView from reusing an older index.html after an APK update.
         webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
     }
@@ -301,6 +317,21 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void changeEndpoint() {
             runOnUiThread(() -> showConnector(activeEndpoint, null));
+        }
+
+        @JavascriptInterface
+        public void showKeyboard() {
+            runOnUiThread(() -> {
+                if (webView == null) return;
+                webView.requestFocus(View.FOCUS_DOWN);
+                webView.postDelayed(() -> {
+                    if (webView == null || !webView.hasFocus()) return;
+                    InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
+                    if (inputMethodManager != null) {
+                        inputMethodManager.showSoftInput(webView, InputMethodManager.SHOW_FORCED);
+                    }
+                }, 80);
+            });
         }
     }
 
