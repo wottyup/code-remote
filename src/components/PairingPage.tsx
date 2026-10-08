@@ -2,6 +2,14 @@ import { useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient } from '../lib/codexRemoteClient'
 
+function normalizePairingCode(value: string) {
+  return value
+    .normalize('NFKC')
+    .toUpperCase()
+    .replace(/[\s_-]+/g, '')
+    .slice(0, 8)
+}
+
 export function PairingPage({ onPaired }: { onPaired: (token: string) => void }) {
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -13,7 +21,7 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
     setBusy(true)
     setError(null)
     try {
-      const result = await codexRemoteClient.pair(code)
+      const result = await codexRemoteClient.pair(normalizePairingCode(code))
       onPaired(result.token)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '配对失败，请确认配对码。')
@@ -31,7 +39,27 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
         <p className="pair-description">在运行 Codex Remote 的电脑终端里找到配对码，然后在这里输入。</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="pair-code">8 位配对码</label>
-          <div className="pair-input-wrap"><KeyRound size={17} /><input id="pair-code" value={code} onChange={(event) => setCode(event.target.value.toUpperCase())} autoComplete="one-time-code" autoCapitalize="characters" maxLength={8} placeholder="例如 A2BC7DEF" /></div>
+          <div className="pair-input-wrap"><KeyRound size={17} /><input
+            id="pair-code"
+            value={code}
+            onChange={(event) => {
+              setCode(normalizePairingCode(event.target.value))
+              setError(null)
+            }}
+            onPaste={(event) => {
+              event.preventDefault()
+              setCode(normalizePairingCode(event.clipboardData.getData('text')))
+              setError(null)
+            }}
+            autoComplete="one-time-code"
+            autoCapitalize="characters"
+            autoCorrect="off"
+            spellCheck={false}
+            inputMode="text"
+            enterKeyHint="done"
+            maxLength={8}
+            placeholder="例如 A2BC7DEF"
+          /></div>
           {error ? <p className="pair-error" role="alert">{error}</p> : null}
           <button className="pair-submit" type="submit" disabled={busy || code.trim().length < 6}>{busy ? <LoaderCircle className="spin" size={17} /> : <>连接本机 <ArrowRight size={16} /></>}</button>
         </form>

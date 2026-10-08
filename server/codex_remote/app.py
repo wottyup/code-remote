@@ -12,6 +12,7 @@ import secrets
 import shutil
 import tempfile
 import time
+import unicodedata
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any, Literal
@@ -66,6 +67,12 @@ class PairRequest(BaseModel):
 
 class PairingStateError(RuntimeError):
     """The local trusted-device state could not be safely updated."""
+
+
+def normalize_pairing_code(value: str) -> str:
+    """Normalize codes copied from terminals and mobile keyboards."""
+    normalized = unicodedata.normalize("NFKC", value).upper()
+    return "".join(character for character in normalized if not character.isspace() and character not in "-_\u200b\ufeff")
 
 
 IMAGE_EXTENSIONS = {
@@ -252,7 +259,7 @@ class PairingAuth:
     def pair(self, code: str) -> str | None:
         if time.monotonic() < self.blocked_until:
             return None
-        if not hmac.compare_digest(code.strip().upper(), self.code):
+        if not hmac.compare_digest(normalize_pairing_code(code), self.code):
             self.failed_attempts += 1
             if self.failed_attempts >= 8:
                 self.failed_attempts = 0
