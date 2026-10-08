@@ -736,6 +736,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
           onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
+          onPointerDown={() => window.CodexRemoteAndroid?.showKeyboard?.()}
           placeholder="给 Codex 发送消息…"
           aria-label="发送消息给 Codex"
           inputMode="text"

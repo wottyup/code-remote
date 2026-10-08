@@ -9,7 +9,18 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     let frame: number | undefined
     let settleTimer: number | undefined
     const syncViewportHeight = () => {
-      const height = Math.round(window.visualViewport?.height ?? window.innerHeight)
+      const viewport = window.visualViewport
+      const layoutHeight = Math.round(window.innerHeight)
+      const visualHeight = Math.round(viewport?.height ?? layoutHeight)
+      // Android WebView can keep the layout viewport at its full height while
+      // panning the visual viewport above the keyboard. Using only
+      // visualViewport.height in that state shortens the app twice and leaves
+      // a blank area between the composer and the keyboard. Keep the layout
+      // bottom when the native bridge is present; regular mobile browsers
+      // still follow their resized visual viewport.
+      const nativeBridge = 'CodexRemoteAndroid' in window
+      const pannedVisualBottom = Math.round(visualHeight + Math.max(0, viewport?.offsetTop ?? 0))
+      const height = nativeBridge ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
       // Do not replace a working viewport value with the occasional zero-sized
       // value that some mobile browsers report while returning from background.
       if (height < 160) return
