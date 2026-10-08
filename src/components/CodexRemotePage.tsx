@@ -1291,7 +1291,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   })), [effortOptions])
 
   return (
-    <div className={'remote-shell remote-shell--theme-' + themePreferences.theme} style={themeStyle}>
+    <div className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '')} style={themeStyle}>
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
