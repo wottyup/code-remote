@@ -66,6 +66,9 @@ const workspaceFileDragMime = 'application/x-codex-workspace-file'
 const workspaceFileDragTextPrefix = 'codex-remote-workspace-file:'
 const minComposerHeight = 45
 const maxComposerHeight = 260
+const defaultComposerHeight = 72
+const compactLandscapeComposerHeight = 50
+const compactLandscapeMediaQuery = '(orientation: landscape) and (pointer: coarse)'
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
@@ -523,7 +526,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [composerHeight, setComposerHeight] = useState(72)
+  const [composerHeight, setComposerHeight] = useState(() => {
+    if (typeof window === 'undefined') return defaultComposerHeight
+    return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
+  })
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
@@ -531,7 +537,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
+  const composerHeightWasResized = useRef(false)
   const inputIsComposing = useRef(false)
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
+    const syncComposerHeight = () => {
+      if (composerHeightWasResized.current) return
+      setComposerHeight(mediaQuery.matches ? compactLandscapeComposerHeight : defaultComposerHeight)
+    }
+    syncComposerHeight()
+    if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
+    else mediaQuery.addListener(syncComposerHeight)
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
+      else mediaQuery.removeListener(syncComposerHeight)
+    }
+  }, [])
 
   const changeOpenMenu = useCallback((next: 'model' | 'effort' | 'approval' | null) => {
     openMenuRef.current = next
@@ -736,6 +758,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault()
+    composerHeightWasResized.current = true
     resizeState.current = { startY: event.clientY, startHeight: composerHeight }
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
