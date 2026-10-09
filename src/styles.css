@@ -91,6 +91,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__tree { min-height: 0; overflow-y: auto; padding: 7px 5px 12px 4px; }
 .workspace-explorer__entry { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; min-height: 29px; padding-top: 0; padding-right: 7px; padding-bottom: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #b7bdc9; cursor: pointer; font-size: 10px; text-align: left; }
 .workspace-explorer__entry:hover { border-color: rgba(146, 157, 184, .13); background: rgba(47, 52, 64, .66); color: #eef1f6; }
+.workspace-explorer__entry--selected { border-color: rgba(170, 186, 255, .38); background: rgba(80, 97, 157, .28); color: #eef1f6; }
 .workspace-explorer__entry--file { cursor: grab; }
 .workspace-explorer__entry--file:active { cursor: grabbing; }
 .workspace-explorer__entry svg { flex: 0 0 auto; color: #9ba9d5; }
@@ -512,6 +513,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .workspace-explorer__eyebrow, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { color: #7b8794; }
 .remote-shell--theme-light .workspace-explorer__entry { color: #52606d; }
 .remote-shell--theme-light .workspace-explorer__entry:hover { border-color: #d7dfe8; background: #e6ecf2; color: #25303b; }
+.remote-shell--theme-light .workspace-explorer__entry--selected { border-color: #a9bfd8; background: #dbe7f4; color: #25303b; }
 .remote-shell--theme-light .workspace-explorer__entry small { color: #8a949e; }
 .remote-shell--theme-light .workspace-explorer__entry svg { color: #6c86ad; }
 .remote-shell--theme-light .workspace-explorer__entry--directory svg { color: #a78352; }
@@ -577,6 +579,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-explorer__eyebrow, .remote-shell--theme-warm .workspace-explorer__root, .remote-shell--theme-warm .workspace-explorer__footer { color: #8b7d6d; }
 .remote-shell--theme-warm .workspace-explorer__entry { color: #76604c; }
 .remote-shell--theme-warm .workspace-explorer__entry:hover { border-color: #e2d2bf; background: #f1e5d6; color: #4a392b; }
+.remote-shell--theme-warm .workspace-explorer__entry--selected { border-color: #cfb18f; background: #eddfcf; color: #4a392b; }
 .remote-shell--theme-warm .workspace-explorer__entry small { color: #998979; }
 .remote-shell--theme-warm .workspace-explorer__entry svg { color: #8a7aa3; }
 .remote-shell--theme-warm .workspace-explorer__entry--directory svg { color: #ad8657; }
@@ -610,6 +613,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .workspace-explorer__header strong, .remote-shell--theme-custom .workspace-explorer__entry, .remote-shell--theme-custom .workspace-explorer__entry-name { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-explorer__eyebrow, .remote-shell--theme-custom .workspace-explorer__root, .remote-shell--theme-custom .workspace-explorer__footer, .remote-shell--theme-custom .workspace-explorer__entry small { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .workspace-explorer__entry:hover { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
+.remote-shell--theme-custom .workspace-explorer__entry--selected { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-queue { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
 .remote-shell--theme-custom .composer-queue__heading, .remote-shell--theme-custom .composer-queue__copy strong { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-queue__heading small, .remote-shell--theme-custom .composer-queue__copy small { color: var(--custom-theme-text-color); opacity: .72; }

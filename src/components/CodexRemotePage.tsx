@@ -880,7 +880,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
-  const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; x: number; y: number } | null>(null)
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([])
+  const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
@@ -911,6 +912,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setDirectories({})
     setExpanded({})
     setLoadingPaths({})
+    setSelectedPaths([])
     setContextMenu(null)
     setError(null)
     if (cwd) void loadDirectory('')
@@ -943,7 +945,21 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     const menuHeight = 72
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
-    setContextMenu({ entry, x, y })
+    const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
+    setSelectedPaths(paths)
+    setContextMenu({ entry, paths, x, y })
+  }
+
+  function handleEntryClick(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedPaths((current) => current.includes(entry.path)
+        ? current.filter((path) => path !== entry.path)
+        : [...current, entry.path])
+      return
+    }
+    setSelectedPaths([entry.path])
+    if (entry.kind === 'directory') toggleDirectory(entry.path)
+    else onInsertPath(entryAbsolutePath(entry))
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
@@ -974,12 +990,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       const row = (
         <Fragment key={entry.path}>
           <button
-            className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}`}
+            className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
             type="button"
             draggable={!isDirectory}
             style={{ paddingLeft: `${10 + depth * 14}px` }}
             title={isDirectory ? entry.path : `${entry.path} · 拖到输入框插入路径`}
-            onClick={() => isDirectory ? toggleDirectory(entry.path) : onInsertPath(entryAbsolutePath(entry))}
+            onClick={(event) => handleEntryClick(event, entry)}
             onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
             onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
           >
@@ -1014,11 +1030,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         {cwd && directories['.'] ? renderDirectory('', 0) : null}
         {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
       </div>
-      <footer className="workspace-explorer__footer">文件和文件夹只插入路径</footer>
+      <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
-          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
-          <button type="button" role="menuitem" onClick={() => { const entry = contextMenu.entry; setContextMenu(null); onInsertPath(entryAbsolutePath(entry)) }}><Link2 size={14} />加入输入框</button>
+          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
+          <button type="button" role="menuitem" onClick={() => { const paths = contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path)).join('\n'); setContextMenu(null); onInsertPath(paths) }}><Link2 size={14} />加入输入框</button>
         </div>,
         document.body,
       ) : null}
