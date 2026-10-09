@@ -1289,7 +1289,6 @@ function RemoteChatPane({
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
-      {active && showActiveFrame ? <MarqueeBorder className="conversation-pane__marquee" /> : null}
     </main>
   )
 }
