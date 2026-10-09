@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
 import {
   AlertTriangle,
   Check,
@@ -868,6 +868,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [attachingPath, setAttachingPath] = useState<string | null>(null)
+  const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; x: number; y: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
@@ -899,9 +900,24 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setExpanded({})
     setLoadingPaths({})
     setAttachingPath(null)
+    setContextMenu(null)
     setError(null)
     if (cwd) void loadDirectory('')
   }, [cwd, loadDirectory, scopeKey])
+
+  useEffect(() => {
+    if (!contextMenu) return
+    const closeMenu = () => setContextMenu(null)
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setContextMenu(null)
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [contextMenu])
 
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
@@ -920,6 +936,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       setAttachingPath((current) => current === path ? null : current)
     }
+  }
+
+  function openFileContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+    event.preventDefault()
+    event.stopPropagation()
+    const menuWidth = 176
+    const menuHeight = 72
+    const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
+    const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
+    setContextMenu({ entry, x, y })
   }
 
   function dragFile(event: DragEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
@@ -952,6 +978,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             title={isDirectory ? entry.path : `${entry.path} · 拖到输入框作为文档附件`}
             onClick={() => isDirectory ? toggleDirectory(entry.path) : void attachFile(entry.path)}
             onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
+            onContextMenu={(event) => { if (!isDirectory) openFileContextMenu(event, entry) }}
           >
             {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
             {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
@@ -985,6 +1012,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
       </div>
       <footer className="workspace-explorer__footer">拖动文件到输入框，或点击文件附加</footer>
+      {contextMenu ? (
+        <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
+          <button type="button" role="menuitem" onClick={() => { const path = contextMenu.entry.path; setContextMenu(null); void attachFile(path) }}><Plus size={14} />加入当前对话</button>
+        </div>
+      ) : null}
     </aside>
   )
 })
@@ -1300,6 +1333,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   useEffect(() => {
     saveThreadComposerPreferences(threadComposerPreferences)
   }, [threadComposerPreferences])
+
+  useEffect(() => {
+    const suppressBrowserContextMenu = (event: globalThis.MouseEvent) => event.preventDefault()
+    document.addEventListener('contextmenu', suppressBrowserContextMenu)
+    return () => document.removeEventListener('contextmenu', suppressBrowserContextMenu)
+  }, [])
+
   useEffect(() => {
     if (!threadContextMenu) return
     const closeMenu = () => setThreadContextMenu(null)
