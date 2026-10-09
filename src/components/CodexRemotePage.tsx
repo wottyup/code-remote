@@ -874,14 +874,17 @@ interface WorkspaceExplorerProps {
   cwd?: string
   threadId?: string
   onInsertPath: (path: string) => void
+  mobileOpen: boolean
+  onCloseMobile: () => void
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onInsertPath }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
+  const [mobileBottomOffset, setMobileBottomOffset] = useState(128)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
@@ -931,6 +934,26 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [contextMenu])
+
+  useLayoutEffect(() => {
+    if (!mobileOpen || typeof window === 'undefined') return
+    const composer = document.querySelector<HTMLElement>('.message-composer')
+    const updateBottomOffset = () => {
+      const rect = composer?.getBoundingClientRect()
+      setMobileBottomOffset(rect ? Math.max(8, window.innerHeight - rect.top + 8) : 128)
+    }
+    updateBottomOffset()
+    window.addEventListener('resize', updateBottomOffset)
+    let observer: ResizeObserver | null = null
+    if (composer && typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateBottomOffset)
+      observer.observe(composer)
+    }
+    return () => {
+      window.removeEventListener('resize', updateBottomOffset)
+      observer?.disconnect()
+    }
+  }, [mobileOpen])
 
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
@@ -988,22 +1011,25 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       const isDirectory = entry.kind === 'directory'
       const isOpen = Boolean(expanded[entry.path])
       const row = (
-        <Fragment key={entry.path}>
-          <button
-            className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
-            type="button"
-            draggable={!isDirectory}
-            style={{ paddingLeft: `${10 + depth * 14}px` }}
-            title={isDirectory ? entry.path : `${entry.path} · 拖到输入框插入路径`}
-            onClick={(event) => handleEntryClick(event, entry)}
-            onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
-            onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
-          >
-            {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
-            {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
-            <span className="workspace-explorer__entry-name">{entry.name}</span>
-            {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
-          </button>
+          <Fragment key={entry.path}>
+          <div className="workspace-explorer__entry-row">
+            <button
+              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
+              type="button"
+              draggable={!isDirectory}
+              style={{ paddingLeft: `${10 + depth * 14}px` }}
+              title={isDirectory ? entry.path : `${entry.path} · 拖到输入框插入路径`}
+              onClick={(event) => handleEntryClick(event, entry)}
+              onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
+              onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
+            >
+              {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
+              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
+              <span className="workspace-explorer__entry-name">{entry.name}</span>
+              {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
+            </button>
+            {!isDirectory ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(entryAbsolutePath(entry)) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button> : null}
+          </div>
           {isDirectory && isOpen ? (
             loadingPaths[directoryKey(entry.path)]
               ? <div className="workspace-explorer__loading" style={{ paddingLeft: `${37 + depth * 14}px` }}><LoaderCircle className="spin" size={12} />读取中…</div>
@@ -1017,10 +1043,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   const rootLoading = loadingPaths['.']
   return (
-    <aside className="workspace-explorer" aria-label="工作区文件资源管理器">
+    <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-bottom': `${mobileBottomOffset}px` } as CSSProperties} aria-label="工作区文件资源管理器">
       <header className="workspace-explorer__header">
         <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
-        <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+        <div className="workspace-explorer__header-actions">
+          <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+          <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
+        </div>
       </header>
       <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
       <div className="workspace-explorer__tree">
@@ -1053,6 +1082,7 @@ interface RemoteChatPaneProps {
   onHandoff: () => void
   onReclaim: () => void
   onOpenSidebar: () => void
+  onOpenWorkspace: () => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -1069,6 +1099,7 @@ function RemoteChatPane({
   onHandoff,
   onReclaim,
   onOpenSidebar,
+  onOpenWorkspace,
   composerHandle,
   copiedMessageId,
   onCopy,
@@ -1201,6 +1232,7 @@ function RemoteChatPane({
           ) : remote.activeThread ? (
             <button className="handoff-button" type="button" onClick={(event) => { event.stopPropagation(); onHandoff() }} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
           ) : null}
+          <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           <button className="pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} disabled={!canClose} aria-label="关闭并发窗口" title={canClose ? '关闭窗口' : '至少保留一个窗口'}><X size={15} /></button>
         </div>
       </header>
@@ -1272,6 +1304,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const remotes = [remote0, remote1, remote2]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
@@ -1381,6 +1414,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         setThreadContextMenu(null)
         return true
       }
+      if (workspaceOpen) {
+        setWorkspaceOpen(false)
+        return true
+      }
       if (sidebarOpen) {
         setSidebarOpen(false)
         return true
@@ -1395,7 +1432,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [settingsOpen, sidebarOpen, threadContextMenu])
+  }, [settingsOpen, sidebarOpen, threadContextMenu, workspaceOpen])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -1669,6 +1706,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
                     onHandoff={() => void handoffToLocalCodex(paneIndex)}
                     onReclaim={() => void reclaimForRemote(paneIndex)}
                     onOpenSidebar={() => setSidebarOpen(true)}
+                    onOpenWorkspace={() => setWorkspaceOpen(true)}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
                     onCopy={copyMessage}
@@ -1708,6 +1746,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
             onInsertPath={insertWorkspacePath}
+            mobileOpen={workspaceOpen}
+            onCloseMobile={() => setWorkspaceOpen(false)}
           />
         </>
       )}
