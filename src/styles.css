@@ -463,6 +463,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .connection-label span { display: none; }
 }
 
+@media (orientation: landscape) and (max-height: 700px) and (max-width: 1200px) {
+  .remote-shell { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 1.1fr); }
+}
+
 .remote-shell--theme-light { color-scheme: light; --line: #e4e8ed; --muted: #737b86; background: #f7f8fa; color: #20252d; }
 .remote-shell--theme-light .remote-sidebar { border-color: #e3e7ec; background: #f1f3f6; }
 .remote-shell--theme-light .remote-chat, .remote-shell--theme-light .remote-workspace, .remote-shell--theme-light .theme-settings-panel { background: #fbfcfd; }
