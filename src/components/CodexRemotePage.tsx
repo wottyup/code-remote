@@ -942,7 +942,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       const rect = composer?.getBoundingClientRect()
       const composerTop = rect?.top ?? Math.max(56, window.innerHeight - 128)
       const availableHeight = Math.max(0, composerTop - 56 - 8)
-      setMobilePanelHeight(Math.round(availableHeight / 2))
+      setMobilePanelHeight(Math.round(availableHeight * 0.75))
     }
     updatePanelHeight()
     window.addEventListener('resize', updatePanelHeight)
