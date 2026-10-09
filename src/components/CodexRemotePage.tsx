@@ -1336,7 +1336,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     ? '#ffffff'
     : themePreferences.theme === 'light'
       ? '#171717'
-      : '#5a3b27'
+      : themePreferences.theme === 'warm'
+        ? '#5a3b27'
+        : themePreferences.customTextColor
   const themeStyle = {
     '--marquee-color': marqueeColor,
     '--custom-theme-background': themePreferences.customBackgroundColor,

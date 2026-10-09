@@ -670,7 +670,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-explorer__add { border-color: #ddc9af; color: #9a7048; }
 .remote-shell--theme-warm .workspace-explorer__add:hover { border-color: #c9aa88; background: #f1e5d6; color: #735237; }
 
-.remote-shell--theme-custom { --marquee-color: #5a3b27; color: var(--custom-theme-text-color); background-color: var(--custom-theme-background); background-image: var(--custom-theme-background-image); background-position: center; background-repeat: no-repeat; background-size: cover; background-attachment: fixed; }
+.remote-shell--theme-custom { --marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background-color: var(--custom-theme-background); background-image: var(--custom-theme-background-image); background-position: center; background-repeat: no-repeat; background-size: cover; background-attachment: fixed; }
 .remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .remote-chat, .remote-shell--theme-custom .remote-workspace, .remote-shell--theme-custom .remote-pane-grid, .remote-shell--theme-custom .remote-pane-slot { border-color: var(--custom-theme-border); background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .remote-shell--theme-custom .remote-chat__header, .remote-shell--theme-custom .theme-settings-panel__header { border-color: var(--custom-theme-border); background: var(--custom-theme-control); }
