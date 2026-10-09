@@ -1018,7 +1018,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
-          <button type="button" role="menuitem" onClick={() => { const entry = contextMenu.entry; setContextMenu(null); onInsertPath(entryAbsolutePath(entry)) }}><Link2 size={14} />加入路径到输入框</button>
+          <button type="button" role="menuitem" onClick={() => { const entry = contextMenu.entry; setContextMenu(null); onInsertPath(entryAbsolutePath(entry)) }}><Link2 size={14} />加入输入框</button>
         </div>,
         document.body,
       ) : null}
