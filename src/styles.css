@@ -51,8 +51,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row--active::before, .thread-row--active::after { display: none !important; content: none !important; }
 .thread-row--active > :not(.thread-row__marquee) { position: relative; z-index: 1; }
 .thread-row__marquee { position: absolute; z-index: 0; inset: 0; overflow: visible; pointer-events: none; color: var(--thread-marquee-color); }
-.thread-row__marquee > svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.thread-row__marquee rect { fill: none; stroke: currentColor; stroke-width: 2.5px; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 60 940; stroke-dashoffset: 0; animation: thread-border-orbit 2.8s linear infinite; }
+.thread-row__marquee > i { position: absolute; display: block; width: 42%; height: 2.5px; border-radius: 999px; background: currentColor; box-shadow: 0 0 5px currentColor; opacity: 0; will-change: top, right, bottom, left, opacity; animation: thread-border-orbit 3.2s linear infinite; }
 .thread-row--active > svg { color: #d3d6dc; }
 .thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
@@ -88,7 +87,24 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   0%, 100% { opacity: .24; box-shadow: inset 0 0 0 1px var(--pane-marquee-color), 0 0 4px var(--pane-marquee-color); }
   50% { opacity: .82; box-shadow: inset 0 0 0 1px var(--pane-marquee-color), 0 0 16px var(--pane-marquee-color); }
 }
-@keyframes thread-border-orbit { to { stroke-dashoffset: -1000; } }
+@keyframes thread-border-orbit {
+  0%, 1% { top: -1px; right: auto; bottom: auto; left: -42%; width: 42%; height: 2.5px; opacity: 0; }
+  3% { top: -1px; right: auto; bottom: auto; left: -42%; width: 42%; height: 2.5px; opacity: 1; }
+  22% { top: -1px; right: auto; bottom: auto; left: 100%; width: 42%; height: 2.5px; opacity: 1; }
+  23%, 25% { top: -1px; right: auto; bottom: auto; left: 100%; width: 42%; height: 2.5px; opacity: 0; }
+  26% { top: -42%; right: -1px; bottom: auto; left: auto; width: 2.5px; height: 42%; opacity: 0; }
+  28% { top: -42%; right: -1px; bottom: auto; left: auto; width: 2.5px; height: 42%; opacity: 1; }
+  47% { top: 100%; right: -1px; bottom: auto; left: auto; width: 2.5px; height: 42%; opacity: 1; }
+  48%, 50% { top: 100%; right: -1px; bottom: auto; left: auto; width: 2.5px; height: 42%; opacity: 0; }
+  51% { top: auto; right: -42%; bottom: -1px; left: auto; width: 42%; height: 2.5px; opacity: 0; }
+  53% { top: auto; right: -42%; bottom: -1px; left: auto; width: 42%; height: 2.5px; opacity: 1; }
+  72% { top: auto; right: 100%; bottom: -1px; left: auto; width: 42%; height: 2.5px; opacity: 1; }
+  73%, 75% { top: auto; right: 100%; bottom: -1px; left: auto; width: 42%; height: 2.5px; opacity: 0; }
+  76% { top: auto; right: auto; bottom: -42%; left: -1px; width: 2.5px; height: 42%; opacity: 0; }
+  78% { top: auto; right: auto; bottom: -42%; left: -1px; width: 2.5px; height: 42%; opacity: 1; }
+  97% { top: auto; right: auto; bottom: 100%; left: -1px; width: 2.5px; height: 42%; opacity: 1; }
+  98%, 100% { top: auto; right: auto; bottom: 100%; left: -1px; width: 2.5px; height: 42%; opacity: 0; }
+}
 .pane-close-button { display: grid; width: 27px; height: 27px; flex: 0 0 auto; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #858d9a; cursor: pointer; }
 .pane-close-button:hover:not(:disabled) { border-color: rgba(180, 193, 230, .28); background: rgba(75, 82, 103, .42); color: #eef1f8; }
 .pane-close-button:disabled { cursor: not-allowed; opacity: .3; }

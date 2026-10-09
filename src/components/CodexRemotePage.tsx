@@ -118,13 +118,7 @@ function normalizeThemeBackgroundImage(value: unknown) {
 }
 
 function MarqueeBorder({ className }: { className: string }) {
-  return (
-    <span className={className} aria-hidden="true">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" focusable="false">
-        <rect x="0" y="0" width="100" height="100" rx="3.5" ry="20" pathLength="1000" strokeDasharray="60 940" strokeDashoffset="0" vectorEffect="non-scaling-stroke" />
-      </svg>
-    </span>
-  )
+  return <span className={className} aria-hidden="true"><i /></span>
 }
 
 function readThemePreferences(): ThemePreferences {
