@@ -464,7 +464,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 
 @media (orientation: landscape) and (pointer: coarse) {
-  .remote-shell { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 1.1fr); }
+  .remote-shell { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); }
   .remote-chat__header { gap: 8px; padding-inline: 16px; }
   .remote-chat__title-wrap { flex: 1 1 auto; overflow: hidden; }
   .remote-chat__controls { min-width: 0; max-width: 42%; gap: 7px; overflow: hidden; }
