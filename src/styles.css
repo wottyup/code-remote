@@ -26,7 +26,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button:first-child { border-color: rgba(159, 177, 255, .48); background: #586aa4; color: #fff; }
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
 .remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: 284px minmax(0, 1fr) 268px; grid-template-rows: minmax(0, 1fr); overflow: hidden; background: #101114; color: #e9ebef; }
-.remote-sidebar { z-index: 2; display: flex; min-width: 0; flex-direction: column; padding: 17px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
+.remote-sidebar { z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 17px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
 .remote-sidebar__heading { display: flex; align-items: center; justify-content: space-between; min-height: 35px; margin: 0 4px 18px; }
 .remote-brand { display: flex; align-items: center; gap: 10px; color: #f0f1f4; letter-spacing: -.02em; }
 .remote-brand__mark, .welcome-state__mark, .pair-card__mark { display: grid; place-items: center; border: 1px solid #41444c; background: linear-gradient(145deg, #30333a, #191b20); color: #f6f7f9; font-weight: 700; }
@@ -465,8 +465,20 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 @media (orientation: landscape) and (pointer: coarse) {
   .remote-shell { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); }
+  .remote-sidebar { min-height: 0; padding: 8px 8px 8px; }
+  .remote-sidebar__heading { min-height: 29px; margin: 0 2px 8px; }
+  .remote-brand { gap: 7px; }
+  .remote-brand__mark { width: 24px; height: 24px; border-radius: 7px; font-size: 12px; }
+  .remote-brand__copy small { display: none; }
+  .new-thread-button { flex-basis: 34px; height: 34px; min-height: 34px; padding-inline: 8px; }
+  .new-thread-button__icon { width: 20px; height: 20px; }
+  .thread-list-heading { margin: 10px 3px 5px; }
+  .thread-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
+  .thread-row { min-height: 36px; padding: 6px 7px; }
+  .remote-sidebar__footer { min-height: 34px; margin-top: 4px; padding-top: 6px; }
   .conversation-pane { grid-template-rows: 0 minmax(0, 1fr) auto; }
   .remote-chat__header { display: none; }
+  .message-stream { padding: 10px 12px 12px; }
   .remote-chat__title-wrap { flex: 1 1 auto; overflow: hidden; }
   .remote-chat__controls { min-width: 0; max-width: 42%; gap: 7px; overflow: hidden; }
   .connection-label { min-width: 0; }
@@ -477,6 +489,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
   .composer-menu__label, .composer-hint { display: none; }
+  .workspace-explorer { grid-template-rows: 44px auto minmax(0, 1fr) 30px; overflow: hidden; }
+  .workspace-explorer__header { gap: 5px; padding-inline: 8px; }
+  .workspace-explorer__root { padding: 6px 8px; }
+  .workspace-explorer__tree { overflow-x: hidden; overflow-y: auto; padding: 4px 3px 8px; overscroll-behavior: contain; touch-action: pan-y; }
+  .workspace-explorer__entry-row { gap: 2px; overflow: hidden; padding-right: 2px; }
+  .workspace-explorer__entry { gap: 4px; min-height: 27px; padding-right: 2px; font-size: 9px; }
+  .workspace-explorer__entry small { display: none; }
+  .workspace-explorer__add { display: grid; width: 25px; height: 26px; flex: 0 0 25px; place-items: center; padding: 0; }
+  .workspace-explorer__footer { overflow: hidden; padding-inline: 7px; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
 }
 
 .remote-shell--theme-light { color-scheme: light; --line: #e4e8ed; --muted: #737b86; background: #f7f8fa; color: #20252d; }
