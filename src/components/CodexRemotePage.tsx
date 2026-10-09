@@ -526,6 +526,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
   const [composerHeight, setComposerHeight] = useState(() => {
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
@@ -543,6 +544,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useEffect(() => {
     const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
     const syncComposerHeight = () => {
+      setCompactLandscape(mediaQuery.matches)
       if (composerHeightWasResized.current) return
       setComposerHeight(mediaQuery.matches ? compactLandscapeComposerHeight : defaultComposerHeight)
     }
@@ -554,6 +556,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       else mediaQuery.removeListener(syncComposerHeight)
     }
   }, [])
+
+  useLayoutEffect(() => {
+    if (!compactLandscape || composerHeightWasResized.current) return
+    const textarea = composer.current
+    if (!textarea) return
+    const measureComposerHeight = () => {
+      const previousHeight = textarea.style.height
+      textarea.style.height = '0px'
+      const contentHeight = textarea.scrollHeight
+      textarea.style.height = previousHeight
+      const nextHeight = Math.min(maxComposerHeight, Math.max(minComposerHeight, contentHeight))
+      setComposerHeight((current) => current === nextHeight ? current : nextHeight)
+    }
+    measureComposerHeight()
+    window.addEventListener('resize', measureComposerHeight)
+    return () => window.removeEventListener('resize', measureComposerHeight)
+  }, [compactLandscape, draft, attachedDocuments.length, attachedImages.length])
 
   const changeOpenMenu = useCallback((next: 'model' | 'effort' | 'approval' | null) => {
     openMenuRef.current = next
