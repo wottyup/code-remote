@@ -1069,6 +1069,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
 interface RemoteChatPaneProps {
   remote: CodexRemoteController
+  marqueeColor: string
   active: boolean
   showActiveFrame: boolean
   canClose: boolean
@@ -1086,6 +1087,7 @@ interface RemoteChatPaneProps {
 
 function RemoteChatPane({
   remote,
+  marqueeColor,
   active,
   showActiveFrame,
   canClose,
@@ -1215,7 +1217,7 @@ function RemoteChatPane({
     .filter(([turnId, changes]) => turnId !== remote.runningTurnId && !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
 
   return (
-    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -1667,7 +1669,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
+              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} style={isActive ? { '--marquee-color': marqueeColor, '--thread-marquee-color': marqueeColor } as CSSProperties : undefined} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
@@ -1703,6 +1705,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
                   <RemoteChatPane
                     remote={remotes[paneIndex]}
+                    marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
                     canClose={openPaneIndexes.length > 1}
