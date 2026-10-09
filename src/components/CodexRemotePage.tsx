@@ -1718,8 +1718,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
           {remote0.threads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
           {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
-        {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-        <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}><Settings2 size={16} /><span>设置</span></button>
+        <div className="remote-sidebar__actions">
+          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}><Settings2 size={16} /><span>设置</span></button>
+        </div>
         <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} /><span>{currentConnectionLabel}</span><button type="button" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
 
