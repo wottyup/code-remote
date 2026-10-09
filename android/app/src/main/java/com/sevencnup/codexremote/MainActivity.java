@@ -47,7 +47,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.83";
+    private static final String APP_VERSION = "0.0.84";
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
