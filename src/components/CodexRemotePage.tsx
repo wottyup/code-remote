@@ -457,6 +457,7 @@ interface ComposerSendInput {
 
 interface ComposerHandle {
   replaceDraft(value: string): void
+  appendDraft(value: string): void
   adoptUnassignedDraft(threadId: string): void
   attachDocument(document: CodexDocumentAttachment): void
   closeOpenMenu(): boolean
@@ -542,6 +543,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
       updateDraft(value)
+      window.requestAnimationFrame(() => composer.current?.focus())
+    },
+    appendDraft(value) {
+      const current = draftRef.current
+      const separator = current && !/\s$/.test(current) ? '\n' : ''
+      updateDraft(`${current}${separator}${value}`)
       window.requestAnimationFrame(() => composer.current?.focus())
     },
     adoptUnassignedDraft(threadId) {
@@ -861,9 +868,10 @@ interface WorkspaceExplorerProps {
   threadId?: string
   onReadFile: (path: string) => Promise<CodexDocumentAttachment>
   onAttachDocument: (document: CodexDocumentAttachment) => void
+  onInsertPath: (path: string) => void
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onReadFile, onAttachDocument }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onReadFile, onAttachDocument, onInsertPath }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
@@ -938,7 +946,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }
 
-  function openFileContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+  function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
     const menuWidth = 176
@@ -978,7 +986,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             title={isDirectory ? entry.path : `${entry.path} · 拖到输入框作为文档附件`}
             onClick={() => isDirectory ? toggleDirectory(entry.path) : void attachFile(entry.path)}
             onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
-            onContextMenu={(event) => { if (!isDirectory) openFileContextMenu(event, entry) }}
+            onContextMenu={(event) => openEntryContextMenu(event, entry)}
           >
             {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
             {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
@@ -1015,7 +1023,22 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {contextMenu ? (
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
-          <button type="button" role="menuitem" onClick={() => { const path = contextMenu.entry.path; setContextMenu(null); void attachFile(path) }}><Plus size={14} />加入当前对话</button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const entry = contextMenu.entry
+              setContextMenu(null)
+              if (entry.kind === 'directory') {
+                const base = cwd?.replace(/[\\/]+$/, '')
+                onInsertPath(base ? `${base}/${entry.path}` : entry.path)
+              } else {
+                void attachFile(entry.path)
+              }
+            }}
+          >
+            <Plus size={14} />{contextMenu.entry.kind === 'directory' ? '加入路径到输入框' : '加入当前对话'}
+          </button>
         </div>
       ) : null}
     </aside>
@@ -1574,6 +1597,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const attachWorkspaceDocument = useCallback((document: CodexDocumentAttachment) => {
     composerHandle.current?.attachDocument(document)
   }, [])
+  const insertWorkspacePath = useCallback((path: string) => {
+    composerHandle.current?.appendDraft(path)
+  }, [])
 
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
   const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : connectionLabel[activeRemote.connection]
@@ -1694,6 +1720,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             threadId={activeRemote.activeThread?.id}
             onReadFile={readWorkspaceFile}
             onAttachDocument={attachWorkspaceDocument}
+            onInsertPath={insertWorkspacePath}
           />
         </>
       )}
