@@ -463,7 +463,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .connection-label span { display: none; }
 }
 
-@media (orientation: landscape) and (max-height: 700px) and (max-width: 1200px) {
+@media (orientation: landscape) and (pointer: coarse) {
   .remote-shell { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 1.1fr); }
 }
 
