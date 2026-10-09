@@ -117,10 +117,6 @@ function normalizeThemeBackgroundImage(value: unknown) {
   return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
 }
 
-function MarqueeBorder({ className }: { className: string }) {
-  return <span className={className} aria-hidden="true"><i /></span>
-}
-
 function readThemePreferences(): ThemePreferences {
   if (typeof window === 'undefined') return defaultThemePreferences
   try {
@@ -1663,11 +1659,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} style={isActive ? { '--marquee-color': marqueeColor, '--thread-marquee-color': marqueeColor } as CSSProperties : undefined} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
+              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
-                {isActive ? <MarqueeBorder className="thread-row__marquee" /> : null}
               </button>
             )
           })}
