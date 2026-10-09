@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -62,8 +62,6 @@ const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
-const workspaceFileDragMime = 'application/x-codex-workspace-file'
-const workspaceFileDragTextPrefix = 'codex-remote-workspace-file:'
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
@@ -99,27 +97,6 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundColor: '#4b5563',
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
-}
-
-function hasWorkspaceFileDrag(dataTransfer: DataTransfer | null) {
-  if (!dataTransfer) return false
-  const types = Array.from(dataTransfer.types)
-  return types.includes(workspaceFileDragMime) || types.includes('text/plain')
-}
-
-function workspaceFilePathFromDrag(dataTransfer: DataTransfer | null) {
-  if (!dataTransfer) return ''
-  const raw = dataTransfer.getData(workspaceFileDragMime)
-  try {
-    const value = JSON.parse(raw) as { path?: unknown }
-    if (typeof value.path === 'string' && value.path) return value.path
-  } catch {
-    // Some browsers strip custom MIME data while dragging inside a page.
-  }
-  const fallback = dataTransfer.getData('text/plain')
-  return fallback.startsWith(workspaceFileDragTextPrefix)
-    ? fallback.slice(workspaceFileDragTextPrefix.length)
-    : ''
 }
 
 function workspaceAbsolutePath(cwd: string | undefined, path: string) {
@@ -492,7 +469,6 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onRemoveQueued: (messageId: string) => void
-  onInsertWorkspacePath: (path: string) => void
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -517,7 +493,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   queuedMessages,
   onSendQueuedNow,
   onRemoveQueued,
-  onInsertWorkspacePath,
   onInterrupt,
   onRefresh,
 }, ref) {
@@ -783,8 +758,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     document.body.style.userSelect = 'none'
   }
 
-  const [workspaceDragOver, setWorkspaceDragOver] = useState(false)
-
   function appendDocument(document: CodexDocumentAttachment) {
     setAttachedDocuments((current) => {
       if (current.some((item) => item.name === document.name && item.content === document.content)) return current
@@ -793,32 +766,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(null)
   }
 
-  async function dropWorkspaceFile(event: DragEvent<HTMLFormElement>) {
-    setWorkspaceDragOver(false)
-    const path = workspaceFilePathFromDrag(event.dataTransfer)
-    if (!path) return
-    event.preventDefault()
-    if (!canCompose) return
-    onInsertWorkspacePath(path)
-    setAttachmentError(null)
-    window.requestAnimationFrame(() => composer.current?.focus())
-  }
-
   return (
     <form
-      className={`message-composer${isRunning ? ' message-composer--running' : ''}${workspaceDragOver ? ' message-composer--drag-over' : ''}`}
+      className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
       onSubmit={(event) => void send(event)}
-      onDragEnter={(event) => {
-        if (hasWorkspaceFileDrag(event.dataTransfer)) setWorkspaceDragOver(true)
-      }}
-      onDragOver={(event) => {
-        if (!hasWorkspaceFileDrag(event.dataTransfer)) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'copy'
-        setWorkspaceDragOver(true)
-      }}
-      onDragLeave={() => setWorkspaceDragOver(false)}
-      onDrop={(event) => void dropWorkspaceFile(event)}
     >
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
@@ -1033,14 +984,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     return workspaceAbsolutePath(cwd, entry.path)
   }
 
-  function dragFile(event: DragEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
-    event.dataTransfer.effectAllowed = 'copy'
-    const path = entryAbsolutePath(entry)
-    event.dataTransfer.setData(workspaceFileDragMime, JSON.stringify({ path }))
-    // Keep a prefixed text fallback for browsers that remove custom MIME data.
-    event.dataTransfer.setData('text/plain', `${workspaceFileDragTextPrefix}${path}`)
-  }
-
   function sizeLabel(size: number | null | undefined) {
     if (size === undefined || size === null) return ''
     if (size < 1_024) return `${size} B`
@@ -1060,11 +1003,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             <button
               className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
               type="button"
-              draggable={!isDirectory}
               style={{ paddingLeft: `${10 + depth * 14}px` }}
-              title={isDirectory ? entry.path : `${entry.path} · 拖到输入框插入路径`}
+              title={entry.path}
               onClick={(event) => handleEntryClick(event, entry)}
-              onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
               onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
             >
               {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
@@ -1782,7 +1723,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onRemoveQueued={activeRemote.removeQueuedMessage}
-              onInsertWorkspacePath={insertWorkspacePath}
               onInterrupt={activeRemote.interrupt}
               onRefresh={activeRemote.refreshActiveThread}
             />

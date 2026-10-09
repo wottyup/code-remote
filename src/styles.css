@@ -114,8 +114,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__error { margin: 9px 8px; color: #e29a9e; font-size: 9px; line-height: 1.5; }
 .workspace-explorer__hint { margin: 8px; color: #817d70; font-size: 8px; line-height: 1.45; }
 .workspace-explorer__footer { display: flex; align-items: center; padding: 0 13px; border-top: 1px solid rgba(146, 157, 184, .1); color: #727a88; font-size: 8px; }
-.message-composer--drag-over { border-color: rgba(170, 186, 255, .8); box-shadow: 0 20px 58px rgba(0, 0, 0, .4), 0 0 0 3px rgba(123, 142, 184, .18), 0 0 24px rgba(142, 164, 255, .22), inset 0 1px 0 rgba(255, 255, 255, .14); }
-.message-composer--drag-over::before { background: radial-gradient(ellipse at 50% 0%, rgba(170, 186, 255, .24), transparent 60%), linear-gradient(100deg, transparent 32%, rgba(255, 255, 255, .05), transparent 68%); }
 .thread-row__pane-dot { width: 6px; height: 6px; flex: 0 0 auto; align-self: center; border: 1px solid rgba(157, 177, 255, .72); border-radius: 50%; background: #8fa7ff; box-shadow: 0 0 8px rgba(115, 142, 255, .55); }
 .thread-context-menu { position: fixed; z-index: 20; display: grid; min-width: 154px; gap: 3px; padding: 5px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 9px; background: rgba(28, 31, 39, .98); box-shadow: 0 15px 38px rgba(0, 0, 0, .35); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
 .thread-context-menu button { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: #c8cedb; cursor: pointer; font-size: 10px; text-align: left; }
