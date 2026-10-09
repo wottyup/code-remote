@@ -313,6 +313,9 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setLoadsImagesAutomatically(true);
+        // The UI is served by the computer's Vite server. Never reuse an old
+        // cached CSS/JS bundle after the web project has been rebuilt.
+        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         webView.setBackgroundColor(DARK);
         webView.addJavascriptInterface(new AndroidBridge(), "CodexRemoteAndroid");
@@ -393,8 +396,8 @@ public class MainActivity extends Activity {
                 0,
                 1));
         addWebViewStatusOverlay(root, endpoint);
-        // Keep the WebView from reusing an older index.html after an APK update.
-        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
+        // Keep the WebView from reusing an older index.html or module bundle.
+        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION) + "&cacheBust=" + System.currentTimeMillis());
     }
 
     private void addWebViewStatusOverlay(FrameLayout container, String endpoint) {
