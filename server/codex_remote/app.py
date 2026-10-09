@@ -117,7 +117,6 @@ class InterruptRequest(BaseModel):
 
 WORKSPACE_TREE_MAX_ENTRIES = 400
 WORKSPACE_TREE_MAX_PATH_LENGTH = 1_024
-WORKSPACE_FILE_MAX_BYTES = 512 * 1_024
 WORKSPACE_SKIPPED_NAMES = {
     ".git",
     ".hg",
@@ -463,36 +462,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             "path": directory.relative_to(base).as_posix() if directory != base else "",
             "entries": entries,
             "truncated": len(entries) >= WORKSPACE_TREE_MAX_ENTRIES,
-        }
-
-    @app.get("/api/v1/codex/workspace/file")
-    async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, Any]:
-        base = workspace_base_for_cwd(app_server.workspace, cwd)
-        file_path = workspace_path(base, path)
-        if not file_path.is_file():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
-        try:
-            size = file_path.stat().st_size
-        except OSError as error:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取文件") from error
-        if size > WORKSPACE_FILE_MAX_BYTES:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="文件超过 512 KB，不能作为文档附件发送")
-        try:
-            content = file_path.read_bytes()
-        except OSError as error:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取文件") from error
-        if b"\x00" in content:
-            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="二进制文件不能作为文档附件发送")
-        try:
-            text = content.decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件不是 UTF-8 文本，不能作为文档附件发送") from error
-        return {
-            "cwd": str(base),
-            "path": file_path.relative_to(base).as_posix(),
-            "name": file_path.name,
-            "size": len(content),
-            "content": text,
         }
 
     @app.get("/api/v1/codex/threads")

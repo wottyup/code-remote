@@ -466,7 +466,6 @@ interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string): void
   adoptUnassignedDraft(threadId: string): void
-  attachDocument(document: CodexDocumentAttachment): void
   closeOpenMenu(): boolean
 }
 
@@ -574,14 +573,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       }
       saveComposerDraft(newThreadComposerDraftScope, '')
       if (draftScope === targetScope) updateDraft(unassignedDraft)
-    },
-    attachDocument(document) {
-      setAttachedDocuments((current) => {
-        if (current.some((item) => item.name === document.name && item.content === document.content)) return current
-        return [...current, document].slice(0, maxDocumentsPerTurn)
-      })
-      setAttachmentError(null)
-      window.requestAnimationFrame(() => composer.current?.focus())
     },
     closeOpenMenu() {
       if (!openMenuRef.current) return false
@@ -882,16 +873,13 @@ interface WorkspaceExplorerProps {
   token: string
   cwd?: string
   threadId?: string
-  onReadFile: (path: string) => Promise<CodexDocumentAttachment>
-  onAttachDocument: (document: CodexDocumentAttachment) => void
   onInsertPath: (path: string) => void
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onReadFile, onAttachDocument, onInsertPath }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onInsertPath }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
-  const [attachingPath, setAttachingPath] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; x: number; y: number } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
@@ -923,7 +911,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setDirectories({})
     setExpanded({})
     setLoadingPaths({})
-    setAttachingPath(null)
     setContextMenu(null)
     setError(null)
     if (cwd) void loadDirectory('')
@@ -947,19 +934,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     const nextExpanded = !expanded[path]
     setExpanded((current) => ({ ...current, [path]: nextExpanded }))
     if (nextExpanded && !directories[directoryKey(path)]) void loadDirectory(path)
-  }
-
-  async function attachFile(path: string) {
-    setAttachingPath(path)
-    try {
-      const document = await onReadFile(path)
-      onAttachDocument(document)
-      setError(null)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '文件读取失败')
-    } finally {
-      setAttachingPath((current) => current === path ? null : current)
-    }
   }
 
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
@@ -1012,7 +986,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
             {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
             <span className="workspace-explorer__entry-name">{entry.name}</span>
-            {!isDirectory && attachingPath === entry.path ? <LoaderCircle className="spin" size={12} /> : <small>{sizeLabel(entry.size)}</small>}
+            {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
           </button>
           {isDirectory && isOpen ? (
             loadingPaths[directoryKey(entry.path)]
@@ -1040,12 +1014,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         {cwd && directories['.'] ? renderDirectory('', 0) : null}
         {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
       </div>
-      <footer className="workspace-explorer__footer">拖动或点击文件插入路径；右键可读取内容</footer>
+      <footer className="workspace-explorer__footer">文件和文件夹只插入路径</footer>
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
           <button type="button" role="menuitem" onClick={() => { const entry = contextMenu.entry; setContextMenu(null); onInsertPath(entryAbsolutePath(entry)) }}><Link2 size={14} />加入路径到输入框</button>
-          {contextMenu.entry.kind === 'file' ? <button type="button" role="menuitem" onClick={() => { const path = contextMenu.entry.path; setContextMenu(null); void attachFile(path) }}><FileText size={14} />读取文件内容</button> : null}
         </div>,
         document.body,
       ) : null}
@@ -1597,14 +1570,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [rememberThreadComposerPreferences, remote0, remote1, remote2, selectedPaneIndex])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
-  const readWorkspaceFile = useCallback(async (path: string) => {
-    if (!activeWorkspaceCwd) throw new Error('当前窗口还没有工作目录。')
-    const file = await codexRemoteClient.workspaceFile(token, activeWorkspaceCwd, path)
-    return { name: file.name, content: file.content }
-  }, [activeWorkspaceCwd, token])
-  const attachWorkspaceDocument = useCallback((document: CodexDocumentAttachment) => {
-    composerHandle.current?.attachDocument(document)
-  }, [])
   const insertWorkspacePath = useCallback((path: string) => {
     composerHandle.current?.appendDraft(path)
   }, [])
@@ -1726,8 +1691,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             token={token}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
-            onReadFile={readWorkspaceFile}
-            onAttachDocument={attachWorkspaceDocument}
             onInsertPath={insertWorkspacePath}
           />
         </>
