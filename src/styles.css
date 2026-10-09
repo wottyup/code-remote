@@ -689,7 +689,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .theme-option { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
 .remote-shell--theme-custom .composer-menu__trigger > svg, .remote-shell--theme-custom .composer-menu__label { color: var(--custom-theme-text-color); opacity: .72; }
-.remote-shell--theme-custom .composer-menu__popover { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: 0 16px 35px rgba(0, 0, 0, .16); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .composer-menu__popover { border-color: var(--custom-theme-border); background: color-mix(in srgb, var(--custom-theme-background) 92%, transparent); box-shadow: 0 16px 35px rgba(0, 0, 0, .28); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .composer-menu__option { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-menu__option:hover, .remote-shell--theme-custom .composer-menu__option--selected { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-menu__option > svg { color: var(--custom-theme-text-color); }
