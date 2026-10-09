@@ -119,6 +119,11 @@ function workspaceFilePathFromDrag(dataTransfer: DataTransfer | null) {
     : ''
 }
 
+function workspaceAbsolutePath(cwd: string | undefined, path: string) {
+  const base = cwd?.replace(/[\\/]+$/, '')
+  return base ? `${base}/${path}` : path
+}
+
 function normalizeHexColor(value: unknown, fallback: string) {
   return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
 }
@@ -485,7 +490,7 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onRemoveQueued: (messageId: string) => void
-  onReadWorkspaceFile: (path: string) => Promise<CodexDocumentAttachment>
+  onInsertWorkspacePath: (path: string) => void
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -510,7 +515,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   queuedMessages,
   onSendQueuedNow,
   onRemoveQueued,
-  onReadWorkspaceFile,
+  onInsertWorkspacePath,
   onInterrupt,
   onRefresh,
 }, ref) {
@@ -761,14 +766,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (!path) return
     event.preventDefault()
     if (!canCompose) return
-    setAttachmentError('正在读取文件…')
-    try {
-      const document = await onReadWorkspaceFile(path)
-      appendDocument(document)
-      window.requestAnimationFrame(() => composer.current?.focus())
-    } catch (reason) {
-      setAttachmentError(reason instanceof Error ? reason.message : '文件读取失败。')
-    }
+    onInsertWorkspacePath(path)
+    setAttachmentError(null)
+    window.requestAnimationFrame(() => composer.current?.focus())
   }
 
   return (
@@ -972,11 +972,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setContextMenu({ entry, x, y })
   }
 
+  function entryAbsolutePath(entry: CodexWorkspaceEntry) {
+    return workspaceAbsolutePath(cwd, entry.path)
+  }
+
   function dragFile(event: DragEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.dataTransfer.effectAllowed = 'copy'
-    event.dataTransfer.setData(workspaceFileDragMime, JSON.stringify({ path: entry.path }))
+    const path = entryAbsolutePath(entry)
+    event.dataTransfer.setData(workspaceFileDragMime, JSON.stringify({ path }))
     // Keep a prefixed text fallback for browsers that remove custom MIME data.
-    event.dataTransfer.setData('text/plain', `${workspaceFileDragTextPrefix}${entry.path}`)
+    event.dataTransfer.setData('text/plain', `${workspaceFileDragTextPrefix}${path}`)
   }
 
   function sizeLabel(size: number | null | undefined) {
@@ -999,8 +1004,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             type="button"
             draggable={!isDirectory}
             style={{ paddingLeft: `${10 + depth * 14}px` }}
-            title={isDirectory ? entry.path : `${entry.path} · 拖到输入框作为文档附件`}
-            onClick={() => isDirectory ? toggleDirectory(entry.path) : void attachFile(entry.path)}
+            title={isDirectory ? entry.path : `${entry.path} · 拖到输入框插入路径`}
+            onClick={() => isDirectory ? toggleDirectory(entry.path) : onInsertPath(entryAbsolutePath(entry))}
             onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
             onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
           >
@@ -1035,26 +1040,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         {cwd && directories['.'] ? renderDirectory('', 0) : null}
         {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
       </div>
-      <footer className="workspace-explorer__footer">拖动文件到输入框，或点击文件附加</footer>
+      <footer className="workspace-explorer__footer">拖动或点击文件插入路径；右键可读取内容</footer>
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              const entry = contextMenu.entry
-              setContextMenu(null)
-              if (entry.kind === 'directory') {
-                const base = cwd?.replace(/[\\/]+$/, '')
-                onInsertPath(base ? `${base}/${entry.path}` : entry.path)
-              } else {
-                void attachFile(entry.path)
-              }
-            }}
-          >
-            <Plus size={14} />{contextMenu.entry.kind === 'directory' ? '加入路径到输入框' : '加入当前对话'}
-          </button>
+          <button type="button" role="menuitem" onClick={() => { const entry = contextMenu.entry; setContextMenu(null); onInsertPath(entryAbsolutePath(entry)) }}><Link2 size={14} />加入路径到输入框</button>
+          {contextMenu.entry.kind === 'file' ? <button type="button" role="menuitem" onClick={() => { const path = contextMenu.entry.path; setContextMenu(null); void attachFile(path) }}><FileText size={14} />读取文件内容</button> : null}
         </div>,
         document.body,
       ) : null}
@@ -1726,7 +1717,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onRemoveQueued={activeRemote.removeQueuedMessage}
-              onReadWorkspaceFile={readWorkspaceFile}
+              onInsertWorkspacePath={insertWorkspacePath}
               onInterrupt={activeRemote.interrupt}
               onRefresh={activeRemote.refreshActiveThread}
             />
