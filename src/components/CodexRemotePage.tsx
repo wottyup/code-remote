@@ -117,6 +117,17 @@ function normalizeThemeBackgroundImage(value: unknown) {
   return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
 }
 
+function MarqueeBorder({ className }: { className: string }) {
+  return (
+    <span className={className} aria-hidden="true">
+      <i className="marquee-edge marquee-edge--top" />
+      <i className="marquee-edge marquee-edge--right" />
+      <i className="marquee-edge marquee-edge--bottom" />
+      <i className="marquee-edge marquee-edge--left" />
+    </span>
+  )
+}
+
 function readThemePreferences(): ThemePreferences {
   if (typeof window === 'undefined') return defaultThemePreferences
   try {
@@ -1276,6 +1287,7 @@ function RemoteChatPane({
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
+      {active && showActiveFrame ? <MarqueeBorder className="conversation-pane__marquee" /> : null}
     </main>
   )
 }
@@ -1653,6 +1665,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
                 <MessagesSquare size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
+                {isActive ? <MarqueeBorder className="thread-row__marquee" /> : null}
               </button>
             )
           })}
