@@ -465,6 +465,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 @media (orientation: landscape) and (pointer: coarse) {
   .remote-shell { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.5fr) minmax(0, 1.1fr); }
+  .remote-chat__header { gap: 8px; padding-inline: 16px; }
+  .remote-chat__title-wrap { flex: 1 1 auto; overflow: hidden; }
+  .remote-chat__controls { min-width: 0; max-width: 42%; gap: 7px; overflow: hidden; }
+  .connection-label { min-width: 0; }
+  .connection-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .remote-workspace > .message-composer { width: calc(100% - 24px); margin-inline: 12px; }
+  .message-composer__footer { gap: 6px; }
+  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: minmax(0, 1.2fr) minmax(0, .85fr) minmax(0, 1.15fr); gap: 4px; overflow: hidden; }
+  .composer-menu { min-width: 0; }
+  .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
+  .composer-menu__label, .composer-hint { display: none; }
 }
 
 .remote-shell--theme-light { color-scheme: light; --line: #e4e8ed; --muted: #737b86; background: #f7f8fa; color: #20252d; }
