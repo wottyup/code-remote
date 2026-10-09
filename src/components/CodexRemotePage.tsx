@@ -1,4 +1,5 @@
 import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   Check,
@@ -986,7 +987,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             title={isDirectory ? entry.path : `${entry.path} · 拖到输入框作为文档附件`}
             onClick={() => isDirectory ? toggleDirectory(entry.path) : void attachFile(entry.path)}
             onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
-            onContextMenu={(event) => openEntryContextMenu(event, entry)}
+            onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
           >
             {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
             {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
@@ -1020,7 +1021,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
       </div>
       <footer className="workspace-explorer__footer">拖动文件到输入框，或点击文件附加</footer>
-      {contextMenu ? (
+      {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}</div>
           <button
@@ -1039,7 +1040,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
           >
             <Plus size={14} />{contextMenu.entry.kind === 'directory' ? '加入路径到输入框' : '加入当前对话'}
           </button>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </aside>
   )
