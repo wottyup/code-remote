@@ -1028,7 +1028,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
               <span className="workspace-explorer__entry-name">{entry.name}</span>
               {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
             </button>
-            {!isDirectory ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(entryAbsolutePath(entry)) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button> : null}
+            <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(entryAbsolutePath(entry)) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button>
           </div>
           {isDirectory && isOpen ? (
             loadingPaths[directoryKey(entry.path)]
