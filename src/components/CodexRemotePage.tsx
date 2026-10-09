@@ -1331,7 +1331,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
   const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
+  const marqueeColor = themePreferences.theme === 'dark'
+    ? '#ffffff'
+    : themePreferences.theme === 'light'
+      ? '#171717'
+      : '#5a3b27'
   const themeStyle = {
+    '--marquee-color': marqueeColor,
     '--custom-theme-background': themePreferences.customBackgroundColor,
     '--custom-theme-background-image': themePreferences.customBackgroundImage
       ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + themePreferences.customBackgroundImage + '")'
