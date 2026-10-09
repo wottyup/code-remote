@@ -311,7 +311,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-composer textarea:disabled { cursor: not-allowed; opacity: .58; }
 .composer-resize { position: absolute; z-index: 2; top: 4px; left: 3px; display: grid; place-items: center; width: 21px; height: 21px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #70798a; cursor: ns-resize; }
 .composer-resize:hover { background: rgba(132, 150, 191, .16); color: #c0cce1; }
-.composer-document { display: flex; align-items: center; gap: 8px; margin: 1px 1px 7px; padding: 7px 8px; border: 1px solid #3b4352; border-radius: 8px; background: rgba(29, 34, 44, .76); color: #aab8d0; }
+.composer-documents { display: grid; gap: 5px; margin: 1px 1px 7px; }
+.composer-document { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid #3b4352; border-radius: 8px; background: rgba(29, 34, 44, .76); color: #aab8d0; }
 .composer-document > span { display: grid; min-width: 0; flex: 1; gap: 2px; }
 .composer-document strong { overflow: hidden; color: #dfe5ef; font-size: 10px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
 .composer-document small { color: #8995a9; font-size: 8px; }

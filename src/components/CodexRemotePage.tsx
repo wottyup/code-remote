@@ -58,6 +58,7 @@ const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageSize = 2 * 1024 * 1024
 const maxThemeImageDataUrlLength = Math.ceil(maxThemeImageSize * 4 / 3) + 256
 const maxImagesPerTurn = 4
+const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
@@ -450,7 +451,7 @@ type RemoteConnection = keyof typeof connectionLabel
 interface ComposerSendInput {
   prompt: string
   images: CodexImageAttachment[]
-  document?: CodexDocumentAttachment
+  documents?: CodexDocumentAttachment[]
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
@@ -516,7 +517,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
-  const [attachedDocument, setAttachedDocument] = useState<CodexDocumentAttachment | null>(null)
+  const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(72)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
@@ -570,7 +571,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (draftScope === targetScope) updateDraft(unassignedDraft)
     },
     attachDocument(document) {
-      setAttachedDocument(document)
+      setAttachedDocuments((current) => {
+        if (current.some((item) => item.name === document.name && item.content === document.content)) return current
+        return [...current, document].slice(0, maxDocumentsPerTurn)
+      })
       setAttachmentError(null)
       window.requestAnimationFrame(() => composer.current?.focus())
     },
@@ -626,7 +630,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   const canCompose = !sending && !writerConflict && connection === 'connected'
   const canConfigure = canCompose && !isRunning
-  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocument !== null) && canCompose
+  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0) && canCompose
   const canAttachImages = canCompose && modelSupportsImages
 
   async function attachImages(files: File[]) {
@@ -663,24 +667,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     const prompt = draft.trim()
-    if ((!prompt && attachedImages.length === 0 && !attachedDocument) || !canCompose) return
+    if ((!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) || !canCompose) return
     if (!modelSupportsImages && attachedImages.length > 0) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
     const previousDraft = draft
     const previousImages = attachedImages
-    const previousDocument = attachedDocument
+    const previousDocuments = attachedDocuments
     const previousAttachmentError = attachmentError
     setSending(true)
     updateDraft('')
     setAttachedImages([])
-    setAttachedDocument(null)
+    setAttachedDocuments([])
     setAttachmentError(null)
     const sent = await onSend({
       prompt,
       images: previousImages,
-      document: previousDocument || undefined,
+      documents: previousDocuments,
       model: selectedModel || undefined,
       effort: selectedEffort || undefined,
       approvalPolicy: selectedApprovalPolicy,
@@ -688,7 +692,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (!sent) {
       updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
       setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
-      setAttachedDocument((current) => current ?? previousDocument)
+      setAttachedDocuments((current) => current.length > 0 ? [...previousDocuments, ...current] : previousDocuments)
       setAttachmentError((current) => current ?? previousAttachmentError)
     }
     setSending(false)
@@ -730,7 +734,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError(`粘贴内容过长，最多支持 ${maxLongPasteChars.toLocaleString()} 个字符。`)
       return
     }
-    setAttachedDocument({ name: 'pasted-content.md', content: pastedText })
+    appendDocument({ name: 'pasted-content.md', content: pastedText })
     setAttachmentError(null)
   }
 
@@ -743,6 +747,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   const [workspaceDragOver, setWorkspaceDragOver] = useState(false)
 
+  function appendDocument(document: CodexDocumentAttachment) {
+    setAttachedDocuments((current) => {
+      if (current.some((item) => item.name === document.name && item.content === document.content)) return current
+      return [...current, document].slice(0, maxDocumentsPerTurn)
+    })
+    setAttachmentError(null)
+  }
+
   async function dropWorkspaceFile(event: DragEvent<HTMLFormElement>) {
     setWorkspaceDragOver(false)
     const path = workspaceFilePathFromDrag(event.dataTransfer)
@@ -752,8 +764,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError('正在读取文件…')
     try {
       const document = await onReadWorkspaceFile(path)
-      setAttachedDocument(document)
-      setAttachmentError(null)
+      appendDocument(document)
       window.requestAnimationFrame(() => composer.current?.focus())
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '文件读取失败。')
@@ -782,11 +793,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-      {attachedDocument ? (
-        <div className="composer-document" aria-label="待发送文档">
-          <FileText size={16} />
-          <span><strong>{attachedDocument.name}</strong><small>{attachedDocument.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
-          <button type="button" onClick={() => setAttachedDocument(null)} aria-label="移除文档"><X size={13} /></button>
+      {attachedDocuments.length > 0 ? (
+        <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
+          {attachedDocuments.map((document, index) => (
+            <div className="composer-document" key={`${document.name}-${index}`}>
+              <FileText size={16} />
+              <span><strong>{document.name}</strong><small>{document.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
+              <button type="button" onClick={() => setAttachedDocuments((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
+            </div>
+          ))}
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
@@ -798,8 +813,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <div className="composer-queue__list">
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
-              const summary = message.text || (message.document
-                ? `附件文档：${message.document.name}`
+              const summary = message.text || (message.documents?.length
+                ? `附件文档：${message.documents.length} 个文件`
                 : `${message.images.length} 张图片`)
               return (
                 <div className="composer-queue__item" key={message.id}>

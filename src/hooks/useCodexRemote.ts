@@ -47,7 +47,7 @@ export interface QueuedTurnMessage {
   id: string
   text: string
   images: CodexImageAttachment[]
-  document?: CodexDocumentAttachment
+  documents?: CodexDocumentAttachment[]
   createdAt: string
 }
 
@@ -61,7 +61,7 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 interface SendMessageInput {
   prompt: string
   images: CodexImageAttachment[]
-  document?: CodexDocumentAttachment
+  documents?: CodexDocumentAttachment[]
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
@@ -240,21 +240,22 @@ function queuedMessageId() {
   return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function queuedRequestText(text: string, document?: CodexDocumentAttachment) {
-  const documentText = document
-    ? `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`
-    : ''
+function queuedRequestText(text: string, documents: CodexDocumentAttachment[] = []) {
+  const documentText = documents
+    .map((document) => `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`)
+    .join('')
   return `${text}${documentText}`.trim()
 }
 
 function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
   const text = input.prompt.trim()
+  const documents = input.documents ?? []
   return {
     id: queuedMessageId(),
     text,
-    requestText: queuedRequestText(text, input.document),
+    requestText: queuedRequestText(text, documents),
     images: input.images,
-    ...(input.document ? { document: input.document } : {}),
+    ...(documents.length > 0 ? { documents } : {}),
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
@@ -281,6 +282,14 @@ function persistedQueuedDocument(value: unknown): CodexDocumentAttachment | unde
   return { name: document.name, content: document.content }
 }
 
+function persistedQueuedDocuments(value: unknown): CodexDocumentAttachment[] {
+  const values = Array.isArray(value) ? value : value ? [value] : []
+  return values.flatMap((item) => {
+    const document = persistedQueuedDocument(item)
+    return document ? [document] : []
+  }).slice(0, 8)
+}
+
 function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   if (!value || typeof value !== 'object') return null
   const payload = value as Record<string, unknown>
@@ -294,8 +303,8 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
       return parsed ? [parsed] : []
     }).slice(0, 4)
     : []
-  const document = persistedQueuedDocument(payload.document)
-  if (!text && images.length === 0 && !document) return null
+  const documents = persistedQueuedDocuments(payload.documents ?? payload.document)
+  if (!text && images.length === 0 && documents.length === 0) return null
   const model = typeof payload.model === 'string' && payload.model.length <= 256 ? payload.model : undefined
   const effort = typeof payload.effort === 'string' && payload.effort.length <= 64 ? payload.effort : undefined
   const approvalPolicy = payload.approvalPolicy === 'on-request' || payload.approvalPolicy === 'untrusted' || payload.approvalPolicy === 'never'
@@ -304,9 +313,9 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   return {
     id,
     text,
-    requestText: queuedRequestText(text, document),
+    requestText: queuedRequestText(text, documents),
     images,
-    ...(document ? { document } : {}),
+    ...(documents.length > 0 ? { documents } : {}),
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
@@ -357,7 +366,7 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
     role: 'user',
     text: payload.text,
     images: payload.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
-    ...(payload.document ? { documents: [{ ...payload.document, charCount: payload.document.content.length }] } : {}),
+    ...(payload.documents?.length ? { documents: payload.documents.map((document) => ({ ...document, charCount: document.content.length })) } : {}),
     createdAt: payload.createdAt,
     ...(turnId ? { turnId } : {}),
   }
@@ -1693,7 +1702,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return false
     }
     const payload = queuedPayloadFromInput(input)
-    if (!payload.text && payload.images.length === 0 && !payload.document) return false
+    if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
     if (!thread) {
       thread = await createThread(input.model, input.approvalPolicy)
