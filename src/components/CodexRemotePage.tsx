@@ -1,11 +1,15 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type DragEvent, type FormEvent, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
 import {
   AlertTriangle,
   Check,
   ChevronDown,
+  ChevronRight,
   ChevronsUpDown,
   Copy,
+  File,
   FileText,
+  Folder,
+  FolderOpen,
   ImagePlus,
   Link2,
   LoaderCircle,
@@ -20,7 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import type { CodexApprovalPolicy, CodexDocumentAttachment, CodexImageAttachment, CodexMessage, CodexModel, CodexThread } from '../lib/codexRemoteClient'
+import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 
 interface Props {
   token: string
@@ -55,6 +59,9 @@ const maxThemeImageDataUrlLength = Math.ceil(maxThemeImageSize * 4 / 3) + 256
 const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
+const workspaceTreeMaxEntries = 400
+const workspaceFileDragMime = 'application/x-codex-workspace-file'
+const workspaceFileDragTextPrefix = 'codex-remote-workspace-file:'
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
@@ -87,6 +94,27 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundColor: '#4b5563',
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
+}
+
+function hasWorkspaceFileDrag(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) return false
+  const types = Array.from(dataTransfer.types)
+  return types.includes(workspaceFileDragMime) || types.includes('text/plain')
+}
+
+function workspaceFilePathFromDrag(dataTransfer: DataTransfer | null) {
+  if (!dataTransfer) return ''
+  const raw = dataTransfer.getData(workspaceFileDragMime)
+  try {
+    const value = JSON.parse(raw) as { path?: unknown }
+    if (typeof value.path === 'string' && value.path) return value.path
+  } catch {
+    // Some browsers strip custom MIME data while dragging inside a page.
+  }
+  const fallback = dataTransfer.getData('text/plain')
+  return fallback.startsWith(workspaceFileDragTextPrefix)
+    ? fallback.slice(workspaceFileDragTextPrefix.length)
+    : ''
 }
 
 function normalizeHexColor(value: unknown, fallback: string) {
@@ -430,6 +458,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   adoptUnassignedDraft(threadId: string): void
+  attachDocument(document: CodexDocumentAttachment): void
   closeOpenMenu(): boolean
 }
 
@@ -453,6 +482,7 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onRemoveQueued: (messageId: string) => void
+  onReadWorkspaceFile: (path: string) => Promise<CodexDocumentAttachment>
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -477,6 +507,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   queuedMessages,
   onSendQueuedNow,
   onRemoveQueued,
+  onReadWorkspaceFile,
   onInterrupt,
   onRefresh,
 }, ref) {
@@ -529,6 +560,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       }
       saveComposerDraft(newThreadComposerDraftScope, '')
       if (draftScope === targetScope) updateDraft(unassignedDraft)
+    },
+    attachDocument(document) {
+      setAttachedDocument(document)
+      setAttachmentError(null)
+      window.requestAnimationFrame(() => composer.current?.focus())
     },
     closeOpenMenu() {
       if (!openMenuRef.current) return false
@@ -697,8 +733,41 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     document.body.style.userSelect = 'none'
   }
 
+  const [workspaceDragOver, setWorkspaceDragOver] = useState(false)
+
+  async function dropWorkspaceFile(event: DragEvent<HTMLFormElement>) {
+    setWorkspaceDragOver(false)
+    const path = workspaceFilePathFromDrag(event.dataTransfer)
+    if (!path) return
+    event.preventDefault()
+    if (!canCompose) return
+    setAttachmentError('正在读取文件…')
+    try {
+      const document = await onReadWorkspaceFile(path)
+      setAttachedDocument(document)
+      setAttachmentError(null)
+      window.requestAnimationFrame(() => composer.current?.focus())
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '文件读取失败。')
+    }
+  }
+
   return (
-    <form className={`message-composer${isRunning ? ' message-composer--running' : ''}`} onSubmit={(event) => void send(event)}>
+    <form
+      className={`message-composer${isRunning ? ' message-composer--running' : ''}${workspaceDragOver ? ' message-composer--drag-over' : ''}`}
+      onSubmit={(event) => void send(event)}
+      onDragEnter={(event) => {
+        if (hasWorkspaceFileDrag(event.dataTransfer)) setWorkspaceDragOver(true)
+      }}
+      onDragOver={(event) => {
+        if (!hasWorkspaceFileDrag(event.dataTransfer)) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'copy'
+        setWorkspaceDragOver(true)
+      }}
+      onDragLeave={() => setWorkspaceDragOver(false)}
+      onDrop={(event) => void dropWorkspaceFile(event)}
+    >
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
           {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
@@ -785,6 +854,140 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     </form>
   )
 }))
+
+interface WorkspaceExplorerProps {
+  token: string
+  cwd?: string
+  threadId?: string
+  onReadFile: (path: string) => Promise<CodexDocumentAttachment>
+  onAttachDocument: (document: CodexDocumentAttachment) => void
+}
+
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onReadFile, onAttachDocument }: WorkspaceExplorerProps) {
+  const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
+  const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
+  const [attachingPath, setAttachingPath] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const requestGeneration = useRef(0)
+  const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
+
+  const directoryKey = (path: string) => path || '.'
+  const loadDirectory = useCallback(async (path: string) => {
+    if (!cwd) return
+    const generation = requestGeneration.current
+    const key = directoryKey(path)
+    setLoadingPaths((current) => ({ ...current, [key]: true }))
+    try {
+      const tree = await codexRemoteClient.workspaceTree(token, cwd, path)
+      if (generation !== requestGeneration.current) return
+      setDirectories((current) => ({ ...current, [key]: tree }))
+      setError(null)
+    } catch (reason) {
+      if (generation !== requestGeneration.current) return
+      setError(reason instanceof Error ? reason.message : '无法读取文件目录')
+    } finally {
+      if (generation === requestGeneration.current) {
+        setLoadingPaths((current) => ({ ...current, [key]: false }))
+      }
+    }
+  }, [cwd, token])
+
+  useEffect(() => {
+    requestGeneration.current += 1
+    setDirectories({})
+    setExpanded({})
+    setLoadingPaths({})
+    setAttachingPath(null)
+    setError(null)
+    if (cwd) void loadDirectory('')
+  }, [cwd, loadDirectory, scopeKey])
+
+  function toggleDirectory(path: string) {
+    const nextExpanded = !expanded[path]
+    setExpanded((current) => ({ ...current, [path]: nextExpanded }))
+    if (nextExpanded && !directories[directoryKey(path)]) void loadDirectory(path)
+  }
+
+  async function attachFile(path: string) {
+    setAttachingPath(path)
+    try {
+      const document = await onReadFile(path)
+      onAttachDocument(document)
+      setError(null)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '文件读取失败')
+    } finally {
+      setAttachingPath((current) => current === path ? null : current)
+    }
+  }
+
+  function dragFile(event: DragEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
+    event.dataTransfer.effectAllowed = 'copy'
+    event.dataTransfer.setData(workspaceFileDragMime, JSON.stringify({ path: entry.path }))
+    // Keep a prefixed text fallback for browsers that remove custom MIME data.
+    event.dataTransfer.setData('text/plain', `${workspaceFileDragTextPrefix}${entry.path}`)
+  }
+
+  function sizeLabel(size: number | null | undefined) {
+    if (size === undefined || size === null) return ''
+    if (size < 1_024) return `${size} B`
+    if (size < 1_024 * 1_024) return `${Math.ceil(size / 1_024)} KB`
+    return `${(size / (1_024 * 1_024)).toFixed(1)} MB`
+  }
+
+  function renderDirectory(path: string, depth: number): ReactNode[] {
+    const tree = directories[directoryKey(path)]
+    if (!tree) return []
+    return tree.entries.flatMap((entry) => {
+      const isDirectory = entry.kind === 'directory'
+      const isOpen = Boolean(expanded[entry.path])
+      const row = (
+        <Fragment key={entry.path}>
+          <button
+            className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}`}
+            type="button"
+            draggable={!isDirectory}
+            style={{ paddingLeft: `${10 + depth * 14}px` }}
+            title={isDirectory ? entry.path : `${entry.path} · 拖到输入框作为文档附件`}
+            onClick={() => isDirectory ? toggleDirectory(entry.path) : void attachFile(entry.path)}
+            onDragStart={(event) => { if (!isDirectory) dragFile(event, entry) }}
+          >
+            {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
+            {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
+            <span className="workspace-explorer__entry-name">{entry.name}</span>
+            {!isDirectory && attachingPath === entry.path ? <LoaderCircle className="spin" size={12} /> : <small>{sizeLabel(entry.size)}</small>}
+          </button>
+          {isDirectory && isOpen ? (
+            loadingPaths[directoryKey(entry.path)]
+              ? <div className="workspace-explorer__loading" style={{ paddingLeft: `${37 + depth * 14}px` }}><LoaderCircle className="spin" size={12} />读取中…</div>
+              : renderDirectory(entry.path, depth + 1)
+          ) : null}
+        </Fragment>
+      )
+      return [row]
+    })
+  }
+
+  const rootLoading = loadingPaths['.']
+  return (
+    <aside className="workspace-explorer" aria-label="工作区文件资源管理器">
+      <header className="workspace-explorer__header">
+        <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
+        <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+      </header>
+      <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
+      <div className="workspace-explorer__tree">
+        {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
+        {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
+        {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
+        {cwd && directories['.'] ? renderDirectory('', 0) : null}
+        {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
+      </div>
+      <footer className="workspace-explorer__footer">拖动文件到输入框，或点击文件附加</footer>
+    </aside>
+  )
+})
 
 interface RemoteChatPaneProps {
   remote: CodexRemoteController
@@ -1322,6 +1525,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     })
   }, [rememberThreadComposerPreferences, remote0, remote1, remote2, selectedPaneIndex])
 
+  const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
+  const readWorkspaceFile = useCallback(async (path: string) => {
+    if (!activeWorkspaceCwd) throw new Error('当前窗口还没有工作目录。')
+    const file = await codexRemoteClient.workspaceFile(token, activeWorkspaceCwd, path)
+    return { name: file.name, content: file.content }
+  }, [activeWorkspaceCwd, token])
+  const attachWorkspaceDocument = useCallback((document: CodexDocumentAttachment) => {
+    composerHandle.current?.attachDocument(document)
+  }, [])
+
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
   const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : connectionLabel[activeRemote.connection]
   const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.CodexRemoteAndroid?.changeEndpoint === 'function'
@@ -1385,54 +1598,64 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       {settingsOpen ? (
         <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={() => setSettingsOpen(false)} />
       ) : (
-        <section className="remote-workspace">
-          <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
-            {openPaneIndexes.map((paneIndex) => (
-              <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
-                <RemoteChatPane
-                  remote={remotes[paneIndex]}
-                  active={paneIndex === selectedPaneIndex}
-                  showActiveFrame={openPaneIndexes.length > 1}
-                  canClose={openPaneIndexes.length > 1}
-                  onActivate={() => activatePane(paneIndex)}
-                  onClose={() => closePane(paneIndex)}
-                  onCreateThread={() => void createThreadForPane(paneIndex)}
-                  onHandoff={() => void handoffToLocalCodex(paneIndex)}
-                  onReclaim={() => void reclaimForRemote(paneIndex)}
-                  onOpenSidebar={() => setSidebarOpen(true)}
-                  composerHandle={composerHandle}
-                  copiedMessageId={copiedMessageId}
-                  onCopy={copyMessage}
-                />
-              </div>
-            ))}
-          </div>
-          <MessageComposer
-            key={composerDraftScope}
-            ref={composerHandle}
-            draftScope={composerDraftScope}
-            connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
-            isRunning={activeRemote.isRunning}
-            isInterrupting={activeRemote.isInterrupting}
-            writerConflict={activeRemote.writerConflict}
-            modelSupportsImages={modelSupportsImages}
-            selectedModel={selectedModel}
-            selectedEffort={selectedEffort}
-            selectedApprovalPolicy={selectedApprovalPolicy}
-            modelOptions={modelOptions}
-            reasoningOptions={reasoningOptions}
-            authorizationOptions={approvalPolicyOptions}
-            onModelChange={changeModel}
-            onEffortChange={changeEffort}
-            onApprovalPolicyChange={changeApprovalPolicy}
-            onSend={sendComposerMessage}
-            queuedMessages={activeRemote.queuedMessages}
-            onSendQueuedNow={activeRemote.sendQueuedMessageNow}
-            onRemoveQueued={activeRemote.removeQueuedMessage}
-            onInterrupt={activeRemote.interrupt}
-            onRefresh={activeRemote.refreshActiveThread}
+        <>
+          <section className="remote-workspace">
+            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
+              {openPaneIndexes.map((paneIndex) => (
+                <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
+                  <RemoteChatPane
+                    remote={remotes[paneIndex]}
+                    active={paneIndex === selectedPaneIndex}
+                    showActiveFrame={openPaneIndexes.length > 1}
+                    canClose={openPaneIndexes.length > 1}
+                    onActivate={() => activatePane(paneIndex)}
+                    onClose={() => closePane(paneIndex)}
+                    onCreateThread={() => void createThreadForPane(paneIndex)}
+                    onHandoff={() => void handoffToLocalCodex(paneIndex)}
+                    onReclaim={() => void reclaimForRemote(paneIndex)}
+                    onOpenSidebar={() => setSidebarOpen(true)}
+                    composerHandle={composerHandle}
+                    copiedMessageId={copiedMessageId}
+                    onCopy={copyMessage}
+                  />
+                </div>
+              ))}
+            </div>
+            <MessageComposer
+              key={composerDraftScope}
+              ref={composerHandle}
+              draftScope={composerDraftScope}
+              connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
+              isRunning={activeRemote.isRunning}
+              isInterrupting={activeRemote.isInterrupting}
+              writerConflict={activeRemote.writerConflict}
+              modelSupportsImages={modelSupportsImages}
+              selectedModel={selectedModel}
+              selectedEffort={selectedEffort}
+              selectedApprovalPolicy={selectedApprovalPolicy}
+              modelOptions={modelOptions}
+              reasoningOptions={reasoningOptions}
+              authorizationOptions={approvalPolicyOptions}
+              onModelChange={changeModel}
+              onEffortChange={changeEffort}
+              onApprovalPolicyChange={changeApprovalPolicy}
+              onSend={sendComposerMessage}
+              queuedMessages={activeRemote.queuedMessages}
+              onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+              onRemoveQueued={activeRemote.removeQueuedMessage}
+              onReadWorkspaceFile={readWorkspaceFile}
+              onInterrupt={activeRemote.interrupt}
+              onRefresh={activeRemote.refreshActiveThread}
+            />
+          </section>
+          <WorkspaceExplorer
+            token={token}
+            cwd={activeWorkspaceCwd}
+            threadId={activeRemote.activeThread?.id}
+            onReadFile={readWorkspaceFile}
+            onAttachDocument={attachWorkspaceDocument}
           />
-        </section>
+        </>
       )}
     </div>
   )

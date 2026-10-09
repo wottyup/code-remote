@@ -61,6 +61,28 @@ export interface CodexRuntime {
   error: string | null
 }
 
+export interface CodexWorkspaceEntry {
+  name: string
+  path: string
+  kind: 'directory' | 'file'
+  size?: number | null
+}
+
+export interface CodexWorkspaceTree {
+  cwd: string
+  path: string
+  entries: CodexWorkspaceEntry[]
+  truncated: boolean
+}
+
+export interface CodexWorkspaceFile {
+  cwd: string
+  path: string
+  name: string
+  size: number
+  content: string
+}
+
 export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
@@ -211,6 +233,17 @@ export const codexRemoteClient = {
   },
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status')
+  },
+  workspaceTree(token: string, cwd?: string, path = '') {
+    const query = new URLSearchParams()
+    if (cwd) query.set('cwd', cwd)
+    if (path) query.set('path', path)
+    return request<CodexWorkspaceTree>(token, `/api/v1/codex/workspace/tree${query.size ? '?' + query.toString() : ''}`)
+  },
+  workspaceFile(token: string, cwd: string | undefined, path: string) {
+    const query = new URLSearchParams({ path })
+    if (cwd) query.set('cwd', cwd)
+    return request<CodexWorkspaceFile>(token, `/api/v1/codex/workspace/file?${query.toString()}`)
   },
   threads(token: string) {
     return request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>

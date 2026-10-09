@@ -115,6 +115,65 @@ class InterruptRequest(BaseModel):
     turn_id: str | None = Field(default=None, max_length=200)
 
 
+WORKSPACE_TREE_MAX_ENTRIES = 400
+WORKSPACE_TREE_MAX_PATH_LENGTH = 1_024
+WORKSPACE_FILE_MAX_BYTES = 512 * 1_024
+WORKSPACE_SKIPPED_NAMES = {
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+}
+
+
+def workspace_base_for_cwd(workspace: Path, raw_cwd: str | None) -> Path:
+    """Resolve a thread cwd without allowing the file browser outside the project area."""
+    configured = workspace.expanduser().resolve()
+    allowed_root = configured.parent
+    candidate = Path(raw_cwd).expanduser() if raw_cwd else configured
+    if not candidate.is_absolute():
+        candidate = configured / candidate
+    candidate = candidate.resolve()
+    try:
+        candidate.relative_to(allowed_root)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="工作目录不在允许范围内") from error
+    if not candidate.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作目录不存在")
+    return candidate
+
+
+def workspace_path(base: Path, relative_path: str) -> Path:
+    if len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径过长")
+    if "\x00" in relative_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径无效")
+    candidate = (base / relative_path).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的路径") from error
+    return candidate
+
+
+def workspace_entry_kind(path: Path) -> str | None:
+    try:
+        if path.is_dir():
+            return "directory"
+        if path.is_file():
+            return "file"
+    except OSError:
+        return None
+    return None
+
+
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
     paths: list[Path] = []
     total_size = 0
@@ -368,6 +427,73 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         if not runtime_status["available"]:
             runtime_status["error"] = f"找不到 Codex CLI：{app_server.command}"
         return runtime_status
+
+    @app.get("/api/v1/codex/workspace/tree")
+    async def workspace_tree(cwd: str | None = None, path: str = "") -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        directory = workspace_path(base, path)
+        if not directory.is_dir():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
+        entries: list[dict[str, Any]] = []
+        try:
+            children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+        except OSError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取目录") from error
+        for child in children:
+            if child.name in WORKSPACE_SKIPPED_NAMES or child.name.startswith("."):
+                continue
+            try:
+                child_path = workspace_path(base, str(child.relative_to(base)))
+                kind = workspace_entry_kind(child_path)
+                if kind is None:
+                    continue
+                stat = child_path.stat()
+            except (OSError, ValueError, HTTPException):
+                continue
+            entries.append({
+                "name": child.name,
+                "path": child_path.relative_to(base).as_posix(),
+                "kind": kind,
+                "size": stat.st_size if kind == "file" else None,
+            })
+            if len(entries) >= WORKSPACE_TREE_MAX_ENTRIES:
+                break
+        return {
+            "cwd": str(base),
+            "path": directory.relative_to(base).as_posix() if directory != base else "",
+            "entries": entries,
+            "truncated": len(entries) >= WORKSPACE_TREE_MAX_ENTRIES,
+        }
+
+    @app.get("/api/v1/codex/workspace/file")
+    async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        file_path = workspace_path(base, path)
+        if not file_path.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
+        try:
+            size = file_path.stat().st_size
+        except OSError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取文件") from error
+        if size > WORKSPACE_FILE_MAX_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="文件超过 512 KB，不能作为文档附件发送")
+        try:
+            content = file_path.read_bytes()
+        except OSError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取文件") from error
+        if b"\x00" in content:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="二进制文件不能作为文档附件发送")
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件不是 UTF-8 文本，不能作为文档附件发送") from error
+        return {
+            "cwd": str(base),
+            "path": file_path.relative_to(base).as_posix(),
+            "name": file_path.name,
+            "size": len(content),
+            "content": text,
+        }
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
