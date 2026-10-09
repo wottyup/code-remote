@@ -884,7 +884,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
-  const [mobileBottomOffset, setMobileBottomOffset] = useState(128)
+  const [mobilePanelHeight, setMobilePanelHeight] = useState(280)
   const [error, setError] = useState<string | null>(null)
   const requestGeneration = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
@@ -938,19 +938,21 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   useLayoutEffect(() => {
     if (!mobileOpen || typeof window === 'undefined') return
     const composer = document.querySelector<HTMLElement>('.message-composer')
-    const updateBottomOffset = () => {
+    const updatePanelHeight = () => {
       const rect = composer?.getBoundingClientRect()
-      setMobileBottomOffset(rect ? Math.max(8, window.innerHeight - rect.top + 8) : 128)
+      const composerTop = rect?.top ?? Math.max(56, window.innerHeight - 128)
+      const availableHeight = Math.max(0, composerTop - 56 - 8)
+      setMobilePanelHeight(Math.round(availableHeight / 2))
     }
-    updateBottomOffset()
-    window.addEventListener('resize', updateBottomOffset)
+    updatePanelHeight()
+    window.addEventListener('resize', updatePanelHeight)
     let observer: ResizeObserver | null = null
     if (composer && typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(updateBottomOffset)
+      observer = new ResizeObserver(updatePanelHeight)
       observer.observe(composer)
     }
     return () => {
-      window.removeEventListener('resize', updateBottomOffset)
+      window.removeEventListener('resize', updatePanelHeight)
       observer?.disconnect()
     }
   }, [mobileOpen])
@@ -1043,7 +1045,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   const rootLoading = loadingPaths['.']
   return (
-    <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-bottom': `${mobileBottomOffset}px` } as CSSProperties} aria-label="工作区文件资源管理器">
+    <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
       <header className="workspace-explorer__header">
         <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
         <div className="workspace-explorer__header-actions">
