@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -13,6 +14,7 @@ from codex_remote.codex_app_server import (
     CodexNoActiveTurnError,
     CodexRuntimeError,
     merge_workspace_change,
+    snapshot_workspace,
     workspace_change_entries,
 )
 
@@ -229,9 +231,55 @@ class WorkspaceChangeMergeTests(unittest.TestCase):
         merge_workspace_change(changes, "src/existing.ts", Change.deleted)
         merge_workspace_change(changes, "src/existing.ts", Change.added)
 
-        self.assertEqual(workspace_change_entries(changes), [
-            {"path": "src/existing.ts", "kind": "update"},
-        ])
+        self.assertEqual(changes, {"src/existing.ts": "update"})
+
+
+class WorkspaceDiffSnapshotTests(unittest.TestCase):
+    def test_snapshot_diff_reports_totals_for_added_modified_and_deleted_text_files(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            (workspace / "src").mkdir()
+            (workspace / "src/updated.ts").write_text("old\nsame\n", encoding="utf-8")
+            (workspace / "src/deleted.ts").write_text("first\nsecond\n", encoding="utf-8")
+            (workspace / ".git").mkdir()
+            (workspace / ".git/ignored.ts").write_text("ignored\n", encoding="utf-8")
+            (workspace / "node_modules").mkdir()
+            (workspace / "node_modules/ignored.ts").write_text("ignored\n", encoding="utf-8")
+
+            baseline = snapshot_workspace(workspace)
+            self.assertNotIn(".git/ignored.ts", baseline.paths)
+            self.assertNotIn("node_modules/ignored.ts", baseline.paths)
+            (workspace / "src/updated.ts").write_text("new\nsame\nadded\n", encoding="utf-8")
+            (workspace / "src/added.ts").write_text("one\ntwo\n", encoding="utf-8")
+            (workspace / "src/deleted.ts").unlink()
+
+            entries = workspace_change_entries({
+                "src/updated.ts": "update",
+                "src/added.ts": "add",
+                "src/deleted.ts": "delete",
+            }, workspace, baseline)
+
+        changes_by_path = {entry["path"]: entry for entry in entries}
+        self.assertEqual((changes_by_path["src/updated.ts"]["additions"], changes_by_path["src/updated.ts"]["deletions"]), (2, 1))
+        self.assertEqual((changes_by_path["src/added.ts"]["additions"], changes_by_path["src/added.ts"]["deletions"]), (2, 0))
+        self.assertEqual((changes_by_path["src/deleted.ts"]["additions"], changes_by_path["src/deleted.ts"]["deletions"]), (0, 2))
+        self.assertIn("@@", changes_by_path["src/updated.ts"]["diff"])
+
+    def test_snapshot_skips_binary_and_oversized_files_without_faking_counts(self) -> None:
+        from codex_remote.codex_app_server import _WORKSPACE_DIFF_MAX_FILE_BYTES
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            (workspace / "binary.dat").write_bytes(b"before\0binary")
+            (workspace / "large.txt").write_bytes(b"x" * (_WORKSPACE_DIFF_MAX_FILE_BYTES + 1))
+            baseline = snapshot_workspace(workspace)
+            (workspace / "binary.dat").write_text("after\n", encoding="utf-8")
+            (workspace / "large.txt").write_text("after\n", encoding="utf-8")
+
+            entries = workspace_change_entries({"binary.dat": "update", "large.txt": "update"}, workspace, baseline)
+
+        self.assertEqual({entry["path"] for entry in entries}, {"binary.dat", "large.txt"})
+        self.assertTrue(all("diff" not in entry and "additions" not in entry for entry in entries))
 
 
 if __name__ == "__main__":

@@ -511,6 +511,9 @@ function fileChangeForItem(value: unknown): CodexFileChange | null {
     : rawChanges && typeof rawChanges === 'object'
       ? Object.entries(rawChanges).map(([path, change]) => ({ path, ...(change && typeof change === 'object' ? change : {}) }))
       : []
+  const explicitLineCount = (count: unknown) => (
+    typeof count === 'number' && Number.isFinite(count) ? Math.max(0, Math.floor(count)) : undefined
+  )
   const entries = changes.flatMap((value) => {
     if (typeof value === 'string') return [{ path: value, additions: 0, deletions: 0 }]
     if (!value || typeof value !== 'object') return []
@@ -521,12 +524,16 @@ function fileChangeForItem(value: unknown): CodexFileChange | null {
     const diff = [change.diff, change.patch, change.unified_diff, change.unifiedDiff]
       .find((part): part is string => typeof part === 'string')
     const diffLines = diff?.split('\n') ?? []
+    const additions = explicitLineCount(change.additions)
+      ?? diffLines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
+    const deletions = explicitLineCount(change.deletions)
+      ?? diffLines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
     return [{
       path,
       kind: typeof change.kind === 'string' ? change.kind : typeof change.type === 'string' ? change.type : undefined,
       diff,
-      additions: diffLines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length,
-      deletions: diffLines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length,
+      additions,
+      deletions,
     }]
   })
   if (entries.length === 0) return null
@@ -546,11 +553,32 @@ function upsertFileChange(current: CodexFileChange[], next: CodexFileChange) {
 
 function mergeWorkspaceFileChange(current: CodexFileChange[], next: CodexFileChange) {
   const withoutPreviousWorkspaceChange = current.filter((change) => change.id !== next.id)
-  const knownPaths = new Set(withoutPreviousWorkspaceChange.flatMap((change) => change.changes.map((entry) => entry.path)))
-  const missingChanges = next.changes.filter((entry) => !knownPaths.has(entry.path))
-  return missingChanges.length > 0
-    ? [...withoutPreviousWorkspaceChange, { ...next, changes: missingChanges }]
-    : withoutPreviousWorkspaceChange
+  const mergedChanges = [...withoutPreviousWorkspaceChange]
+  const missingWorkspaceEntries: CodexFileChange['changes'] = []
+  for (const workspaceEntry of next.changes) {
+    const previousLocation = mergedChanges.findIndex((change) => change.changes.some((entry) => entry.path === workspaceEntry.path))
+    if (previousLocation < 0) {
+      missingWorkspaceEntries.push(workspaceEntry)
+      continue
+    }
+    const previousChange = mergedChanges[previousLocation]
+    const previousEntries = previousChange.changes.map((entry) => {
+      if (entry.path !== workspaceEntry.path) return entry
+      const nativeHasLineStats = Boolean(entry.diff) || entry.additions > 0 || entry.deletions > 0
+      return {
+        ...entry,
+        kind: entry.kind ?? workspaceEntry.kind,
+        diff: entry.diff || workspaceEntry.diff,
+        additions: nativeHasLineStats ? entry.additions : workspaceEntry.additions,
+        deletions: nativeHasLineStats ? entry.deletions : workspaceEntry.deletions,
+      }
+    })
+    mergedChanges[previousLocation] = { ...previousChange, changes: previousEntries }
+  }
+  if (missingWorkspaceEntries.length > 0) {
+    mergedChanges.push({ ...next, changes: missingWorkspaceEntries })
+  }
+  return mergedChanges
 }
 
 function isWorkspaceFileChange(change: CodexFileChange) {

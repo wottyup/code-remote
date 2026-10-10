@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 class WorkspaceChangeWatch:
     stop_event: asyncio.Event
     task: asyncio.Task[dict[str, str]]
+    baseline: WorkspaceSnapshot
 
 
 _IGNORED_WORKSPACE_PARTS = frozenset({
@@ -46,6 +48,107 @@ _IGNORED_WORKSPACE_PARTS = frozenset({
     ".pytest_cache",
     "node_modules",
 })
+
+_WORKSPACE_DIFF_MAX_FILE_BYTES = 1_048_576
+_WORKSPACE_DIFF_MAX_TOTAL_BYTES = 32 * 1_048_576
+_WORKSPACE_DIFF_MAX_FILES = 20_000
+
+
+@dataclass
+class WorkspaceSnapshot:
+    paths: frozenset[str]
+    text_files: dict[str, bytes]
+    complete: bool
+
+
+@dataclass
+class WorkspaceChangeCapture:
+    changes: dict[str, str]
+    baseline: WorkspaceSnapshot
+
+
+def snapshot_workspace(workspace: Path) -> WorkspaceSnapshot:
+    root = workspace.expanduser().resolve()
+    paths: set[str] = set()
+    text_files: dict[str, bytes] = {}
+    total_bytes = 0
+    complete = True
+
+    def mark_incomplete(_error: OSError) -> None:
+        nonlocal complete
+        complete = False
+
+    for directory, directory_names, file_names in os.walk(root, topdown=True, followlinks=False, onerror=mark_incomplete):
+        current_directory = Path(directory)
+        directory_names[:] = sorted(
+            name for name in directory_names
+            if name not in _IGNORED_WORKSPACE_PARTS
+            and not (current_directory / name).is_symlink()
+        )
+        for name in sorted(file_names):
+            if len(paths) >= _WORKSPACE_DIFF_MAX_FILES:
+                complete = False
+                break
+            path = current_directory / name
+            try:
+                if path.is_symlink() or not path.is_file():
+                    continue
+                relative = path.relative_to(root).as_posix()
+                if any(part in _IGNORED_WORKSPACE_PARTS for part in Path(relative).parts):
+                    continue
+                paths.add(relative)
+                size = path.stat().st_size
+                if size > _WORKSPACE_DIFF_MAX_FILE_BYTES or total_bytes + size > _WORKSPACE_DIFF_MAX_TOTAL_BYTES:
+                    continue
+                content = path.read_bytes()
+                if len(content) > _WORKSPACE_DIFF_MAX_FILE_BYTES or b'\0' in content:
+                    continue
+                content.decode('utf-8-sig')
+                text_files[relative] = content
+                total_bytes += len(content)
+            except (OSError, UnicodeDecodeError):
+                continue
+        if not complete:
+            break
+    return WorkspaceSnapshot(paths=frozenset(paths), text_files=text_files, complete=complete)
+
+
+def _read_workspace_text(workspace: Path, relative_path: str) -> bytes | None:
+    root = workspace.expanduser().resolve()
+    relative = Path(relative_path)
+    if relative.is_absolute() or any(part in {"", ".", ".."} for part in relative.parts):
+        return None
+    if any(part in _IGNORED_WORKSPACE_PARTS for part in relative.parts):
+        return None
+    candidate = root / relative
+    try:
+        if candidate.is_symlink() or not candidate.is_file():
+            return None
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+        if resolved.stat().st_size > _WORKSPACE_DIFF_MAX_FILE_BYTES:
+            return None
+        content = resolved.read_bytes()
+        if len(content) > _WORKSPACE_DIFF_MAX_FILE_BYTES or b'\0' in content:
+            return None
+        content.decode('utf-8-sig')
+        return content
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _workspace_text_diff(path: str, before: bytes, after: bytes) -> tuple[str, int, int] | None:
+    try:
+        old_lines = before.decode('utf-8-sig').splitlines()
+        new_lines = after.decode('utf-8-sig').splitlines()
+    except UnicodeDecodeError:
+        return None
+    diff_lines = list(difflib.unified_diff(old_lines, new_lines, fromfile=f"a/{path}", tofile=f"b/{path}", lineterm=""))
+    additions = sum(line.startswith('+') and not line.startswith('+++') for line in diff_lines)
+    deletions = sum(line.startswith('-') and not line.startswith('---') for line in diff_lines)
+    if additions == 0 and deletions == 0:
+        return None
+    return '\n'.join(diff_lines), additions, deletions
 
 
 def merge_workspace_change(changes: dict[str, str], path: str, change: Change) -> None:
@@ -63,8 +166,30 @@ def merge_workspace_change(changes: dict[str, str], path: str, change: Change) -
         changes[path] = "update"
 
 
-def workspace_change_entries(changes: dict[str, str]) -> list[dict[str, str]]:
-    return [{"path": path, "kind": kind} for path, kind in sorted(changes.items())]
+def workspace_change_entries(
+    changes: dict[str, str],
+    workspace: Path,
+    baseline: WorkspaceSnapshot,
+) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
+    for path, kind in sorted(changes.items()):
+        entry: dict[str, Any] = {"path": path, "kind": kind}
+        existed_before = path in baseline.paths
+        before = baseline.text_files.get(path)
+        after = None if kind == "delete" else _read_workspace_text(workspace, path)
+
+        if kind == "delete":
+            if before is not None:
+                after = b""
+        elif before is None and not existed_before and baseline.complete and after is not None:
+            before = b""
+
+        if before is not None and after is not None:
+            diff = _workspace_text_diff(path, before, after)
+            if diff:
+                entry["diff"], entry["additions"], entry["deletions"] = diff
+        entries.append(entry)
+    return entries
 
 
 class CodexAppServer:
@@ -88,7 +213,7 @@ class CodexAppServer:
         # Command-based edits do not always produce a native FileChange item.
         # Keep their watcher fallback per completed turn so a later turn never
         # replaces a card that belongs to an earlier reply in the same thread.
-        self._workspace_change_results: dict[str, dict[str, list[dict[str, str]]]] = {}
+        self._workspace_change_results: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
         self._handed_off = False
@@ -249,22 +374,24 @@ class CodexAppServer:
 
     async def _start_workspace_change_watch(self, thread_id: str) -> None:
         await self._stop_workspace_change_watch(thread_id)
+        baseline = await asyncio.to_thread(snapshot_workspace, self.workspace)
         stop_event = asyncio.Event()
         task = asyncio.create_task(self._watch_workspace_changes(stop_event))
-        self._workspace_change_watches[thread_id] = WorkspaceChangeWatch(stop_event=stop_event, task=task)
+        self._workspace_change_watches[thread_id] = WorkspaceChangeWatch(stop_event=stop_event, task=task, baseline=baseline)
         # Let awatch register before turn/start can begin writing files.
         await asyncio.sleep(0)
 
-    async def _stop_workspace_change_watch(self, thread_id: str, *, collect: bool = False) -> dict[str, str]:
+    async def _stop_workspace_change_watch(self, thread_id: str, *, collect: bool = False) -> WorkspaceChangeCapture | None:
         watch = self._workspace_change_watches.pop(thread_id, None)
         if watch is None:
-            return {}
+            return None
         if collect:
             # Let the small debounce window flush the final write before closing.
             await asyncio.sleep(0.1)
         watch.stop_event.set()
+        changes: dict[str, str] = {}
         try:
-            return await asyncio.wait_for(watch.task, timeout=1)
+            changes = await asyncio.wait_for(watch.task, timeout=1)
         except TimeoutError:
             watch.task.cancel()
             try:
@@ -275,10 +402,13 @@ class CodexAppServer:
             raise
         except Exception:
             logger.warning("Unable to stop Codex workspace change watch", exc_info=True)
-        return {}
+        return WorkspaceChangeCapture(changes=changes, baseline=watch.baseline)
 
     async def _complete_workspace_change_watch(self, thread_id: str, turn_id: str | None) -> None:
-        changes = workspace_change_entries(await self._stop_workspace_change_watch(thread_id, collect=True))
+        capture = await self._stop_workspace_change_watch(thread_id, collect=True)
+        if capture is None:
+            return
+        changes = await asyncio.to_thread(workspace_change_entries, capture.changes, self.workspace, capture.baseline)
         # A watcher result without a turn ID cannot be placed beside a reply
         # reliably, so do not expose it as a misleading global card.
         if not changes or not turn_id:

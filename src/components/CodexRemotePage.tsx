@@ -1152,6 +1152,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
             <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
           ) : null}
+          {fileChangeSummary.files.length > 0 ? (
+            <span className="composer-file-change-summary__files" aria-label="各文件增删行数">
+              {fileChangeSummary.files.map((file) => {
+                const fileName = file.path.split(/[\\/]/).at(-1) || file.path
+                const hasStats = file.additions > 0 || file.deletions > 0
+                return (
+                  <span className="composer-file-change-summary__file" key={file.path} title={file.path}>
+                    <span>{fileName}</span>
+                    {hasStats ? <span className="composer-file-change-summary__file-stats"><i>+{file.additions}</i><em>-{file.deletions}</em></span> : null}
+                  </span>
+                )
+              })}
+            </span>
+          ) : null}
         </div>
       ) : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
@@ -1205,7 +1219,7 @@ interface WorkspaceExplorerProps {
   token: string
   cwd?: string
   threadId?: string
-  previewRequest: { id: number; cwd?: string; path: string } | null
+  previewRequest: { id: number; cwd?: string; path: string; diff?: string } | null
   onPreviewStateChange: (open: boolean) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
@@ -1227,6 +1241,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [mobilePanelHeight, setMobilePanelHeight] = useState(280)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewDiff, setPreviewDiff] = useState<string | null>(null)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
   const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
@@ -1258,10 +1273,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }, [cwd, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd = cwd) => {
+  const loadPreview = useCallback(async (path: string, requestedCwd = cwd, diff?: string) => {
     const generation = ++previewRequestGeneration.current
     onPreviewStateChange(true)
     setPreviewPath(path)
+    setPreviewDiff(diff ?? null)
     setPreviewFile(null)
     setPreviewError(null)
     setPreviewCopied(false)
@@ -1272,7 +1288,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       setPreviewFile(file)
     } catch (reason) {
       if (generation !== previewRequestGeneration.current) return
-      setPreviewError(reason instanceof Error ? reason.message : '无法读取文件')
+      if (!diff) setPreviewError(reason instanceof Error ? reason.message : '无法读取文件')
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
@@ -1288,6 +1304,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setContextMenu(null)
     setError(null)
     setPreviewPath(null)
+    setPreviewDiff(null)
     setPreviewFile(null)
     setPreviewLoading(false)
     setPreviewError(null)
@@ -1300,7 +1317,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
     if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
     handledPreviewRequest.current = previewRequest.id
-    if (desktopWorkspacePreviewAvailable()) void loadPreview(previewRequest.path, previewRequest.cwd)
+    if (desktopWorkspacePreviewAvailable()) void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff)
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
@@ -1375,6 +1392,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   function closePreview() {
     previewRequestGeneration.current += 1
     setPreviewPath(null)
+    setPreviewDiff(null)
     setPreviewLoading(false)
     setPreviewError(null)
     setPreviewCopied(false)
@@ -1441,6 +1459,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     if (lines.length > 1 && lines.at(-1) === '' && /(?:\r\n|\n|\r)$/.test(previewFile.content)) lines.pop()
     return lines
   }, [previewFile])
+  const previewDiffLines = useMemo(() => {
+    if (!previewDiff) return null
+    const lines = numberDiffLines(previewDiff).filter(({ line, kind }) => (
+      kind !== 'context' || !/^(?:diff --git |index |--- |\+\+\+ )/.test(line)
+    ))
+    return lines.length > 0 ? lines : null
+  }, [previewDiff])
+  const previewDiffStats = useMemo(() => previewDiffLines ? {
+    additions: previewDiffLines.filter(({ kind }) => kind === 'added').length,
+    deletions: previewDiffLines.filter(({ kind }) => kind === 'deleted').length,
+  } : null, [previewDiffLines])
   useEffect(() => {
     if (!previewFile) {
       setHighlightedPreview(null)
@@ -1494,20 +1523,37 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
                 <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button>
-                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
+                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, cwd, previewDiff ?? undefined)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
               </div>
             </div>
             {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件内容…</div> : null}
             {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
-            {previewFile ? (
-              <pre className="workspace-file-preview__code"><code>{previewLines.map((line, index) => (
-                <span className="workspace-file-preview__line" key={index}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
-                  ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
-                  : line || ' '}</span></span>
-              ))}</code></pre>
+            {previewFile || previewDiffLines ? (
+              <pre className="workspace-file-preview__code"><code>{previewDiffLines
+                ? previewDiffLines.map((diffLine, index) => {
+                  const content = diffLine.kind === 'added' || diffLine.kind === 'deleted'
+                    ? diffLine.line.slice(1)
+                    : diffLine.kind === 'context' && diffLine.line.startsWith(' ')
+                      ? diffLine.line.slice(1)
+                      : diffLine.line
+                  const highlightedLine = diffLine.newLine === null ? undefined : highlightedPreviewLines[diffLine.newLine - 1]
+                  return (
+                    <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} key={`diff-${index}`}>
+                      <span className="workspace-file-preview__line-number" aria-hidden="true">{diffLine.newLine ?? diffLine.oldLine ?? ''}</span>
+                      <span className="workspace-file-preview__line-content">{diffLine.kind !== 'deleted' && highlightedLine?.length
+                        ? highlightedLine.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                        : content || ' '}</span>
+                    </span>
+                  )
+                })
+                : previewLines.map((line, index) => (
+                  <span className="workspace-file-preview__line" key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
+                    ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                    : line || ' '}</span></span>
+                ))}</code></pre>
             ) : null}
           </section>
-          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">只读预览 · {previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}</footer>
+          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">只读预览 · {previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}</footer>
         </aside>
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
@@ -1534,7 +1580,7 @@ interface RemoteChatPaneProps {
   onReclaim: () => void
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
-  onOpenWorkspaceFile: (path: string, cwd?: string) => void
+  onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -1572,10 +1618,10 @@ function RemoteChatPane({
     onActivate()
     window.requestAnimationFrame(() => composerHandle.current?.appendDraft(fileReference, true))
   }, [composerHandle, onActivate, remote.activeThread?.cwd, remote.runtime.workspace])
-  const openChangedFilePreview = useCallback((path: string) => {
+  const openChangedFilePreview = useCallback((path: string, diff?: string) => {
     const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
     onActivate()
-    onOpenWorkspaceFile(workspaceRelativePath(cwd, path), cwd)
+    onOpenWorkspaceFile(workspaceRelativePath(cwd, path), cwd, diff)
   }, [onActivate, onOpenWorkspaceFile, remote.activeThread?.cwd, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
@@ -1783,7 +1829,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [workspaceFilePreviewWidth, setWorkspaceFilePreviewWidth] = useState(readWorkspaceFilePreviewWidth)
   const [workspaceFilePreviewOpen, setWorkspaceFilePreviewOpen] = useState(false)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
-  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string } | null>(null)
+  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string; diff?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
@@ -2398,10 +2444,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
                     onReclaim={() => void reclaimForRemote(paneIndex)}
                     onOpenSidebar={() => setSidebarOpen(true)}
                     onOpenWorkspace={() => setWorkspaceOpen(true)}
-                    onOpenWorkspaceFile={(path, cwd) => {
+                    onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
-                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path })
+                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
                     }}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
@@ -2787,7 +2833,7 @@ function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
   }
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string) => void }) {
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const { files, additions, deletions } = summarizeFileChanges(changes)
@@ -2823,7 +2869,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
               <span className="file-change-card__path-mobile" title={item.path}>{item.path}</span>
-              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
               <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
             </div>

@@ -121,6 +121,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-file-preview__code { min-width: 0; min-height: 0; flex: 1; overflow: auto; margin: 0; padding: 9px 0 15px; background: #111317; color: #d4d8e0; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; tab-size: 2; }
 .workspace-file-preview__code > code { display: block; min-width: max-content; }
 .workspace-file-preview__line { display: grid; min-width: 100%; width: max-content; grid-template-columns: 5ch minmax(max-content, 1fr); }
+.workspace-file-preview__line--added { background: rgba(50, 118, 69, .3); box-shadow: inset 3px 0 rgba(108, 201, 130, .8); color: #c2e8ca; }
+.workspace-file-preview__line--deleted { background: rgba(143, 57, 55, .3); box-shadow: inset 3px 0 rgba(230, 118, 112, .8); color: #f0c3c0; }
+.workspace-file-preview__line--hunk { background: rgba(100, 115, 143, .16); color: #9aa8bd; }
 .workspace-file-preview__line-number { padding-right: 1ch; color: #687181; text-align: right; user-select: none; }
 .workspace-file-preview__line-content { min-height: 1.55em; padding: 0 10px; white-space: pre; }
 .workspace-file-preview__line-content :is(.hljs-comment, .hljs-quote, .hljs-doctag) { color: #8b9b77; font-style: italic; }
@@ -390,9 +393,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-editor { position: relative; min-height: 45px; }
 .composer-file-change-summary { display: flex; min-width: 0; align-items: center; gap: 6px; margin: 0 2px 5px 28px; color: #858b95; font-size: 9px; line-height: 1.25; }
 .composer-file-change-summary > svg { flex: 0 0 auto; color: #929baa; }
+.composer-file-change-summary > span:not(.composer-file-change-summary__files) { flex: 0 0 auto; }
 .composer-file-change-summary__stats { display: inline-flex; flex: 0 0 auto; gap: 4px; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .composer-file-change-summary__stats i { color: #70bd89; font-style: normal; }
 .composer-file-change-summary__stats em { color: #db6e67; font-style: normal; }
+.composer-file-change-summary__files { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; overflow-x: auto; scrollbar-width: none; white-space: nowrap; }
+.composer-file-change-summary__files::-webkit-scrollbar { display: none; }
+.composer-file-change-summary__file { display: inline-flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 4px; padding-left: 7px; border-left: 1px solid rgba(132, 143, 161, .22); }
+.composer-file-change-summary__file > span:first-child { max-width: 120px; overflow: hidden; color: #a8afbb; text-overflow: ellipsis; }
+.composer-file-change-summary__file-stats { display: inline-flex; gap: 3px; font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.composer-file-change-summary__file-stats i { color: #70bd89; font-style: normal; }
+.composer-file-change-summary__file-stats em { color: #db6e67; font-style: normal; }
 .message-composer textarea { display: block; width: 100%; height: 100%; min-height: 0; max-height: none; resize: none; overflow-y: auto; padding: 7px 2px 8px 27px; border: 0; outline: 0; background: transparent; color: #e7e9ed; font: 12px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; scrollbar-width: none; }
 .message-composer textarea::-webkit-scrollbar { width: 0; height: 0; }
 .message-composer textarea::placeholder { color: #777e89; }
@@ -656,6 +667,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .message-composer textarea { color: #25303b; }
 .remote-shell--theme-light .composer-file-change-summary { color: #687585; }
 .remote-shell--theme-light .composer-file-change-summary > svg { color: #76859a; }
+.remote-shell--theme-light .composer-file-change-summary__file > span:first-child { color: #687585; }
 .remote-shell--theme-light .composer-queue { border-color: #c7d4ec; background: #eef3fb; }
 .remote-shell--theme-light .composer-queue__heading { color: #435c84; }
 .remote-shell--theme-light .composer-queue__heading small, .remote-shell--theme-light .composer-queue__copy small { color: #748298; }
@@ -739,6 +751,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .message-composer textarea { color: #4a392b; }
 .remote-shell--theme-warm .composer-file-change-summary { color: #827260; }
 .remote-shell--theme-warm .composer-file-change-summary > svg { color: #927e68; }
+.remote-shell--theme-warm .composer-file-change-summary__file > span:first-child { color: #827260; }
 .remote-shell--theme-warm .composer-queue { border-color: #ddc9af; background: #f8ede0; }
 .remote-shell--theme-warm .composer-queue__heading { color: #71563f; }
 .remote-shell--theme-warm .composer-queue__heading small, .remote-shell--theme-warm .composer-queue__copy small { color: #927d69; }
@@ -821,6 +834,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-file-change-summary { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .composer-file-change-summary > svg { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
+.remote-shell--theme-custom .composer-file-change-summary__file > span:first-child { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
 .remote-shell--theme-custom .workspace-explorer, .remote-shell--theme-custom .workspace-file-preview-panel { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .workspace-explorer--mobile-open { background: var(--custom-theme-background); backdrop-filter: none; -webkit-backdrop-filter: none; }
 .remote-shell--theme-custom .workspace-explorer__header, .remote-shell--theme-custom .workspace-explorer__root, .remote-shell--theme-custom .workspace-explorer__footer { border-color: var(--custom-theme-border); }
