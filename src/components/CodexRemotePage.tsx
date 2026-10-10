@@ -1402,8 +1402,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       return
     }
     let cancelled = false
-    void import('../lib/codeHighlight').then(({ highlightCodeLines }) => {
-      if (!cancelled) setHighlightedPreview({ file: previewFile, lines: highlightCodeLines(previewFile.path, previewFile.content) })
+    void import('../lib/codeHighlight').then(async ({ highlightCodeLines }) => {
+      const lines = await highlightCodeLines(previewFile.path, previewFile.content)
+      if (!cancelled) setHighlightedPreview({ file: previewFile, lines })
     }).catch(() => {
       if (!cancelled) setHighlightedPreview(null)
     })

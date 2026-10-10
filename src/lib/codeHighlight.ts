@@ -1,5 +1,5 @@
 import hljs from 'highlight.js/lib/core'
-import type { LanguageFn } from 'highlight.js'
+import type { AutoHighlightResult, LanguageFn } from 'highlight.js'
 import bash from 'highlight.js/lib/languages/bash'
 import c from 'highlight.js/lib/languages/c'
 import cpp from 'highlight.js/lib/languages/cpp'
@@ -126,6 +126,9 @@ const languageByExtension: Record<string, string> = {
   yml: 'yaml',
 }
 
+const plainTextExtensions = new Set(['csv', 'log', 'text', 'tsv', 'txt'])
+const autoDetectionSampleLength = 16 * 1024
+
 const escapedEntities: Record<string, string> = {
   amp: '&',
   gt: '>',
@@ -195,15 +198,53 @@ function languageForPath(path: string) {
   return languageByExtension[extension] ?? null
 }
 
-export function highlightCodeLines(path: string, content: string): HighlightedCodeSegment[][] {
+function isConfidentAutoDetection(result: AutoHighlightResult, content: string) {
+  if (!result.language || result.relevance < 3) return false
+
+  const hasStructuralSyntax = /[{}()\[\];=<>]|=>|::|:=/.test(content)
+  const hasMarkdownSyntax = /^\s{0,3}(?:#{1,6}\s|>\s|[-+*]\s|\d+\.\s)|\[[^\]]+\]\([^)]+\)/m.test(content)
+  const hasLanguageKeywords = /\b(?:function|const|let|var|def|class|struct|enum|fn|func|return|package|import|export|select|create|update|insert|from|where|puts|write-host)\b/i.test(content)
+  const hasConfigSyntax = /^\s*[\w.-]+\s*:\s+\S/m.test(content)
+  const secondBestRelevance = result.secondBest?.relevance ?? 0
+
+  // Syntax markers let short but structured files pass even when related
+  // languages (for example JavaScript and TypeScript) have similar scores.
+  if (hasStructuralSyntax || hasMarkdownSyntax || hasLanguageKeywords || hasConfigSyntax) return true
+
+  // For less structured formats, require a clear lead over other candidates.
+  return result.relevance >= 6 && result.relevance - secondBestRelevance >= 2
+}
+
+function highlightedLines(markup: string, content: string): HighlightedCodeSegment[][] {
+  const lines = splitHighlightedMarkup(markup)
+  if (lines.length > 1 && lines.at(-1)?.length === 0 && /(?:\r\n|\n|\r)$/.test(content)) lines.pop()
+  return lines
+}
+
+export async function highlightCodeLines(path: string, content: string): Promise<HighlightedCodeSegment[][]> {
   const language = languageForPath(path)
-  if (!language) return plainTextLines(content)
+  if (language) {
+    try {
+      const result = hljs.highlight(content, { language, ignoreIllegals: true })
+      return highlightedLines(result.value, content)
+    } catch {
+      return plainTextLines(content)
+    }
+  }
+
+  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
+  const extension = filename.split('.').at(-1) ?? ''
+  if (!content.trim() || plainTextExtensions.has(extension)) return plainTextLines(content)
 
   try {
-    const result = hljs.highlight(content, { language, ignoreIllegals: true })
-    const lines = splitHighlightedMarkup(result.value)
-    if (lines.length > 1 && lines.at(-1)?.length === 0 && /(?:\r\n|\n|\r)$/.test(content)) lines.pop()
-    return lines
+    // Keep the full language bundle out of the normal preview path; it is
+    // fetched only when an extension has no explicit grammar mapping.
+    const { default: autoHighlighter } = await import('highlight.js')
+    const detectionSample = content.slice(0, autoDetectionSampleLength)
+    const result = autoHighlighter.highlightAuto(detectionSample)
+    if (!result.language || !isConfidentAutoDetection(result, detectionSample)) return plainTextLines(content)
+    const highlighted = autoHighlighter.highlight(content, { language: result.language, ignoreIllegals: true })
+    return highlightedLines(highlighted.value, content)
   } catch {
     return plainTextLines(content)
   }
