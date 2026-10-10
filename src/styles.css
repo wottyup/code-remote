@@ -346,7 +346,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-edit-cancel { min-width: 32px; height: 29px; padding: 0 8px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 7px; background: transparent; color: #b8bfce; cursor: pointer; font-size: 10px; }
 .composer-edit-cancel:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #f0f2f8; }
 .composer-edit-cancel:disabled { cursor: wait; opacity: .55; }
-.send-button--confirm { min-width: 54px; }
+.send-button--confirm { min-width: 50px; font-size: 10px; font-weight: 500; }
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
 .composer-preferences { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .composer-menu { position: relative; min-width: 0; }

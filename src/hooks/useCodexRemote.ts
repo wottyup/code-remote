@@ -687,6 +687,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   // A restored queue may start only after a fresh thread/read confirms that
   // the matching Codex turn is idle. Cached UI alone is not authoritative.
   const [queueRecoveryReadyThreadId, setQueueRecoveryReadyThreadId] = useState<string | null>(null)
+  const [queueEditRevision, setQueueEditRevision] = useState(0)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const connectionRef = useRef<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const reconnectRef = useRef<() => void>(() => {})
@@ -717,6 +718,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const queuedTurnSteersInFlight = useRef(new Set<string>())
   const editingQueuedMessageByThread = useRef<Record<string, string>>({})
   const editingQueuedMessageThreadById = useRef(new Map<string, string>())
+  const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
 
   const setActiveTurnId = useCallback((turnId: string | null) => {
     activeTurnId.current = turnId
@@ -739,7 +741,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (next === current) return current
     const nextByThread = { ...queuedMessagesByThreadRef.current }
     if (next.length > 0) nextByThread[threadId] = next
-    else delete nextByThread[threadId]
+    else {
+      delete nextByThread[threadId]
+      deferredQueueAdvanceAfterEdit.current.delete(threadId)
+    }
     queuedMessagesByThreadRef.current = nextByThread
     setQueuedMessagesByThread(nextByThread)
     // Secondary panes are short-lived views. Let the primary controller own
@@ -1093,8 +1098,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!queuedMessagesByThreadRef.current[threadId]?.some((message) => message.id === messageId)) return false
     editingQueuedMessageByThread.current[threadId] = messageId
     editingQueuedMessageThreadById.current.set(messageId, threadId)
+    if (queueRecoveryReadyThreadId === threadId) deferredQueueAdvanceAfterEdit.current.add(threadId)
+    setQueueEditRevision((revision) => revision + 1)
     return true
-  }, [])
+  }, [queueRecoveryReadyThreadId])
 
   const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
@@ -1125,6 +1132,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return
     delete editingQueuedMessageByThread.current[threadId]
     editingQueuedMessageThreadById.current.delete(messageId)
+    setQueueEditRevision((revision) => revision + 1)
   }, [])
 
   const startQueuedMessage = useCallback(async (threadId: string, messageId: string) => {
@@ -1181,7 +1189,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [appendQueuedMessageToActiveThread, beginTurnTimer, onUnauthorized, requestTurnStart, setActiveTurnId, updateQueuedMessages])
 
   const startNextQueuedMessage = useCallback(async (threadId: string) => {
+    if (editingQueuedMessageByThread.current[threadId]) {
+      deferredQueueAdvanceAfterEdit.current.add(threadId)
+      return false
+    }
     const next = queuedMessagesByThreadRef.current[threadId]?.[0]
+    if (!next) {
+      deferredQueueAdvanceAfterEdit.current.delete(threadId)
+      return false
+    }
     return next ? startQueuedMessage(threadId, next.id) : false
   }, [startQueuedMessage])
 
@@ -1229,9 +1245,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   useEffect(() => {
     const threadId = activeThread?.id
     const queued = threadId ? queuedMessagesByThread[threadId] : undefined
+    const deferredAdvance = threadId ? deferredQueueAdvanceAfterEdit.current.has(threadId) : false
     if (
       !threadId
-      || queueRecoveryReadyThreadId !== threadId
+      || (!deferredAdvance && queueRecoveryReadyThreadId !== threadId)
       || !queued?.length
       || loadingHistory
       || connection !== 'connected'
@@ -1240,8 +1257,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       || isInterrupting
       || writerConflict
     ) return
+    if (editingQueuedMessageByThread.current[threadId]) {
+      deferredQueueAdvanceAfterEdit.current.add(threadId)
+      return
+    }
+    if (deferredAdvance) deferredQueueAdvanceAfterEdit.current.delete(threadId)
     void startNextQueuedMessage(threadId)
-  }, [activeThread?.id, connection, handedOff, isInterrupting, isRunning, loadingHistory, queueRecoveryReadyThreadId, queuedMessagesByThread, startNextQueuedMessage, writerConflict])
+  }, [activeThread?.id, connection, handedOff, isInterrupting, isRunning, loadingHistory, queueEditRevision, queueRecoveryReadyThreadId, queuedMessagesByThread, startNextQueuedMessage, writerConflict])
 
   const restoreActiveThread = useCallback(async () => {
     if (handedOffRef.current) return

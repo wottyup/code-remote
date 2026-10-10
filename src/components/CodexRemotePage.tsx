@@ -922,7 +922,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-queue" aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <div className="composer-queue__heading">
             <span>已排队 {queuedMessages.length} 条</span>
-            <small>{editingQueuedMessageId ? '正在编辑 · 确定后仍保留在队列' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
+            <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
           </div>
           <div className="composer-queue__list">
             {queuedMessages.map((message, index) => {
@@ -988,7 +988,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             : isRunning ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
           {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending}>取消</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
-            <button className={`send-button${isRunning ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}`} type="submit" disabled={!canSend} aria-label={editingQueuedMessageId ? '确定并保留在队列' : isRunning ? '将消息加入发送队列' : '发送消息'} title={editingQueuedMessageId ? '确定并保留在队列' : isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : editingQueuedMessageId ? <Check size={15} /> : <Send size={16} />}{editingQueuedMessageId ? <span>确定</span> : null}</button>
+            <button className={`send-button${isRunning ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}`} type="submit" disabled={!canSend} aria-label={editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'} title={editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : editingQueuedMessageId ? <Check size={13} /> : <Send size={16} />}{editingQueuedMessageId ? <span>确定</span> : null}</button>
           ) : null}
         </div>
       </div>
