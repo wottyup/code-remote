@@ -2,6 +2,7 @@ import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
+  BookOpen,
   Check,
   ChevronDown,
   ChevronRight,
@@ -1660,6 +1661,8 @@ function RemoteChatPane({
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
+  const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
     const indexes = new Map<string, number>()
     remote.messages.forEach((message, index) => {
@@ -1734,8 +1737,7 @@ function RemoteChatPane({
           ) : null}
           {remote.isRunning && !hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
-              <span className="running-indicator__activity"><LoaderCircle className="spin" size={15} /><span>{remote.activity?.label ?? '正在思考'}</span>{remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}</span>
-              {remote.runningTurnId ? <OperationLog operations={remote.operationsByTurn[remote.runningTurnId] ?? []} initiallyOpen /> : null}
+              <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
             </div>
           ) : null}
         </div>
@@ -2859,10 +2861,45 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
   )
 })
 
+function operationActivityDetail(operation: CodexOperation, activity: CodexActivity | null) {
+  if (operation.kind === 'file' && operation.label === '查看文件' && operation.detail) {
+    const paths = operation.detail.match(/(?:[A-Za-z]:)?(?:\.{1,2}[\\/])?[\w@.-]+(?:[\\/][\w@.-]+)*\.[A-Za-z0-9_-]+/g)
+    const path = paths?.at(-1)
+    if (path) return path.split(/[\\/]/).at(-1)
+  }
+  return operation.kind === 'command' ? operation.detail : activity?.detail ?? operation.detail
+}
+
+const OperationActivityLine = memo(function OperationActivityLine({ className, operation, activity, iconSize }: {
+  className: string
+  operation: CodexOperation | null
+  activity: CodexActivity | null
+  iconSize: number
+}) {
+  const isReadingFile = operation?.kind === 'file' && operation.label === '查看文件'
+  const label = isReadingFile
+    ? '正在读取'
+    : operation?.kind === 'command'
+      ? '正在运行'
+      : operation?.kind === 'search'
+        ? '正在搜索文件'
+        : activity?.label ?? '正在思考'
+  const detail = operation ? operationActivityDetail(operation, activity) : activity?.detail
+  const text = [label, detail].filter(Boolean).join(' ')
+
+  return (
+    <span className={`operation-activity ${className}`} aria-live="polite">
+      {isReadingFile ? <BookOpen size={iconSize} /> : <LoaderCircle className="spin" size={iconSize} />}
+      <span className="operation-activity__text" title={text}>{text}</span>
+    </span>
+  )
+})
+
 const MessageBubble = memo(function MessageBubble({ message, activity, operations, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
+  const currentOperation = [...operations].reverse().find((operation) => operation.status === 'running') ?? null
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
@@ -2871,16 +2908,13 @@ const MessageBubble = memo(function MessageBubble({ message, activity, operation
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {message.streaming ? (
-            <span className="chat-message__activity" aria-live="polite">
-              <LoaderCircle className="spin" size={12} />{activity?.label ?? '正在回复'}
-              {activity?.detail ? <small title={activity.detail}>{activity.detail}</small> : null}
-            </span>
+            <OperationActivityLine className="chat-message__activity" operation={currentOperation} activity={activity} iconSize={12} />
           ) : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
-        {message.role === 'assistant' ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
+        {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
         {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
