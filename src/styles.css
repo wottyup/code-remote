@@ -261,10 +261,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .approval-card__actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 0 9px; border: 1px solid #48453d; border-radius: 6px; background: #1f1e1b; color: #c8bda7; cursor: pointer; font-size: 9px; }
 .approval-card__actions button:hover { border-color: #77705f; }
 .approval-card__actions .approval-card__accept { border-color: #806840; background: #3b301f; color: #eed29f; }
-.file-change-card { width: min(100%, 840px); margin: -5px auto 0; overflow: clip; border: 1px solid #3a3b3e; border-radius: 10px; background: #292a2d; box-shadow: 0 8px 20px rgba(0, 0, 0, .14); }
+.file-change-card { width: min(100%, 840px); margin: -5px auto 0; overflow: visible; border: 1px solid #3a3b3e; border-radius: 10px; background: #292a2d; box-shadow: 0 8px 20px rgba(0, 0, 0, .14); }
 .file-change-card--inProgress { border-color: #505767; box-shadow: 0 8px 22px rgba(0, 0, 0, .16), 0 0 0 1px rgba(121, 139, 178, .08); }
 .file-change-card__heading { display: flex; min-height: 46px; align-items: center; gap: 8px; padding: 7px 9px; }
-.file-change-card--reviewing .file-change-card__heading { position: sticky; z-index: 5; top: 0; background: #292a2d; box-shadow: 0 1px 0 #3e3f42; }
+.file-change-card--reviewing .file-change-card__heading { position: sticky; z-index: 5; top: 0; border-radius: 9px 9px 0 0; background: #292a2d; box-shadow: 0 1px 0 #3e3f42; }
 .file-change-card__icon { display: grid; width: 28px; height: 28px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: #222326; color: #aeb3bc; }
 .file-change-card__summary { display: grid; min-width: 0; flex: 1; gap: 2px; }
 .file-change-card__summary strong { overflow: hidden; color: #dedfe2; font-size: 11px; font-weight: 590; text-overflow: ellipsis; white-space: nowrap; }
