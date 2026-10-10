@@ -73,6 +73,7 @@ export interface CodexWorkspaceTree {
   path: string
   entries: CodexWorkspaceEntry[]
   truncated: boolean
+  nextOffset: number | null
 }
 
 export interface CodexWorkspaceFile {
@@ -232,10 +233,11 @@ export const codexRemoteClient = {
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status')
   },
-  workspaceTree(token: string, cwd?: string, path = '') {
+  workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
     if (cwd) query.set('cwd', cwd)
     if (path) query.set('path', path)
+    if (offset > 0) query.set('offset', String(offset))
     return request<CodexWorkspaceTree>(token, `/api/v1/codex/workspace/tree${query.size ? '?' + query.toString() : ''}`)
   },
   workspaceFile(token: string, cwd: string | undefined, path: string) {

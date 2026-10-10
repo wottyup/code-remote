@@ -2,6 +2,7 @@ import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
+  ArrowUp,
   BookOpen,
   Check,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   Send,
   Settings2,
   ShieldCheck,
@@ -66,6 +68,7 @@ const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const workspaceFilePreviewWidthStorageKey = 'codex-remote.workspace-file-preview-width'
 const workspaceFilePreviewWidthRatioStorageKey = 'codex-remote.workspace-file-preview-width-ratio'
 const workspaceExplorerDefaultWidth = 340
@@ -206,9 +209,40 @@ function readWorkspaceExplorerWidth() {
   }
 }
 
+function readWorkspaceExplorerRoot() {
+  if (typeof window === 'undefined') return null
+  try {
+    return window.localStorage.getItem(workspaceExplorerRootStorageKey)?.trim() || null
+  } catch {
+    return null
+  }
+}
+
 function workspaceAbsolutePath(cwd: string | undefined, path: string) {
-  const base = cwd?.replace(/[\\/]+$/, '')
-  return base ? `${base}/${path}` : path
+  if (!cwd) return path
+  const trimmed = cwd.replace(/[\\/]+$/, '')
+  const separator = cwd.includes('\\') && !cwd.includes('/') ? '\\' : '/'
+  const base = trimmed || (cwd.startsWith('\\') ? '\\' : '/')
+  const rootedDrive = /^[a-z]:$/i.test(base) ? `${base}${separator}` : base
+  if (!path) return cwd
+  return `${rootedDrive}${rootedDrive.endsWith('/') || rootedDrive.endsWith('\\') ? '' : separator}${path}`
+}
+
+function workspaceParentPath(path: string) {
+  const drivePath = /^([a-z]:)[\\/]*(.*)$/i.exec(path)
+  const separator = path.includes('\\') && !path.includes('/') ? '\\' : '/'
+  if (drivePath) {
+    const segments = drivePath[2].split(/[\\/]+/).filter(Boolean)
+    if (segments.length === 0) return `${drivePath[1]}${separator}`
+    segments.pop()
+    return `${drivePath[1]}${separator}${segments.join(separator) || ''}`
+  }
+  const normalized = path.replace(/[\\/]+$/, '')
+  if (!normalized) return path.startsWith('\\') ? '\\' : '/'
+  const lastSeparator = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+  if (lastSeparator < 0) return path
+  if (lastSeparator === 0) return normalized[0]
+  return normalized.slice(0, lastSeparator)
 }
 
 function workspaceFileReference(cwd: string | undefined, path: string) {
@@ -1233,6 +1267,8 @@ function desktopWorkspacePreviewAvailable() {
 }
 
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+  const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
+  const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
@@ -1241,6 +1277,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [mobilePanelHeight, setMobilePanelHeight] = useState(280)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
   const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
@@ -1252,12 +1289,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
   const handledPreviewRequest = useRef(0)
-  const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
+  const browsingRoot = manualRoot || cwd
+  const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
 
   const directoryKey = (path: string) => path || '.'
   const closePreview = useCallback(() => {
     previewRequestGeneration.current += 1
     setPreviewPath(null)
+    setPreviewCwd(undefined)
     setPreviewDiff(null)
     setMobilePreviewDialog(false)
     setPreviewLoading(false)
@@ -1266,15 +1305,20 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     onPreviewStateChange(false)
   }, [onPreviewStateChange])
 
-  const loadDirectory = useCallback(async (path: string) => {
-    if (!cwd) return
+  const loadDirectory = useCallback(async (path: string, offset = 0) => {
+    if (!browsingRoot) return
     const generation = requestGeneration.current
     const key = directoryKey(path)
     setLoadingPaths((current) => ({ ...current, [key]: true }))
     try {
-      const tree = await codexRemoteClient.workspaceTree(token, cwd, path)
+      const tree = await codexRemoteClient.workspaceTree(token, browsingRoot, path, offset)
       if (generation !== requestGeneration.current) return
-      setDirectories((current) => ({ ...current, [key]: tree }))
+      setDirectories((current) => {
+        const entries = offset > 0 && current[key]
+          ? [...current[key].entries, ...tree.entries]
+          : tree.entries
+        return { ...current, [key]: { ...tree, entries } }
+      })
       setError(null)
     } catch (reason) {
       if (generation !== requestGeneration.current) return
@@ -1284,13 +1328,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         setLoadingPaths((current) => ({ ...current, [key]: false }))
       }
     }
-  }, [cwd, token])
+  }, [browsingRoot, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd = cwd, diff?: string) => {
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string) => {
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
     onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
+    setPreviewCwd(requestedCwd)
     setPreviewDiff(diff ?? null)
     setMobilePreviewDialog(mobileDialog)
     setPreviewFile(null)
@@ -1307,7 +1352,36 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
-  }, [closePreview, cwd, onPreviewStateChange, token])
+  }, [closePreview, onPreviewStateChange, token])
+
+  function bindRoot(path = rootInput) {
+    const nextRoot = path.trim()
+    if (!nextRoot) return
+    setManualRoot(nextRoot)
+    setRootInput(nextRoot)
+    setError(null)
+    try {
+      window.localStorage.setItem(workspaceExplorerRootStorageKey, nextRoot)
+    } catch {
+      // Keep the selected root for this page even when browser storage is unavailable.
+    }
+  }
+
+  function goToParentDirectory() {
+    if (!browsingRoot) return
+    const parent = workspaceParentPath(browsingRoot)
+    if (parent !== browsingRoot) bindRoot(parent)
+  }
+
+  function followChatDirectory() {
+    setManualRoot(null)
+    setRootInput(cwd ?? '')
+    try {
+      window.localStorage.removeItem(workspaceExplorerRootStorageKey)
+    } catch {
+      // The current page can still return to the chat directory.
+    }
+  }
 
   useEffect(() => {
     requestGeneration.current += 1
@@ -1319,6 +1393,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setContextMenu(null)
     setError(null)
     setPreviewPath(null)
+    setPreviewCwd(undefined)
     setPreviewDiff(null)
     setMobilePreviewDialog(false)
     setPreviewFile(null)
@@ -1326,8 +1401,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewError(null)
     setPreviewCopied(false)
     onPreviewStateChange(false)
-    if (cwd) void loadDirectory('')
-  }, [cwd, loadDirectory, onPreviewStateChange, scopeKey])
+    if (browsingRoot) void loadDirectory('')
+  }, [browsingRoot, cwd, loadDirectory, onPreviewStateChange, scopeKey])
+
+  useEffect(() => {
+    if (!manualRoot) setRootInput(cwd ?? '')
+  }, [cwd, manualRoot])
 
   useEffect(() => {
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
@@ -1386,7 +1465,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = (selectedPaths.includes(entry.path) ? selectedPaths : [entry.path])
-      .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(cwd, path)))
+      .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(browsingRoot, path)))
     if (paths.length === 0) return
     setSelectedPaths(paths)
     setContextMenu({ entry, paths, x, y })
@@ -1401,7 +1480,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
-    else void loadPreview(entry.path)
+    else void loadPreview(entry.path, browsingRoot)
   }
 
   async function copyPreview() {
@@ -1410,7 +1489,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
-    return workspaceAbsolutePath(cwd, entry.path)
+    return workspaceAbsolutePath(browsingRoot, entry.path)
   }
 
   function sizeLabel(size: number | null | undefined) {
@@ -1423,7 +1502,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   function renderDirectory(path: string, depth: number): ReactNode[] {
     const tree = directories[directoryKey(path)]
     if (!tree) return []
-    return tree.entries.flatMap((entry) => {
+    const rows = tree.entries.flatMap((entry) => {
       const isDirectory = entry.kind === 'directory'
       const isOpen = Boolean(expanded[entry.path])
       const absolutePath = entryAbsolutePath(entry)
@@ -1455,6 +1534,22 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       )
       return [row]
     })
+    if (tree.nextOffset !== null) {
+      rows.push(
+        <button
+          className="workspace-explorer__load-more"
+          key={`${directoryKey(path)}:load-more`}
+          type="button"
+          style={{ paddingLeft: `${10 + depth * 14}px` }}
+          disabled={Boolean(loadingPaths[directoryKey(path)])}
+          onClick={() => void loadDirectory(path, tree.nextOffset ?? 0)}
+        >
+          {loadingPaths[directoryKey(path)] ? <LoaderCircle className="spin" size={12} /> : <ChevronDown size={12} />}
+          {loadingPaths[directoryKey(path)] ? '继续读取…' : '加载更多'}
+        </button>,
+      )
+    }
+    return rows
   }
 
   const rootLoading = loadingPaths['.']
@@ -1503,18 +1598,34 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
-            <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
         </header>
-        <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
+        <div className="workspace-explorer__root">
+          <form className="workspace-explorer__root-form" onSubmit={(event) => { event.preventDefault(); bindRoot() }}>
+            <input
+              aria-label="服务端目录路径"
+              title={browsingRoot ?? '输入后端主机上的目录路径'}
+              value={rootInput}
+              onChange={(event) => setRootInput(event.currentTarget.value)}
+              placeholder="输入服务端目录路径"
+              spellCheck={false}
+            />
+            <button className="workspace-explorer__root-open" type="submit" title="绑定并打开目录"><FolderOpen size={13} /><span>打开</span></button>
+          </form>
+          <div className="workspace-explorer__root-actions">
+            <button type="button" onClick={goToParentDirectory} disabled={!browsingRoot || workspaceParentPath(browsingRoot) === browsingRoot} title="浏览上级目录"><ArrowUp size={12} />上级</button>
+            <button type="button" onClick={followChatDirectory} disabled={!manualRoot} title="恢复跟随当前聊天的工作目录"><RotateCcw size={12} />跟随聊天</button>
+          </div>
+        </div>
         <div className="workspace-explorer__body">
           <div className="workspace-explorer__tree">
-            {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
+            {!browsingRoot ? <p className="workspace-explorer__empty">还没有聊天工作目录，可以输入服务端路径打开文件夹。</p> : null}
             {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
             {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
-            {cwd && directories['.'] ? renderDirectory('', 0) : null}
-            {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
+            {browsingRoot && directories['.'] ? renderDirectory('', 0) : null}
+            {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
           </div>
         </div>
         <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
@@ -1553,7 +1664,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
                 <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button>
-                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, cwd, previewDiff ?? undefined)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
+                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
               </div>
             </div>
             {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件内容…</div> : null}
@@ -1590,7 +1701,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
-          {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
+          {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
         </div>,
         document.body,
       ) : null}

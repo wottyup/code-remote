@@ -112,7 +112,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__close, .mobile-workspace-button { display: none; }
 .workspace-explorer__header strong { color: #eef0f4; font-size: 12px; font-weight: 620; }
 .workspace-explorer__eyebrow { color: #858da2; font-size: 8px; letter-spacing: .12em; text-transform: uppercase; }
-.workspace-explorer__root { overflow: hidden; padding: 10px 14px 8px; border-bottom: 1px solid rgba(146, 157, 184, .1); color: #858d9b; font: 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-explorer__root { display: grid; min-width: 0; gap: 6px; padding: 8px 10px; border-bottom: 1px solid rgba(146, 157, 184, .1); color: #858d9b; font: 9px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workspace-explorer__root-form { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) auto; gap: 5px; }
+.workspace-explorer__root-form input { width: 100%; min-width: 0; height: 29px; padding: 0 7px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 6px; outline: 0; background: rgba(12, 14, 18, .52); color: #d5dae4; font: 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workspace-explorer__root-form input:focus { border-color: rgba(170, 186, 255, .65); box-shadow: 0 0 0 2px rgba(170, 186, 255, .12); }
+.workspace-explorer__root-form input::placeholder { color: #777f8d; }
+.workspace-explorer__root-open, .workspace-explorer__root-actions button { display: inline-flex; min-width: 0; min-height: 25px; align-items: center; justify-content: center; gap: 4px; padding: 0 7px; border: 1px solid rgba(146, 157, 184, .2); border-radius: 6px; background: rgba(35, 39, 49, .72); color: #c6cddb; cursor: pointer; font: 9px/1 ui-sans-serif, system-ui, sans-serif; white-space: nowrap; }
+.workspace-explorer__root-open:hover, .workspace-explorer__root-actions button:hover:not(:disabled) { border-color: rgba(170, 186, 255, .48); color: #f0f2f7; }
+.workspace-explorer__root-actions { display: flex; min-width: 0; justify-content: space-between; gap: 6px; }
+.workspace-explorer__root-actions button { min-height: 22px; padding-inline: 6px; }
+.workspace-explorer__root-actions button:disabled { cursor: default; opacity: .42; }
 .workspace-explorer__body { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr); overflow: hidden; }
 .workspace-explorer__tree { min-height: 0; overflow-y: auto; padding: 7px 5px 12px 4px; }
 .workspace-file-preview { display: flex; width: 100%; height: 100%; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; }
@@ -150,6 +159,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__entry--directory svg { color: #c5a875; }
 .workspace-explorer__entry small { flex: 0 0 auto; margin-left: auto; color: #687181; font-size: 8px; }
 .workspace-explorer__entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-explorer__load-more { display: flex; width: 100%; min-height: 27px; align-items: center; gap: 5px; border: 0; border-radius: 6px; background: transparent; color: #8993a3; cursor: pointer; font-size: 9px; text-align: left; }
+.workspace-explorer__load-more:hover:not(:disabled) { background: rgba(47, 52, 64, .5); color: #d5dbea; }
+.workspace-explorer__load-more:disabled { cursor: wait; opacity: .65; }
 .workspace-explorer__chevron { color: #727b8c !important; transition: transform .15s ease; }
 .workspace-explorer__chevron--open { transform: rotate(90deg); }
 .workspace-explorer__chevron-spacer { width: 13px; flex: 0 0 auto; }
@@ -714,7 +726,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .workspace-explorer__header, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { border-color: #e0e5eb; }
 .remote-shell--theme-light .workspace-explorer__header strong { color: #2a333d; }
 .remote-shell--theme-light .workspace-explorer__eyebrow, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { color: #7b8794; }
+.remote-shell--theme-light .workspace-explorer__root-form input { border-color: #d2dae4; background: #f8fafc; color: #334155; }
+.remote-shell--theme-light .workspace-explorer__root-form input::placeholder { color: #8793a0; }
+.remote-shell--theme-light .workspace-explorer__root-open, .remote-shell--theme-light .workspace-explorer__root-actions button { border-color: #d2dae4; background: #f8fafc; color: #52606d; }
 .remote-shell--theme-light .workspace-explorer__entry { color: #52606d; }
+.remote-shell--theme-light .workspace-explorer__load-more { color: #687787; }
+.remote-shell--theme-light .workspace-explorer__load-more:hover:not(:disabled) { background: #e6ecf2; color: #25303b; }
 .remote-shell--theme-light .workspace-explorer__entry:hover { border-color: #d7dfe8; background: #e6ecf2; color: #25303b; }
 .remote-shell--theme-light .workspace-explorer__entry--selected { border-color: #a9bfd8; background: #dbe7f4; color: #25303b; }
 .remote-shell--theme-light .workspace-explorer__entry small { color: #8a949e; }
@@ -798,7 +815,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-explorer__header, .remote-shell--theme-warm .workspace-explorer__root, .remote-shell--theme-warm .workspace-explorer__footer { border-color: #e8ded2; }
 .remote-shell--theme-warm .workspace-explorer__header strong { color: #514335; }
 .remote-shell--theme-warm .workspace-explorer__eyebrow, .remote-shell--theme-warm .workspace-explorer__root, .remote-shell--theme-warm .workspace-explorer__footer { color: #8b7d6d; }
+.remote-shell--theme-warm .workspace-explorer__root-form input { border-color: #ddc9af; background: #fbf6ef; color: #544230; }
+.remote-shell--theme-warm .workspace-explorer__root-form input::placeholder { color: #9a8975; }
+.remote-shell--theme-warm .workspace-explorer__root-open, .remote-shell--theme-warm .workspace-explorer__root-actions button { border-color: #ddc9af; background: #fbf6ef; color: #735237; }
 .remote-shell--theme-warm .workspace-explorer__entry { color: #76604c; }
+.remote-shell--theme-warm .workspace-explorer__load-more { color: #8b735d; }
+.remote-shell--theme-warm .workspace-explorer__load-more:hover:not(:disabled) { background: #f1e5d6; color: #4a392b; }
 .remote-shell--theme-warm .workspace-explorer__entry:hover { border-color: #e2d2bf; background: #f1e5d6; color: #4a392b; }
 .remote-shell--theme-warm .workspace-explorer__entry--selected { border-color: #cfb18f; background: #eddfcf; color: #4a392b; }
 .remote-shell--theme-warm .workspace-explorer__entry small { color: #998979; }
@@ -854,6 +876,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .workspace-explorer__header, .remote-shell--theme-custom .workspace-explorer__root, .remote-shell--theme-custom .workspace-explorer__footer { border-color: var(--custom-theme-border); }
 .remote-shell--theme-custom .workspace-explorer__header strong, .remote-shell--theme-custom .workspace-explorer__entry, .remote-shell--theme-custom .workspace-explorer__entry-name { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-explorer__eyebrow, .remote-shell--theme-custom .workspace-explorer__root, .remote-shell--theme-custom .workspace-explorer__footer, .remote-shell--theme-custom .workspace-explorer__entry small { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
+.remote-shell--theme-custom .workspace-explorer__load-more { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
+.remote-shell--theme-custom .workspace-explorer__load-more:hover:not(:disabled) { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .workspace-explorer__root-form input { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .workspace-explorer__root-form input::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 55%, transparent); }
+.remote-shell--theme-custom .workspace-explorer__root-open, .remote-shell--theme-custom .workspace-explorer__root-actions button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-explorer__entry:hover { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
 .remote-shell--theme-custom .workspace-explorer__entry--selected { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-explorer__add { border-color: var(--custom-theme-border); color: var(--custom-theme-text-color); }

@@ -6,7 +6,14 @@ from pathlib import Path
 
 from fastapi import HTTPException
 
-from codex_remote.app import WORKSPACE_FILE_PREVIEW_MAX_BYTES, WORKSPACE_FILE_PREVIEW_MAX_LINES, workspace_file_preview
+from codex_remote.app import (
+    WORKSPACE_FILE_PREVIEW_MAX_BYTES,
+    WORKSPACE_FILE_PREVIEW_MAX_LINES,
+    WORKSPACE_TREE_MAX_ENTRIES,
+    workspace_base_for_cwd,
+    workspace_directory_tree,
+    workspace_file_preview,
+)
 
 
 class WorkspaceFilePreviewTests(unittest.TestCase):
@@ -35,16 +42,51 @@ class WorkspaceFilePreviewTests(unittest.TestCase):
         self.assertEqual(traversal.exception.status_code, 400)
         self.assertEqual(absolute.exception.status_code, 400)
 
-    def test_rejects_hidden_and_ignored_paths(self) -> None:
+    def test_reads_hidden_and_previously_ignored_paths(self) -> None:
         (self.workspace / ".env").write_text("secret", encoding="utf-8")
         ignored = self.workspace / "node_modules" / "package.json"
         ignored.parent.mkdir()
         ignored.write_text("{}", encoding="utf-8")
 
-        for path in (".env", "node_modules/package.json"):
-            with self.subTest(path=path), self.assertRaises(HTTPException) as error:
-                workspace_file_preview(self.workspace, path)
-            self.assertEqual(error.exception.status_code, 404)
+        self.assertEqual(workspace_file_preview(self.workspace, ".env")["content"], "secret")
+        self.assertEqual(workspace_file_preview(self.workspace, "node_modules/package.json")["content"], "{}")
+
+    def test_accepts_a_directory_outside_the_configured_project_parent(self) -> None:
+        configured_workspace = self.workspace / "projects" / "current"
+        configured_workspace.mkdir(parents=True)
+        external_directory = self.workspace / "private" / "notes"
+        external_directory.mkdir(parents=True)
+
+        self.assertEqual(workspace_base_for_cwd(configured_workspace, str(external_directory)), external_directory.resolve())
+
+    def test_directory_tree_includes_hidden_and_previously_ignored_entries(self) -> None:
+        (self.workspace / ".env").write_text("secret", encoding="utf-8")
+        (self.workspace / ".git").mkdir()
+        (self.workspace / "node_modules").mkdir()
+        (self.workspace / "dist").mkdir()
+
+        tree = workspace_directory_tree(self.workspace)
+
+        self.assertEqual({entry["name"] for entry in tree["entries"]}, {".env", ".git", "dist", "node_modules"})
+
+    def test_directory_tree_paginates_without_losing_entries(self) -> None:
+        for index in range(WORKSPACE_TREE_MAX_ENTRIES + 2):
+            (self.workspace / f"file-{index:04}.txt").touch()
+
+        first_page = workspace_directory_tree(self.workspace)
+        second_page = workspace_directory_tree(self.workspace, offset=first_page["nextOffset"] or 0)
+
+        self.assertEqual(len(first_page["entries"]), WORKSPACE_TREE_MAX_ENTRIES)
+        self.assertTrue(first_page["truncated"])
+        self.assertEqual(len(second_page["entries"]), 2)
+        self.assertIsNone(second_page["nextOffset"])
+        self.assertEqual(len(first_page["entries"]) + len(second_page["entries"]), WORKSPACE_TREE_MAX_ENTRIES + 2)
+
+    def test_rejects_a_nonexistent_browser_directory(self) -> None:
+        with self.assertRaises(HTTPException) as error:
+            workspace_base_for_cwd(self.workspace, str(self.workspace / "missing"))
+
+        self.assertEqual(error.exception.status_code, 404)
 
     def test_rejects_symlinks_that_resolve_outside_the_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as outside_directory:

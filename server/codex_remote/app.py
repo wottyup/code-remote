@@ -119,33 +119,16 @@ WORKSPACE_TREE_MAX_ENTRIES = 400
 WORKSPACE_TREE_MAX_PATH_LENGTH = 1_024
 WORKSPACE_FILE_PREVIEW_MAX_BYTES = 1 * 1_024 * 1_024
 WORKSPACE_FILE_PREVIEW_MAX_LINES = 20_000
-WORKSPACE_SKIPPED_NAMES = {
-    ".git",
-    ".hg",
-    ".svn",
-    ".venv",
-    "venv",
-    "node_modules",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    "dist",
-    "build",
-}
-
-
 def workspace_base_for_cwd(workspace: Path, raw_cwd: str | None) -> Path:
-    """Resolve a thread cwd without allowing the file browser outside the project area."""
-    configured = workspace.expanduser().resolve()
-    allowed_root = configured.parent
-    candidate = Path(raw_cwd).expanduser() if raw_cwd else configured
-    if not candidate.is_absolute():
-        candidate = configured / candidate
-    candidate = candidate.resolve()
+    """Resolve a browser-selected or thread working directory on the server host."""
     try:
-        candidate.relative_to(allowed_root)
-    except ValueError as error:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="工作目录不在允许范围内") from error
+        configured = workspace.expanduser().resolve()
+        candidate = Path(raw_cwd).expanduser() if raw_cwd else configured
+        if not candidate.is_absolute():
+            candidate = configured / candidate
+        candidate = candidate.resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="目录路径无效") from error
     if not candidate.is_dir():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="工作目录不存在")
     return candidate
@@ -175,6 +158,43 @@ def workspace_entry_kind(path: Path) -> str | None:
     return None
 
 
+def workspace_directory_tree(base: Path, relative_path: str = "", offset: int = 0) -> dict[str, Any]:
+    directory = workspace_path(base, relative_path)
+    if not directory.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
+    if offset < 0:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="目录位置无效")
+    entries: list[dict[str, Any]] = []
+    try:
+        children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取目录") from error
+    page_end = min(offset + WORKSPACE_TREE_MAX_ENTRIES, len(children))
+    for child in children[offset:page_end]:
+        try:
+            child_path = workspace_path(base, str(child.relative_to(base)))
+            kind = workspace_entry_kind(child_path)
+            if kind is None:
+                continue
+            stat = child_path.stat()
+        except (OSError, ValueError, HTTPException):
+            continue
+        entries.append({
+            "name": child.name,
+            "path": child_path.relative_to(base).as_posix(),
+            "kind": kind,
+            "size": stat.st_size if kind == "file" else None,
+        })
+    next_offset = page_end if page_end < len(children) else None
+    return {
+        "cwd": str(base),
+        "path": directory.relative_to(base).as_posix() if directory != base else "",
+        "entries": entries,
+        "truncated": next_offset is not None,
+        "nextOffset": next_offset,
+    }
+
+
 def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | int]:
     if not relative_path or len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件路径无效或过长")
@@ -183,16 +203,11 @@ def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | in
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
     if any(part in {"", ".", ".."} for part in normalized_parts):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件路径无效")
-    if any(part.startswith(".") or part in WORKSPACE_SKIPPED_NAMES for part in normalized_parts):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或不可预览")
-
     candidate = workspace_path(base, relative_path)
     try:
         resolved_relative = candidate.relative_to(base)
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的文件") from error
-    if any(part.startswith(".") or part in WORKSPACE_SKIPPED_NAMES for part in resolved_relative.parts):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或不可预览")
     try:
         if not candidate.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
@@ -476,41 +491,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return runtime_status
 
     @app.get("/api/v1/codex/workspace/tree")
-    async def workspace_tree(cwd: str | None = None, path: str = "") -> dict[str, Any]:
+    async def workspace_tree(cwd: str | None = None, path: str = "", offset: int = 0) -> dict[str, Any]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
-        directory = workspace_path(base, path)
-        if not directory.is_dir():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="目录不存在")
-        entries: list[dict[str, Any]] = []
-        try:
-            children = sorted(directory.iterdir(), key=lambda item: (not item.is_dir(), item.name.casefold()))
-        except OSError as error:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取目录") from error
-        for child in children:
-            if child.name in WORKSPACE_SKIPPED_NAMES or child.name.startswith("."):
-                continue
-            try:
-                child_path = workspace_path(base, str(child.relative_to(base)))
-                kind = workspace_entry_kind(child_path)
-                if kind is None:
-                    continue
-                stat = child_path.stat()
-            except (OSError, ValueError, HTTPException):
-                continue
-            entries.append({
-                "name": child.name,
-                "path": child_path.relative_to(base).as_posix(),
-                "kind": kind,
-                "size": stat.st_size if kind == "file" else None,
-            })
-            if len(entries) >= WORKSPACE_TREE_MAX_ENTRIES:
-                break
-        return {
-            "cwd": str(base),
-            "path": directory.relative_to(base).as_posix() if directory != base else "",
-            "entries": entries,
-            "truncated": len(entries) >= WORKSPACE_TREE_MAX_ENTRIES,
-        }
+        return workspace_directory_tree(base, path, offset)
 
     @app.get("/api/v1/codex/workspace/file")
     async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
