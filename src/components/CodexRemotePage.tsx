@@ -1392,12 +1392,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [threadComposerPreferences])
 
   useEffect(() => {
-    const suppressBrowserContextMenu = (event: globalThis.MouseEvent) => event.preventDefault()
-    document.addEventListener('contextmenu', suppressBrowserContextMenu)
-    return () => document.removeEventListener('contextmenu', suppressBrowserContextMenu)
-  }, [])
-
-  useEffect(() => {
     if (!threadContextMenu) return
     const closeMenu = () => setThreadContextMenu(null)
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
