@@ -320,9 +320,72 @@ class CodexAppServer:
         return thread
 
     async def list_models(self) -> list[dict[str, Any]]:
-        result = await self.request("model/list", {"limit": 100, "includeHidden": False})
-        models = result.get("data", [])
-        return [model for model in models if isinstance(model, dict)] if isinstance(models, list) else []
+        configured_models = self._configured_models()
+        if configured_models:
+            return configured_models
+        try:
+            result = await self.request("model/list", {"limit": 100, "includeHidden": False})
+            models = result.get("data", [])
+            if isinstance(models, list) and models:
+                return [model for model in models if isinstance(model, dict)]
+        except CodexRuntimeError:
+            pass
+        return self._configured_models()
+
+    def _configured_models(self) -> list[dict[str, Any]]:
+        config_path = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+        try:
+            config_text = config_path.read_text(encoding="utf-8")
+        except OSError:
+            return []
+        catalog_path: Path | None = None
+        for line in config_text.splitlines():
+            if line.strip().startswith("model_catalog_json") and "=" in line:
+                raw_path = line.split("=", 1)[1].strip().strip('"').strip("'")
+                catalog_path = Path(raw_path).expanduser()
+                if not catalog_path.is_absolute():
+                    catalog_path = config_path.parent / catalog_path
+                break
+        if catalog_path is None:
+            return []
+        try:
+            catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        models = catalog.get("models") if isinstance(catalog, dict) else None
+        if not isinstance(models, list):
+            return []
+        configured_default = None
+        for line in config_text.splitlines():
+            if line.strip().startswith("model ="):
+                configured_default = line.split("=", 1)[1].strip().strip('"').strip("'")
+                break
+        result: list[dict[str, Any]] = []
+        for entry in models:
+            if not isinstance(entry, dict) or entry.get("visibility") != "list":
+                continue
+            model_id = entry.get("slug")
+            if not isinstance(model_id, str) or not model_id:
+                continue
+            efforts = entry.get("supported_reasoning_levels")
+            supported = [
+                {"reasoningEffort": item.get("effort"), "description": item.get("description")}
+                for item in efforts
+                if isinstance(item, dict) and isinstance(item.get("effort"), str)
+            ] if isinstance(efforts, list) else []
+            result.append({
+                "id": model_id,
+                "model": model_id,
+                "displayName": entry.get("display_name") or model_id,
+                "description": entry.get("description"),
+                "supportedReasoningEfforts": supported,
+                "defaultReasoningEffort": entry.get("default_reasoning_level"),
+                "inputModalities": entry.get("input_modalities") or ["text"],
+                "isDefault": model_id == configured_default,
+            })
+        if result and not any(model["isDefault"] for model in result):
+            result[0]["isDefault"] = True
+        return result
 
     async def start_thread(
         self,

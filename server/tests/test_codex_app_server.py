@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 from watchfiles import Change
 
@@ -20,6 +21,67 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(side_effect=[
+            {"data": [{"id": "server-1", "name": "server"}], "nextCursor": "cursor-1"},
+            {"data": [{"id": "server-2", "name": "second"}], "nextCursor": None},
+        ])
+        app_server._history.list_threads = Mock(return_value=[
+            {"id": "disk-1", "name": "disk"},
+            {"id": "server-1", "name": "disk copy"},
+        ])
+
+        threads = await app_server.list_threads()
+
+        self.assertEqual({"disk-1", "server-1", "server-2"}, {thread["id"] for thread in threads})
+        self.assertEqual("server", next(thread["name"] for thread in threads if thread["id"] == "server-1"))
+        self.assertEqual(2, app_server.request.await_count)
+
+    async def test_list_threads_falls_back_to_disk_when_app_server_is_unavailable(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._history.list_threads = Mock(return_value=[{"id": "disk-1", "name": "disk"}])
+        app_server.request = AsyncMock(side_effect=CodexRuntimeError("offline"))
+        threads = await app_server.list_threads()
+
+        self.assertEqual([{"id": "disk-1", "name": "disk"}], threads)
+
+    def test_configured_models_follow_codex_catalog_and_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            catalog_path = codex_home / "models-custom.json"
+            catalog_path.write_text(json.dumps({
+                "models": [
+                    {
+                        "slug": "gpt-new",
+                        "display_name": "GPT New",
+                        "visibility": "list",
+                        "input_modalities": ["text", "image"],
+                        "default_reasoning_level": "high",
+                        "supported_reasoning_levels": [{"effort": "high", "description": "deep"}],
+                    },
+                    {"slug": "hidden", "visibility": "hide"},
+                ]
+            }), encoding="utf-8")
+            (codex_home / "config.toml").write_text(
+                f'model = "gpt-new"\nmodel_catalog_json = "{catalog_path.as_posix()}"\n',
+                encoding="utf-8",
+            )
+            old_home = __import__("os").environ.get("CODEX_HOME")
+            try:
+                __import__("os").environ["CODEX_HOME"] = str(codex_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                models = app_server._configured_models()
+            finally:
+                if old_home is None:
+                    __import__("os").environ.pop("CODEX_HOME", None)
+                else:
+                    __import__("os").environ["CODEX_HOME"] = old_home
+
+            self.assertEqual(["gpt-new"], [model["model"] for model in models])
+            self.assertTrue(models[0]["isDefault"])
+            self.assertEqual("high", models[0]["defaultReasoningEffort"])
+
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[

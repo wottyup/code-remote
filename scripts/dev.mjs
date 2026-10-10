@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -8,7 +8,23 @@ const serverRoot = join(projectRoot, 'server')
 const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const isWindows = process.platform === 'win32'
 const configuredPython = process.env.CODEX_REMOTE_PYTHON
-const virtualEnvironmentPython = isWindows ? join(projectRoot, '.venv', 'Scripts', 'python.exe') : join(projectRoot, '.venv', 'bin', 'python')
+const configuredCodex = process.env.CODEX_REMOTE_COMMAND
+const vscodeExtensionRoot = isWindows ? join(process.env.USERPROFILE || '', '.vscode', 'extensions') : ''
+const vscodeCodexCandidates = isWindows && existsSync(vscodeExtensionRoot)
+  ? readdirSync(vscodeExtensionRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('openai.chatgpt-'))
+      .sort((left, right) => right.name.localeCompare(left.name))
+      .map((entry) => join(vscodeExtensionRoot, entry.name, 'bin', 'windows-x86_64', 'codex.exe'))
+  : []
+const windowsCodexCandidates = isWindows
+  ? [
+      ...vscodeCodexCandidates,
+      join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin', '8aaf1547b825b104', 'codex.exe'),
+    ]
+  : []
+const virtualEnvironmentPython = isWindows
+  ? join(projectRoot, '.venv', 'Scripts', 'python.exe')
+  : join(projectRoot, '.venv', 'bin', 'python')
 const python = configuredPython || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
 
 let engine = null
@@ -18,6 +34,14 @@ let shuttingDown = false
 
 function sleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
+}
+
+function cleanCodexEnvironment() {
+  for (const key of Object.keys(process.env)) {
+    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODEX_REMOTE_COMMAND', 'CODEX_REMOTE_PYTHON', 'CODEX_REMOTE_WORKSPACE', 'CODEX_REMOTE_AUTH_FILE'].includes(key)) {
+      delete process.env[key]
+    }
+  }
 }
 
 async function engineReady() {
@@ -80,6 +104,11 @@ async function main() {
   if (!existsSync(viteEntrypoint)) {
     throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)
   }
+
+  if (!configuredCodex && windowsCodexCandidates.some((candidate) => existsSync(candidate))) {
+    process.env.CODEX_REMOTE_COMMAND = windowsCodexCandidates.find((candidate) => existsSync(candidate))
+  }
+  cleanCodexEnvironment()
 
   if (await engineReady()) {
     console.log('复用已运行的本机 Codex 引擎。')
