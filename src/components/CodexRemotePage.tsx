@@ -138,18 +138,19 @@ function clampWorkspaceExplorerWidth(value: number, previewOpen = false, preview
   return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(previewOpen, previewWidth), value)))
 }
 
-function workspaceFilePreviewWidthLimit() {
-  return Math.max(0, Math.min(workspaceFilePreviewMaxWidth, workspacePanelsWidthLimit(true) - workspaceExplorerMinimumWidth()))
+function workspaceFilePreviewWidthLimit(explorerWidth = workspaceExplorerMinimumWidth()) {
+  return Math.max(0, Math.min(workspaceFilePreviewMaxWidth, workspacePanelsWidthLimit(true) - explorerWidth))
 }
 
 function fitWorkspacePreviewWidths(explorerWidth: number, previewWidth: number) {
   const totalLimit = workspacePanelsWidthLimit(true)
   const minimumExplorerWidth = workspaceExplorerMinimumWidth()
-  const maximumPreviewWidth = workspaceFilePreviewWidthLimit()
-  const minimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, maximumPreviewWidth)
-  const nextPreviewWidth = Math.round(Math.max(minimumPreviewWidth, Math.min(maximumPreviewWidth, previewWidth)))
-  const maximumExplorerWidth = Math.max(minimumExplorerWidth, Math.min(workspaceExplorerMaxWidth, totalLimit - nextPreviewWidth))
+  const minimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, Math.max(0, totalLimit - minimumExplorerWidth))
+  const maximumExplorerWidth = Math.max(minimumExplorerWidth, Math.min(workspaceExplorerMaxWidth, totalLimit - minimumPreviewWidth))
   const nextExplorerWidth = Math.round(Math.max(minimumExplorerWidth, Math.min(maximumExplorerWidth, explorerWidth)))
+  const maximumPreviewWidth = workspaceFilePreviewWidthLimit(nextExplorerWidth)
+  const nextMinimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, maximumPreviewWidth)
+  const nextPreviewWidth = Math.round(Math.max(nextMinimumPreviewWidth, Math.min(maximumPreviewWidth, previewWidth)))
   return { explorerWidth: nextExplorerWidth, previewWidth: nextPreviewWidth }
 }
 
@@ -2408,8 +2409,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               role="separator"
               aria-label="调整文件预览宽度"
               aria-orientation="vertical"
-              aria-valuemin={Math.min(workspaceFilePreviewMinWidth, workspaceFilePreviewWidthLimit())}
-              aria-valuemax={workspaceFilePreviewWidthLimit()}
+              aria-valuemin={Math.min(workspaceFilePreviewMinWidth, workspaceFilePreviewWidthLimit(workspaceExplorerWidth))}
+              aria-valuemax={workspaceFilePreviewWidthLimit(workspaceExplorerWidth)}
               aria-valuenow={workspaceFilePreviewWidth}
               tabIndex={0}
               onPointerDown={startWorkspaceFilePreviewResize}
@@ -2419,7 +2420,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               onLostPointerCapture={finishWorkspaceFilePreviewResize}
               onDoubleClick={() => setWorkspaceFilePreviewWidthValue(workspaceFilePreviewDefaultWidth, true)}
               onKeyDown={(event) => {
-                const limits = workspaceFilePreviewWidthLimit()
+                const limits = workspaceFilePreviewWidthLimit(workspaceExplorerWidthRef.current)
                 const minimum = Math.min(workspaceFilePreviewMinWidth, limits)
                 const nextWidth = event.key === 'ArrowLeft'
                   ? workspaceFilePreviewWidthRef.current + 24
