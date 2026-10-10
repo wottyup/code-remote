@@ -537,6 +537,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-pane-slot { width: 100%; height: 100%; }
   .remote-pane-slot:not(:has(.conversation-pane--selected)) { display: none; }
   .workspace-explorer { display: none; }
+  .workspace-file-preview__code { font-size: 10px; line-height: 1.55; }
   .workspace-explorer--mobile-open { position: fixed; z-index: 31; top: 56px; right: 8px; left: 8px; display: grid; height: var(--workspace-mobile-height, 280px); max-height: none; border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 18px 48px rgba(0, 0, 0, .38); }
   .workspace-explorer--mobile-open .workspace-explorer__close { display: grid; }
   .workspace-explorer__add { display: grid; width: 30px; height: 29px; flex: 0 0 30px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #aabaff; cursor: pointer; }
