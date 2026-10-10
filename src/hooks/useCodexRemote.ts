@@ -10,6 +10,7 @@ import {
   type CodexApprovalPolicy,
   type CodexRuntime,
   type CodexThread,
+  type CodexThreadDetails,
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
 
@@ -242,6 +243,28 @@ function latestTurnState(thread: { turns?: unknown[] }) {
   const running = latest?.status === 'inProgress' || latest?.status === 'running'
   const turnId = typeof latest?.id === 'string' ? latest.id : null
   return { running, turnId }
+}
+
+function isAmbiguousNetworkFailure(reason: unknown) {
+  if (reason instanceof RemoteApiError || !(reason instanceof Error)) return false
+  return reason instanceof TypeError || /failed to fetch|network|load failed/i.test(reason.message)
+}
+
+function threadContainsNewPayload(thread: CodexThreadDetails, previousMessageIds: Set<string>, payload: QueuedTurnPayload) {
+  return messagesFromThread(thread).some((message) => {
+    if (message.role !== 'user' || previousMessageIds.has(message.id)) return false
+    if (payload.requestText) return message.text === payload.requestText
+    const images = message.images ?? []
+    return images.length === payload.images.length
+      && images.every((image, index) => image.name === payload.images[index]?.name)
+  })
+}
+
+function sendFailureMessage(reason: unknown) {
+  if (isAmbiguousNetworkFailure(reason)) {
+    return '连接中断，无法确认消息是否送达。草稿已保留；恢复后先检查对话记录，再决定是否重试。'
+  }
+  return reason instanceof Error ? reason.message : '发送消息失败'
 }
 
 function isActiveWriterError(reason: unknown) {
@@ -2120,6 +2143,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return true
     }
     const localId = payload.id
+    const previousMessageIds = new Set(messages.map((message) => message.id))
     const rememberStartedTurn = (turnId: string | null) => {
       if (!turnId) return
       setActiveTurnId(turnId)
@@ -2147,6 +2171,31 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason) && activeThreadId.current === thread.id) {
+        try {
+          const recoveredThread = await codexRemoteClient.readThread(token, thread.id)
+          if (threadContainsNewPayload(recoveredThread, previousMessageIds, payload)) {
+            const { running, turnId } = latestTurnState(recoveredThread)
+            setActiveThread(recoveredThread)
+            setActiveTurnId(running ? turnId : null)
+            setIsRunning(running)
+            setIsInterrupting(false)
+            setActivity(running ? { label: '正在思考' } : null)
+            if (!running) {
+              finishTurnTimer()
+              resetStreamingAssistant()
+            }
+            setQueueRecoveryReadyThreadId(running ? null : thread.id)
+            setError(null)
+            void loadThread(thread.id, ++historyRevision.current, true)
+            void refreshThreads()
+            return true
+          }
+        } catch {
+          // Keep the draft and report an uncertain delivery state if history
+          // cannot be read while the mobile connection is still interrupted.
+        }
+      }
       historyRevision.current += 1
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
@@ -2156,7 +2205,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setIsInterrupting(false)
       clearTurnTimer()
       setActivity(null)
-      const message = reason instanceof Error ? reason.message : '发送消息失败'
+      const message = sendFailureMessage(reason)
       if (isActiveWriterError(reason)) {
         writerConflictRef.current = true
         setWriterConflict(true)
@@ -2170,7 +2219,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       return false
     }
-  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, isRunning, onUnauthorized, requestTurnStart, setActiveTurnId, startNextQueuedMessage, updateQueuedMessages])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshThreads, requestTurnStart, resetStreamingAssistant, setActiveTurnId, startNextQueuedMessage, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
