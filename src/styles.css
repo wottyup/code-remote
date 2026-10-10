@@ -444,6 +444,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
 .composer-preferences { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .composer-menu { position: relative; min-width: 0; }
+.composer-menu--open { z-index: 21; }
 .composer-menu__trigger { display: flex; align-items: center; gap: 6px; max-width: 205px; height: 29px; padding: 0 9px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 9px; background: rgba(20, 22, 28, .62); color: #d8dbe1; cursor: pointer; font-size: 10px; }
 .composer-menu__trigger:hover:not(:disabled), .composer-menu--open .composer-menu__trigger { border-color: #66718a; background: rgba(38, 41, 51, .86); }
 .composer-menu__trigger:disabled { cursor: not-allowed; opacity: .55; }
@@ -477,7 +478,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @container remote-workspace (max-width: 680px) {
   .remote-workspace > .message-composer { width: calc(100% - 24px); margin-inline: 12px; }
   .message-composer__footer { gap: 6px; }
-  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: hidden; }
+  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; }
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
   .composer-menu__label, .composer-hint { display: none; }
@@ -629,7 +630,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .connection-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remote-workspace > .message-composer { width: calc(100% - 24px); margin-inline: 12px; }
   .message-composer__footer { gap: 6px; }
-  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: minmax(0, 1.2fr) minmax(0, .85fr) minmax(0, 1.15fr); gap: 4px; overflow: hidden; }
+  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: minmax(0, 1.2fr) minmax(0, .85fr) minmax(0, 1.15fr); gap: 4px; }
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
   .composer-menu__label, .composer-hint { display: none; }
