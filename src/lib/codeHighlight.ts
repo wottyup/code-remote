@@ -16,6 +16,7 @@ import javascript from 'highlight.js/lib/languages/javascript'
 import json from 'highlight.js/lib/languages/json'
 import kotlin from 'highlight.js/lib/languages/kotlin'
 import makefile from 'highlight.js/lib/languages/makefile'
+import markdown from 'highlight.js/lib/languages/markdown'
 import php from 'highlight.js/lib/languages/php'
 import powershell from 'highlight.js/lib/languages/powershell'
 import python from 'highlight.js/lib/languages/python'
@@ -50,6 +51,7 @@ const languages = {
   json,
   kotlin,
   makefile,
+  markdown,
   php,
   powershell,
   python,
@@ -99,6 +101,8 @@ const languageByExtension: Record<string, string> = {
   kt: 'kotlin',
   kts: 'kotlin',
   less: 'css',
+  md: 'markdown',
+  markdown: 'markdown',
   mjs: 'javascript',
   mts: 'typescript',
   php: 'php',
