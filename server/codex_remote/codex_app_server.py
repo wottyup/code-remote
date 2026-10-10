@@ -206,10 +206,10 @@ class CodexAppServer:
         self._runtime_home = (
             Path(configured_runtime_home).expanduser().resolve()
             if configured_runtime_home
-            else self.workspace / ".codex-remote" / "app-server-home"
+            else Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Codex Remote" / "app-server-home"
         )
         if self._runtime_home == self._history_home:
-            self._runtime_home = self.workspace / ".codex-remote" / "app-server-home"
+            self._runtime_home = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Codex Remote" / "app-server-home"
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
