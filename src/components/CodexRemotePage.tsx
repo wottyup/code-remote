@@ -1752,6 +1752,7 @@ function RemoteChatPane({
   const forceMessageStreamBottomFor = useRef<string | null>(null)
   const forceMessageStreamBottomVersion = useRef(0)
   const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
+  const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeThreadId = remote.activeThread?.id
@@ -1815,6 +1816,22 @@ function RemoteChatPane({
     if (!active) return
     forceMessageStreamToBottom(activeThreadId)
   }, [active, activeThreadId, forceMessageStreamToBottom])
+
+  useLayoutEffect(() => {
+    let latestUserMessageId: string | null = null
+    for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+      const message = remote.messages[index]
+      if (message?.role === 'user') {
+        latestUserMessageId = message.id
+        break
+      }
+    }
+    const previous = lastObservedUserMessage.current
+    lastObservedUserMessage.current = { threadId: activeThreadId ?? null, messageId: latestUserMessageId }
+    if (!active || !activeThreadId || remote.loadingHistory || previous.threadId !== activeThreadId) return
+    if (!latestUserMessageId || latestUserMessageId === previous.messageId) return
+    forceMessageStreamToBottom(activeThreadId)
+  }, [active, activeThreadId, forceMessageStreamToBottom, remote.loadingHistory, remote.messages])
 
   useLayoutEffect(() => {
     if (!active) return
