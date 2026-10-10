@@ -715,6 +715,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>(queuedMessagesByThread)
   const queuedTurnStartsInFlight = useRef(new Set<string>())
   const queuedTurnSteersInFlight = useRef(new Set<string>())
+  const editingQueuedMessageByThread = useRef<Record<string, string>>({})
+  const editingQueuedMessageThreadById = useRef(new Map<string, string>())
 
   const setActiveTurnId = useCallback((turnId: string | null) => {
     activeTurnId.current = turnId
@@ -1082,8 +1084,52 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       : [...current, localMessage])
   }, [])
 
+  const beginEditQueuedMessage = useCallback((messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId || editingQueuedMessageByThread.current[threadId]) return false
+    const steerPrefix = `${threadId}:`
+    const steeringThreadMessage = [...queuedTurnSteersInFlight.current].some((requestKey) => requestKey.startsWith(steerPrefix))
+    if (queuedTurnStartsInFlight.current.has(threadId) || steeringThreadMessage) return false
+    if (!queuedMessagesByThreadRef.current[threadId]?.some((message) => message.id === messageId)) return false
+    editingQueuedMessageByThread.current[threadId] = messageId
+    editingQueuedMessageThreadById.current.set(messageId, threadId)
+    return true
+  }, [])
+
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId)
+    if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
+    const text = input.prompt.trim()
+    const images = [...input.images]
+    const documents = [...(input.documents ?? [])]
+    let updated = false
+    updateQueuedMessages(threadId, (current) => {
+      if (!current.some((message) => message.id === messageId)) return current
+      updated = true
+      return current.map((message) => message.id === messageId
+        ? {
+          ...message,
+          text,
+          requestText: queuedRequestText(text, documents),
+          images,
+          ...(documents.length > 0 ? { documents } : { documents: undefined }),
+        }
+        : message)
+    })
+    if (updated) setQueueRecoveryReadyThreadId((current) => current === threadId ? null : current)
+    return updated
+  }, [setQueueRecoveryReadyThreadId, updateQueuedMessages])
+
+  const endEditQueuedMessage = useCallback((messageId: string) => {
+    const threadId = editingQueuedMessageThreadById.current.get(messageId)
+    if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return
+    delete editingQueuedMessageByThread.current[threadId]
+    editingQueuedMessageThreadById.current.delete(messageId)
+  }, [])
+
   const startQueuedMessage = useCallback(async (threadId: string, messageId: string) => {
     if (handedOffRef.current) return false
+    if (editingQueuedMessageByThread.current[threadId]) return false
     if (queuedTurnStartsInFlight.current.has(threadId)) return false
     const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
     if (!payload) return false
@@ -1145,7 +1191,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return false
     }
     const threadId = activeThreadId.current
-    if (!threadId || queuedTurnStartsInFlight.current.has(threadId)) return false
+    if (!threadId || editingQueuedMessageByThread.current[threadId] || queuedTurnStartsInFlight.current.has(threadId)) return false
     const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
     if (!payload) return false
     const requestKey = `${threadId}:${messageId}`
@@ -1176,7 +1222,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const removeQueuedMessage = useCallback((messageId: string) => {
     const threadId = activeThreadId.current
-    if (!threadId) return
+    if (!threadId || editingQueuedMessageByThread.current[threadId]) return
     updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== messageId))
   }, [updateQueuedMessages])
 
@@ -1880,6 +1926,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     createThread,
     sendMessage,
     sendQueuedMessageNow,
+    beginEditQueuedMessage,
+    updateQueuedMessage,
+    endEditQueuedMessage,
     removeQueuedMessage,
     interrupt,
     handoffToLocalCodex,

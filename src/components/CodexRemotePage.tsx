@@ -16,6 +16,7 @@ import {
   LoaderCircle,
   Menu,
   MessagesSquare,
+  Pencil,
   Plus,
   RefreshCw,
   Send,
@@ -501,6 +502,9 @@ interface MessageComposerProps {
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
+  onBeginQueuedEdit: (messageId: string) => boolean
+  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean
+  onEndQueuedEdit: (messageId: string) => void
   onRemoveQueued: (messageId: string) => void
   onInterrupt: () => void
   onRefresh: () => void
@@ -526,6 +530,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onSend,
   queuedMessages,
   onSendQueuedNow,
+  onBeginQueuedEdit,
+  onUpdateQueuedMessage,
+  onEndQueuedEdit,
   onRemoveQueued,
   onInterrupt,
   onRefresh,
@@ -541,14 +548,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
   })
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
+  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerHeightWasResized = useRef(false)
   const inputIsComposing = useRef(false)
+  const editingDraftSnapshot = useRef<{
+    draft: string
+    images: CodexImageAttachment[]
+    documents: CodexDocumentAttachment[]
+    attachmentError: string | null
+  } | null>(null)
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
@@ -596,6 +611,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
+  useEffect(() => () => {
+    const messageId = editingQueuedMessageIdRef.current
+    if (messageId) onEndQueuedEdit(messageId)
+  }, [onEndQueuedEdit])
+
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
       updateDraft(value)
@@ -635,6 +655,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
+    const snapshot = editingDraftSnapshot.current
+    if (snapshot) {
+      saveComposerDraft(draftScope, snapshot.draft)
+      draftSaveTimer.current = undefined
+      return
+    }
     const timer = window.setTimeout(() => saveComposerDraft(draftScope, draft), 260)
     draftSaveTimer.current = timer
     return () => {
@@ -642,10 +668,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       window.clearTimeout(timer)
       draftSaveTimer.current = undefined
     }
-  }, [draft, draftScope])
+  }, [draft, draftScope, editingQueuedMessageId])
 
   useLayoutEffect(() => {
-    const persistDraft = () => saveComposerDraft(draftScope, draftRef.current)
+    const persistDraft = () => saveComposerDraft(draftScope, editingDraftSnapshot.current?.draft ?? draftRef.current)
     window.addEventListener('pagehide', persistDraft)
     return () => {
       window.removeEventListener('pagehide', persistDraft)
@@ -678,8 +704,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   const canCompose = !sending && !writerConflict && connection === 'connected'
   const canConfigure = canCompose && !isRunning
-  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0) && canCompose
-  const canAttachImages = canCompose && modelSupportsImages
+  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
+    && (editingQueuedMessageId ? !sending : canCompose)
+  const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
 
   async function attachImages(files: File[]) {
     if (files.length === 0) return
@@ -714,6 +741,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (editingQueuedMessageId) {
+      confirmQueuedEdit()
+      return
+    }
     const prompt = draft.trim()
     if ((!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) || !canCompose) return
     if (!modelSupportsImages && attachedImages.length > 0) {
@@ -744,6 +775,69 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError((current) => current ?? previousAttachmentError)
     }
     setSending(false)
+  }
+
+  function restoreDraftAfterQueuedEdit() {
+    const snapshot = editingDraftSnapshot.current
+    editingDraftSnapshot.current = null
+    if (!snapshot) return
+    updateDraft(snapshot.draft)
+    setAttachedImages(snapshot.images)
+    setAttachedDocuments(snapshot.documents)
+    setAttachmentError(snapshot.attachmentError)
+  }
+
+  function beginQueuedEdit(message: QueuedTurnMessage) {
+    if (editingQueuedMessageId || sending || sendingQueuedId) return
+    if (!onBeginQueuedEdit(message.id)) {
+      setAttachmentError('这条排队消息正在处理中，请稍后再试。')
+      return
+    }
+    editingDraftSnapshot.current = {
+      draft: draftRef.current,
+      images: attachedImages,
+      documents: attachedDocuments,
+      attachmentError,
+    }
+    editingQueuedMessageIdRef.current = message.id
+    setEditingQueuedMessageId(message.id)
+    updateDraft(message.text)
+    setAttachedImages(message.images)
+    setAttachedDocuments(message.documents ?? [])
+    setAttachmentError(null)
+    window.requestAnimationFrame(() => composer.current?.focus())
+  }
+
+  function finishQueuedEdit() {
+    const messageId = editingQueuedMessageIdRef.current
+    if (messageId) onEndQueuedEdit(messageId)
+    editingQueuedMessageIdRef.current = null
+    setEditingQueuedMessageId(null)
+    restoreDraftAfterQueuedEdit()
+  }
+
+  function confirmQueuedEdit() {
+    const messageId = editingQueuedMessageIdRef.current
+    if (!messageId || sending) return
+    const prompt = draftRef.current.trim()
+    if (!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) {
+      setAttachmentError('消息内容和附件不能同时为空。')
+      return
+    }
+    if (!onUpdateQueuedMessage(messageId, {
+      prompt,
+      images: attachedImages,
+      documents: attachedDocuments,
+    })) {
+      setAttachmentError('排队消息更新失败，请取消后重试。')
+      return
+    }
+    finishQueuedEdit()
+  }
+
+  function cancelQueuedEdit() {
+    if (!editingQueuedMessageIdRef.current) return
+    finishQueuedEdit()
   }
 
   async function sendQueuedNow(messageId: string) {
@@ -828,22 +922,27 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-queue" aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <div className="composer-queue__heading">
             <span>已排队 {queuedMessages.length} 条</span>
-            <small>{isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
+            <small>{editingQueuedMessageId ? '正在编辑 · 确定后仍保留在队列' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
           </div>
           <div className="composer-queue__list">
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
+              const isEditing = editingQueuedMessageId === message.id
+              const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
               const summary = message.text || (message.documents?.length
                 ? `附件文档：${message.documents.length} 个文件`
                 : `${message.images.length} 张图片`)
               return (
-                <div className="composer-queue__item" key={message.id}>
+                <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
-                  <button className="composer-queue__send" type="button" disabled={sendingNow} onClick={() => void sendQueuedNow(message.id)} title="立即发送给当前 Codex 回复">
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked} onClick={() => beginQueuedEdit(message)} title={isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
+                    <Pencil size={11} /><span>{isEditing ? '编辑中' : '编辑'}</span>
+                  </button>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow} onClick={() => void sendQueuedNow(message.id)} title="立即发送给当前 Codex 回复">
                     {sendingNow ? <LoaderCircle className="spin" size={12} /> : <Send size={12} />}<span>立即发送</span>
                   </button>
-                  <button className="composer-queue__remove" type="button" disabled={sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
                 </div>
               )
             })}
@@ -866,8 +965,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           onPaste={handlePaste}
           onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
           onPointerDown={() => window.CodexRemoteAndroid?.showKeyboard?.()}
-          placeholder="给 Codex 发送消息…"
-          aria-label="发送消息给 Codex"
+          placeholder={editingQueuedMessageId ? '编辑排队消息…' : '给 Codex 发送消息…'}
+          aria-label={editingQueuedMessageId ? '编辑排队消息' : '发送消息给 Codex'}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -877,21 +976,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
           <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
           <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-          <span className="composer-hint"><ShieldCheck size={14} />Enter 发送 · Shift+Enter 换行</span>
+          <span className="composer-hint"><ShieldCheck size={14} />{editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
           <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
             <ImagePlus size={16} />
             <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
           </span>
-          {writerConflict ? (
-            <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-          ) : (
-            <>
-              {isRunning ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
-              <button className={`send-button${isRunning ? ' send-button--queue' : ''}`} type="submit" disabled={!canSend} aria-label={isRunning ? '将消息加入发送队列' : '发送消息'} title={isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
-            </>
-          )}
+          {writerConflict
+            ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
+            : isRunning ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
+          {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending}>取消</button> : null}
+          {(!writerConflict || editingQueuedMessageId) ? (
+            <button className={`send-button${isRunning ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}`} type="submit" disabled={!canSend} aria-label={editingQueuedMessageId ? '确定并保留在队列' : isRunning ? '将消息加入发送队列' : '发送消息'} title={editingQueuedMessageId ? '确定并保留在队列' : isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : editingQueuedMessageId ? <Check size={15} /> : <Send size={16} />}{editingQueuedMessageId ? <span>确定</span> : null}</button>
+          ) : null}
         </div>
       </div>
     </form>
@@ -1776,6 +1874,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+              onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
+              onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
+              onEndQueuedEdit={activeRemote.endEditQueuedMessage}
               onRemoveQueued={activeRemote.removeQueuedMessage}
               onInterrupt={activeRemote.interrupt}
               onRefresh={activeRemote.refreshActiveThread}
