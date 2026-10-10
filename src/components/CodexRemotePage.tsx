@@ -1548,7 +1548,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote0.models, remote1.models, remote2.models])
   const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
-  const customSurfaceOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
+  const customBackgroundOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
   const marqueeColor = themePreferences.theme === 'dark'
     ? '#ffffff'
     : themePreferences.theme === 'light'
@@ -1559,15 +1559,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const themeStyle = {
     '--marquee-color': marqueeColor,
     '--custom-theme-background': themePreferences.customBackgroundColor,
+    '--custom-theme-background-opacity': customBackgroundOpacity,
     '--custom-theme-background-image': themePreferences.customBackgroundImage
       ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + themePreferences.customBackgroundImage + '")'
       : 'none',
     '--custom-theme-text-color': themePreferences.customTextColor,
-    '--custom-theme-surface': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.88)),
-    '--custom-theme-control': rgbaFromHex('#ffffff', Math.max(0.04, customSurfaceOpacity * 0.72)),
-    '--custom-theme-active': rgbaFromHex('#ffffff', Math.max(0.06, customSurfaceOpacity * 0.46)),
-    '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, Math.max(0.12, customSurfaceOpacity * 0.32)),
-    '--custom-theme-panel-blur': Math.min(18, 7 + customSurfaceOpacity * 11) + 'px',
+    '--custom-theme-surface': rgbaFromHex('#ffffff', 0.88),
+    '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
+    '--custom-theme-active': rgbaFromHex('#ffffff', 0.46),
+    '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, 0.32),
+    '--custom-theme-panel-blur': '18px',
   } as CSSProperties
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
@@ -2035,6 +2036,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                   className={`theme-option__preview ${option.previewClass}`}
                   style={option.value === 'custom' ? {
                     backgroundColor: preferences.customBackgroundColor,
+                    opacity: (100 - preferences.customBackgroundTransparency) / 100,
                     backgroundImage: preferences.customBackgroundImage
                       ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`
                       : 'none',
@@ -2059,7 +2061,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                 <span className="theme-color-input"><input type="color" value={preferences.customTextColor} onChange={(event) => onChange({ ...preferences, customTextColor: normalizeHexColor(event.target.value, preferences.customTextColor) })} aria-label="自定义字体颜色" /><code>{preferences.customTextColor}</code></span>
               </label>
               <label className="theme-control-row theme-control-row--stacked">
-                <span><strong>背景透明度</strong><small>数值越高，界面面板越透明。</small></span>
+                <span><strong>背景透明度</strong><small>数值越高，全局背景图片和底色越透明；界面面板不变。</small></span>
                 <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
               </label>
               <div className="theme-control-row theme-image-row">
