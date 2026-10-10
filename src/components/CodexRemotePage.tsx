@@ -2108,7 +2108,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
   }
 
   return (
-    <article className="file-change-card">
+    <article className={`file-change-card${reviewing ? ' file-change-card--reviewing' : ''}`}>
       <header className="file-change-card__heading">
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
@@ -2128,7 +2128,16 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
             </div>
             {reviewing ? (
               item.diff
-                ? <pre>{item.diff}</pre>
+                ? <pre>{item.diff.split(/\r?\n/).map((line, index) => {
+                  const lineClass = line.startsWith('+') && !line.startsWith('+++')
+                    ? 'file-change-card__diff-line file-change-card__diff-line--added'
+                    : line.startsWith('-') && !line.startsWith('---')
+                      ? 'file-change-card__diff-line file-change-card__diff-line--deleted'
+                      : line.startsWith('@@')
+                        ? 'file-change-card__diff-line file-change-card__diff-line--hunk'
+                        : 'file-change-card__diff-line'
+                  return <span className={lineClass} key={index}>{line || ' '}</span>
+                })}</pre>
                 : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>
             ) : null}
           </div>
