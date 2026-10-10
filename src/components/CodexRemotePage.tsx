@@ -120,9 +120,8 @@ function workspacePanelsWidthLimit(previewOpen = false) {
   const sidebarWidth = Math.round(Math.max(180, Math.min(284, viewportWidth * 0.22)))
   const separatorWidth = previewOpen ? 16 : 8
   const availableWorkspaceWidth = viewportWidth - sidebarWidth - separatorWidth
-  const proportionalLimit = Math.floor(availableWorkspaceWidth * 0.66)
   const chatMinimumLimit = availableWorkspaceWidth - workspaceChatMinWidth
-  return Math.max(0, Math.min(workspaceExplorerMaxWidth, proportionalLimit, chatMinimumLimit))
+  return Math.max(0, Math.min(workspaceExplorerMaxWidth, chatMinimumLimit))
 }
 
 function workspaceExplorerMinimumWidth() {
