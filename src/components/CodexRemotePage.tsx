@@ -2029,8 +2029,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const target = event.target
     const sidebar = remoteShell.current?.querySelector('.remote-sidebar')
     const startedInsideSidebar = sidebarOpen && target instanceof Node && Boolean(sidebar?.contains(target))
-    const startedAtLeftEdge = !sidebarOpen && touch.clientX <= 28
-    sidebarTouchStart.current = startedInsideSidebar || startedAtLeftEdge
+    const startedOnBackdrop = sidebarOpen && target instanceof Element && Boolean(target.closest('.sidebar-backdrop'))
+    // Keep the gesture outside Android's narrow system-back edge zone while still
+    // making it easy to start on a phone with a case or a screen protector.
+    const startedAtLeftEdge = !sidebarOpen && touch.clientX <= 72
+    sidebarTouchStart.current = startedInsideSidebar || startedOnBackdrop || startedAtLeftEdge
       ? { x: touch.clientX, y: touch.clientY, sidebarWasOpen: sidebarOpen }
       : null
   }
