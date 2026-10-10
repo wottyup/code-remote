@@ -616,6 +616,7 @@ interface MessageComposerProps {
   onDraftChange: (draft: string) => void
   connection: RemoteConnection
   isRunning: boolean
+  fileChangeSummary: FileChangeSummary | null
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
@@ -644,6 +645,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onDraftChange,
   connection,
   isRunning,
+  fileChangeSummary,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
@@ -1141,6 +1143,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               )
             })}
           </div>
+        </div>
+      ) : null}
+      {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
+        <div className="composer-file-change-summary" aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
+          <FileText size={12} aria-hidden="true" />
+          <span>{fileChangeSummary.files.length} 个文件已更改</span>
+          {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
+            <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
+          ) : null}
         </div>
       ) : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
@@ -1762,6 +1773,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const runningFileChangeSummary = useMemo(() => {
+    if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
+    return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
+  }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
@@ -2402,6 +2417,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               onDraftChange={syncWorkspaceDraft}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
+              fileChangeSummary={runningFileChangeSummary}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
@@ -2739,9 +2755,13 @@ function numberDiffLines(diff: string): NumberedDiffLine[] {
   })
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string) => void }) {
-  const [expanded, setExpanded] = useState(false)
-  const [reviewing, setReviewing] = useState(false)
+interface FileChangeSummary {
+  files: CodexFileChange['changes'][number][]
+  additions: number
+  deletions: number
+}
+
+function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
   const files = [...changes.reduce((entries, change) => {
     for (const item of change.changes) {
       const previous = entries.get(item.path)
@@ -2760,8 +2780,17 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
     }
     return entries
   }, new Map<string, CodexFileChange['changes'][number]>()).values()]
-  const additions = files.reduce((total, item) => total + item.additions, 0)
-  const deletions = files.reduce((total, item) => total + item.deletions, 0)
+  return {
+    files,
+    additions: files.reduce((total, item) => total + item.additions, 0),
+    deletions: files.reduce((total, item) => total + item.deletions, 0),
+  }
+}
+
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string) => void }) {
+  const [expanded, setExpanded] = useState(false)
+  const [reviewing, setReviewing] = useState(false)
+  const { files, additions, deletions } = summarizeFileChanges(changes)
   const hasLineStats = additions > 0 || deletions > 0
   const inProgress = changes.some((change) => change.status === 'inProgress')
   const showAll = expanded || reviewing
