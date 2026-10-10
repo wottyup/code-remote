@@ -73,8 +73,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .status-dot--disconnected, .status-dot--unavailable { background: #cb7478; }
 .status-dot--handoff { background: #7aa8e6; box-shadow: 0 0 8px rgba(112, 163, 226, .42); }
 
-.remote-chat { display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: 60px minmax(0, 1fr) auto auto auto; overflow: hidden; background: radial-gradient(ellipse at 58% -10%, rgba(94, 105, 147, .1), transparent 40%), #101114; }
-.remote-workspace { display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; background: #101114; }
+.remote-chat { container-name: remote-chat; container-type: inline-size; display: grid; width: 100%; height: 100%; min-width: 0; min-height: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: 60px minmax(0, 1fr) auto auto auto; overflow: hidden; background: radial-gradient(ellipse at 58% -10%, rgba(94, 105, 147, .1), transparent 40%), #101114; }
+.remote-workspace { container-name: remote-workspace; container-type: inline-size; display: grid; min-width: 0; min-height: 0; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; background: #101114; }
 .remote-pane-grid { display: grid; min-width: 0; min-height: 0; grid-template-columns: repeat(var(--pane-count, 1), minmax(0, 1fr)); gap: 1px; overflow: hidden; background: var(--line); }
 .remote-pane-slot { min-width: 0; min-height: 0; overflow: hidden; background: #101114; }
 .conversation-pane { position: relative; height: 100%; grid-template-rows: 60px minmax(0, 1fr) auto auto auto; border: 1px solid transparent; }
@@ -408,6 +408,32 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .attach-button--disabled .image-input { cursor: not-allowed; }
 .stop-button { border: 1px solid #454950; background: #282a30; color: #c9cbd1; font-size: 9px; }
 .stop-button:disabled { cursor: wait; opacity: .62; }
+@container remote-workspace (max-width: 680px) {
+  .remote-workspace > .message-composer { width: calc(100% - 24px); margin-inline: 12px; }
+  .message-composer__footer { gap: 6px; }
+  .composer-preferences { display: grid; min-width: 0; flex: 1 1 auto; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; overflow: hidden; }
+  .composer-menu { min-width: 0; }
+  .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; }
+  .composer-menu__label, .composer-hint { display: none; }
+  .composer-actions { min-width: 0; gap: 4px; }
+}
+@container remote-workspace (max-width: 360px) {
+  .message-composer__footer { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .composer-preferences { width: 100%; }
+  .composer-actions { justify-self: end; }
+}
+@container remote-chat (max-width: 680px) {
+  .remote-chat__header { gap: 8px; padding-inline: 12px; }
+  .remote-chat__title-wrap { flex: 1 1 auto; gap: 6px; }
+  .remote-chat__controls { gap: 6px; }
+}
+@container remote-chat (max-width: 420px) {
+  .remote-chat__title .remote-chat__eyebrow { display: none; }
+  .remote-chat__title span:not(.remote-chat__eyebrow) { display: none; }
+  .connection-label { padding: 4px 5px; }
+  .connection-label span { display: none; }
+  .handoff-button { width: 27px; min-width: 27px; padding: 0; gap: 0; overflow: hidden; font-size: 0; }
+}
 .spin { animation: spin .85s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
