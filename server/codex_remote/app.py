@@ -39,19 +39,19 @@ logger = logging.getLogger(__name__)
 async def watch_codex_history(app_server: CodexAppServer) -> None:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
     sessions = codex_home / "sessions"
-    watch_root = sessions if sessions.is_dir() else codex_home
+    watch_root = codex_home if codex_home.is_dir() else sessions
     if not watch_root.is_dir():
         return
 
     def is_session_change(_change: object, changed_path: str) -> bool:
         path = Path(changed_path).resolve()
-        if path == sessions:
+        if path == codex_home or path == sessions:
             return True
         try:
-            relative = path.relative_to(sessions)
+            relative = path.relative_to(codex_home)
         except ValueError:
             return False
-        return relative.suffix == ".jsonl" or not relative.suffix
+        return relative.name == "session_index.jsonl" or relative.suffix == ".jsonl" or not relative.suffix
 
     try:
         async for changes in awatch(watch_root, watch_filter=is_session_change, debounce=500):

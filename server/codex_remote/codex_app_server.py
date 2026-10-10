@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from watchfiles import Change, DefaultFilter, awatch
-
 from .codex_history import CodexHistoryStore
 
 logger = logging.getLogger(__name__)
@@ -269,6 +268,7 @@ class CodexAppServer:
         self._subscribers.discard(queue)
 
     async def notify_threads_changed(self) -> None:
+        self._history.invalidate()
         await self._emit({"type": "threads.changed"})
 
     async def notify_turn_delivery(self, thread_id: str, request_id: str | None, turn_id: str | None) -> None:
@@ -309,14 +309,77 @@ class CodexAppServer:
             return self.status()
 
     async def list_threads(self) -> list[dict[str, Any]]:
-        result = await self.request("thread/list", {"limit": 100})
-        items = result.get("data", result.get("threads", []))
-        return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+        items: list[dict[str, Any]] = []
+        cursor: str | None = None
+        app_server_error: CodexRuntimeError | None = None
+        for _ in range(20):
+            params: dict[str, Any] = {
+                "limit": 100,
+                "sortKey": "updated_at",
+                "sortDirection": "desc",
+            }
+            if cursor:
+                params["cursor"] = cursor
+            try:
+                result = await self.request("thread/list", params)
+            except CodexRuntimeError as error:
+                if items:
+                    app_server_error = error
+                    break
+                try:
+                    result = await self.request("thread/list", {"limit": 100})
+                except CodexRuntimeError:
+                    app_server_error = error
+                    break
+            page = result.get("data", result.get("threads", []))
+            if not isinstance(page, list):
+                break
+            items.extend(item for item in page if isinstance(item, dict))
+            next_cursor = result.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor or not page:
+                break
+            cursor = next_cursor
+
+        history_items = self._history.list_threads()
+        merged: dict[str, dict[str, Any]] = {
+            item["id"]: item
+            for item in history_items
+            if isinstance(item.get("id"), str)
+        }
+        for item in items:
+            thread_id = item.get("id")
+            if not isinstance(thread_id, str):
+                continue
+            merged[thread_id] = {**merged.get(thread_id, {}), **item}
+        if merged:
+            return list(merged.values())
+        if app_server_error is not None:
+            raise app_server_error
+        return []
 
     async def read_thread(self, thread_id: str) -> dict[str, Any]:
-        result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
-        thread = result.get("thread")
-        if not isinstance(thread, dict):
+        thread: dict[str, Any] | None = None
+        try:
+            result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+            candidate = result.get("thread")
+            if isinstance(candidate, dict):
+                thread = candidate
+        except CodexRuntimeError:
+            pass
+
+        history_thread = self._history.read_thread(thread_id)
+        if isinstance(history_thread, dict):
+            server_turns = thread.get("turns") if thread is not None else None
+            history_turns = history_thread.get("turns")
+            if thread is None or (
+                isinstance(server_turns, list)
+                and not server_turns
+                and isinstance(history_turns, list)
+                and history_turns
+            ):
+                thread = history_thread
+
+        if thread is None:
             raise CodexRuntimeError("Codex 没有返回该对话内容")
         turns = thread.get("turns")
         workspace_changes = self._workspace_change_results.get(thread_id, {})

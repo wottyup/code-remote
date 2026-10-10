@@ -2,7 +2,7 @@
 setlocal
 
 cd /d "%~dp0"
-title Codex Remote - 6546
+title Codex Remote - 4173
 
 set "PNPM_CMD="
 for /f "delims=" %%P in ('where pnpm.cmd 2^>nul') do if not defined PNPM_CMD set "PNPM_CMD=%%P"
@@ -23,7 +23,7 @@ if not exist "package.json" (
 )
 
 echo Starting Codex Remote...
-echo Web: http://localhost:6546
+echo Web: http://localhost:4173
 echo Close this window to stop the service.
 echo.
 

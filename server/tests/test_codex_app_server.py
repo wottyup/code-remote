@@ -90,7 +90,6 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(history_home.resolve(), app_server._history.codex_home)
             self.assertEqual(str(Path(runtime_directory).resolve()), child_environment["CODEX_HOME"])
             self.assertEqual('model = "gpt-test"', (Path(runtime_directory) / "config.toml").read_text(encoding="utf-8").strip())
-
     async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[
@@ -151,7 +150,6 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(["gpt-new"], [model["model"] for model in models])
             self.assertTrue(models[0]["isDefault"])
             self.assertEqual("high", models[0]["defaultReasoningEffort"])
-
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[
