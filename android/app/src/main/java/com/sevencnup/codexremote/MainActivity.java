@@ -3,6 +3,7 @@ package com.sevencnup.codexremote;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ActivityNotFoundException;
+import android.content.ClipboardManager;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
@@ -47,7 +48,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.84";
+    private static final String APP_VERSION = "0.0.85";
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
@@ -474,6 +475,19 @@ public class MainActivity extends Activity {
     }
 
     private final class AndroidBridge {
+        @JavascriptInterface
+        public boolean copyToClipboard(String value) {
+            try {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (clipboard == null) return false;
+                clipboard.setPrimaryClip(ClipData.newPlainText("Codex Remote", value == null ? "" : value));
+                return true;
+            } catch (RuntimeException error) {
+                Log.w("CodexRemoteWebView", "Unable to write to the system clipboard", error);
+                return false;
+            }
+        }
+
         @JavascriptInterface
         public void changeEndpoint() {
             runOnUiThread(() -> showConnector(activeEndpoint, null));

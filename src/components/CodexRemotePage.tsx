@@ -37,6 +37,7 @@ declare global {
   interface Window {
     CodexRemoteAndroid?: {
       changeEndpoint?: () => void
+      copyToClipboard?: (text: string) => boolean
       showKeyboard?: () => void
     }
     CodexRemoteHandleBack?: () => boolean
@@ -309,6 +310,14 @@ function readThemeBackgroundImage(file: File): Promise<string> {
 }
 
 async function copyText(value: string) {
+  const androidBridge = window.CodexRemoteAndroid
+  if (typeof androidBridge?.copyToClipboard === 'function') {
+    try {
+      if (androidBridge.copyToClipboard(value)) return true
+    } catch {
+      // Keep the browser clipboard path available if the native bridge fails.
+    }
+  }
   try {
     if (navigator.clipboard?.writeText) {
       await navigator.clipboard.writeText(value)
