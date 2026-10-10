@@ -75,6 +75,12 @@ export interface CodexWorkspaceTree {
   truncated: boolean
 }
 
+export interface CodexWorkspaceFile {
+  path: string
+  content: string
+  size: number
+}
+
 export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
@@ -231,6 +237,11 @@ export const codexRemoteClient = {
     if (cwd) query.set('cwd', cwd)
     if (path) query.set('path', path)
     return request<CodexWorkspaceTree>(token, `/api/v1/codex/workspace/tree${query.size ? '?' + query.toString() : ''}`)
+  },
+  workspaceFile(token: string, cwd: string | undefined, path: string) {
+    const query = new URLSearchParams({ path })
+    if (cwd) query.set('cwd', cwd)
+    return request<CodexWorkspaceFile>(token, `/api/v1/codex/workspace/file?${query.toString()}`)
   },
   threads(token: string) {
     return request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>

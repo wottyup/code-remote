@@ -1,6 +1,7 @@
 import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  ArrowLeft,
   AlertTriangle,
   Check,
   ChevronDown,
@@ -26,7 +27,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 
 interface Props {
   token: string
@@ -64,6 +65,10 @@ const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
+const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const workspaceExplorerDefaultWidth = 340
+const workspaceExplorerMinWidth = 220
+const workspaceExplorerMaxWidth = 640
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
@@ -102,6 +107,28 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundTransparency: 0,
 }
 
+function workspaceExplorerWidthLimit() {
+  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches) {
+    return workspaceExplorerMaxWidth
+  }
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerMaxWidth, viewportWidth - 284 - 320 - 8))
+}
+
+function clampWorkspaceExplorerWidth(value: number) {
+  return Math.round(Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerWidthLimit(), value)))
+}
+
+function readWorkspaceExplorerWidth() {
+  if (typeof window === 'undefined') return workspaceExplorerDefaultWidth
+  try {
+    const stored = Number(window.localStorage.getItem(workspaceExplorerWidthStorageKey))
+    return clampWorkspaceExplorerWidth(Number.isFinite(stored) && stored > 0 ? stored : workspaceExplorerDefaultWidth)
+  } catch {
+    return clampWorkspaceExplorerWidth(workspaceExplorerDefaultWidth)
+  }
+}
+
 function workspaceAbsolutePath(cwd: string | undefined, path: string) {
   const base = cwd?.replace(/[\\/]+$/, '')
   return base ? `${base}/${path}` : path
@@ -110,6 +137,19 @@ function workspaceAbsolutePath(cwd: string | undefined, path: string) {
 function workspaceFileReference(cwd: string | undefined, path: string) {
   const isAbsolute = path.startsWith('/') || path.startsWith('\\\\') || /^[a-z]:[\\/]/i.test(path)
   return isAbsolute || !cwd ? path : workspaceAbsolutePath(cwd, path)
+}
+
+function workspaceRelativePath(cwd: string | undefined, path: string) {
+  if (!cwd) return path
+  const normalizedCwd = cwd.replace(/[\\/]+/g, '/').replace(/\/$/, '')
+  const normalizedPath = path.replace(/[\\/]+/g, '/')
+  const prefix = `${normalizedCwd}/`
+  const isWindowsPath = /^[a-z]:\//i.test(prefix)
+  if (normalizedPath.toLowerCase() === normalizedCwd.toLowerCase()) return ''
+  if (isWindowsPath
+    ? normalizedPath.toLowerCase().startsWith(prefix.toLowerCase())
+    : normalizedPath.startsWith(prefix)) return normalizedPath.slice(prefix.length)
+  return path.replace(/^\.\//, '')
 }
 
 function draftContainsWorkspacePath(draft: string, path: string) {
@@ -1077,13 +1117,19 @@ interface WorkspaceExplorerProps {
   token: string
   cwd?: string
   threadId?: string
+  previewRequest: { id: number; cwd?: string; path: string } | null
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
   mobileOpen: boolean
   onCloseMobile: () => void
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+function desktopWorkspacePreviewAvailable() {
+  return typeof window !== 'undefined'
+    && !window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches
+}
+
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
@@ -1091,7 +1137,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
   const [mobilePanelHeight, setMobilePanelHeight] = useState(280)
   const [error, setError] = useState<string | null>(null)
+  const [previewPath, setPreviewPath] = useState<string | null>(null)
+  const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
+  const [previewCopied, setPreviewCopied] = useState(false)
   const requestGeneration = useRef(0)
+  const previewRequestGeneration = useRef(0)
+  const handledPreviewRequest = useRef(0)
+  const treeElement = useRef<HTMLDivElement>(null)
+  const treeScrollTop = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
 
   const directoryKey = (path: string) => path || '.'
@@ -1115,16 +1170,54 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }, [cwd, token])
 
+  const loadPreview = useCallback(async (path: string, requestedCwd = cwd) => {
+    const generation = ++previewRequestGeneration.current
+    treeScrollTop.current = treeElement.current?.scrollTop ?? treeScrollTop.current
+    setPreviewPath(path)
+    setPreviewFile(null)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    setPreviewLoading(true)
+    try {
+      const file = await codexRemoteClient.workspaceFile(token, requestedCwd, path)
+      if (generation !== previewRequestGeneration.current) return
+      setPreviewFile(file)
+    } catch (reason) {
+      if (generation !== previewRequestGeneration.current) return
+      setPreviewError(reason instanceof Error ? reason.message : '无法读取文件')
+    } finally {
+      if (generation === previewRequestGeneration.current) setPreviewLoading(false)
+    }
+  }, [cwd, token])
+
   useEffect(() => {
     requestGeneration.current += 1
+    previewRequestGeneration.current += 1
     setDirectories({})
     setExpanded({})
     setLoadingPaths({})
     setSelectedPaths([])
     setContextMenu(null)
     setError(null)
+    setPreviewPath(null)
+    setPreviewFile(null)
+    setPreviewLoading(false)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    treeScrollTop.current = 0
     if (cwd) void loadDirectory('')
   }, [cwd, loadDirectory, scopeKey])
+
+  useEffect(() => {
+    if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
+    if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
+    handledPreviewRequest.current = previewRequest.id
+    if (desktopWorkspacePreviewAvailable()) void loadPreview(previewRequest.path, previewRequest.cwd)
+  }, [cwd, loadPreview, previewRequest])
+
+  useLayoutEffect(() => {
+    if (!previewPath && treeElement.current) treeElement.current.scrollTop = treeScrollTop.current
+  }, [previewPath])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -1191,7 +1284,20 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
+    else if (desktopWorkspacePreviewAvailable()) void loadPreview(entry.path)
     else onInsertPath(entryAbsolutePath(entry), !mobileOpen)
+  }
+
+  function closePreview() {
+    previewRequestGeneration.current += 1
+    setPreviewPath(null)
+    setPreviewLoading(false)
+    setPreviewError(null)
+  }
+
+  async function copyPreview() {
+    if (!previewFile) return
+    setPreviewCopied(await copyText(previewFile.content))
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
@@ -1243,24 +1349,51 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }
 
   const rootLoading = loadingPaths['.']
+  const previewLines = useMemo(() => {
+    if (!previewFile) return []
+    const lines = previewFile.content.split(/\r\n|\n|\r/)
+    if (lines.length > 1 && lines.at(-1) === '' && /(?:\r\n|\n|\r)$/.test(previewFile.content)) lines.pop()
+    return lines
+  }, [previewFile])
   return (
     <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
       <header className="workspace-explorer__header">
-        <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
+        <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>{previewPath ? '文件预览' : '文件'}</strong></div>
         <div className="workspace-explorer__header-actions">
+          {previewPath ? <button className="icon-button workspace-explorer__back" type="button" onClick={closePreview} aria-label="返回文件树" title="返回文件树"><ArrowLeft size={15} /></button> : null}
           <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
           <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
         </div>
       </header>
       <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
-      <div className="workspace-explorer__tree">
-        {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
-        {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
-        {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
-        {cwd && directories['.'] ? renderDirectory('', 0) : null}
-        {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
+      <div className="workspace-explorer__body">
+        <div className="workspace-explorer__tree" ref={treeElement} hidden={Boolean(previewPath)}>
+          {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
+          {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
+          {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
+          {cwd && directories['.'] ? renderDirectory('', 0) : null}
+          {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
+        </div>
+        {previewPath ? (
+          <section className="workspace-file-preview" aria-label="文件预览">
+            <div className="workspace-file-preview__toolbar">
+              <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
+              <div>
+                <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button>
+                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
+              </div>
+            </div>
+            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件内容…</div> : null}
+            {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
+            {previewFile ? (
+              <pre className="workspace-file-preview__code"><code>{previewLines.map((line, index) => (
+                <span className="workspace-file-preview__line" key={index}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{line || ' '}</span></span>
+              ))}</code></pre>
+            ) : null}
+          </section>
+        ) : null}
       </div>
-      <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
+      <footer className="workspace-explorer__footer">{previewPath ? `只读预览 · ${previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}` : 'Ctrl/⌘ 多选后右键加入输入框'}</footer>
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
@@ -1285,6 +1418,7 @@ interface RemoteChatPaneProps {
   onReclaim: () => void
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
+  onOpenWorkspaceFile: (path: string, cwd?: string) => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -1303,6 +1437,7 @@ function RemoteChatPane({
   onReclaim,
   onOpenSidebar,
   onOpenWorkspace,
+  onOpenWorkspaceFile,
   composerHandle,
   copiedMessageId,
   onCopy,
@@ -1321,6 +1456,11 @@ function RemoteChatPane({
     onActivate()
     window.requestAnimationFrame(() => composerHandle.current?.appendDraft(fileReference, true))
   }, [composerHandle, onActivate, remote.activeThread?.cwd, remote.runtime.workspace])
+  const openChangedFilePreview = useCallback((path: string) => {
+    const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
+    onActivate()
+    onOpenWorkspaceFile(workspaceRelativePath(cwd, path), cwd)
+  }, [onActivate, onOpenWorkspaceFile, remote.activeThread?.cwd, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
@@ -1468,11 +1608,11 @@ function RemoteChatPane({
             return (
               <Fragment key={message.id}>
                 <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={onCopy} />
-                {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} /> : null}
+                {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
           })}
-          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} onInsertPath={insertChangedFileIntoConversation} />)}
+          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} />)}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -1513,6 +1653,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
+  const [workspaceResizing, setWorkspaceResizing] = useState(false)
+  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
@@ -1527,6 +1670,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const paneNoticeTimer = useRef<number | undefined>(undefined)
   const paneGrid = useRef<HTMLDivElement>(null)
   const paneRects = useRef(new Map<number, DOMRect>())
+  const remoteShell = useRef<HTMLDivElement>(null)
+  const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const workspacePreviewSequence = useRef(0)
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
@@ -1558,6 +1705,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         : themePreferences.customTextColor
   const themeStyle = {
     '--marquee-color': marqueeColor,
+    '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
     '--custom-theme-background': themePreferences.customBackgroundColor,
     '--custom-theme-background-opacity': customBackgroundOpacity,
     '--custom-theme-background-image': themePreferences.customBackgroundImage
@@ -1845,6 +1993,59 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
 
+  function setWorkspaceExplorerWidthValue(value: number, persist = false) {
+    const width = clampWorkspaceExplorerWidth(value)
+    workspaceExplorerWidthRef.current = width
+    remoteShell.current?.style.setProperty('--workspace-explorer-width', `${width}px`)
+    if (!persist) return width
+    setWorkspaceExplorerWidth(width)
+    try {
+      window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
+  function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    workspaceResizePointer.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: workspaceExplorerWidthRef.current,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setWorkspaceResizing(true)
+  }
+
+  function moveWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    setWorkspaceExplorerWidthValue(current.startWidth + current.startX - event.clientX)
+  }
+
+  function finishWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    workspaceResizePointer.current = null
+    setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
+    setWorkspaceResizing(false)
+  }
+
+  useEffect(() => {
+    workspaceExplorerWidthRef.current = workspaceExplorerWidth
+  }, [workspaceExplorerWidth])
+
+  useEffect(() => {
+    const clampForViewport = () => {
+      const width = clampWorkspaceExplorerWidth(workspaceExplorerWidthRef.current)
+      if (width !== workspaceExplorerWidthRef.current) setWorkspaceExplorerWidthValue(width, true)
+    }
+    window.addEventListener('resize', clampForViewport)
+    return () => window.removeEventListener('resize', clampForViewport)
+  }, [])
+
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
   const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : connectionLabel[activeRemote.connection]
   const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.CodexRemoteAndroid?.changeEndpoint === 'function'
@@ -1859,7 +2060,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   })), [effortOptions])
 
   return (
-    <div className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '')} style={themeStyle}>
+    <div ref={remoteShell} className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')} style={themeStyle}>
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
@@ -1928,6 +2129,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
                     onReclaim={() => void reclaimForRemote(paneIndex)}
                     onOpenSidebar={() => setSidebarOpen(true)}
                     onOpenWorkspace={() => setWorkspaceOpen(true)}
+                    onOpenWorkspaceFile={(path, cwd) => {
+                      activatePane(paneIndex)
+                      workspacePreviewSequence.current += 1
+                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path })
+                    }}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
                     onCopy={copyMessage}
@@ -1965,10 +2171,42 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               onRefresh={activeRemote.refreshActiveThread}
             />
           </section>
+          <div
+            className="workspace-resize-handle"
+            role="separator"
+            aria-label="调整右侧文件区宽度"
+            aria-orientation="vertical"
+            aria-valuemin={workspaceExplorerMinWidth}
+            aria-valuemax={workspaceExplorerWidthLimit()}
+            aria-valuenow={workspaceExplorerWidth}
+            tabIndex={0}
+            onPointerDown={startWorkspaceResize}
+            onPointerMove={moveWorkspaceResize}
+            onPointerUp={finishWorkspaceResize}
+            onPointerCancel={finishWorkspaceResize}
+            onLostPointerCapture={finishWorkspaceResize}
+            onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
+            onKeyDown={(event) => {
+              const limits = workspaceExplorerWidthLimit()
+              const nextWidth = event.key === 'ArrowLeft'
+                ? workspaceExplorerWidthRef.current + 24
+                : event.key === 'ArrowRight'
+                  ? workspaceExplorerWidthRef.current - 24
+                  : event.key === 'Home'
+                    ? workspaceExplorerMinWidth
+                    : event.key === 'End'
+                      ? limits
+                      : null
+              if (nextWidth === null) return
+              event.preventDefault()
+              setWorkspaceExplorerWidthValue(nextWidth, true)
+            }}
+          />
           <WorkspaceExplorer
             token={token}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
+            previewRequest={workspacePreviewRequest}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
             mobileOpen={workspaceOpen}
@@ -2204,7 +2442,7 @@ function numberDiffLines(diff: string): NumberedDiffLine[] {
   })
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void }) {
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const files = [...changes.reduce((entries, change) => {
@@ -2257,7 +2495,8 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath }: {
         {visibleFiles.map((item) => (
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
-              <span title={item.path}>{item.path}</span>
+              <span className="file-change-card__path-mobile" title={item.path}>{item.path}</span>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
               <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
             </div>

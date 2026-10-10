@@ -117,6 +117,8 @@ class InterruptRequest(BaseModel):
 
 WORKSPACE_TREE_MAX_ENTRIES = 400
 WORKSPACE_TREE_MAX_PATH_LENGTH = 1_024
+WORKSPACE_FILE_PREVIEW_MAX_BYTES = 1 * 1_024 * 1_024
+WORKSPACE_FILE_PREVIEW_MAX_LINES = 20_000
 WORKSPACE_SKIPPED_NAMES = {
     ".git",
     ".hg",
@@ -171,6 +173,52 @@ def workspace_entry_kind(path: Path) -> str | None:
     except OSError:
         return None
     return None
+
+
+def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | int]:
+    if not relative_path or len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件路径无效或过长")
+    normalized_parts = relative_path.replace("\\", "/").split("/")
+    if relative_path.startswith(("/", "\\")) or (len(relative_path) > 1 and relative_path[1] == ":"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
+    if any(part in {"", ".", ".."} for part in normalized_parts):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件路径无效")
+    if any(part.startswith(".") or part in WORKSPACE_SKIPPED_NAMES for part in normalized_parts):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或不可预览")
+
+    candidate = workspace_path(base, relative_path)
+    try:
+        resolved_relative = candidate.relative_to(base)
+    except ValueError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的文件") from error
+    if any(part.startswith(".") or part in WORKSPACE_SKIPPED_NAMES for part in resolved_relative.parts):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在或不可预览")
+    try:
+        if not candidate.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件不存在")
+        size = candidate.stat().st_size
+        if size > WORKSPACE_FILE_PREVIEW_MAX_BYTES:
+            raise HTTPException(status_code=413, detail="文件超过 1 MB，暂不支持预览")
+        with candidate.open("rb") as file:
+            content_bytes = file.read(WORKSPACE_FILE_PREVIEW_MAX_BYTES + 1)
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该文件") from error
+    if len(content_bytes) > WORKSPACE_FILE_PREVIEW_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="文件超过 1 MB，暂不支持预览")
+    if b"\x00" in content_bytes:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="二进制文件不支持预览")
+    try:
+        content = content_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as error:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 UTF-8 文本文件预览") from error
+    line_count = content.count("\n") + content.count("\r") - content.count("\r\n")
+    if content and not content.endswith(("\n", "\r")):
+        line_count += 1
+    if line_count > WORKSPACE_FILE_PREVIEW_MAX_LINES:
+        raise HTTPException(status_code=413, detail="文件行数过多，暂不支持预览")
+    return {"path": resolved_relative.as_posix(), "content": content, "size": len(content_bytes)}
 
 
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
@@ -463,6 +511,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             "entries": entries,
             "truncated": len(entries) >= WORKSPACE_TREE_MAX_ENTRIES,
         }
+
+    @app.get("/api/v1/codex/workspace/file")
+    async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return workspace_file_preview(base, path)
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
