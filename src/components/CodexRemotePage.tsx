@@ -1,7 +1,6 @@
 import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import {
-  ArrowLeft,
   AlertTriangle,
   Check,
   ChevronDown,
@@ -66,9 +65,13 @@ const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const workspaceFilePreviewWidthStorageKey = 'codex-remote.workspace-file-preview-width'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
+const workspaceFilePreviewDefaultWidth = 360
+const workspaceFilePreviewMinWidth = 160
+const workspaceFilePreviewMaxWidth = 1_600
 const workspaceChatMinWidth = 240
 const minComposerHeight = 45
 const maxComposerHeight = 260
@@ -108,19 +111,57 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundTransparency: 0,
 }
 
-function workspaceExplorerWidthLimit() {
+function workspacePanelsWidthLimit(previewOpen = false) {
   if (typeof window !== 'undefined' && window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches) {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
-  const availableWorkspaceWidth = viewportWidth - 284 - 8
+  const sidebarWidth = Math.round(Math.max(180, Math.min(284, viewportWidth * 0.22)))
+  const separatorWidth = previewOpen ? 16 : 8
+  const availableWorkspaceWidth = viewportWidth - sidebarWidth - separatorWidth
   const proportionalLimit = Math.floor(availableWorkspaceWidth * 0.66)
   const chatMinimumLimit = availableWorkspaceWidth - workspaceChatMinWidth
-  return Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerMaxWidth, proportionalLimit, chatMinimumLimit))
+  return Math.max(0, Math.min(workspaceExplorerMaxWidth, proportionalLimit, chatMinimumLimit))
 }
 
-function clampWorkspaceExplorerWidth(value: number) {
-  return Math.round(Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerWidthLimit(), value)))
+function workspaceExplorerMinimumWidth() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return viewportWidth <= 900 ? 160 : workspaceExplorerMinWidth
+}
+
+function workspaceExplorerWidthLimit(previewOpen = false, previewWidth = 0) {
+  return Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerMaxWidth, workspacePanelsWidthLimit(previewOpen) - previewWidth))
+}
+
+function clampWorkspaceExplorerWidth(value: number, previewOpen = false, previewWidth = 0) {
+  return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(previewOpen, previewWidth), value)))
+}
+
+function workspaceFilePreviewWidthLimit(explorerWidth: number) {
+  return Math.max(0, Math.min(workspaceFilePreviewMaxWidth, workspacePanelsWidthLimit(true) - explorerWidth))
+}
+
+function fitWorkspacePreviewWidths(explorerWidth: number, previewWidth: number) {
+  const totalLimit = workspacePanelsWidthLimit(true)
+  const minimumExplorerWidth = workspaceExplorerMinimumWidth()
+  const minimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, Math.max(0, totalLimit - minimumExplorerWidth))
+  let nextExplorerWidth = explorerWidth
+  let nextPreviewWidth = Math.min(previewWidth, Math.max(0, totalLimit - nextExplorerWidth))
+  if (nextPreviewWidth < minimumPreviewWidth) {
+    nextPreviewWidth = minimumPreviewWidth
+    nextExplorerWidth = Math.max(minimumExplorerWidth, Math.min(nextExplorerWidth, totalLimit - nextPreviewWidth))
+  }
+  return { explorerWidth: nextExplorerWidth, previewWidth: nextPreviewWidth }
+}
+
+function readWorkspaceFilePreviewWidth() {
+  if (typeof window === 'undefined') return workspaceFilePreviewDefaultWidth
+  try {
+    const stored = Number(window.localStorage.getItem(workspaceFilePreviewWidthStorageKey))
+    return Math.round(Math.max(workspaceFilePreviewMinWidth, Math.min(workspaceFilePreviewMaxWidth, Number.isFinite(stored) && stored > 0 ? stored : workspaceFilePreviewDefaultWidth)))
+  } catch {
+    return workspaceFilePreviewDefaultWidth
+  }
 }
 
 function readWorkspaceExplorerWidth() {
@@ -1122,6 +1163,7 @@ interface WorkspaceExplorerProps {
   cwd?: string
   threadId?: string
   previewRequest: { id: number; cwd?: string; path: string } | null
+  onPreviewStateChange: (open: boolean) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
   mobileOpen: boolean
@@ -1133,7 +1175,7 @@ function desktopWorkspacePreviewAvailable() {
     && !window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
@@ -1149,8 +1191,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
   const handledPreviewRequest = useRef(0)
-  const treeElement = useRef<HTMLDivElement>(null)
-  const treeScrollTop = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
 
   const directoryKey = (path: string) => path || '.'
@@ -1176,7 +1216,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   const loadPreview = useCallback(async (path: string, requestedCwd = cwd) => {
     const generation = ++previewRequestGeneration.current
-    treeScrollTop.current = treeElement.current?.scrollTop ?? treeScrollTop.current
+    onPreviewStateChange(true)
     setPreviewPath(path)
     setPreviewFile(null)
     setPreviewError(null)
@@ -1192,7 +1232,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
-  }, [cwd, token])
+  }, [cwd, onPreviewStateChange, token])
 
   useEffect(() => {
     requestGeneration.current += 1
@@ -1208,9 +1248,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewLoading(false)
     setPreviewError(null)
     setPreviewCopied(false)
-    treeScrollTop.current = 0
+    onPreviewStateChange(false)
     if (cwd) void loadDirectory('')
-  }, [cwd, loadDirectory, scopeKey])
+  }, [cwd, loadDirectory, onPreviewStateChange, scopeKey])
 
   useEffect(() => {
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
@@ -1218,10 +1258,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     handledPreviewRequest.current = previewRequest.id
     if (desktopWorkspacePreviewAvailable()) void loadPreview(previewRequest.path, previewRequest.cwd)
   }, [cwd, loadPreview, previewRequest])
-
-  useLayoutEffect(() => {
-    if (!previewPath && treeElement.current) treeElement.current.scrollTop = treeScrollTop.current
-  }, [previewPath])
 
   useEffect(() => {
     if (!contextMenu) return
@@ -1297,6 +1333,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewPath(null)
     setPreviewLoading(false)
     setPreviewError(null)
+    setPreviewCopied(false)
+    onPreviewStateChange(false)
   }
 
   async function copyPreview() {
@@ -1360,26 +1398,37 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     return lines
   }, [previewFile])
   return (
-    <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
-      <header className="workspace-explorer__header">
-        <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>{previewPath ? '文件预览' : '文件'}</strong></div>
-        <div className="workspace-explorer__header-actions">
-          {previewPath ? <button className="icon-button workspace-explorer__back" type="button" onClick={closePreview} aria-label="返回文件树" title="返回文件树"><ArrowLeft size={15} /></button> : null}
-          <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
-          <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
+    <>
+      <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
+        <header className="workspace-explorer__header">
+          <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
+          <div className="workspace-explorer__header-actions">
+            <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!cwd || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
+          </div>
+        </header>
+        <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
+        <div className="workspace-explorer__body">
+          <div className="workspace-explorer__tree">
+            {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
+            {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
+            {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
+            {cwd && directories['.'] ? renderDirectory('', 0) : null}
+            {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
+          </div>
         </div>
-      </header>
-      <div className="workspace-explorer__root" title={cwd}>{cwd ? cwd : '选择对话后显示工作目录'}</div>
-      <div className="workspace-explorer__body">
-        <div className="workspace-explorer__tree" ref={treeElement} hidden={Boolean(previewPath)}>
-          {!cwd ? <p className="workspace-explorer__empty">当前窗口还没有工作目录。</p> : null}
-          {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
-          {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
-          {cwd && directories['.'] ? renderDirectory('', 0) : null}
-          {cwd && directories['.']?.truncated ? <p className="workspace-explorer__hint">目录条目过多，已截取前 {workspaceTreeMaxEntries} 项。</p> : null}
-        </div>
-        {previewPath ? (
-          <section className="workspace-file-preview" aria-label="文件预览">
+        <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
+      </aside>
+      {previewPath ? (
+        <aside className="workspace-file-preview-panel" aria-label="工作区文件预览">
+          <header className="workspace-explorer__header workspace-file-preview-panel__header">
+            <div>
+              <span className="workspace-explorer__eyebrow">只读预览</span>
+              <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+            </div>
+            <button className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
+          </header>
+          <section className="workspace-file-preview">
             <div className="workspace-file-preview__toolbar">
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
@@ -1395,9 +1444,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
               ))}</code></pre>
             ) : null}
           </section>
-        ) : null}
-      </div>
-      <footer className="workspace-explorer__footer">{previewPath ? `只读预览 · ${previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}` : 'Ctrl/⌘ 多选后右键加入输入框'}</footer>
+          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">只读预览 · {previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}</footer>
+        </aside>
+      ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
@@ -1405,7 +1454,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         </div>,
         document.body,
       ) : null}
-    </aside>
+    </>
   )
 })
 
@@ -1658,6 +1707,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
+  const [workspaceFilePreviewWidth, setWorkspaceFilePreviewWidth] = useState(readWorkspaceFilePreviewWidth)
+  const [workspaceFilePreviewOpen, setWorkspaceFilePreviewOpen] = useState(false)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -1677,6 +1728,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const remoteShell = useRef<HTMLDivElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
   const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const workspaceFilePreviewWidthRef = useRef(workspaceFilePreviewWidth)
+  const workspaceFilePreviewPreferredWidthRef = useRef(workspaceFilePreviewWidth)
+  const workspaceFilePreviewOpenRef = useRef(false)
+  const workspaceExplorerWidthBeforePreviewRef = useRef<number | null>(null)
+  const workspaceFilePreviewResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
 
   const activeThreadId = activeRemote.activeThread?.id
@@ -1710,6 +1766,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const themeStyle = {
     '--marquee-color': marqueeColor,
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
+    '--workspace-file-preview-handle-width': workspaceFilePreviewOpen ? '8px' : '0px',
+    '--workspace-file-preview-width': workspaceFilePreviewOpen ? `${workspaceFilePreviewWidth}px` : '0px',
     '--custom-theme-background': themePreferences.customBackgroundColor,
     '--custom-theme-background-opacity': customBackgroundOpacity,
     '--custom-theme-background-image': themePreferences.customBackgroundImage
@@ -1997,12 +2055,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
 
-  function setWorkspaceExplorerWidthValue(value: number, persist = false) {
-    const width = clampWorkspaceExplorerWidth(value)
+  function setWorkspaceExplorerWidthValue(value: number, persist = false, commit = false) {
+    const previewOpen = workspaceFilePreviewOpenRef.current
+    const width = clampWorkspaceExplorerWidth(value, previewOpen, previewOpen ? workspaceFilePreviewWidthRef.current : 0)
     workspaceExplorerWidthRef.current = width
     remoteShell.current?.style.setProperty('--workspace-explorer-width', `${width}px`)
-    if (!persist) return width
+    if (!persist && !commit) return width
     setWorkspaceExplorerWidth(width)
+    if (!persist) return width
     try {
       window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(width))
     } catch {
@@ -2011,9 +2071,54 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     return width
   }
 
+  function setWorkspaceFilePreviewWidthValue(value: number, persist = false, commit = false) {
+    const maximum = workspaceFilePreviewOpenRef.current
+      ? workspaceFilePreviewWidthLimit(workspaceExplorerWidthRef.current)
+      : workspaceFilePreviewMaxWidth
+    const width = Math.round(Math.max(0, Math.min(maximum, value)))
+    workspaceFilePreviewWidthRef.current = width
+    remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${width}px`)
+    if (!persist && !commit) return width
+    setWorkspaceFilePreviewWidth(width)
+    if (!persist) return width
+    workspaceFilePreviewPreferredWidthRef.current = width
+    try {
+      window.localStorage.setItem(workspaceFilePreviewWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
+  const handleWorkspacePreviewStateChange = useCallback((open: boolean) => {
+    if (workspaceFilePreviewOpenRef.current === open) return
+    if (open) {
+      const currentExplorerWidth = workspaceExplorerWidthRef.current
+      const fitted = fitWorkspacePreviewWidths(currentExplorerWidth, workspaceFilePreviewPreferredWidthRef.current)
+      if (fitted.explorerWidth < currentExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
+        workspaceExplorerWidthBeforePreviewRef.current = currentExplorerWidth
+      }
+      workspaceFilePreviewOpenRef.current = true
+      setWorkspaceFilePreviewOpen(true)
+      workspaceFilePreviewWidthRef.current = fitted.previewWidth
+      setWorkspaceFilePreviewWidth(fitted.previewWidth)
+      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
+      setWorkspaceExplorerWidthValue(fitted.explorerWidth, false, true)
+      return
+    }
+    workspaceFilePreviewOpenRef.current = false
+    setWorkspaceFilePreviewOpen(false)
+    remoteShell.current?.style.setProperty('--workspace-file-preview-handle-width', '0px')
+    remoteShell.current?.style.setProperty('--workspace-file-preview-width', '0px')
+    const previousExplorerWidth = workspaceExplorerWidthBeforePreviewRef.current
+    workspaceExplorerWidthBeforePreviewRef.current = null
+    if (previousExplorerWidth !== null) setWorkspaceExplorerWidthValue(previousExplorerWidth, false, true)
+  }, [])
+
   function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     event.preventDefault()
+    workspaceExplorerWidthBeforePreviewRef.current = null
     workspaceResizePointer.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
@@ -2037,12 +2142,54 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     setWorkspaceResizing(false)
   }
 
+  function startWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return
+    event.preventDefault()
+    workspaceFilePreviewResizePointer.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: workspaceFilePreviewWidthRef.current,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    setWorkspaceResizing(true)
+  }
+
+  function moveWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceFilePreviewResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    setWorkspaceFilePreviewWidthValue(current.startWidth + current.startX - event.clientX)
+  }
+
+  function finishWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const current = workspaceFilePreviewResizePointer.current
+    if (!current || current.pointerId !== event.pointerId) return
+    workspaceFilePreviewResizePointer.current = null
+    setWorkspaceFilePreviewWidthValue(workspaceFilePreviewWidthRef.current, true)
+    setWorkspaceResizing(false)
+  }
+
   useEffect(() => {
     workspaceExplorerWidthRef.current = workspaceExplorerWidth
   }, [workspaceExplorerWidth])
 
   useEffect(() => {
+    workspaceFilePreviewWidthRef.current = workspaceFilePreviewWidth
+  }, [workspaceFilePreviewWidth])
+
+  useEffect(() => {
     const clampForViewport = () => {
+      if (workspaceFilePreviewOpenRef.current) {
+        const desiredExplorerWidth = workspaceExplorerWidthBeforePreviewRef.current ?? workspaceExplorerWidthRef.current
+        const fitted = fitWorkspacePreviewWidths(desiredExplorerWidth, workspaceFilePreviewPreferredWidthRef.current)
+        if (fitted.explorerWidth < desiredExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
+          workspaceExplorerWidthBeforePreviewRef.current = desiredExplorerWidth
+        }
+        workspaceFilePreviewWidthRef.current = fitted.previewWidth
+        setWorkspaceFilePreviewWidth(fitted.previewWidth)
+        remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
+        setWorkspaceExplorerWidthValue(fitted.explorerWidth, false, true)
+        return
+      }
       const width = clampWorkspaceExplorerWidth(workspaceExplorerWidthRef.current)
       if (width !== workspaceExplorerWidthRef.current) setWorkspaceExplorerWidthValue(width, true)
     }
@@ -2180,8 +2327,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             role="separator"
             aria-label="调整右侧文件区宽度"
             aria-orientation="vertical"
-            aria-valuemin={workspaceExplorerMinWidth}
-            aria-valuemax={workspaceExplorerWidthLimit()}
+            aria-valuemin={workspaceExplorerMinimumWidth()}
+            aria-valuemax={workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewWidth : 0)}
             aria-valuenow={workspaceExplorerWidth}
             tabIndex={0}
             onPointerDown={startWorkspaceResize}
@@ -2191,13 +2338,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             onLostPointerCapture={finishWorkspaceResize}
             onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
             onKeyDown={(event) => {
-              const limits = workspaceExplorerWidthLimit()
+              const limits = workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewWidth : 0)
               const nextWidth = event.key === 'ArrowLeft'
                 ? workspaceExplorerWidthRef.current + 24
                 : event.key === 'ArrowRight'
                   ? workspaceExplorerWidthRef.current - 24
                   : event.key === 'Home'
-                    ? workspaceExplorerMinWidth
+                    ? workspaceExplorerMinimumWidth()
                     : event.key === 'End'
                       ? limits
                       : null
@@ -2206,11 +2353,46 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               setWorkspaceExplorerWidthValue(nextWidth, true)
             }}
           />
+          {workspaceFilePreviewOpen ? (
+            <div
+              className="workspace-file-preview-resize-handle"
+              role="separator"
+              aria-label="调整文件预览宽度"
+              aria-orientation="vertical"
+              aria-valuemin={Math.min(workspaceFilePreviewMinWidth, workspaceFilePreviewWidthLimit(workspaceExplorerWidth))}
+              aria-valuemax={workspaceFilePreviewWidthLimit(workspaceExplorerWidth)}
+              aria-valuenow={workspaceFilePreviewWidth}
+              tabIndex={0}
+              onPointerDown={startWorkspaceFilePreviewResize}
+              onPointerMove={moveWorkspaceFilePreviewResize}
+              onPointerUp={finishWorkspaceFilePreviewResize}
+              onPointerCancel={finishWorkspaceFilePreviewResize}
+              onLostPointerCapture={finishWorkspaceFilePreviewResize}
+              onDoubleClick={() => setWorkspaceFilePreviewWidthValue(workspaceFilePreviewDefaultWidth, true)}
+              onKeyDown={(event) => {
+                const limits = workspaceFilePreviewWidthLimit(workspaceExplorerWidth)
+                const minimum = Math.min(workspaceFilePreviewMinWidth, limits)
+                const nextWidth = event.key === 'ArrowLeft'
+                  ? workspaceFilePreviewWidthRef.current + 24
+                  : event.key === 'ArrowRight'
+                    ? workspaceFilePreviewWidthRef.current - 24
+                    : event.key === 'Home'
+                      ? minimum
+                      : event.key === 'End'
+                        ? limits
+                        : null
+                if (nextWidth === null) return
+                event.preventDefault()
+                setWorkspaceFilePreviewWidthValue(nextWidth, true)
+              }}
+            />
+          ) : null}
           <WorkspaceExplorer
             token={token}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
             previewRequest={workspacePreviewRequest}
+            onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
             mobileOpen={workspaceOpen}
