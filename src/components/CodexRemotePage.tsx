@@ -66,6 +66,7 @@ const maxLongPasteChars = 24_000
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceFilePreviewWidthStorageKey = 'codex-remote.workspace-file-preview-width'
+const workspaceFilePreviewWidthRatioStorageKey = 'codex-remote.workspace-file-preview-width-ratio'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
@@ -159,6 +160,24 @@ function readWorkspaceFilePreviewWidth() {
     return Math.round(Math.max(workspaceFilePreviewMinWidth, Math.min(workspaceFilePreviewMaxWidth, Number.isFinite(stored) && stored > 0 ? stored : workspaceFilePreviewDefaultWidth)))
   } catch {
     return workspaceFilePreviewDefaultWidth
+  }
+}
+
+function workspaceFilePreviewWidthRatio(width: number) {
+  const currentViewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  const viewportWidth = currentViewportWidth <= 700 ? 1_400 : currentViewportWidth
+  return Math.min(1, width / Math.max(1, viewportWidth))
+}
+
+function readWorkspaceFilePreviewWidthRatio() {
+  if (typeof window === 'undefined') return workspaceFilePreviewWidthRatio(workspaceFilePreviewDefaultWidth)
+  try {
+    const storedRatio = Number(window.localStorage.getItem(workspaceFilePreviewWidthRatioStorageKey))
+    if (Number.isFinite(storedRatio) && storedRatio > 0 && storedRatio <= 1) return storedRatio
+    const legacyWidth = Math.min(readWorkspaceFilePreviewWidth(), workspaceFilePreviewWidthLimit())
+    return workspaceFilePreviewWidthRatio(legacyWidth)
+  } catch {
+    return workspaceFilePreviewWidthRatio(workspaceFilePreviewDefaultWidth)
   }
 }
 
@@ -1747,7 +1766,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
   const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspaceFilePreviewWidthRef = useRef(workspaceFilePreviewWidth)
-  const workspaceFilePreviewPreferredWidthRef = useRef(workspaceFilePreviewWidth)
+  const workspaceFilePreviewPreferredWidthRatioRef = useRef(0)
+  if (workspaceFilePreviewPreferredWidthRatioRef.current === 0) {
+    workspaceFilePreviewPreferredWidthRatioRef.current = readWorkspaceFilePreviewWidthRatio()
+  }
   const workspaceFilePreviewOpenRef = useRef(false)
   const workspaceExplorerWidthBeforePreviewRef = useRef<number | null>(null)
   const workspaceFilePreviewResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
@@ -2100,9 +2122,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     if (!persist && !commit) return fitted.previewWidth
     setWorkspaceFilePreviewWidth(fitted.previewWidth)
     if (!persist) return fitted.previewWidth
-    workspaceFilePreviewPreferredWidthRef.current = fitted.previewWidth
+    const ratio = workspaceFilePreviewWidthRatio(fitted.previewWidth)
+    workspaceFilePreviewPreferredWidthRatioRef.current = ratio
     try {
       window.localStorage.setItem(workspaceFilePreviewWidthStorageKey, String(fitted.previewWidth))
+      window.localStorage.setItem(workspaceFilePreviewWidthRatioStorageKey, String(ratio))
     } catch {
       // The current tab still keeps the chosen width when storage is unavailable.
     }
@@ -2113,7 +2137,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     if (workspaceFilePreviewOpenRef.current === open) return
     if (open) {
       const currentExplorerWidth = workspaceExplorerWidthRef.current
-      const fitted = fitWorkspacePreviewWidths(currentExplorerWidth, workspaceFilePreviewPreferredWidthRef.current)
+      const desiredPreviewWidth = window.innerWidth * workspaceFilePreviewPreferredWidthRatioRef.current
+      const fitted = fitWorkspacePreviewWidths(currentExplorerWidth, desiredPreviewWidth)
       if (fitted.explorerWidth < currentExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
         workspaceExplorerWidthBeforePreviewRef.current = currentExplorerWidth
       }
@@ -2199,7 +2224,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     const clampForViewport = () => {
       if (workspaceFilePreviewOpenRef.current) {
         const desiredExplorerWidth = workspaceExplorerWidthBeforePreviewRef.current ?? workspaceExplorerWidthRef.current
-        const fitted = fitWorkspacePreviewWidths(desiredExplorerWidth, workspaceFilePreviewPreferredWidthRef.current)
+        const desiredPreviewWidth = window.innerWidth * workspaceFilePreviewPreferredWidthRatioRef.current
+        const fitted = fitWorkspacePreviewWidths(desiredExplorerWidth, desiredPreviewWidth)
         if (fitted.explorerWidth < desiredExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
           workspaceExplorerWidthBeforePreviewRef.current = desiredExplorerWidth
         }
