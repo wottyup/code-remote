@@ -73,6 +73,7 @@ const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
 const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
+const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const newThreadComposerDraftScope = 'new'
 
 interface ComposerPreferences {
@@ -104,6 +105,11 @@ const defaultThemePreferences: ThemePreferences = {
 function workspaceAbsolutePath(cwd: string | undefined, path: string) {
   const base = cwd?.replace(/[\\/]+$/, '')
   return base ? `${base}/${path}` : path
+}
+
+function workspaceFileReference(cwd: string | undefined, path: string) {
+  const isAbsolute = path.startsWith('/') || path.startsWith('\\\\') || /^[a-z]:[\\/]/i.test(path)
+  return isAbsolute || !cwd ? path : workspaceAbsolutePath(cwd, path)
 }
 
 function draftContainsWorkspacePath(draft: string, path: string) {
@@ -283,6 +289,12 @@ function saveComposerDraft(scope: string, draft: string) {
   } catch {
     // The composer still works for this session when storage is unavailable.
   }
+}
+
+interface ComposerFocusRestoreState {
+  scope: string
+  selectionStart: number
+  selectionEnd: number
 }
 
 function modelIdOf(model: CodexModel) {
@@ -555,6 +567,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
+  const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerHeightWasResized = useRef(false)
   const inputIsComposing = useRef(false)
@@ -611,6 +624,46 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
+  useLayoutEffect(() => {
+    if (focusRestoreAttempted.current) return
+    focusRestoreAttempted.current = true
+
+    const navigation = window.performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+    let restoreState: ComposerFocusRestoreState | null = null
+    try {
+      const stored = window.sessionStorage.getItem(composerFocusRestoreStorageKey)
+      window.sessionStorage.removeItem(composerFocusRestoreStorageKey)
+      if (stored) {
+        const parsed: unknown = JSON.parse(stored)
+        if (parsed && typeof parsed === 'object') {
+          const candidate = parsed as Record<string, unknown>
+          if (typeof candidate.scope === 'string'
+            && typeof candidate.selectionStart === 'number'
+            && typeof candidate.selectionEnd === 'number') {
+            restoreState = {
+              scope: candidate.scope,
+              selectionStart: candidate.selectionStart,
+              selectionEnd: candidate.selectionEnd,
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignore browser storage restrictions; the composer still works normally.
+    }
+    if (navigation?.type !== 'reload' || restoreState?.scope !== draftScope) return
+    const savedFocus = restoreState
+
+    window.requestAnimationFrame(() => {
+      const textarea = composer.current
+      if (!textarea) return
+      textarea.focus({ preventScroll: true })
+      const selectionStart = Math.max(0, Math.min(savedFocus.selectionStart, textarea.value.length))
+      const selectionEnd = Math.max(selectionStart, Math.min(savedFocus.selectionEnd, textarea.value.length))
+      textarea.setSelectionRange(selectionStart, selectionEnd)
+    })
+  }, [draftScope])
+
   useEffect(() => () => {
     const messageId = editingQueuedMessageIdRef.current
     if (messageId) onEndQueuedEdit(messageId)
@@ -624,7 +677,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     appendDraft(value, focus = true) {
       const current = draftRef.current
       const additions = workspacePathsMissingFromDraft(current, value.split(/\r?\n/))
-      if (additions.length === 0) return
+      if (additions.length === 0) {
+        if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+        return
+      }
       const separator = current && !/\s$/.test(current) ? '\n' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
@@ -677,6 +733,27 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       window.removeEventListener('pagehide', persistDraft)
       persistDraft()
     }
+  }, [draftScope])
+
+  useEffect(() => {
+    const rememberComposerFocus = () => {
+      const textarea = composer.current
+      try {
+        if (!textarea || document.activeElement !== textarea) {
+          window.sessionStorage.removeItem(composerFocusRestoreStorageKey)
+          return
+        }
+        window.sessionStorage.setItem(composerFocusRestoreStorageKey, JSON.stringify({
+          scope: draftScope,
+          selectionStart: textarea.selectionStart,
+          selectionEnd: textarea.selectionEnd,
+        } satisfies ComposerFocusRestoreState))
+      } catch {
+        // The page reload remains safe even when session storage is disabled.
+      }
+    }
+    window.addEventListener('pagehide', rememberComposerFocus)
+    return () => window.removeEventListener('pagehide', rememberComposerFocus)
   }, [draftScope])
 
   useEffect(() => {
@@ -1239,6 +1316,11 @@ function RemoteChatPane({
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeThreadId = remote.activeThread?.id
+  const insertChangedFileIntoConversation = useCallback((path: string) => {
+    const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
+    onActivate()
+    window.requestAnimationFrame(() => composerHandle.current?.appendDraft(fileReference, true))
+  }, [composerHandle, onActivate, remote.activeThread?.cwd, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
@@ -1386,11 +1468,11 @@ function RemoteChatPane({
             return (
               <Fragment key={message.id}>
                 <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={onCopy} />
-                {changes?.length ? <FileChangeCard changes={changes} /> : null}
+                {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} /> : null}
               </Fragment>
             )
           })}
-          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} />)}
+          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} onInsertPath={insertChangedFileIntoConversation} />)}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -2070,7 +2152,57 @@ function CodeBlock({ value, language, showCopy = true }: { value: string; langua
   )
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: CodexFileChange[] }) {
+interface NumberedDiffLine {
+  line: string
+  kind: 'added' | 'deleted' | 'hunk' | 'context'
+  oldLine: number | null
+  newLine: number | null
+}
+
+function numberDiffLines(diff: string): NumberedDiffLine[] {
+  let oldLine: number | null = null
+  let newLine: number | null = null
+  let oldRemaining = 0
+  let newRemaining = 0
+
+  return diff.split(/\r?\n/).map((line) => {
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    if (hunk) {
+      oldLine = Number(hunk[1])
+      oldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2])
+      newLine = Number(hunk[3])
+      newRemaining = hunk[4] === undefined ? 1 : Number(hunk[4])
+      return { line, kind: 'hunk', oldLine: null, newLine: null }
+    }
+
+    if (line.startsWith('\\')) return { line, kind: 'context', oldLine: null, newLine: null }
+    if (oldRemaining > 0 || newRemaining > 0) {
+      if (line.startsWith(' ') && oldRemaining > 0 && newRemaining > 0) {
+        const numbered = { line, kind: 'context' as const, oldLine, newLine }
+        oldLine = (oldLine ?? 0) + 1
+        newLine = (newLine ?? 0) + 1
+        oldRemaining -= 1
+        newRemaining -= 1
+        return numbered
+      }
+      if (line.startsWith('-') && oldRemaining > 0) {
+        const numbered = { line, kind: 'deleted' as const, oldLine, newLine: null }
+        oldLine = (oldLine ?? 0) + 1
+        oldRemaining -= 1
+        return numbered
+      }
+      if (line.startsWith('+') && newRemaining > 0) {
+        const numbered = { line, kind: 'added' as const, oldLine: null, newLine }
+        newLine = (newLine ?? 0) + 1
+        newRemaining -= 1
+        return numbered
+      }
+    }
+    return { line, kind: 'context', oldLine: null, newLine: null }
+  })
+}
+
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const files = [...changes.reduce((entries, change) => {
@@ -2125,18 +2257,25 @@ const FileChangeCard = memo(function FileChangeCard({ changes }: { changes: Code
             <div className="file-change-card__file-row">
               <span title={item.path}>{item.path}</span>
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
+              <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
             </div>
             {reviewing ? (
               item.diff
-                ? <pre>{item.diff.split(/\r?\n/).map((line, index) => {
-                  const lineClass = line.startsWith('+') && !line.startsWith('+++')
+                ? <pre>{numberDiffLines(item.diff).map((diffLine, index) => {
+                  const lineClass = diffLine.kind === 'added'
                     ? 'file-change-card__diff-line file-change-card__diff-line--added'
-                    : line.startsWith('-') && !line.startsWith('---')
+                    : diffLine.kind === 'deleted'
                       ? 'file-change-card__diff-line file-change-card__diff-line--deleted'
-                      : line.startsWith('@@')
+                      : diffLine.kind === 'hunk'
                         ? 'file-change-card__diff-line file-change-card__diff-line--hunk'
                         : 'file-change-card__diff-line'
-                  return <span className={lineClass} key={index}>{line || ' '}</span>
+                  return (
+                    <span className={lineClass} key={index}>
+                      <span className="file-change-card__line-number">{diffLine.oldLine ?? ''}</span>
+                      <span className="file-change-card__line-number">{diffLine.newLine ?? ''}</span>
+                      <span className="file-change-card__diff-code">{diffLine.line || ' '}</span>
+                    </span>
+                  )
                 })}</pre>
                 : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>
             ) : null}
