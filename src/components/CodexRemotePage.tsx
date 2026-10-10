@@ -68,7 +68,7 @@ const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
-const workspaceExplorerMaxWidth = 960
+const workspaceExplorerMaxWidth = 2_400
 const workspaceChatMinWidth = 240
 const minComposerHeight = 45
 const maxComposerHeight = 260
@@ -113,7 +113,10 @@ function workspaceExplorerWidthLimit() {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
-  return Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerMaxWidth, viewportWidth - 284 - workspaceChatMinWidth - 8))
+  const availableWorkspaceWidth = viewportWidth - 284 - 8
+  const proportionalLimit = Math.floor(availableWorkspaceWidth * 0.66)
+  const chatMinimumLimit = availableWorkspaceWidth - workspaceChatMinWidth
+  return Math.max(workspaceExplorerMinWidth, Math.min(workspaceExplorerMaxWidth, proportionalLimit, chatMinimumLimit))
 }
 
 function clampWorkspaceExplorerWidth(value: number) {
