@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,49 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runtime_history_is_seeded_from_original_database_and_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            source_db = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(source_db)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values (?)", ("source",))
+                connection.execute("create table thread_history_projection_state (thread_id text not null)")
+                connection.execute("insert into thread_history_projection_state values (?)", ("thread-id",))
+                connection.commit()
+            finally:
+                connection.close()
+            session_path = history_home / "sessions" / "2026" / "10" / "01" / "rollout-thread-id.jsonl"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text("session", encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._history._path_index = {"thread-id": session_path}
+                await app_server._prepare_runtime_thread("thread-id")
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+            connection = sqlite3.connect(runtime_home / "thread_history_1.sqlite")
+            try:
+                self.assertEqual(("source",), connection.execute("select value from marker").fetchone())
+            finally:
+                connection.close()
+            staged_path = runtime_home / "sessions" / "2026" / "10" / "01" / session_path.name
+            self.assertEqual("session", staged_path.read_text(encoding="utf-8"))
+
     async def test_app_server_uses_isolated_runtime_home_and_original_history_home(self) -> None:
         with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
             history_home = Path(history_directory)

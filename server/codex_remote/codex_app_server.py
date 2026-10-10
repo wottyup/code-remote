@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -421,6 +422,7 @@ class CodexAppServer:
         return thread
 
     async def resume_thread(self, thread_id: str) -> dict[str, Any]:
+        await self._prepare_runtime_thread(thread_id)
         result = await self.request("thread/resume", {"threadId": thread_id})
         thread = result.get("thread")
         if not isinstance(thread, dict):
@@ -654,6 +656,7 @@ class CodexAppServer:
             if not self.workspace.is_dir():
                 raise CodexRuntimeError(f"工作目录不存在：{self.workspace}")
             try:
+                self._seed_runtime_database()
                 child_environment = self._app_server_environment()
                 arguments = [executable, "app-server", "--listen", "stdio://"]
                 process_options = {
@@ -699,6 +702,90 @@ class CodexAppServer:
                 if isinstance(error, CodexRuntimeError):
                     raise
                 raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+
+    async def _prepare_runtime_thread(self, thread_id: str) -> None:
+        """Make an on-disk Codex thread visible to the isolated app-server."""
+        self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        runtime_database = self._runtime_home / "thread_history_1.sqlite"
+        if not self._database_has_thread(runtime_database, thread_id):
+            if self.connected:
+                await self._stop_process()
+            self._seed_runtime_database(force=True)
+        self._copy_thread_rollout(thread_id)
+
+    def _seed_runtime_database(self, force: bool = False) -> None:
+        source = self._history_home / "thread_history_1.sqlite"
+        target = self._runtime_home / "thread_history_1.sqlite"
+        if not source.is_file():
+            return
+        if not force and target.is_file() and self._database_has_threads(target):
+            return
+        for suffix in ("", "-shm", "-wal"):
+            target_path = Path(f"{target}{suffix}")
+            try:
+                target_path.unlink()
+            except FileNotFoundError:
+                pass
+        source_connection: sqlite3.Connection | None = None
+        target_connection: sqlite3.Connection | None = None
+        try:
+            source_connection = sqlite3.connect(
+                f"file:{source.as_posix()}?mode=ro", uri=True, timeout=30,
+            )
+            target_connection = sqlite3.connect(target, timeout=30)
+            source_connection.backup(target_connection)
+            target_connection.commit()
+        except sqlite3.Error as error:
+            raise CodexRuntimeError(f"无法准备 Codex 历史数据库：{error}") from error
+        finally:
+            if target_connection is not None:
+                target_connection.close()
+            if source_connection is not None:
+                source_connection.close()
+
+    @staticmethod
+    def _database_has_threads(path: Path) -> bool:
+        try:
+            with sqlite3.connect(path, timeout=5) as connection:
+                return connection.execute("select 1 from thread_history_projection_state limit 1").fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    @staticmethod
+    def _database_has_thread(path: Path, thread_id: str) -> bool:
+        if not path.is_file():
+            return False
+        try:
+            with sqlite3.connect(path, timeout=5) as connection:
+                return connection.execute(
+                    "select 1 from thread_history_projection_state where thread_id = ? limit 1",
+                    (thread_id,),
+                ).fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    def _copy_thread_rollout(self, thread_id: str) -> None:
+        source = self._history._load_path_index().get(thread_id)
+        if source is None or not source.is_file():
+            return
+        try:
+            relative = source.relative_to(self._history_home)
+        except ValueError:
+            return
+        target = self._runtime_home / relative
+        if target.is_file() and target.stat().st_size == source.stat().st_size:
+            return
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        try:
+            shutil.copy2(source, temporary)
+            os.replace(temporary, target)
+        except OSError as error:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+            raise CodexRuntimeError(f"无法准备 Codex 对话历史：{error}") from error
 
     def _app_server_environment(self) -> dict[str, str]:
         """Give the child app-server its own state directory.
