@@ -1671,7 +1671,7 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
-    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn])
+    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && turnId !== remote.runningTurnId && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
 
   return (
     <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
@@ -1709,7 +1709,8 @@ function RemoteChatPane({
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
           {remote.messages.map((message, index) => {
-            const changes = message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
+            const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId
+            const changes = turnComplete && message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
               ? remote.fileChangesByTurn[message.turnId]
               : undefined
             const operations = message.role === 'assistant' && message.turnId
