@@ -1093,10 +1093,32 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   return (
-    <form
-      className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
-      onSubmit={(event) => void send(event)}
-    >
+    <div className="composer-dock">
+      {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
+        <div className="composer-file-change-summary" aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
+          <FileText size={12} aria-hidden="true" />
+          <span>{fileChangeSummary.files.length} 个文件已更改</span>
+          {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
+            <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
+          ) : null}
+          <span className="composer-file-change-summary__files" aria-label="各文件增删行数">
+            {fileChangeSummary.files.map((file) => {
+              const fileName = file.path.split(/[\\/]/).at(-1) || file.path
+              const hasStats = file.additions > 0 || file.deletions > 0
+              return (
+                <span className="composer-file-change-summary__file" key={file.path} title={file.path}>
+                  <span>{fileName}</span>
+                  {hasStats ? <span className="composer-file-change-summary__file-stats"><i>+{file.additions}</i><em>-{file.deletions}</em></span> : null}
+                </span>
+              )
+            })}
+          </span>
+        </div>
+      ) : null}
+      <form
+        className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
+        onSubmit={(event) => void send(event)}
+      >
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
           {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
@@ -1145,29 +1167,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </div>
         </div>
       ) : null}
-      {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
-        <div className="composer-file-change-summary" aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
-          <FileText size={12} aria-hidden="true" />
-          <span>{fileChangeSummary.files.length} 个文件已更改</span>
-          {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
-            <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
-          ) : null}
-          {fileChangeSummary.files.length > 0 ? (
-            <span className="composer-file-change-summary__files" aria-label="各文件增删行数">
-              {fileChangeSummary.files.map((file) => {
-                const fileName = file.path.split(/[\\/]/).at(-1) || file.path
-                const hasStats = file.additions > 0 || file.deletions > 0
-                return (
-                  <span className="composer-file-change-summary__file" key={file.path} title={file.path}>
-                    <span>{fileName}</span>
-                    {hasStats ? <span className="composer-file-change-summary__file-stats"><i>+{file.additions}</i><em>-{file.deletions}</em></span> : null}
-                  </span>
-                )
-              })}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
         <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
         <textarea
@@ -1211,7 +1210,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ) : null}
         </div>
       </div>
-    </form>
+      </form>
+    </div>
   )
 }))
 
