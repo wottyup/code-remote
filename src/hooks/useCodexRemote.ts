@@ -24,6 +24,16 @@ export interface CodexActivity {
   detail?: string
 }
 
+export type CodexOperationStatus = 'running' | 'completed' | 'failed' | 'stopped'
+
+export interface CodexOperation {
+  id: string
+  kind: 'command' | 'file' | 'search' | 'tool'
+  label: string
+  detail?: string
+  status: CodexOperationStatus
+}
+
 export interface CodexThreadCompletion {
   threadId: string
   completedAt: number
@@ -69,6 +79,7 @@ interface SendMessageInput {
 }
 
 type FileChangesByTurn = Record<string, CodexFileChange[]>
+type OperationsByTurn = Record<string, CodexOperation[]>
 type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
 
 const emptyQueuedMessages: QueuedTurnMessage[] = []
@@ -101,6 +112,7 @@ interface ThreadCacheEntry {
   thread: CodexThread
   messages: CodexMessage[]
   fileChangesByTurn: FileChangesByTurn
+  operationsByTurn: OperationsByTurn
   running: boolean
   turnId: string | null
   characters: number
@@ -625,7 +637,7 @@ function activityForItem(value: unknown): CodexActivity {
     case 'agentMessage': return { label: '正在生成回复' }
     case 'commandExecution': {
       const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
-      return { label: '正在执行命令', detail: command ? command.slice(0, 100) : undefined }
+      return { label: '正在执行命令', detail: command ? safeOperationDetail(command) : undefined }
     }
     case 'fileChange': {
       const count = Array.isArray(item.changes) ? item.changes.length : 0
@@ -634,15 +646,180 @@ function activityForItem(value: unknown): CodexActivity {
     case 'mcpToolCall': {
       const server = typeof item.server === 'string' ? item.server : ''
       const tool = typeof item.tool === 'string' ? item.tool : ''
-      return { label: '正在调用 MCP 工具', detail: [server, tool].filter(Boolean).join(' · ') || undefined }
+      return { label: '正在调用 MCP 工具', detail: safeOperationDetail([server, tool].filter(Boolean).join(' · ')) }
     }
-    case 'dynamicToolCall': return { label: '正在调用工具', detail: toolName || undefined }
-    case 'webSearch': return { label: '正在搜索资料', detail: typeof item.query === 'string' ? item.query : undefined }
+    case 'dynamicToolCall': return { label: '正在调用工具', detail: safeOperationDetail(toolName) }
+    case 'webSearch': return { label: '正在搜索资料', detail: typeof item.query === 'string' ? safeOperationDetail(item.query) : undefined }
     case 'imageView': return { label: '正在查看图片' }
     case 'imageGeneration': return { label: '正在生成图片' }
     case 'collabAgentToolCall': return { label: '正在协调子任务', detail: typeof item.tool === 'string' ? item.tool : undefined }
     case 'subAgentActivity': return { label: '正在运行子任务' }
     default: return { label: '正在处理' }
+  }
+}
+
+const maxOperationsPerTurn = 80
+const maxOperationHistoryTurns = 30
+const maxOperationDetailCharacters = 220
+
+function normalizedOperationStatus(value: unknown, fallback: CodexOperationStatus = 'completed'): CodexOperationStatus {
+  if (typeof value !== 'string') return fallback
+  const status = value.replace(/[-_]/g, '').toLowerCase()
+  if (status === 'inprogress' || status === 'running' || status === 'started') return 'running'
+  if (status === 'failed' || status === 'error') return 'failed'
+  if (status === 'interrupted' || status === 'cancelled' || status === 'canceled' || status === 'declined') return 'stopped'
+  if (status === 'completed' || status === 'complete' || status === 'success') return 'completed'
+  return fallback
+}
+
+function safeOperationDetail(value: string) {
+  const sanitized = value
+    .replace(/[\u0000-\u001f\u007f]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/(--?(?:token|password|passwd|api[-_]?key|secret|authorization|cookie)(?:=|\s+))(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1[已隐藏]')
+    .replace(/\b([A-Z0-9_]*(?:TOKEN|PASSWORD|SECRET|API_KEY|PRIVATE_KEY|CREDENTIAL)[A-Z0-9_]*)=(?:"[^"]*"|'[^']*'|[^\s]+)/gi, '$1=[已隐藏]')
+    .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [已隐藏]')
+    .replace(/([a-z][\w+.-]*:\/\/[^:/\s@]+:)[^@\s/]+@/gi, '$1[已隐藏]@')
+  return sanitized.length > maxOperationDetailCharacters
+    ? `${sanitized.slice(0, maxOperationDetailCharacters - 1)}…`
+    : sanitized || undefined
+}
+
+function operationPaths(value: unknown, depth = 0): string[] {
+  if (depth > 4 || !value || typeof value !== 'object') return []
+  const paths: string[] = []
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (/^(?:path|filepath|file_path|filename|target_path|source_path)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
+      paths.push(entry.trim())
+    } else if (entry && typeof entry === 'object') {
+      paths.push(...operationPaths(entry, depth + 1))
+    }
+  }
+  return [...new Set(paths)].slice(0, 8)
+}
+
+function operationForItem(value: unknown, statusOverride?: CodexOperationStatus): CodexOperation | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  const id = typeof item.id === 'string' ? item.id : ''
+  if (!id || itemType === 'reasoning' || itemType === 'agentmessage' || itemType === 'usermessage' || itemType === 'plan') return null
+  const status = statusOverride ?? normalizedOperationStatus(item.status)
+
+  if (itemType === 'commandexecution') {
+    const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+    const knownCommand = command.match(/(?:^|[\s"'|;&])(?:\/[\w.\/-]+\/)?(rg|grep|find|fd|ag|ack|cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])/i)?.[1]?.toLowerCase() ?? ''
+    const isSearch = /^(?:rg|grep|find|fd|ag|ack)$/.test(knownCommand)
+    const isRead = /^(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)$/.test(knownCommand)
+    const detail = safeOperationDetail(command)
+    return {
+      id,
+      kind: isSearch ? 'search' : isRead ? 'file' : 'command',
+      label: isSearch ? '搜索文件' : isRead ? '查看文件' : '执行命令',
+      ...(detail ? { detail } : {}),
+      status,
+    }
+  }
+
+  if (itemType === 'filechange') {
+    const fileChange = fileChangeForItem(item)
+    if (!fileChange) return null
+    const paths = fileChange.changes.map((change) => change.path)
+    const shownPaths = paths.slice(0, 3)
+    const suffix = paths.length > shownPaths.length ? ` 等 ${paths.length} 个文件` : ''
+    const detail = safeOperationDetail(`${shownPaths.join('、')}${suffix}`)
+    return { id, kind: 'file', label: '修改文件', ...(detail ? { detail } : {}), status }
+  }
+
+  if (itemType === 'mcpToolCall' || itemType === 'dynamicToolCall' || itemType === 'collabAgentToolCall') {
+    const tool = [item.server, item.tool, item.name]
+      .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
+      .join(' · ')
+    const args = item.arguments ?? item.args ?? item.input
+    let parsedArgs = args
+    if (typeof args === 'string' && args.length < 20_000) {
+      try { parsedArgs = JSON.parse(args) } catch { parsedArgs = null }
+    }
+    const paths = operationPaths(parsedArgs)
+    const toolType = tool.toLowerCase()
+    const isSearch = /search|find|grep|query/.test(toolType)
+    const isFile = /read|file|directory|folder|list/.test(toolType)
+    const label = isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
+    const pathSummary = paths.length > 0
+      ? `${paths.slice(0, 3).join('、')}${paths.length > 3 ? ` 等 ${paths.length} 个路径` : ''}`
+      : ''
+    const detail = safeOperationDetail([tool, pathSummary].filter(Boolean).join(' · '))
+    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), status }
+  }
+
+  if (itemType === 'websearch') {
+    const query = typeof item.query === 'string' ? item.query : ''
+    const detail = safeOperationDetail(query)
+    return { id, kind: 'search', label: '搜索资料', ...(detail ? { detail } : {}), status }
+  }
+
+  if (itemType === 'imageview') return { id, kind: 'tool', label: '查看图片', status }
+  if (itemType === 'imagegeneration') return { id, kind: 'tool', label: '生成图片', status }
+  if (itemType === 'subagentactivity') return { id, kind: 'tool', label: '运行子任务', status }
+  return null
+}
+
+function upsertTurnOperation(current: CodexOperation[], operation: CodexOperation[]) {
+  let next = current
+  for (const item of operation) {
+    const index = next.findIndex((entry) => entry.id === item.id)
+    if (index < 0) next = [...next, item]
+    else if (next[index] !== item) next = next.map((entry, entryIndex) => entryIndex === index ? item : entry)
+  }
+  return next.length > maxOperationsPerTurn ? next.slice(-maxOperationsPerTurn) : next
+}
+
+function withTurnOperation(current: OperationsByTurn, turnId: string, operation: CodexOperation) {
+  const next = {
+    ...current,
+    [turnId]: upsertTurnOperation(current[turnId] ?? [], [operation]),
+  }
+  const turnIds = Object.keys(next)
+  if (turnIds.length <= maxOperationHistoryTurns) return next
+  return Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, next[id]]))
+}
+
+function mergeOperationsByTurn(current: OperationsByTurn, incoming: OperationsByTurn): OperationsByTurn {
+  let merged = incoming
+  for (const [turnId, operations] of Object.entries(current)) {
+    const next = upsertTurnOperation(merged[turnId] ?? [], operations)
+    if (merged === incoming) merged = { ...incoming }
+    merged[turnId] = next
+  }
+  const turnIds = Object.keys(merged)
+  return turnIds.length > maxOperationHistoryTurns
+    ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, merged[id]]))
+    : merged
+}
+
+function operationsFromThread(thread: { turns?: unknown[] }): OperationsByTurn {
+  const turns = Array.isArray(thread.turns) ? thread.turns.slice(-maxOperationHistoryTurns) : []
+  return turns.reduce<OperationsByTurn>((groups, turnValue, index) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${index}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    const operations = items.flatMap((item) => {
+      const operation = operationForItem(item)
+      return operation ? [operation] : []
+    })
+    if (operations.length > 0) groups[turnId] = upsertTurnOperation([], operations)
+    return groups
+  }, {})
+}
+
+function finishTurnOperations(current: OperationsByTurn, turnId: string, status: CodexOperationStatus): OperationsByTurn {
+  const operations = current[turnId]
+  if (!operations?.some((operation) => operation.status === 'running')) return current
+  return {
+    ...current,
+    [turnId]: operations.map((operation) => operation.status === 'running' ? { ...operation, status } : operation),
   }
 }
 
@@ -670,13 +847,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [isRunning, setIsRunning] = useState(false)
   // This is intentionally state as well as a ref: the ref lets socket events
   // make immediate decisions, while the state tells the UI which turn is not
-  // finished yet. File-change cards must wait for turn/completed.
+  // finished yet so in-progress file changes can be shown beside its reply.
   const [runningTurnId, setRunningTurnId] = useState<string | null>(null)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [lastTurnDurationMs, setLastTurnDurationMs] = useState<number | null>(null)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
   const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
+  const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
   const [writerConflict, setWriterConflict] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
   const [error, setError] = useState<string | null>(null)
@@ -700,6 +878,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const loadRequest = useRef(0)
   const historyRevision = useRef(0)
   const activityItemId = useRef<string | null>(null)
+  const operationsByTurnRef = useRef<OperationsByTurn>({})
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
   const streamingRenderTimer = useRef<number | undefined>(undefined)
@@ -822,7 +1001,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }, streamingRenderIntervalMs)
   }, [flushStreamingAssistant])
 
-  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn'>) => {
+  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn' | 'operationsByTurn'>) => {
     const characters = cachedHistoryCharacters(nextMessages)
     const cache = threadHistoryCache.current
     const previous = cache.get(thread.id)
@@ -832,6 +1011,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       thread: compactThread(thread),
       messages: nextMessages,
       fileChangesByTurn: state?.fileChangesByTurn ?? previous?.fileChangesByTurn ?? {},
+      operationsByTurn: state?.operationsByTurn ?? previous?.operationsByTurn ?? {},
       running: state?.running ?? previous?.running ?? threadIsRunning(thread),
       turnId: state?.turnId ?? previous?.turnId ?? null,
       characters,
@@ -846,6 +1026,60 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       totalCharacters -= oldest[1].characters
     }
   }, [])
+
+  const commitTurnOperation = useCallback((threadId: string | null, turnId: string | null, operation: CodexOperation) => {
+    if (!threadId || !turnId) return
+    if (threadId === activeThreadId.current) {
+      const next = withTurnOperation(operationsByTurnRef.current, turnId, operation)
+      operationsByTurnRef.current = next
+      setOperationsByTurn(next)
+      const cached = threadHistoryCache.current.get(threadId)
+      if (cached) cacheThreadSnapshot(cached.thread, cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: next,
+      })
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = withTurnOperation(cached.operationsByTurn, turnId, operation)
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: cached.running,
+      turnId: cached.turnId,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: next,
+    })
+  }, [cacheThreadSnapshot])
+
+  const finalizeTurnOperations = useCallback((threadId: string | null, turnId: string | null, status: CodexOperationStatus) => {
+    if (!threadId || !turnId) return
+    if (threadId === activeThreadId.current) {
+      const next = finishTurnOperations(operationsByTurnRef.current, turnId, status)
+      if (next === operationsByTurnRef.current) return
+      operationsByTurnRef.current = next
+      setOperationsByTurn(next)
+      const cached = threadHistoryCache.current.get(threadId)
+      if (cached) cacheThreadSnapshot(cached.thread, cached.messages, {
+        running: false,
+        turnId: null,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: next,
+      })
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = finishTurnOperations(cached.operationsByTurn, turnId, status)
+    if (next === cached.operationsByTurn) return
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: false,
+      turnId: null,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: next,
+    })
+  }, [cacheThreadSnapshot])
 
   const updateCachedThreadRunState = useCallback((threadId: string, running: boolean, turnId: string | null) => {
     const cache = threadHistoryCache.current
@@ -876,6 +1110,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         fileChangesByTurn: mergeFileChangesByTurn(
           cachedThread?.fileChangesByTurn ?? {},
           fileChangesFromThread(loadedThread),
+        ),
+        operationsByTurn: mergeOperationsByTurn(
+          operationsFromThread(loadedThread),
+          cachedThread?.operationsByTurn ?? {},
         ),
       })
     } catch (reason) {
@@ -954,6 +1192,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         threadHistoryCache.current.get(thread.id)?.fileChangesByTurn ?? {},
         fileChangesFromThread(thread),
       )
+      const currentOperations = threadHistoryCache.current.get(thread.id)?.operationsByTurn ?? {}
+      const historicalOperationsByTurn = mergeOperationsByTurn(
+        operationsFromThread(thread),
+        thread.id === activeThreadId.current ? operationsByTurnRef.current : currentOperations,
+      )
       if (persistActiveThread) persistActiveThreadCache(thread, cachedMessages)
       const { running, turnId: latestTurnId } = latestTurnState(thread)
       // A history read can finish while a reply is streaming (for example
@@ -970,6 +1213,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         running,
         turnId: latestTurnId,
         fileChangesByTurn: historicalFileChangesByTurn,
+        operationsByTurn: historicalOperationsByTurn,
       })
       setMessages((current) => {
         const loaded = preserveCurrentImages(cachedMessages, current)
@@ -986,6 +1230,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // Rebuild every turn's card from thread/read after a reconnect or hot
       // update, rather than keeping only the last global file-change state.
       setFileChangesByTurn(historicalFileChangesByTurn)
+      operationsByTurnRef.current = historicalOperationsByTurn
+      setOperationsByTurn(historicalOperationsByTurn)
       setActiveTurnId(running ? latestTurnId : null)
       if (!running) {
         resetStreamingAssistant()
@@ -1034,6 +1280,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       running: isRunning,
       turnId: activeTurnId.current,
       fileChangesByTurn,
+      operationsByTurn: operationsByTurnRef.current,
     })
   }, [activeThread, cacheThreadSnapshot, fileChangesByTurn, isRunning, messages])
 
@@ -1347,11 +1594,32 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         clearThreadCompletion(eventThreadId)
         void refreshThreads()
       } else if (event.method === 'turn/completed') {
+        const cachedTurnId = threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const completedTurnId = typeof eventTurn?.id === 'string' ? eventTurn.id : eventTurnId ?? cachedTurnId
+        const turnStatus = normalizedOperationStatus(eventTurn?.status, 'completed')
+        finalizeTurnOperations(eventThreadId, completedTurnId, turnStatus === 'running' ? 'completed' : turnStatus)
         updateCachedThreadRunState(eventThreadId, false, null)
         markThreadCompletion(eventThreadId)
         void startNextQueuedMessage(eventThreadId)
         void prefetchThread({ id: eventThreadId }, true)
         void refreshThreads()
+      } else if (event.method === 'item/started' || event.method === 'item/completed') {
+        const item = params.item as Record<string, unknown> | undefined
+        const turnId = typeof params.turnId === 'string' ? params.turnId : eventTurnId ?? threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const operation = operationForItem(item, event.method === 'item/started'
+          ? 'running'
+          : normalizedOperationStatus(item?.status, 'completed') === 'running' ? 'completed' : undefined)
+        if (operation) commitTurnOperation(eventThreadId, turnId, operation)
+      } else if (event.method === 'item/fileChange/patchUpdated') {
+        const itemId = typeof params.itemId === 'string' ? params.itemId : null
+        const turnId = typeof params.turnId === 'string' ? params.turnId : eventTurnId ?? threadHistoryCache.current.get(eventThreadId)?.turnId ?? null
+        const operation = itemId ? operationForItem({
+          id: itemId,
+          type: 'fileChange',
+          status: 'inProgress',
+          changes: params.changes,
+        }, 'running') : null
+        if (operation) commitTurnOperation(eventThreadId, turnId, operation)
       } else if (event.method === 'turn/workspaceChanges') {
         const turnId = typeof params.turnId === 'string' ? params.turnId : null
         const fileChange = turnId ? workspaceFileChange(turnId, params.changes) : null
@@ -1361,6 +1629,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             running: cachedThread.running,
             turnId: cachedThread.turnId,
             fileChangesByTurn: mergeFileChangesByTurn(cachedThread.fileChangesByTurn, { [turnId]: [fileChange] }),
+            operationsByTurn: cachedThread.operationsByTurn,
           })
         } else if (turnId && fileChange) {
           void prefetchThread({ id: eventThreadId }, true)
@@ -1401,6 +1670,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const completedTurnId = typeof turn?.id === 'string'
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
+      finalizeTurnOperations(turnThreadId ?? activeThreadId.current, completedTurnId, completedStatus === 'running' ? 'completed' : completedStatus)
       setActiveTurnId(null)
       if (!turnThreadId || interruptRequestedThreadId.current === turnThreadId) {
         interruptRequestedThreadId.current = null
@@ -1455,6 +1726,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const fileChange = fileChangeForItem(item)
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
+      const operation = operationForItem(item, 'running')
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       activityItemId.current = typeof item?.id === 'string' ? item.id : null
       setIsRunning(true)
       setActivity(activityForItem(item))
@@ -1470,6 +1743,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       })
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
+      const operation = operationForItem({
+        id: itemId,
+        type: 'fileChange',
+        status: 'inProgress',
+        changes: params.changes,
+      }, 'running')
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       setIsRunning(true)
       setActivity({ label: '正在修改文件', detail: fileChange ? `${fileChange.changes.length} 个文件` : undefined })
       return
@@ -1491,6 +1771,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const fileChange = fileChangeForItem(item)
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       if (fileChange) addFileChangeToTurn(turnId, { ...fileChange, status: 'completed' })
+      const operationStatus = normalizedOperationStatus(item?.status, 'completed')
+      const operation = operationForItem(item, operationStatus === 'running' ? 'completed' : operationStatus)
+      if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       const itemId = typeof item?.id === 'string' ? item.id : null
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType !== 'agentmessage') {
@@ -1509,7 +1792,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, dispatchInterrupt, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finishTurnTimer, flushStreamingAssistant, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
 
   useEffect(() => {
     if (!enabled) {
@@ -1665,6 +1948,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const persistedCache = memoryCache || !persistActiveThread ? null : readPersistedActiveThreadCache(thread.id)
     if (persistedCache) cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, {
       fileChangesByTurn: {},
+      operationsByTurn: {},
       running: false,
       turnId: null,
     })
@@ -1672,6 +1956,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       thread: persistedCache.thread,
       messages: persistedCache.messages,
       fileChangesByTurn: {},
+      operationsByTurn: {},
       running: false,
       turnId: null,
       characters: cachedHistoryCharacters(persistedCache.messages),
@@ -1680,6 +1965,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     setActiveThread(cachedThread ? { ...cachedThread.thread, ...thread } : thread)
     setMessages(cachedThread?.messages ?? [])
     setFileChangesByTurn(cachedThread?.fileChangesByTurn ?? {})
+    const cachedOperations = cachedThread?.operationsByTurn ?? {}
+    operationsByTurnRef.current = cachedOperations
+    setOperationsByTurn(cachedOperations)
     setIsRunning(cachedRunning)
     setActiveTurnId(cachedRunning ? cachedThread?.turnId ?? null : null)
     setIsInterrupting(false)
@@ -1748,6 +2036,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       clearTurnTimer()
       setActivity(null)
       setFileChangesByTurn({})
+      operationsByTurnRef.current = {}
+      setOperationsByTurn({})
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
@@ -1934,6 +2224,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     lastTurnDurationMs,
     activity,
     fileChangesByTurn,
+    operationsByTurn,
     writerConflict,
     handedOff,
     handoffInProgress,

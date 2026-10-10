@@ -25,7 +25,7 @@ import {
   Square,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 
 interface Props {
@@ -1654,7 +1654,7 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
-    .filter(([turnId, changes]) => turnId !== remote.runningTurnId && !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
+    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn])
 
   return (
     <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
@@ -1692,12 +1692,15 @@ function RemoteChatPane({
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
           {remote.messages.map((message, index) => {
-            const changes = message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index
+            const changes = message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
               ? remote.fileChangesByTurn[message.turnId]
               : undefined
+            const operations = message.role === 'assistant' && message.turnId
+              ? remote.operationsByTurn[message.turnId] ?? []
+              : []
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} activity={message.streaming ? remote.activity : null} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble message={message} activity={message.streaming ? remote.activity : null} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -1718,6 +1721,7 @@ function RemoteChatPane({
           {remote.isRunning && !hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <span className="running-indicator__activity"><LoaderCircle className="spin" size={15} /><span>{remote.activity?.label ?? '正在思考'}</span>{remote.activity?.detail ? <small>{remote.activity.detail}</small> : null}</span>
+              {remote.runningTurnId ? <OperationLog operations={remote.operationsByTurn[remote.runningTurnId] ?? []} initiallyOpen /> : null}
             </div>
           ) : null}
         </div>
@@ -2697,6 +2701,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   const additions = files.reduce((total, item) => total + item.additions, 0)
   const deletions = files.reduce((total, item) => total + item.deletions, 0)
   const hasLineStats = additions > 0 || deletions > 0
+  const inProgress = changes.some((change) => change.status === 'inProgress')
   const showAll = expanded || reviewing
   const visibleFiles = showAll ? files : files.slice(0, 1)
   const hiddenCount = files.length - 1
@@ -2711,11 +2716,11 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   }
 
   return (
-    <article className={`file-change-card${reviewing ? ' file-change-card--reviewing' : ''}`}>
+    <article className={`file-change-card${reviewing ? ' file-change-card--reviewing' : ''}${inProgress ? ' file-change-card--inProgress' : ''}`}>
       <header className="file-change-card__heading">
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
-          <strong>本次已编辑 {files.length} 个文件</strong>
+          <strong>{inProgress ? `正在编辑 ${files.length} 个文件` : `本次已编辑 ${files.length} 个文件`}</strong>
           {hasLineStats ? <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span> : null}
         </div>
         <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
@@ -2764,7 +2769,38 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   )
 })
 
-const MessageBubble = memo(function MessageBubble({ message, activity, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const OperationLog = memo(function OperationLog({ operations, initiallyOpen = false }: { operations: CodexOperation[]; initiallyOpen?: boolean }) {
+  const [expanded, setExpanded] = useState(initiallyOpen)
+  if (operations.length === 0) return null
+  const runningCount = operations.filter((operation) => operation.status === 'running').length
+  const failedCount = operations.filter((operation) => operation.status === 'failed').length
+  const stoppedCount = operations.filter((operation) => operation.status === 'stopped').length
+  const completedCount = operations.filter((operation) => operation.status === 'completed').length
+  const statusText = runningCount > 0
+    ? `${runningCount} 项进行中`
+    : failedCount > 0 ? `${failedCount} 项失败`
+      : stoppedCount > 0 ? `${completedCount} 项完成 · ${stoppedCount} 项停止`
+        : `${completedCount} 项完成`
+
+  return (
+    <details className="operation-log" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
+      <summary><ChevronDown size={13} /><span>操作记录</span><small>{statusText}</small></summary>
+      <ul>
+        {operations.map((operation) => (
+          <li className={`operation-log__item operation-log__item--${operation.status}`} key={operation.id}>
+            <span className="operation-log__status" aria-label={operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '已完成'}>
+              {operation.status === 'running' ? <LoaderCircle className="spin" size={12} /> : operation.status === 'completed' ? <Check size={12} /> : operation.status === 'failed' ? <AlertTriangle size={12} /> : <Square size={10} />}
+            </span>
+            <span className="operation-log__content"><strong>{operation.label}</strong>{operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}</span>
+            <small>{operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '完成'}</small>
+          </li>
+        ))}
+      </ul>
+    </details>
+  )
+})
+
+const MessageBubble = memo(function MessageBubble({ message, activity, operations, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
@@ -2785,6 +2821,7 @@ const MessageBubble = memo(function MessageBubble({ message, activity, copied, o
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+        {message.role === 'assistant' ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
         {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
     </article>
