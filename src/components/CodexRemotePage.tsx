@@ -142,10 +142,14 @@ function workspaceFilePreviewWidthLimit(explorerWidth = workspaceExplorerMinimum
   return Math.max(0, Math.min(workspaceFilePreviewMaxWidth, workspacePanelsWidthLimit(true) - explorerWidth))
 }
 
+function workspaceFilePreviewMinimumWidth() {
+  return Math.min(workspaceFilePreviewMinWidth, Math.max(0, workspacePanelsWidthLimit(true) - workspaceExplorerMinimumWidth()))
+}
+
 function fitWorkspacePreviewWidths(explorerWidth: number, previewWidth: number) {
   const totalLimit = workspacePanelsWidthLimit(true)
   const minimumExplorerWidth = workspaceExplorerMinimumWidth()
-  const minimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, Math.max(0, totalLimit - minimumExplorerWidth))
+  const minimumPreviewWidth = workspaceFilePreviewMinimumWidth()
   const maximumExplorerWidth = Math.max(minimumExplorerWidth, Math.min(workspaceExplorerMaxWidth, totalLimit - minimumPreviewWidth))
   const nextExplorerWidth = Math.round(Math.max(minimumExplorerWidth, Math.min(maximumExplorerWidth, explorerWidth)))
   const maximumPreviewWidth = workspaceFilePreviewWidthLimit(nextExplorerWidth)
@@ -1769,7 +1773,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
-  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number; startPreviewWidth: number } | null>(null)
   const workspaceFilePreviewWidthRef = useRef(workspaceFilePreviewWidth)
   const workspaceFilePreviewPreferredWidthRatioRef = useRef(0)
   if (workspaceFilePreviewPreferredWidthRatioRef.current === 0) {
@@ -2102,14 +2106,34 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   function setWorkspaceExplorerWidthValue(value: number, persist = false, commit = false) {
     const previewOpen = workspaceFilePreviewOpenRef.current
-    const width = clampWorkspaceExplorerWidth(value, previewOpen, previewOpen ? workspaceFilePreviewWidthRef.current : 0)
+    const currentWidth = workspaceExplorerWidthRef.current
+    let width: number
+    let previewWidth = workspaceFilePreviewWidthRef.current
+    if (previewOpen && value > currentWidth) {
+      // When the explorer divider is dragged wider, let the preview yield
+      // space instead of locking the explorer at the combined-width limit.
+      const fitted = fitWorkspacePreviewWidths(value, previewWidth)
+      width = fitted.explorerWidth
+      previewWidth = fitted.previewWidth
+      workspaceFilePreviewWidthRef.current = previewWidth
+      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${previewWidth}px`)
+    } else {
+      width = clampWorkspaceExplorerWidth(value, previewOpen, previewOpen ? previewWidth : 0)
+    }
     workspaceExplorerWidthRef.current = width
     remoteShell.current?.style.setProperty('--workspace-explorer-width', `${width}px`)
     if (!persist && !commit) return width
     setWorkspaceExplorerWidth(width)
+    if (previewOpen) setWorkspaceFilePreviewWidth(previewWidth)
     if (!persist) return width
     try {
       window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(width))
+      if (previewOpen) {
+        const ratio = workspaceFilePreviewWidthRatio(previewWidth)
+        workspaceFilePreviewPreferredWidthRatioRef.current = ratio
+        window.localStorage.setItem(workspaceFilePreviewWidthStorageKey, String(previewWidth))
+        window.localStorage.setItem(workspaceFilePreviewWidthRatioStorageKey, String(ratio))
+      }
     } catch {
       // The current tab still keeps the chosen width when storage is unavailable.
     }
@@ -2172,6 +2196,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       pointerId: event.pointerId,
       startX: event.clientX,
       startWidth: workspaceExplorerWidthRef.current,
+      startPreviewWidth: workspaceFilePreviewWidthRef.current,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setWorkspaceResizing(true)
@@ -2180,7 +2205,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   function moveWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
-    setWorkspaceExplorerWidthValue(current.startWidth + current.startX - event.clientX)
+    const requestedWidth = current.startWidth + current.startX - event.clientX
+    if (workspaceFilePreviewOpenRef.current) {
+      const fitted = requestedWidth > current.startWidth
+        ? fitWorkspacePreviewWidths(requestedWidth, current.startPreviewWidth)
+        : {
+          explorerWidth: clampWorkspaceExplorerWidth(requestedWidth, true, current.startPreviewWidth),
+          previewWidth: current.startPreviewWidth,
+        }
+      workspaceExplorerWidthRef.current = fitted.explorerWidth
+      workspaceFilePreviewWidthRef.current = fitted.previewWidth
+      remoteShell.current?.style.setProperty('--workspace-explorer-width', `${fitted.explorerWidth}px`)
+      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
+      return
+    }
+    setWorkspaceExplorerWidthValue(requestedWidth)
   }
 
   function finishWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
@@ -2378,7 +2417,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             aria-label="调整右侧文件区宽度"
             aria-orientation="vertical"
             aria-valuemin={workspaceExplorerMinimumWidth()}
-            aria-valuemax={workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewWidth : 0)}
+            aria-valuemax={workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewMinimumWidth() : 0)}
             aria-valuenow={workspaceExplorerWidth}
             tabIndex={0}
             onPointerDown={startWorkspaceResize}
@@ -2388,7 +2427,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             onLostPointerCapture={finishWorkspaceResize}
             onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
             onKeyDown={(event) => {
-              const limits = workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewWidth : 0)
+              const limits = workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewMinimumWidth() : 0)
               const nextWidth = event.key === 'ArrowLeft'
                 ? workspaceExplorerWidthRef.current + 24
                 : event.key === 'ArrowRight'
