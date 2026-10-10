@@ -1183,6 +1183,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
+  const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewCopied, setPreviewCopied] = useState(false)
@@ -1395,6 +1396,22 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     if (lines.length > 1 && lines.at(-1) === '' && /(?:\r\n|\n|\r)$/.test(previewFile.content)) lines.pop()
     return lines
   }, [previewFile])
+  useEffect(() => {
+    if (!previewFile) {
+      setHighlightedPreview(null)
+      return
+    }
+    let cancelled = false
+    void import('../lib/codeHighlight').then(({ highlightCodeLines }) => {
+      if (!cancelled) setHighlightedPreview({ file: previewFile, lines: highlightCodeLines(previewFile.path, previewFile.content) })
+    }).catch(() => {
+      if (!cancelled) setHighlightedPreview(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [previewFile])
+  const highlightedPreviewLines = highlightedPreview?.file === previewFile ? highlightedPreview.lines : []
   return (
     <>
       <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
@@ -1438,7 +1455,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
             {previewFile ? (
               <pre className="workspace-file-preview__code"><code>{previewLines.map((line, index) => (
-                <span className="workspace-file-preview__line" key={index}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{line || ' '}</span></span>
+                <span className="workspace-file-preview__line" key={index}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
+                  ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+                  : line || ' '}</span></span>
               ))}</code></pre>
             ) : null}
           </section>

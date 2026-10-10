@@ -12,6 +12,7 @@
     "engine:dev": "node scripts/engine-dev.mjs"
   },
   "dependencies": {
+    "highlight.js": "11.12.0",
     "lucide-react": "1.34.0",
     "react": "19.2.3",
     "react-dom": "19.2.3"
