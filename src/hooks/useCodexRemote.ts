@@ -1500,8 +1500,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       // The active reply may have completed in the interval before the click
-      // reached the server. Preserve the item and start it as the next turn.
-      if (reason instanceof RemoteApiError && reason.status === 409) return startQueuedMessage(threadId, messageId)
+      // reached the server. Re-read the authoritative turn state first so a
+      // stale local turn ID cannot silently block the fallback start.
+      if (reason instanceof RemoteApiError && reason.status === 409) {
+        const refreshed = await loadThread(threadId, historyRevision.current)
+        if (!refreshed) return false
+        return startQueuedMessage(threadId, messageId)
+      }
       if (activeThreadId.current === threadId) {
         setError(reason instanceof Error ? reason.message : '立即发送排队消息失败')
       }
@@ -1509,7 +1514,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       queuedTurnSteersInFlight.current.delete(requestKey)
     }
-  }, [appendQueuedMessageToActiveThread, onUnauthorized, startQueuedMessage, token, updateQueuedMessages])
+  }, [appendQueuedMessageToActiveThread, loadThread, onUnauthorized, startQueuedMessage, token, updateQueuedMessages])
 
   const removeQueuedMessage = useCallback((messageId: string) => {
     const threadId = activeThreadId.current
@@ -1889,6 +1894,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       if (!wasHidden) return
       wasHidden = false
+      const threadId = activeThreadId.current
+      const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
+      // Android WebViews can leave a socket marked "connected" after the app
+      // was backgrounded. Re-read only when a queue is waiting, so a missed
+      // turn/completed event cannot strand its next message.
+      if (connectionRef.current === 'connected') {
+        if (hasQueuedMessages) void restoreActiveThread()
+        return
+      }
       resumeFromBackground()
     }
     const handlePageShow = (event: PageTransitionEvent) => {
