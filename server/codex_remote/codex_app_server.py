@@ -6,11 +6,14 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from watchfiles import Change, DefaultFilter, awatch
+
+from .codex_history import CodexHistoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +201,15 @@ class CodexAppServer:
     def __init__(self, command: str, workspace: Path) -> None:
         self.command = command
         self.workspace = workspace.expanduser().resolve()
+        self._history_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
+        configured_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+        self._runtime_home = (
+            Path(configured_runtime_home).expanduser().resolve()
+            if configured_runtime_home
+            else self.workspace / ".codex-remote" / "app-server-home"
+        )
+        if self._runtime_home == self._history_home:
+            self._runtime_home = self.workspace / ".codex-remote" / "app-server-home"
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -217,6 +229,7 @@ class CodexAppServer:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
         self._handed_off = False
+        self._history = CodexHistoryStore(self._history_home)
 
     @property
     def connected(self) -> bool:
@@ -333,7 +346,7 @@ class CodexAppServer:
         return self._configured_models()
 
     def _configured_models(self) -> list[dict[str, Any]]:
-        config_path = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")) / "config.toml"
+        config_path = self._history_home / "config.toml"
         try:
             config_text = config_path.read_text(encoding="utf-8")
         except OSError:
@@ -641,19 +654,25 @@ class CodexAppServer:
             if not self.workspace.is_dir():
                 raise CodexRuntimeError(f"工作目录不存在：{self.workspace}")
             try:
-                process = await asyncio.create_subprocess_exec(
-                    executable,
-                    "app-server",
-                    "--listen",
-                    "stdio://",
-                    cwd=self.workspace,
-                    stdin=asyncio.subprocess.PIPE,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                child_environment = self._app_server_environment()
+                arguments = [executable, "app-server", "--listen", "stdio://"]
+                process_options = {
+                    "cwd": self.workspace,
+                    "env": child_environment,
+                    "stdin": asyncio.subprocess.PIPE,
+                    "stdout": asyncio.subprocess.PIPE,
+                    "stderr": asyncio.subprocess.PIPE,
                     # thread/read returns a whole conversation as one JSONL line.
                     # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
-                    limit=64 * 1024 * 1024,
-                )
+                    "limit": 64 * 1024 * 1024,
+                }
+                if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
+                    process = await asyncio.create_subprocess_shell(
+                        subprocess.list2cmdline(arguments),
+                        **process_options,
+                    )
+                else:
+                    process = await asyncio.create_subprocess_exec(*arguments, **process_options)
             except OSError as error:
                 raise CodexRuntimeError(f"无法启动 Codex app-server：{error}") from error
 
@@ -680,6 +699,27 @@ class CodexAppServer:
                 if isinstance(error, CodexRuntimeError):
                     raise
                 raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+
+    def _app_server_environment(self) -> dict[str, str]:
+        """Give the child app-server its own state directory.
+
+        The VS Code Codex process and this remote bridge can run at the same time.
+        Sharing CODEX_HOME makes the two processes contend for Codex's SQLite state
+        runtime, so only the read-only history/config source stays in the original
+        home; mutable app-server state is copied into a separate home.
+        """
+        self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+        for filename in ("config.toml", "auth.json", "models-custom.json"):
+            source = self._history_home / filename
+            target = self._runtime_home / filename
+            if source.is_file() and source.resolve() != target.resolve():
+                try:
+                    shutil.copy2(source, target)
+                except OSError as error:
+                    raise CodexRuntimeError(f"无法准备 Codex app-server 配置：{error}") from error
+        child_environment = os.environ.copy()
+        child_environment["CODEX_HOME"] = str(self._runtime_home)
+        return child_environment
 
     def _resolve_executable(self) -> str | None:
         candidates = [self.command]

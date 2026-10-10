@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,31 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_app_server_uses_isolated_runtime_home_and_original_history_home(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            (history_home / "config.toml").write_text('model = "gpt-test"\n', encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = runtime_directory
+                app_server = CodexAppServer("codex", Path.cwd())
+                child_environment = app_server._app_server_environment()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+            self.assertEqual(history_home.resolve(), app_server._history.codex_home)
+            self.assertEqual(str(Path(runtime_directory).resolve()), child_environment["CODEX_HOME"])
+            self.assertEqual('model = "gpt-test"', (Path(runtime_directory) / "config.toml").read_text(encoding="utf-8").strip())
+
     async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[
