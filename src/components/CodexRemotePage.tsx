@@ -105,6 +105,29 @@ function workspaceAbsolutePath(cwd: string | undefined, path: string) {
   return base ? `${base}/${path}` : path
 }
 
+function draftContainsWorkspacePath(draft: string, path: string) {
+  if (!draft || !path) return false
+  let index = draft.indexOf(path)
+  while (index >= 0) {
+    const previous = draft[index - 1]
+    const next = draft[index + path.length]
+    const startsAtBoundary = previous === undefined || /[\s"'`([{<]/.test(previous)
+    const endsAtBoundary = next === undefined || /[\s"'`)\]}>]/.test(next)
+    if (startsAtBoundary && endsAtBoundary) return true
+    index = draft.indexOf(path, index + path.length)
+  }
+  return false
+}
+
+function workspacePathsMissingFromDraft(draft: string, paths: string[]) {
+  const seen = new Set<string>()
+  return paths.filter((path) => {
+    if (!path || seen.has(path) || draftContainsWorkspacePath(draft, path)) return false
+    seen.add(path)
+    return true
+  })
+}
+
 function normalizeHexColor(value: unknown, fallback: string) {
   return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
 }
@@ -453,13 +476,14 @@ interface ComposerSendInput {
 
 interface ComposerHandle {
   replaceDraft(value: string): void
-  appendDraft(value: string): void
+  appendDraft(value: string, focus?: boolean): void
   adoptUnassignedDraft(threadId: string): void
   closeOpenMenu(): boolean
 }
 
 interface MessageComposerProps {
   draftScope: string
+  onDraftChange: (draft: string) => void
   connection: RemoteConnection
   isRunning: boolean
   isInterrupting: boolean
@@ -484,6 +508,7 @@ interface MessageComposerProps {
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   draftScope,
+  onDraftChange,
   connection,
   isRunning,
   isInterrupting,
@@ -564,23 +589,25 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [])
 
   const updateDraft = useCallback((next: string | ((current: string) => string)) => {
-    setDraft((current) => {
-      const value = typeof next === 'function' ? next(current) : next
-      draftRef.current = value
-      return value
-    })
+    const value = typeof next === 'function' ? next(draftRef.current) : next
+    draftRef.current = value
+    setDraft(value)
   }, [])
+
+  useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
       updateDraft(value)
       window.requestAnimationFrame(() => composer.current?.focus())
     },
-    appendDraft(value) {
+    appendDraft(value, focus = true) {
       const current = draftRef.current
+      const additions = workspacePathsMissingFromDraft(current, value.split(/\r?\n/))
+      if (additions.length === 0) return
       const separator = current && !/\s$/.test(current) ? '\n' : ''
-      updateDraft(`${current}${separator}${value}`)
-      window.requestAnimationFrame(() => composer.current?.focus())
+      updateDraft(`${current}${separator}${additions.join('\n')}`)
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
     adoptUnassignedDraft(threadId) {
       const targetScope = composerDraftScopeForThread(threadId)
@@ -875,12 +902,13 @@ interface WorkspaceExplorerProps {
   token: string
   cwd?: string
   threadId?: string
-  onInsertPath: (path: string) => void
+  draft: string
+  onInsertPath: (path: string, focus?: boolean) => void
   mobileOpen: boolean
   onCloseMobile: () => void
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
@@ -972,7 +1000,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     const menuHeight = 72
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
-    const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
+    const paths = (selectedPaths.includes(entry.path) ? selectedPaths : [entry.path])
+      .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(cwd, path)))
+    if (paths.length === 0) return
     setSelectedPaths(paths)
     setContextMenu({ entry, paths, x, y })
   }
@@ -986,7 +1016,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
-    else onInsertPath(entryAbsolutePath(entry))
+    else onInsertPath(entryAbsolutePath(entry), !mobileOpen)
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
@@ -1006,6 +1036,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     return tree.entries.flatMap((entry) => {
       const isDirectory = entry.kind === 'directory'
       const isOpen = Boolean(expanded[entry.path])
+      const absolutePath = entryAbsolutePath(entry)
+      const alreadyAdded = draftContainsWorkspacePath(draft, absolutePath)
       const row = (
           <Fragment key={entry.path}>
           <div className="workspace-explorer__entry-row">
@@ -1022,7 +1054,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
               <span className="workspace-explorer__entry-name">{entry.name}</span>
               {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
             </button>
-            <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(entryAbsolutePath(entry)) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button>
+            {!alreadyAdded ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(absolutePath, !mobileOpen) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button> : null}
           </div>
           {isDirectory && isOpen ? (
             loadingPaths[directoryKey(entry.path)]
@@ -1057,7 +1089,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
-          <button type="button" role="menuitem" onClick={() => { const paths = contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path)).join('\n'); setContextMenu(null); onInsertPath(paths) }}><Link2 size={14} />加入输入框</button>
+          {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(cwd, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
         </div>,
         document.body,
       ) : null}
@@ -1309,6 +1341,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
   const composerHandle = useRef<ComposerHandle>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
@@ -1317,6 +1350,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
+    ? workspaceDraftSnapshot.draft
+    : readComposerDraft(composerDraftScope)
+  const syncWorkspaceDraft = useCallback((draft: string) => {
+    setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
+  }, [composerDraftScope])
   const activeComposerPreferences = activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences
@@ -1621,8 +1660,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [rememberThreadComposerPreferences, remote0, remote1, remote2, selectedPaneIndex])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
-  const insertWorkspacePath = useCallback((path: string) => {
-    composerHandle.current?.appendDraft(path)
+  const insertWorkspacePath = useCallback((path: string, focus = true) => {
+    composerHandle.current?.appendDraft(path, focus)
   }, [])
 
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
@@ -1719,6 +1758,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               key={composerDraftScope}
               ref={composerHandle}
               draftScope={composerDraftScope}
+              onDraftChange={syncWorkspaceDraft}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
               isInterrupting={activeRemote.isInterrupting}
@@ -1745,6 +1785,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
             token={token}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
+            draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
             mobileOpen={workspaceOpen}
             onCloseMobile={() => setWorkspaceOpen(false)}
