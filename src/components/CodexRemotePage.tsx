@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode } from 'react'
+import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -1999,6 +1999,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
   const composerHandle = useRef<ComposerHandle>(null)
+  const sidebarTouchStart = useRef<{ x: number; y: number; sidebarWasOpen: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
   const paneGrid = useRef<HTMLDivElement>(null)
@@ -2017,6 +2018,34 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    if (!window.matchMedia('(max-width: 700px)').matches || event.touches.length !== 1) {
+      sidebarTouchStart.current = null
+      return
+    }
+    const touch = event.touches[0]
+    if (!touch) return
+    const target = event.target
+    const sidebar = remoteShell.current?.querySelector('.remote-sidebar')
+    const startedInsideSidebar = sidebarOpen && target instanceof Node && Boolean(sidebar?.contains(target))
+    const startedAtLeftEdge = !sidebarOpen && touch.clientX <= 28
+    sidebarTouchStart.current = startedInsideSidebar || startedAtLeftEdge
+      ? { x: touch.clientX, y: touch.clientY, sidebarWasOpen: sidebarOpen }
+      : null
+  }
+
+  function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    const start = sidebarTouchStart.current
+    sidebarTouchStart.current = null
+    const touch = event.changedTouches[0]
+    if (!start || !touch) return
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    if (Math.abs(deltaX) < 64 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return
+    if (!start.sidebarWasOpen && deltaX > 0) setSidebarOpen(true)
+    else if (start.sidebarWasOpen && deltaX < 0) setSidebarOpen(false)
+  }
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
@@ -2553,7 +2582,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   })), [effortOptions])
 
   return (
-    <div ref={remoteShell} className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')} style={themeStyle}>
+    <div
+      ref={remoteShell}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
+      style={themeStyle}
+      onTouchStartCapture={handleSidebarTouchStart}
+      onTouchEndCapture={handleSidebarTouchEnd}
+      onTouchCancelCapture={() => { sidebarTouchStart.current = null }}
+    >
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
