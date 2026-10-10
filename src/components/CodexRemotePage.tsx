@@ -1220,7 +1220,7 @@ interface WorkspaceExplorerProps {
   cwd?: string
   threadId?: string
   previewRequest: { id: number; cwd?: string; path: string; diff?: string } | null
-  onPreviewStateChange: (open: boolean) => void
+  onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
   mobileOpen: boolean
@@ -1242,17 +1242,30 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
+  const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
   const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewCopied, setPreviewCopied] = useState(false)
+  const previewCloseButton = useRef<HTMLButtonElement>(null)
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
   const handledPreviewRequest = useRef(0)
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}`
 
   const directoryKey = (path: string) => path || '.'
+  const closePreview = useCallback(() => {
+    previewRequestGeneration.current += 1
+    setPreviewPath(null)
+    setPreviewDiff(null)
+    setMobilePreviewDialog(false)
+    setPreviewLoading(false)
+    setPreviewError(null)
+    setPreviewCopied(false)
+    onPreviewStateChange(false)
+  }, [onPreviewStateChange])
+
   const loadDirectory = useCallback(async (path: string) => {
     if (!cwd) return
     const generation = requestGeneration.current
@@ -1275,9 +1288,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   const loadPreview = useCallback(async (path: string, requestedCwd = cwd, diff?: string) => {
     const generation = ++previewRequestGeneration.current
-    onPreviewStateChange(true)
+    const mobileDialog = !desktopWorkspacePreviewAvailable()
+    onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
     setPreviewDiff(diff ?? null)
+    setMobilePreviewDialog(mobileDialog)
     setPreviewFile(null)
     setPreviewError(null)
     setPreviewCopied(false)
@@ -1292,7 +1307,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
-  }, [cwd, onPreviewStateChange, token])
+  }, [closePreview, cwd, onPreviewStateChange, token])
 
   useEffect(() => {
     requestGeneration.current += 1
@@ -1305,6 +1320,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setError(null)
     setPreviewPath(null)
     setPreviewDiff(null)
+    setMobilePreviewDialog(false)
     setPreviewFile(null)
     setPreviewLoading(false)
     setPreviewError(null)
@@ -1317,7 +1333,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
     if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
     handledPreviewRequest.current = previewRequest.id
-    if (desktopWorkspacePreviewAvailable()) void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff)
+    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff)
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
@@ -1385,18 +1401,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
-    else if (desktopWorkspacePreviewAvailable()) void loadPreview(entry.path)
-    else onInsertPath(entryAbsolutePath(entry), !mobileOpen)
-  }
-
-  function closePreview() {
-    previewRequestGeneration.current += 1
-    setPreviewPath(null)
-    setPreviewDiff(null)
-    setPreviewLoading(false)
-    setPreviewError(null)
-    setPreviewCopied(false)
-    onPreviewStateChange(false)
+    else void loadPreview(entry.path)
   }
 
   async function copyPreview() {
@@ -1487,6 +1492,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }, [previewFile])
   const highlightedPreviewLines = highlightedPreview?.file === previewFile ? highlightedPreview.lines : []
+  useEffect(() => {
+    if (!mobilePreviewDialog || !previewPath) return
+    const frame = window.requestAnimationFrame(() => previewCloseButton.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [mobilePreviewDialog, previewPath])
   return (
     <>
       <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
@@ -1510,13 +1520,33 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
       </aside>
       {previewPath ? (
-        <aside className="workspace-file-preview-panel" aria-label="工作区文件预览">
+        <>
+        {mobilePreviewDialog ? <button className="workspace-file-preview-backdrop workspace-file-preview-backdrop--open" type="button" aria-label="关闭文件预览" onClick={closePreview} /> : null}
+        <aside
+          className={`workspace-file-preview-panel${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ''}`}
+          role={mobilePreviewDialog ? 'dialog' : undefined}
+          aria-modal={mobilePreviewDialog || undefined}
+          aria-label="工作区文件预览"
+          onKeyDown={(event) => {
+            if (!mobilePreviewDialog || event.key !== 'Tab') return
+            const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
+            const first = buttons.item(0)
+            const last = buttons.item(buttons.length - 1)
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault()
+              last?.focus()
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault()
+              first?.focus()
+            }
+          }}
+        >
           <header className="workspace-explorer__header workspace-file-preview-panel__header">
             <div>
               <span className="workspace-explorer__eyebrow">只读预览</span>
               <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
             </div>
-            <button className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
+            <button ref={previewCloseButton} className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
           </header>
           <section className="workspace-file-preview">
             <div className="workspace-file-preview__toolbar">
@@ -1555,6 +1585,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
           </section>
           <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">只读预览 · {previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}</footer>
         </aside>
+        </>
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
@@ -1856,6 +1887,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const workspaceExplorerWidthBeforePreviewRef = useRef<number | null>(null)
   const workspaceFilePreviewResizePointer = useRef<{ pointerId: number; startX: number; startExplorerWidth: number; startPreviewWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
+  const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
+  const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
@@ -1959,6 +1992,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   useEffect(() => {
     const handleBack = () => {
+      if (workspacePreviewModeRef.current === 'mobile') {
+        workspacePreviewCloseRef.current?.()
+        return true
+      }
       if (composerHandle.current?.closeOpenMenu()) return true
       if (threadContextMenu) {
         setThreadContextMenu(null)
@@ -1986,7 +2023,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229 || !activeRemote.isRunning) return
+      if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (workspacePreviewModeRef.current === 'mobile') {
+        event.preventDefault()
+        workspacePreviewCloseRef.current?.()
+        return
+      }
+      if (!activeRemote.isRunning) return
       event.preventDefault()
       void activeRemote.interrupt()
     }
@@ -2234,9 +2277,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     return fitted
   }
 
-  const handleWorkspacePreviewStateChange = useCallback((open: boolean) => {
-    if (workspaceFilePreviewOpenRef.current === open) return
+  const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
     if (open) {
+      const mode = workspacePreviewModeRef.current ?? (desktopWorkspacePreviewAvailable() ? 'desktop' : 'mobile')
+      workspacePreviewModeRef.current = mode
+      workspacePreviewCloseRef.current = closePreview ?? null
+      if (mode === 'mobile' || workspaceFilePreviewOpenRef.current) return
       const currentExplorerWidth = workspaceExplorerWidthRef.current
       const desiredPreviewWidth = window.innerWidth * workspaceFilePreviewPreferredWidthRatioRef.current
       const fitted = fitWorkspacePreviewWidths(currentExplorerWidth, desiredPreviewWidth)
@@ -2251,6 +2297,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       setWorkspaceExplorerWidthValue(fitted.explorerWidth, false, true)
       return
     }
+    const mode = workspacePreviewModeRef.current
+    workspacePreviewModeRef.current = null
+    workspacePreviewCloseRef.current = null
+    if (mode === 'mobile' || !workspaceFilePreviewOpenRef.current) return
     workspaceFilePreviewOpenRef.current = false
     setWorkspaceFilePreviewOpen(false)
     remoteShell.current?.style.setProperty('--workspace-file-preview-handle-width', '0px')
@@ -2868,7 +2918,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
         {visibleFiles.map((item) => (
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
-              <span className="file-change-card__path-mobile" title={item.path}>{item.path}</span>
+              <button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
               <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
               <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
