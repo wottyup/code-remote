@@ -36,6 +36,20 @@ from .codex_app_server import (
 logger = logging.getLogger(__name__)
 
 
+def resolve_default_workspace(
+    project_root: Path,
+    *,
+    configured: Path | None = None,
+    is_windows: bool | None = None,
+) -> Path:
+    """Choose a useful local default while preserving explicit configuration."""
+    if configured is not None:
+        return configured.expanduser().resolve()
+    windows = os.name == "nt" if is_windows is None else is_windows
+    root = project_root.expanduser().resolve()
+    return root.parent if windows else root
+
+
 async def watch_codex_history(app_server: CodexAppServer) -> None:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
     sessions = codex_home / "sessions"
@@ -570,7 +584,10 @@ class PairingAuth:
 
 def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
     project_root = Path(__file__).resolve().parents[2]
-    configured_workspace = workspace or Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root))
+    configured_workspace = resolve_default_workspace(
+        project_root,
+        configured=workspace or (Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None),
+    )
     app_server = CodexAppServer(
         codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex"),
         configured_workspace,

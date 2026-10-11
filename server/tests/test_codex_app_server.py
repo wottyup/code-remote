@@ -23,6 +23,42 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_default_app_server_uses_main_codex_home_without_reseeding_its_database(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory:
+            history_home = Path(history_directory)
+            database = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values ('preserve')")
+                connection.commit()
+            finally:
+                connection.close()
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                child_environment = app_server._app_server_environment()
+
+                self.assertEqual(history_home.resolve(), app_server._runtime_home)
+                self.assertEqual(str(history_home.resolve()), child_environment["CODEX_HOME"])
+                await app_server._prepare_runtime_thread("not-in-history")
+
+                connection = sqlite3.connect(database)
+                try:
+                    self.assertEqual(("preserve",), connection.execute("select value from marker").fetchone())
+                finally:
+                    connection.close()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
     async def test_runtime_history_is_seeded_from_original_database_and_rollout(self) -> None:
         with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
             history_home = Path(history_directory)

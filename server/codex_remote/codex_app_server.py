@@ -206,10 +206,8 @@ class CodexAppServer:
         self._runtime_home = (
             Path(configured_runtime_home).expanduser().resolve()
             if configured_runtime_home
-            else self.workspace / ".codex-remote" / "app-server-home"
+            else self._history_home
         )
-        if self._runtime_home == self._history_home:
-            self._runtime_home = self.workspace / ".codex-remote" / "app-server-home"
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -767,7 +765,9 @@ class CodexAppServer:
                 raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
 
     async def _prepare_runtime_thread(self, thread_id: str) -> None:
-        """Make an on-disk Codex thread visible to the isolated app-server."""
+        """Make a local Codex thread visible when a separate runtime home is configured."""
+        if self._runtime_home == self._history_home:
+            return
         self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
         runtime_database = self._runtime_home / "thread_history_1.sqlite"
         if not self._database_has_thread(runtime_database, thread_id):
@@ -851,13 +851,18 @@ class CodexAppServer:
             raise CodexRuntimeError(f"无法准备 Codex 对话历史：{error}") from error
 
     def _app_server_environment(self) -> dict[str, str]:
-        """Give the child app-server its own state directory.
+        """Use the main Codex home unless isolation was explicitly configured.
 
         The VS Code Codex process and this remote bridge can run at the same time.
         Sharing CODEX_HOME makes the two processes contend for Codex's SQLite state
         runtime, so only the read-only history/config source stays in the original
         home; mutable app-server state is copied into a separate home.
         """
+        if self._runtime_home == self._history_home:
+            child_environment = os.environ.copy()
+            child_environment["CODEX_HOME"] = str(self._history_home)
+            return child_environment
+
         self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
         for filename in ("config.toml", "auth.json", "models-custom.json"):
             source = self._history_home / filename
