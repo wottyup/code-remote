@@ -118,6 +118,13 @@ function wait(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
 }
 
+function timeoutSignal(milliseconds: number) {
+  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(milliseconds)
+  const controller = new AbortController()
+  window.setTimeout(() => controller.abort(), milliseconds)
+  return controller.signal
+}
+
 async function request<T>(
   token: string,
   path: string,
@@ -285,6 +292,12 @@ export const codexRemoteClient = {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
       method: 'POST',
       body: JSON.stringify({ code }),
+      signal: timeoutSignal(10_000),
+    }).catch((reason) => {
+      if (reason instanceof Error && (reason.name === 'TimeoutError' || reason.name === 'AbortError')) {
+        throw new Error('连接超时，请确认 Codex Remote 服务正在运行后重试。')
+      }
+      throw reason
     })
   },
   unpair(token: string) {

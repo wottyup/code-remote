@@ -433,8 +433,14 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
 class PairingAuth:
     def __init__(self, state_path: Path | None = None) -> None:
         self.code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
+        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
         self.state_path = state_path or self._default_state_path()
-        self.token_hashes = self._load_token_hashes()
+        state_exists = self.state_path.is_file()
+        self.token_hashes = self._load_token_hashes(self.state_path)
+        if state_path is None and not configured_path and not state_exists:
+            for legacy_path in self._legacy_state_paths():
+                if legacy_path.resolve() != self.state_path.resolve():
+                    self.token_hashes.update(self._load_token_hashes(legacy_path))
         self.failed_attempts = 0
         self.blocked_until = 0.0
 
@@ -443,16 +449,31 @@ class PairingAuth:
         configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
         if configured_path:
             return Path(configured_path).expanduser()
+        if os.name == "nt":
+            project_root = Path(__file__).resolve().parents[2]
+            return project_root / ".codex-remote" / "trusted-devices-v2.json"
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return codex_home / "codex-remote" / "trusted-devices.json"
+
+    @staticmethod
+    def _legacy_state_paths() -> tuple[Path, ...]:
+        if os.name != "nt":
+            return ()
+        project_root = Path(__file__).resolve().parents[2]
+        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+        return (
+            project_root / ".codex-remote" / "trusted-devices.json",
+            codex_home / "codex-remote" / "trusted-devices.json",
+        )
 
     @staticmethod
     def _token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def _load_token_hashes(self) -> set[str]:
+    @staticmethod
+    def _load_token_hashes(state_path: Path) -> set[str]:
         try:
-            raw_state = self.state_path.read_text(encoding="utf-8")
+            raw_state = state_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return set()
         except OSError as error:
@@ -481,6 +502,14 @@ class PairingAuth:
     def _save_token_hashes(self) -> None:
         try:
             self.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.name == "nt":
+                with self.state_path.open("w", encoding="utf-8") as state_file:
+                    json.dump({"version": 1, "token_hashes": sorted(self.token_hashes)}, state_file)
+                    state_file.write("\n")
+                    state_file.flush()
+                    os.fsync(state_file.fileno())
+                os.chmod(self.state_path, 0o600)
+                return
             descriptor, temporary_path = tempfile.mkstemp(
                 prefix=f".{self.state_path.name}.", suffix=".tmp", dir=self.state_path.parent,
             )

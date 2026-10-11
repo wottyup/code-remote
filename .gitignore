@@ -6,6 +6,8 @@ __pycache__/
 *.py[cod]
 *.sqlite3
 .env
+.codex-remote/
+server/codex-remote-images-*/
 android/.gradle/
 android/build/
 android/app/build/

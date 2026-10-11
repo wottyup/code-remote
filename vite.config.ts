@@ -13,6 +13,9 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 4173,
     strictPort: true,
+    watch: {
+      ignored: ['**/.codex-remote/**'],
+    },
     proxy: { '/api': engineProxy },
   },
   preview: {
