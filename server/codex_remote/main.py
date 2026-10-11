@@ -14,7 +14,7 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the local Codex Remote web engine")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address; defaults to loopback only")
     parser.add_argument("--port", type=int, default=18766)
-    parser.add_argument("--workspace", type=Path, default=Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root)))
+    parser.add_argument("--workspace", type=Path, default=Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root.parent)))
     parser.add_argument("--codex-command", default=os.environ.get("CODEX_REMOTE_COMMAND", "codex"))
     return parser.parse_args()
 

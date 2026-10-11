@@ -541,7 +541,7 @@ class PairingAuth:
 
 def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
     project_root = Path(__file__).resolve().parents[2]
-    configured_workspace = workspace or Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root))
+    configured_workspace = workspace or Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root.parent))
     app_server = CodexAppServer(
         codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex"),
         configured_workspace,
