@@ -911,12 +911,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .workspace-file-preview__line-content :is(.hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-attr) { color: #f9e2af; }
 .remote-shell--theme-custom .workspace-file-preview__line-content .hljs-code { color: #f9e2af; }
 .remote-shell--theme-custom .workspace-file-preview__line-content .hljs-link { color: #89b4fa; }
-.remote-shell--theme-custom .composer-queue { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
+.remote-shell--theme-custom .composer-queue { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); }
 .remote-shell--theme-custom .composer-queue__heading, .remote-shell--theme-custom .composer-queue__copy strong { color: var(--custom-theme-text-color); }
-.remote-shell--theme-custom .composer-queue__heading small, .remote-shell--theme-custom .composer-queue__copy small { color: var(--custom-theme-text-color); opacity: .72; }
-.remote-shell--theme-custom .composer-queue__item { background: var(--custom-theme-control); }
+.remote-shell--theme-custom .composer-queue__heading small, .remote-shell--theme-custom .composer-queue__copy small { color: var(--custom-theme-text-color); opacity: .82; }
+.remote-shell--theme-custom .composer-queue__item { background: transparent; }
+.remote-shell--theme-custom .composer-queue__item--editing { outline-color: var(--custom-theme-border); background: var(--custom-theme-active); }
 .remote-shell--theme-custom .composer-queue__index, .remote-shell--theme-custom .composer-queue__send, .remote-shell--theme-custom .composer-queue__edit { border-color: var(--custom-theme-border); color: var(--custom-theme-text-color); }
-.remote-shell--theme-custom .composer-queue__send, .remote-shell--theme-custom .composer-queue__edit { background: var(--custom-theme-control); }
+.remote-shell--theme-custom .composer-queue__send, .remote-shell--theme-custom .composer-queue__edit { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .composer-queue__send:hover:not(:disabled), .remote-shell--theme-custom .composer-queue__remove:hover:not(:disabled) { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-queue__remove { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .theme-settings-card__heading, .remote-shell--theme-custom .theme-custom-controls { border-color: var(--custom-theme-border); }
