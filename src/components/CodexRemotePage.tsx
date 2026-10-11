@@ -724,6 +724,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
   })
+  const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
@@ -772,6 +773,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       else mediaQuery.removeListener(syncMobileLayout)
     }
   }, [])
+
+  useEffect(() => {
+    if (queuedMessages.length === 0) setQueuedMessagesExpanded(false)
+  }, [queuedMessages.length])
 
   useLayoutEffect(() => {
     if (!compactLandscape || composerHeightWasResized.current) return
@@ -1219,12 +1224,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
-        <div className="composer-queue" aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
-          <div className="composer-queue__heading">
+        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
+          <button
+            className="composer-queue__heading"
+            type="button"
+            aria-expanded={queuedMessagesExpanded}
+            aria-controls="composer-queue-list"
+            aria-label={`已排队 ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
+            onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
+          >
             <span>已排队 {queuedMessages.length} 条</span>
-            <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
-          </div>
-          <div className="composer-queue__list">
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small> : null}
+            <ChevronDown size={14} aria-hidden="true" />
+          </button>
+          <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
               const isEditing = editingQueuedMessageId === message.id

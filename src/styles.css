@@ -442,9 +442,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-document > button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #8c96a7; cursor: pointer; }
 .composer-document > button:hover { background: #303744; color: #e2e7f0; }
 .composer-queue { display: grid; gap: 5px; margin: 1px 1px 9px; padding: 7px 8px; border: 1px solid rgba(113, 136, 255, .35); border-radius: 10px; background: rgba(47, 55, 84, .48); }
-.composer-queue__heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: #cbd4ff; font-size: 9px; font-weight: 600; }
+.composer-queue--collapsed { gap: 0; padding-block: 4px; }
+.composer-queue__heading { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; color: #cbd4ff; cursor: pointer; font: inherit; font-size: 9px; font-weight: 600; text-align: left; }
+.composer-queue__heading > span { flex: 0 0 auto; }
 .composer-queue__heading small { overflow: hidden; color: #929dbc; font-size: 8px; font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
+.composer-queue__heading > svg { flex: 0 0 auto; transition: transform .18s ease; }
+.composer-queue__heading[aria-expanded='true'] > svg { transform: rotate(180deg); }
 .composer-queue__list { display: grid; gap: 3px; }
+.composer-queue__list[hidden] { display: none; }
 .composer-queue__item { display: grid; min-width: 0; grid-template-columns: 17px minmax(0, 1fr) auto auto 22px; align-items: center; gap: 6px; padding: 4px 3px 4px 5px; border-radius: 7px; background: rgba(16, 20, 31, .34); }
 .composer-queue__item--editing { outline: 1px solid rgba(143, 162, 255, .42); background: rgba(96, 118, 212, .16); }
 .composer-queue__index { display: grid; width: 17px; height: 17px; place-items: center; border: 1px solid rgba(145, 162, 255, .38); border-radius: 50%; color: #aebcff; font-size: 8px; }
