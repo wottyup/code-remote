@@ -71,6 +71,7 @@ const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const workspaceFilePreviewWidthStorageKey = 'codex-remote.workspace-file-preview-width'
 const workspaceFilePreviewWidthRatioStorageKey = 'codex-remote.workspace-file-preview-width-ratio'
+const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
@@ -90,6 +91,10 @@ const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
 const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const newThreadComposerDraftScope = 'new'
+
+function isSettingsHistoryEntry(state: unknown): boolean {
+  return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
+}
 
 interface ComposerPreferences {
   model?: string
@@ -2044,7 +2049,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [workspaceFilePreviewOpen, setWorkspaceFilePreviewOpen] = useState(false)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string; diff?: string } | null>(null)
-  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -2053,6 +2058,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+  const openSettingsPanel = useCallback(() => {
+    const currentState = window.history.state
+    if (!isSettingsHistoryEntry(currentState)) {
+      const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
+        ? currentState as Record<string, unknown>
+        : {}
+      window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
+    }
+    setSettingsOpen(true)
+    setSidebarOpen(false)
+  }, [])
+  const closeSettingsPanel = useCallback(() => {
+    setSettingsOpen(false)
+    if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+  }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const sidebarTouchStart = useRef<{ x: number; y: number; sidebarWasOpen: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
@@ -2192,6 +2212,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [threadComposerPreferences])
 
   useEffect(() => {
+    const syncSettingsFromHistory = (event: PopStateEvent) => {
+      setSettingsOpen(isSettingsHistoryEntry(event.state))
+    }
+    window.addEventListener('popstate', syncSettingsFromHistory)
+    return () => window.removeEventListener('popstate', syncSettingsFromHistory)
+  }, [])
+
+  useEffect(() => {
     if (!threadContextMenu) return
     const closeMenu = () => setThreadContextMenu(null)
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -2205,8 +2233,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     }
   }, [threadContextMenu])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const handleBack = () => {
+      if (settingsOpen) {
+        closeSettingsPanel()
+        return true
+      }
       if (workspacePreviewModeRef.current === 'mobile') {
         workspacePreviewCloseRef.current?.()
         return true
@@ -2224,17 +2256,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         setSidebarOpen(false)
         return true
       }
-      if (settingsOpen) {
-        setSettingsOpen(false)
-        return true
-      }
       return false
     }
     window.CodexRemoteHandleBack = handleBack
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [settingsOpen, sidebarOpen, threadContextMenu, workspaceOpen])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, workspaceOpen])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -2682,7 +2710,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={() => { setSettingsOpen(true); setSidebarOpen(false) }}><Settings2 size={16} /><span>设置</span></button>
+          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
         <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} /><span>{currentConnectionLabel}</span><button type="button" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
@@ -2696,7 +2724,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={() => setSettingsOpen(false)} />
+        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
