@@ -919,7 +919,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [queueEditRevision, setQueueEditRevision] = useState(0)
   const socketRef = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const connectionRef = useRef<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
-  const reconnectRef = useRef<() => void>(() => {})
+  const reconnectRef = useRef<(force?: boolean) => void>(() => {})
   const handedOffRef = useRef(false)
   const activeThreadId = useRef<string | null>(initialActiveThreadId)
   const activeTurnId = useRef<string | null>(null)
@@ -1363,9 +1363,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       model: payload.model,
       effort: payload.effort,
       approvalPolicy: payload.approvalPolicy,
+      requestId: payload.id,
     })
     if (resumedThreadId.current !== threadId) {
-      await codexRemoteClient.resumeThread(token, threadId)
+      await codexRemoteClient.resumeThread(token, threadId, payload.id)
       resumedThreadId.current = threadId
     }
     try {
@@ -1373,7 +1374,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
       resumedThreadId.current = null
-      await codexRemoteClient.resumeThread(token, threadId)
+      await codexRemoteClient.resumeThread(token, threadId, payload.id)
       resumedThreadId.current = threadId
       return start()
     }
@@ -1466,6 +1467,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
       if (activeThreadId.current === threadId) {
         const message = reason instanceof Error ? reason.message : '发送排队消息失败'
         if (isActiveWriterError(reason)) {
@@ -1515,6 +1517,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const result = await codexRemoteClient.steerTurn(token, threadId, {
         prompt: payload.requestText,
         images: payload.images,
+        requestId: payload.id,
       })
       updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
       appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current)
@@ -1522,6 +1525,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
       // The active reply may have completed in the interval before the click
       // reached the server. Re-read the authoritative turn state first so a
       // stale local turn ID cannot silently block the fallback start.
@@ -1931,8 +1935,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const handlePageShow = (event: PageTransitionEvent) => {
       if (event.persisted) resumeFromBackground(true)
     }
+    const handleOnline = () => resumeFromBackground(true)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pageshow', handlePageShow)
+    window.addEventListener('online', handleOnline)
 
     void (async () => {
       try {
@@ -1978,6 +1984,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (reconnectRef.current === connect) reconnectRef.current = () => {}
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
+      window.removeEventListener('online', handleOnline)
     }
   }, [enabled, handleEvent, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
@@ -2070,7 +2077,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [activeThread, cacheThreadSnapshot, cacheVisibleThread, clearThreadCompletion, clearTurnTimer, loadThread, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId])
 
-  const createThread = useCallback(async (model?: string, approvalPolicy?: CodexApprovalPolicy) => {
+  const createThread = useCallback(async (
+    model?: string,
+    approvalPolicy?: CodexApprovalPolicy,
+    requestId = queuedMessageId(),
+  ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
       return null
@@ -2084,7 +2095,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     historyRevision.current += 1
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy)
+      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId)
       activeThreadId.current = thread.id
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setQueueRecoveryReadyThreadId(null)
@@ -2128,7 +2139,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
     if (!thread) {
-      thread = await createThread(input.model, input.approvalPolicy)
+      thread = await createThread(input.model, input.approvalPolicy, payload.id)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
@@ -2196,6 +2207,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           // cannot be read while the mobile connection is still interrupted.
         }
       }
+      if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
       historyRevision.current += 1
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)

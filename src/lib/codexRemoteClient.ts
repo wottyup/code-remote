@@ -104,31 +104,59 @@ export class RemoteApiError extends Error {
   }
 }
 
-async function request<T>(token: string, path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...init?.headers,
-    },
-  })
-  if (!response.ok) {
-    const body = await response.json().catch(() => null)
-    const detail = body?.detail
-    const validationDetail = Array.isArray(detail)
-      ? detail.map((item) => {
-        if (!item || typeof item !== 'object') return ''
-        const message = (item as Record<string, unknown>).msg
-        return typeof message === 'string' ? message : ''
-      }).filter(Boolean).join('；')
-      : ''
-    const message = typeof detail === 'string'
-      ? detail
-      : validationDetail || (detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : `请求失败 (${response.status})`)
-    throw new RemoteApiError(message, response.status)
+const networkRetryDelaysMs = [300, 900, 1_800]
+
+function isNetworkRequestFailure(reason: unknown) {
+  if (reason instanceof RemoteApiError || !(reason instanceof Error)) return false
+  return reason instanceof TypeError || /failed to fetch|network|load failed/i.test(reason.message)
+}
+
+function wait(milliseconds: number) {
+  return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+async function request<T>(
+  token: string,
+  path: string,
+  init?: RequestInit,
+  options: { networkRetries?: number } = {},
+): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  const networkRetries = options.networkRetries ?? (method === 'GET' ? 3 : 0)
+  let attempt = 0
+  while (true) {
+    try {
+      const response = await fetch(path, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...init?.headers,
+        },
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        const detail = body?.detail
+        const validationDetail = Array.isArray(detail)
+          ? detail.map((item) => {
+            if (!item || typeof item !== 'object') return ''
+            const message = (item as Record<string, unknown>).msg
+            return typeof message === 'string' ? message : ''
+          }).filter(Boolean).join('；')
+          : ''
+        const message = typeof detail === 'string'
+          ? detail
+          : validationDetail || (detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : `请求失败 (${response.status})`)
+        throw new RemoteApiError(message, response.status)
+      }
+      return response.json() as Promise<T>
+    } catch (reason) {
+      if (!isNetworkRequestFailure(reason) || attempt >= networkRetries) throw reason
+      const delay = networkRetryDelaysMs[Math.min(attempt, networkRetryDelaysMs.length - 1)]
+      attempt += 1
+      await wait(delay)
+    }
   }
-  return response.json() as Promise<T>
 }
 
 function plainText(value: unknown): string {
@@ -253,8 +281,11 @@ export const codexRemoteClient = {
   readThread(token: string, threadId: string) {
     return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`)
   },
-  resumeThread(token: string, threadId: string) {
-    return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, { method: 'POST' })
+  resumeThread(token: string, threadId: string, requestId: string) {
+    return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ request_id: requestId }),
+    }, { networkRetries: 3 })
   },
   models(token: string) {
     return request<CodexModel[]>(token, '/api/v1/codex/models')
@@ -265,11 +296,11 @@ export const codexRemoteClient = {
   reclaimForRemote(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/reclaim', { method: 'POST' })
   },
-  createThread(token: string, model?: string, approvalPolicy?: CodexApprovalPolicy) {
+  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string) {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
-      body: JSON.stringify({ model, approval_policy: approvalPolicy }),
-    })
+      body: JSON.stringify({ model, approval_policy: approvalPolicy, request_id: requestId }),
+    }, { networkRetries: 3 })
   },
   startTurn(token: string, threadId: string, input: {
     prompt: string
@@ -277,6 +308,7 @@ export const codexRemoteClient = {
     model?: string
     effort?: string
     approvalPolicy?: CodexApprovalPolicy
+    requestId: string
   }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
       method: 'POST',
@@ -285,29 +317,32 @@ export const codexRemoteClient = {
         model: input.model,
         effort: input.effort,
         approval_policy: input.approvalPolicy,
+        request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,
           media_type: image.mediaType,
           data: image.data,
         })),
       }),
-    })
+    }, { networkRetries: 3 })
   },
   steerTurn(token: string, threadId: string, input: {
     prompt: string
     images: CodexImageAttachment[]
+    requestId: string
   }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/steer`, {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
+        request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,
           media_type: image.mediaType,
           data: image.data,
         })),
       }),
-    })
+    }, { networkRetries: 3 })
   },
   interrupt(token: string, threadId: string, turnId?: string | null) {
     return request<{ interrupted: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, {

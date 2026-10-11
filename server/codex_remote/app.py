@@ -13,7 +13,9 @@ import shutil
 import tempfile
 import time
 import unicodedata
+from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
@@ -90,6 +92,7 @@ MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
 class ThreadStartRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     approval_policy: ApprovalPolicy | None = None
+    request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class TurnImage(BaseModel):
@@ -104,15 +107,134 @@ class TurnRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approval_policy: ApprovalPolicy | None = None
+    request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class SteerRequest(BaseModel):
     prompt: str = Field(default="", max_length=32_000)
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
+    request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class ResumeRequest(BaseModel):
+    request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
 class InterruptRequest(BaseModel):
     turn_id: str | None = Field(default=None, max_length=200)
+
+
+class IdempotencyConflictError(RuntimeError):
+    """A request ID was reused with a different payload."""
+
+
+@dataclass
+class IdempotentRequestEntry:
+    fingerprint: str
+    created_at: float
+    task: asyncio.Task[dict[str, Any]]
+
+
+class IdempotentRequestRegistry:
+    """Share and briefly cache mutation results so mobile retries stay safe."""
+
+    def __init__(self, ttl_seconds: float = 600, max_entries: int = 1_024) -> None:
+        self.ttl_seconds = ttl_seconds
+        self.max_entries = max_entries
+        self._entries: dict[tuple[str, str, str], IdempotentRequestEntry] = {}
+        self._lock = asyncio.Lock()
+
+    def _prune_completed(self, now: float) -> None:
+        expired = [
+            key
+            for key, entry in self._entries.items()
+            if entry.task.done() and now - entry.created_at >= self.ttl_seconds
+        ]
+        for key in expired:
+            self._entries.pop(key, None)
+        if len(self._entries) < self.max_entries:
+            return
+        completed = sorted(
+            (
+                (entry.created_at, key)
+                for key, entry in self._entries.items()
+                if entry.task.done()
+            ),
+        )
+        for _, key in completed:
+            if len(self._entries) < self.max_entries:
+                break
+            self._entries.pop(key, None)
+
+    async def _remove_failed(
+        self,
+        key: tuple[str, str, str],
+        task: asyncio.Task[dict[str, Any]],
+    ) -> None:
+        async with self._lock:
+            entry = self._entries.get(key)
+            if entry is not None and entry.task is task:
+                self._entries.pop(key, None)
+
+    def _discard_failed_when_done(
+        self,
+        key: tuple[str, str, str],
+        task: asyncio.Task[dict[str, Any]],
+    ) -> None:
+        if not task.cancelled() and task.exception() is None:
+            return
+        entry = self._entries.get(key)
+        if entry is not None and entry.task is task:
+            self._entries.pop(key, None)
+
+    async def run(
+        self,
+        operation: str,
+        resource_id: str,
+        request_id: str,
+        fingerprint: str,
+        callback: Callable[[], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        key = (operation, resource_id, request_id)
+        async with self._lock:
+            self._prune_completed(time.monotonic())
+            entry = self._entries.get(key)
+            if entry is not None:
+                if not hmac.compare_digest(entry.fingerprint, fingerprint):
+                    raise IdempotencyConflictError("请求编号已被另一条消息使用，请重新发送。")
+                task = entry.task
+            else:
+                task = asyncio.create_task(callback())
+                task.add_done_callback(
+                    lambda completed, request_key=key: self._discard_failed_when_done(request_key, completed),
+                )
+                self._entries[key] = IdempotentRequestEntry(
+                    fingerprint=fingerprint,
+                    created_at=time.monotonic(),
+                    task=task,
+                )
+        # Keep the mutation alive if the phone disconnects before the HTTP
+        # response reaches it. A retry with the same ID will await this task.
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # The shared task keeps running. A retry can still join it and
+            # receive the successful result after this requester disappears.
+            raise
+        except Exception:
+            # Cache only successful mutations. A rejected operation must be
+            # allowed to run again after its underlying state is repaired.
+            await self._remove_failed(key, task)
+            raise
+
+
+def request_fingerprint(body: BaseModel) -> str:
+    if hasattr(body, "model_dump"):
+        payload = body.model_dump(mode="json", exclude={"request_id"})
+    else:  # Pydantic 1 compatibility for older local environments.
+        payload = body.dict(exclude={"request_id"})
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 WORKSPACE_TREE_MAX_ENTRIES = 400
@@ -424,6 +546,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         configured_workspace,
     )
     auth = PairingAuth()
+    idempotent_requests = IdempotentRequestRegistry()
     image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
 
     @asynccontextmanager
@@ -442,6 +565,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app = FastAPI(title="Codex Remote", version="0.0.30", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
+    app.state.idempotent_requests = idempotent_requests
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -459,6 +583,26 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             if not auth.accepts(token):
                 return JSONResponse({"detail": "需要配对码"}, status_code=status.HTTP_401_UNAUTHORIZED)
         return await call_next(request)
+
+    async def run_idempotent_request(
+        operation: str,
+        resource_id: str,
+        request_id: str | None,
+        body: BaseModel,
+        callback: Callable[[], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        if request_id is None:
+            return await callback()
+        try:
+            return await idempotent_requests.run(
+                operation,
+                resource_id,
+                request_id,
+                request_fingerprint(body),
+                callback,
+            )
+        except IdempotencyConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     @app.get("/health")
     async def health() -> dict[str, str]:
@@ -533,10 +677,19 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/codex/threads", status_code=status.HTTP_201_CREATED)
     async def create_thread(body: ThreadStartRequest) -> dict[str, Any]:
-        try:
+        async def create() -> dict[str, Any]:
             return await app_server.start_thread(
                 body.model.strip() or None if body.model else None,
                 body.approval_policy,
+            )
+
+        try:
+            return await run_idempotent_request(
+                "thread.start",
+                "new",
+                body.request_id,
+                body,
+                create,
             )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -550,9 +703,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/resume")
-    async def resume_thread(thread_id: str) -> dict[str, Any]:
-        try:
+    async def resume_thread(thread_id: str, body: ResumeRequest | None = None) -> dict[str, Any]:
+        async def resume() -> dict[str, Any]:
             return await app_server.resume_thread(thread_id)
+
+        try:
+            if body is None:
+                return await resume()
+            return await run_idempotent_request(
+                "thread.resume",
+                thread_id,
+                body.request_id,
+                body,
+                resume,
+            )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -561,22 +725,35 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         prompt = body.prompt.strip()
         if not prompt and not body.images:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
-        image_paths = save_turn_images(body.images, image_directory)
+
+        async def start() -> dict[str, Any]:
+            image_paths = save_turn_images(body.images, image_directory)
+            try:
+                result = await app_server.start_turn(
+                    thread_id,
+                    prompt,
+                    image_paths,
+                    body.model.strip() or None if body.model else None,
+                    body.effort.strip() or None if body.effort else None,
+                    body.approval_policy,
+                )
+                turn = result.get("turn", {})
+                return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}
+            except Exception:
+                for path in image_paths:
+                    with suppress(FileNotFoundError):
+                        path.unlink()
+                raise
+
         try:
-            result = await app_server.start_turn(
+            return await run_idempotent_request(
+                "turn.start",
                 thread_id,
-                prompt,
-                image_paths,
-                body.model.strip() or None if body.model else None,
-                body.effort.strip() or None if body.effort else None,
-                body.approval_policy,
+                body.request_id,
+                body,
+                start,
             )
-            turn = result.get("turn", {})
-            return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}
         except CodexRuntimeError as error:
-            for path in image_paths:
-                with suppress(FileNotFoundError):
-                    path.unlink()
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")
@@ -592,23 +769,33 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         prompt = body.prompt.strip()
         if not prompt and not body.images:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
-        image_paths = save_turn_images(body.images, image_directory)
+
+        async def steer() -> dict[str, Any]:
+            image_paths = save_turn_images(body.images, image_directory)
+            try:
+                result = await app_server.steer_turn(thread_id, prompt, image_paths)
+                turn_id = result.get("turnId")
+                if not isinstance(turn_id, str):
+                    turn = result.get("turn")
+                    turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                return {"turn_id": turn_id}
+            except Exception:
+                for path in image_paths:
+                    with suppress(FileNotFoundError):
+                        path.unlink()
+                raise
+
         try:
-            result = await app_server.steer_turn(thread_id, prompt, image_paths)
-            turn_id = result.get("turnId")
-            if not isinstance(turn_id, str):
-                turn = result.get("turn")
-                turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
-            return {"turn_id": turn_id}
+            return await run_idempotent_request(
+                "turn.steer",
+                thread_id,
+                body.request_id,
+                body,
+                steer,
+            )
         except CodexNoActiveTurnError as error:
-            for path in image_paths:
-                with suppress(FileNotFoundError):
-                    path.unlink()
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
-            for path in image_paths:
-                with suppress(FileNotFoundError):
-                    path.unlink()
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.websocket("/api/v1/codex/ws")
