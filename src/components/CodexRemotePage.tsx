@@ -1217,7 +1217,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-queue" aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <div className="composer-queue__heading">
             <span>已排队 {queuedMessages.length} 条</span>
-            <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
+            <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small>
           </div>
           <div className="composer-queue__list">
             {queuedMessages.map((message, index) => {
@@ -1230,7 +1230,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : sendingNow ? '已插入对话 · 正在确认送达' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked} onClick={() => beginQueuedEdit(message)} title={isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
                     <Pencil size={11} /><span>{isEditing ? '编辑中' : '编辑'}</span>
                   </button>

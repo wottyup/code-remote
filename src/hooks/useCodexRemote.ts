@@ -269,6 +269,10 @@ function queuedMessageId() {
   return `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function streamingMessageId(turnId: string | null) {
+  return `streaming-assistant-${turnId ?? 'turn'}-${queuedMessageId()}`
+}
+
 function queuedRequestText(text: string, documents: CodexDocumentAttachment[] = []) {
   const documentText = documents
     .map((document) => `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`)
@@ -401,6 +405,61 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
   }
 }
 
+function sameQueuedMessageHistoryContent(message: CodexMessage, localMessage: CodexMessage) {
+  if (message.role !== 'user' || message.turnId !== localMessage.turnId) return false
+  const expectedText = queuedRequestText(localMessage.text, localMessage.documents)
+  if (message.text !== localMessage.text && message.text !== expectedText) return false
+  return sameMessageImages(message.images, localMessage.images)
+}
+
+function sameHistoryAnchor(message: CodexMessage, candidate: CodexMessage) {
+  if (message.id === candidate.id) return true
+  if (message.role !== candidate.role || message.turnId !== candidate.turnId) return false
+  if (message.text === candidate.text) return true
+  if (message.role === 'assistant' && message.text && candidate.text) {
+    return message.text.startsWith(candidate.text) || candidate.text.startsWith(message.text)
+  }
+  return message.role === 'user' && sameMessageImages(message.images, candidate.images)
+}
+
+function preserveLocalQueuedMessages(next: CodexMessage[], current: CodexMessage[]) {
+  const preserved = [...next]
+  for (const localMessage of current) {
+    if (localMessage.role !== 'user' || !localMessage.id.startsWith('queued-')) continue
+    if (preserved.some((message) => message.id === localMessage.id)) continue
+
+    const currentIndex = current.findIndex((message) => message.id === localMessage.id)
+    let previousAnchor = -1
+    for (let index = currentIndex - 1; index >= 0; index -= 1) {
+      const candidate = current[index]
+      const anchorIndex = preserved.findIndex((message) => sameHistoryAnchor(message, candidate))
+      if (anchorIndex >= 0) {
+        previousAnchor = anchorIndex
+        break
+      }
+    }
+
+    if (localMessage.turnId && previousAnchor >= 0) {
+      const duplicateIndex = preserved.findIndex((message, index) => index > previousAnchor
+        && sameQueuedMessageHistoryContent(message, localMessage))
+      if (duplicateIndex >= 0) continue
+    }
+
+    let insertionIndex = -1
+    for (let index = currentIndex + 1; index < current.length; index += 1) {
+      const candidate = current[index]
+      const anchorIndex = preserved.findIndex((message) => sameHistoryAnchor(message, candidate))
+      if (anchorIndex >= 0) {
+        insertionIndex = anchorIndex
+        break
+      }
+    }
+    if (insertionIndex < 0) insertionIndex = previousAnchor >= 0 ? previousAnchor + 1 : preserved.length
+    preserved.splice(insertionIndex, 0, localMessage)
+  }
+  return preserved
+}
+
 function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
   const previousImageMessages = current.filter((message) => message.role === 'user' && message.images?.length)
   const used = new Set<string>()
@@ -461,22 +520,30 @@ function mergeStreamingText(current: string, incoming: string) {
   return current + incoming
 }
 
-function isAssistantMessageForTurn(message: CodexMessage, turnId: string | null, messageId: string) {
-  return message.role === 'assistant' && (message.id === messageId || (turnId !== null && message.turnId === turnId))
+function assistantMessagesForStreamSegment(messages: CodexMessage[], turnId: string | null, messageId: string) {
+  const exactMatches = messages.filter((message) => message.role === 'assistant' && message.id === messageId)
+  if (exactMatches.length > 0 || !turnId) return exactMatches
+  let latestUserIndex = -1
+  messages.forEach((message, index) => {
+    if (message.role === 'user' && message.turnId === turnId) latestUserIndex = index
+  })
+  return messages.filter((message, index) => message.role === 'assistant'
+    && message.turnId === turnId
+    && index > latestUserIndex)
 }
 
 function assistantTextForTurn(messages: CodexMessage[], turnId: string | null, messageId: string) {
-  return messages.reduce((text, message) => isAssistantMessageForTurn(message, turnId, messageId)
-    ? mergeStreamingText(text, message.text)
-    : text, '')
+  return assistantMessagesForStreamSegment(messages, turnId, messageId)
+    .reduce((text, message) => mergeStreamingText(text, message.text), '')
 }
 
 function collapseAssistantMessagesForTurn(messages: CodexMessage[], turnId: string | null, messageId: string, incomingText: string) {
-  const matching = messages.filter((message) => isAssistantMessageForTurn(message, turnId, messageId))
+  const matching = assistantMessagesForStreamSegment(messages, turnId, messageId)
   const text = mergeStreamingText(assistantTextForTurn(messages, turnId, messageId), incomingText)
   if (matching.length === 0 && !text) return messages
 
   const source = matching.find((message) => message.id === messageId) ?? matching.at(-1)
+  const matchingIds = new Set(matching.map((message) => message.id))
   const merged: CodexMessage = {
     ...(source ?? {}),
     id: messageId,
@@ -488,7 +555,7 @@ function collapseAssistantMessagesForTurn(messages: CodexMessage[], turnId: stri
   }
   let inserted = false
   const next = messages.flatMap((message) => {
-    if (!isAssistantMessageForTurn(message, turnId, messageId)) return [message]
+    if (!matchingIds.has(message.id)) return [message]
     if (inserted) return []
     inserted = true
     return [merged]
@@ -1277,7 +1344,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // after reconnecting). Give that partial server message the same stable
       // bubble as the socket stream instead of rendering both versions.
       const runningMessageId = running && latestTurnId
-        ? streamingAssistantMessageId.current ?? `streaming-assistant-${latestTurnId}`
+        ? streamingAssistantMessageId.current ?? streamingMessageId(latestTurnId)
         : null
       if (runningMessageId && !streamingAssistantMessageId.current) {
         streamingAssistantMessageId.current = runningMessageId
@@ -1290,7 +1357,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         operationsByTurn: historicalOperationsByTurn,
       })
       setMessages((current) => {
-        const loaded = preserveCurrentImages(cachedMessages, current)
+        const loaded = preserveLocalQueuedMessages(preserveCurrentImages(cachedMessages, current), current)
         const next = runningMessageId
           ? collapseAssistantMessagesForTurn(
             loaded,
@@ -1450,9 +1517,35 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const appendQueuedMessageToActiveThread = useCallback((threadId: string, payload: QueuedTurnPayload, turnId?: string | null) => {
     if (activeThreadId.current !== threadId) return
     const localMessage = localMessageFromQueuedPayload(payload, turnId)
-    setMessages((current) => current.some((message) => message.id === localMessage.id)
-      ? current
-      : [...current, localMessage])
+    setMessages((current) => {
+      const existingIndex = current.findIndex((message) => message.id === localMessage.id)
+      if (existingIndex < 0) return [...current, localMessage]
+      const next = [...current]
+      next[existingIndex] = { ...next[existingIndex], ...localMessage }
+      return sameMessages(current, next) ? current : next
+    })
+  }, [])
+
+  const removeQueuedMessageFromActiveThread = useCallback((threadId: string, messageId: string) => {
+    const cachedThread = threadHistoryCache.current.get(threadId)
+    if (cachedThread?.messages.some((message) => message.id === messageId)) {
+      const cachedMessages = cachedThread.messages.filter((message) => message.id !== messageId)
+      threadHistoryCache.current.set(threadId, {
+        ...cachedThread,
+        messages: cachedMessages,
+        characters: cachedHistoryCharacters(cachedMessages),
+      })
+    }
+    if (activeThreadId.current !== threadId) return
+    setMessages((current) => {
+      const next = current.filter((message) => message.id !== messageId)
+      if (next.length === current.length) return current
+      const turnId = activeTurnId.current
+      const streamMessageId = streamingAssistantMessageId.current
+      const streamedText = streamingAssistantText(streamingAssistantParts.current)
+      if (!turnId || !streamMessageId || !streamedText) return next
+      return collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText)
+    })
   }, [])
 
   const beginEditQueuedMessage = useCallback((messageId: string) => {
@@ -1597,6 +1690,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const requestKey = `${threadId}:${messageId}`
     if (queuedTurnSteersInFlight.current.has(requestKey)) return false
     queuedTurnSteersInFlight.current.add(requestKey)
+    const currentTurnId = activeTurnId.current
+    // Close the old visible reply and place the user's prompt before awaiting
+    // HTTP. App Server may accept the steer and emit its next deltas first.
+    if (currentTurnId) finalizeVisibleStreamingTurn(currentTurnId)
+    appendQueuedMessageToActiveThread(threadId, payload, currentTurnId)
     try {
       const result = await requestTurnDelivery(threadId, payload.id, () => codexRemoteClient.steerTurn(token, threadId, {
         prompt: payload.requestText,
@@ -1606,7 +1704,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
       if (activeThreadId.current === threadId) {
         if (result.completed) void loadThread(threadId, ++historyRevision.current, true)
-        else appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current)
+        else appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current ?? currentTurnId)
         setError(null)
       }
       return true
@@ -1618,19 +1716,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // stale local turn ID cannot silently block the fallback start.
       if (reason instanceof RemoteApiError && reason.status === 409) {
         const refreshed = await loadThread(threadId, historyRevision.current)
-        if (!refreshed) return false
+        if (!refreshed) {
+          removeQueuedMessageFromActiveThread(threadId, payload.id)
+          return false
+        }
         queuedTurnSteersInFlight.current.delete(requestKey)
-        return await startQueuedMessage(threadId, messageId)
+        const started = await startQueuedMessage(threadId, messageId)
+        if (!started) removeQueuedMessageFromActiveThread(threadId, payload.id)
+        return started
       }
       if (activeThreadId.current === threadId) {
         setError(reason instanceof Error ? reason.message : '立即发送排队消息失败')
       }
+      if (!isAmbiguousNetworkFailure(reason)) removeQueuedMessageFromActiveThread(threadId, payload.id)
       return false
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
       queuedTurnSteersInFlight.current.delete(requestKey)
     }
-  }, [appendQueuedMessageToActiveThread, loadThread, onUnauthorized, requestTurnDelivery, startQueuedMessage, token, updateQueuedMessages])
+  }, [appendQueuedMessageToActiveThread, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, removeQueuedMessageFromActiveThread, requestTurnDelivery, startQueuedMessage, token, updateQueuedMessages])
 
   const removeQueuedMessage = useCallback((messageId: string) => {
     const threadId = activeThreadId.current
@@ -1956,7 +2060,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       const part = streamingAssistantParts.current.get(itemId) ?? ''
       streamingAssistantParts.current.set(itemId, part + delta)
-      const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? Date.now()}`
+      const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       activityItemId.current = itemId
       setActivity((current) => current?.label === '正在回复' && !current.detail ? current : { label: '正在回复' })
@@ -1987,7 +2091,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
-      const messageId = streamingAssistantMessageId.current ?? `streaming-assistant-${activeTurnId.current ?? itemId}`
+      const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       scheduleStreamingAssistantRender()
       return
