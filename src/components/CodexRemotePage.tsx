@@ -2146,7 +2146,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
     '--custom-theme-text-color': themePreferences.customTextColor,
     '--custom-theme-surface': rgbaFromHex(themePreferences.customBackgroundColor, 0.38),
     '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
-    '--custom-theme-active': rgbaFromHex('#ffffff', 0.46),
+    '--custom-theme-active': rgbaFromHex(themePreferences.customBackgroundColor, 0.24),
     '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
   } as CSSProperties
