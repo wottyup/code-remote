@@ -83,6 +83,7 @@ const maxComposerHeight = 260
 const defaultComposerHeight = 72
 const compactLandscapeComposerHeight = 50
 const compactLandscapeMediaQuery = '(orientation: landscape) and (pointer: coarse)'
+const mobileLayoutMediaQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
@@ -117,7 +118,7 @@ const defaultThemePreferences: ThemePreferences = {
 }
 
 function workspacePanelsWidthLimit(previewOpen = false) {
-  if (typeof window !== 'undefined' && window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches) {
+  if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
@@ -708,6 +709,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
+  const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
+    window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+  ))
   const [composerHeight, setComposerHeight] = useState(() => {
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
@@ -744,6 +748,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     return () => {
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
       else mediaQuery.removeListener(syncComposerHeight)
+    }
+  }, [])
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
+    const syncMobileLayout = () => {
+      setMobileLayout(mediaQuery.matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint))
+    }
+    syncMobileLayout()
+    if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncMobileLayout)
+    else mediaQuery.addListener(syncMobileLayout)
+    return () => {
+      if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncMobileLayout)
+      else mediaQuery.removeListener(syncMobileLayout)
     }
   }, [])
 
@@ -937,6 +955,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
+  const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
 
   async function attachImages(files: File[]) {
     if (files.length === 0) return
@@ -1237,10 +1256,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-            : isRunning ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
+            : isRunning && !stopWithSendButton ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
           {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending}>取消</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
-            <button className={`send-button${isRunning ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}`} type="submit" disabled={!canSend} aria-label={editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'} title={editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}>{sending ? <LoaderCircle className="spin" size={16} /> : editingQueuedMessageId ? <Check size={13} /> : <Send size={16} />}{editingQueuedMessageId ? <span>确定</span> : null}</button>
+            <button
+              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}`}
+              type={stopWithSendButton ? 'button' : 'submit'}
+              onClick={stopWithSendButton ? onInterrupt : undefined}
+              disabled={stopWithSendButton ? isInterrupting : !canSend}
+              aria-label={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+            >
+              {sending || (stopWithSendButton && isInterrupting)
+                ? <LoaderCircle className="spin" size={16} />
+                : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Square size={14} fill="currentColor" /> : <Send size={16} />}
+              {editingQueuedMessageId ? <span>确定</span> : null}
+            </button>
           ) : null}
         </div>
       </div>
@@ -1263,7 +1294,7 @@ interface WorkspaceExplorerProps {
 
 function desktopWorkspacePreviewAvailable() {
   return typeof window !== 'undefined'
-    && !window.matchMedia('(max-width: 700px), (orientation: landscape) and (pointer: coarse)').matches
+    && !window.matchMedia(mobileLayoutMediaQuery).matches
 }
 
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
