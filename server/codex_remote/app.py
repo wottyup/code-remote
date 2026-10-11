@@ -40,14 +40,12 @@ def resolve_default_workspace(
     project_root: Path,
     *,
     configured: Path | None = None,
-    is_windows: bool | None = None,
 ) -> Path:
-    """Choose a useful local default while preserving explicit configuration."""
+    """Use the app repository's parent so sibling repositories are accessible."""
     if configured is not None:
         return configured.expanduser().resolve()
-    windows = os.name == "nt" if is_windows is None else is_windows
     root = project_root.expanduser().resolve()
-    return root.parent if windows else root
+    return root.parent
 
 
 async def watch_codex_history(app_server: CodexAppServer) -> None:

@@ -11,7 +11,7 @@ WorkingDirectory=/code
 EnvironmentFile=-/etc/environment
 EnvironmentFile=-/etc/codex-remote.env
 Environment=HOME=/root
-Environment=CODEX_REMOTE_WORKSPACE=/code/codex-remote
+Environment=CODEX_REMOTE_WORKSPACE=/code
 Environment=PATH=/usr/local/lib/node-v24.19.0-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/local/bin/node /code/codex-remote/scripts/dev.mjs
 Restart=always

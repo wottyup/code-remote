@@ -63,7 +63,7 @@ pnpm --filter codex-remote dev
 
 ## 工作目录和历史会话
 
-新建对话在 Linux 默认使用 `/code/codex-remote`；Windows 默认使用远程项目的父目录（例如 `F:\1code`），以便在同一代码目录下访问并编辑多个仓库。可以通过环境变量或启动参数更改：
+新建对话默认使用应用仓库的上一级目录作为工作目录（例如应用位于 `/code/codex-remote` 时，默认工作目录为 `/code`），因此新拉取的项目会与 `codex-remote` 并列，而不是放进应用仓库内部。可以通过环境变量或启动参数更改：
 
 ```bash
 CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:dev
