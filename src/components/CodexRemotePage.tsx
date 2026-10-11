@@ -60,8 +60,10 @@ const connectionLabel = {
 const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
-const themeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
+const maxThemeImageUploadSize = 20 * 1024 * 1024
+const maxThemeImageDataUrlLength = 1_450_000
+const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
 const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
@@ -305,6 +307,10 @@ function normalizeThemeBackgroundImage(value: unknown) {
   return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
 }
 
+function isCompactThemeBackgroundImage(value: string) {
+  return value.length <= maxThemeImageDataUrlLength && Boolean(normalizeThemeBackgroundImage(value))
+}
+
 export function readThemePreferences(): ThemePreferences {
   if (typeof window === 'undefined') return defaultThemePreferences
   try {
@@ -514,16 +520,50 @@ function readImage(file: File): Promise<CodexImageAttachment> {
   })
 }
 
-function readThemeBackgroundImage(file: File): Promise<string> {
+function optimizeThemeBackgroundImage(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(new Error(`无法读取图片：${file.name}`))
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? normalizeThemeBackgroundImage(reader.result) : undefined
-      if (result) resolve(result)
-      else reject(new Error('背景图片格式无效或无法读取。'))
+    const image = document.createElement('img')
+    const sourceUrl = URL.createObjectURL(file)
+    image.onload = () => {
+      URL.revokeObjectURL(sourceUrl)
+      try {
+        const longestEdge = Math.max(image.naturalWidth, image.naturalHeight)
+        if (!longestEdge) throw new Error('图片尺寸无效。')
+        let scale = Math.min(1, maxThemeImageEdge / longestEdge)
+        let smallestResult = ''
+        for (let attempt = 0; attempt < 8; attempt += 1) {
+          const width = Math.max(1, Math.round(image.naturalWidth * scale))
+          const height = Math.max(1, Math.round(image.naturalHeight * scale))
+          const canvas = document.createElement('canvas')
+          canvas.width = width
+          canvas.height = height
+          const context = canvas.getContext('2d')
+          if (!context) throw new Error('浏览器不支持图片处理。')
+          context.drawImage(image, 0, 0, width, height)
+          for (const quality of [0.9, 0.8, 0.7, 0.6, 0.5, 0.4]) {
+            const dataUrl = canvas.toDataURL('image/webp', quality)
+            if (!smallestResult || dataUrl.length < smallestResult.length) smallestResult = dataUrl
+            if (isCompactThemeBackgroundImage(dataUrl)) {
+              resolve(dataUrl)
+              return
+            }
+          }
+          scale *= 0.72
+        }
+        if (isCompactThemeBackgroundImage(smallestResult)) {
+          resolve(smallestResult)
+          return
+        }
+        throw new Error('图片无法压缩到浏览器可保存的大小。')
+      } catch (reason) {
+        reject(reason instanceof Error ? reason : new Error('背景图片处理失败。'))
+      }
     }
-    reader.readAsDataURL(file)
+    image.onerror = () => {
+      URL.revokeObjectURL(sourceUrl)
+      reject(new Error('背景图片读取失败。'))
+    }
+    image.src = sourceUrl
   })
 }
 
@@ -2907,6 +2947,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
 function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
   const [imageError, setImageError] = useState<string | null>(null)
+  const [imageProcessing, setImageProcessing] = useState(false)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
@@ -2917,15 +2958,22 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
   async function updateBackgroundImage(file: File | undefined) {
     setImageError(null)
     if (!file) return
-    if (!themeImageTypes.has(file.type)) {
-      setImageError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
+    if (!file.type.startsWith('image/')) {
+      setImageError('请选择图片文件。')
       return
     }
+    if (file.size > maxThemeImageUploadSize) {
+      setImageError('背景原图不能超过 20 MB。')
+      return
+    }
+    setImageProcessing(true)
     try {
-      const customBackgroundImage = await readThemeBackgroundImage(file)
+      const customBackgroundImage = await optimizeThemeBackgroundImage(file)
       onChange({ ...preferences, customBackgroundImage })
     } catch (reason) {
-      setImageError(reason instanceof Error ? reason.message : '背景图片读取失败。')
+      setImageError(reason instanceof Error ? reason.message : '背景图片处理失败。')
+    } finally {
+      setImageProcessing(false)
     }
   }
 
@@ -2986,18 +3034,19 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                 <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
               </label>
               <div className="theme-control-row theme-image-row">
-                <span><strong>背景图片</strong><small>仅保存在当前浏览器，实际空间受浏览器存储配额影响。</small></span>
+                <span><strong>背景图片</strong><small>原图最大 20 MB，上传后自动压缩保存。</small></span>
                 <span className="theme-image-input">
                   <span className={`theme-image-preview${preferences.customBackgroundImage ? '' : ' theme-image-preview--empty'}`}>
                     {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt="当前背景图片预览" /> : <span>未设置</span>}
                   </span>
                   <span className="theme-image-actions">
                     <label className="theme-image-upload">
-                      <ImagePlus size={14} />
-                      <span>选择图片</span>
+                      {imageProcessing ? <LoaderCircle className="spin" size={14} /> : <ImagePlus size={14} />}
+                      <span>{imageProcessing ? '正在压缩…' : '选择图片'}</span>
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/webp,image/gif"
+                        disabled={imageProcessing}
                         onChange={(event) => {
                           const file = event.currentTarget.files?.[0]
                           event.currentTarget.value = ''
@@ -3006,7 +3055,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                         aria-label="上传背景图片"
                       />
                     </label>
-                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined }) }}><X size={13} />清除</button> : null}
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined }) }}><X size={13} />清除</button> : null}
                   </span>
                 </span>
               </div>
