@@ -652,6 +652,7 @@ interface MessageComposerProps {
   connection: RemoteConnection
   isRunning: boolean
   fileChangeSummary: FileChangeSummary | null
+  fileChangeSummaryKey: string | null
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
@@ -681,6 +682,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   connection,
   isRunning,
   fileChangeSummary,
+  fileChangeSummaryKey,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
@@ -712,6 +714,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
     window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
   ))
+  const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
@@ -956,6 +959,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
   const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
+  const fileChangeSummaryExpanded = Boolean(
+    mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
+  )
+  const fileChangeSummaryTotals = fileChangeSummary ? (
+    <>
+      <FileText size={12} aria-hidden="true" />
+      <span>{fileChangeSummary.files.length} 个文件已更改</span>
+      {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
+        <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
+      ) : null}
+    </>
+  ) : null
 
   async function attachImages(files: File[]) {
     if (files.length === 0) return
@@ -1148,13 +1163,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   return (
     <div className="composer-dock">
       {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
-        <div className="composer-file-change-summary" aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
-          <FileText size={12} aria-hidden="true" />
-          <span>{fileChangeSummary.files.length} 个文件已更改</span>
-          {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
-            <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
-          ) : null}
-          <span className="composer-file-change-summary__files" aria-label="各文件增删行数">
+        <div className={`composer-file-change-summary${fileChangeSummaryExpanded ? ' composer-file-change-summary--expanded' : ''}`} aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
+          {mobileLayout ? (
+            <button
+              className="composer-file-change-summary__toggle"
+              type="button"
+              aria-expanded={fileChangeSummaryExpanded}
+              aria-controls="composer-file-change-files"
+              aria-label={`${fileChangeSummary.files.length} 个文件已更改，${fileChangeSummaryExpanded ? '收起' : '展开'}文件明细`}
+              title={fileChangeSummaryExpanded ? '收起文件明细' : '查看文件明细'}
+              onClick={() => setExpandedFileChangesKey(fileChangeSummaryExpanded ? null : fileChangeSummaryKey)}
+            >
+              {fileChangeSummaryTotals}
+              <ChevronDown size={14} aria-hidden="true" />
+            </button>
+          ) : fileChangeSummaryTotals}
+          <span id="composer-file-change-files" className="composer-file-change-summary__files" aria-label="各文件增删行数">
             {fileChangeSummary.files.map((file) => {
               const fileName = file.path.split(/[\\/]/).at(-1) || file.path
               const hasStats = file.additions > 0 || file.deletions > 0
@@ -2712,6 +2736,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
               fileChangeSummary={runningFileChangeSummary}
+              fileChangeSummaryKey={activeRemote.runningTurnId}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
