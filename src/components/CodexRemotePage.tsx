@@ -1366,6 +1366,12 @@ function desktopWorkspacePreviewAvailable() {
     && !window.matchMedia(mobileLayoutMediaQuery).matches
 }
 
+function concurrentPaneLimit() {
+  if (typeof window === 'undefined') return 5
+  const mobileLayout = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+  return mobileLayout ? 3 : 5
+}
+
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
@@ -2076,7 +2082,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remotes = [remote0, remote1, remote2]
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const runningFileChangeSummary = useMemo(() => {
     if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
@@ -2181,7 +2189,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const availableModels = useMemo(() => {
     const source = remotes.find((remote) => remote.models.length > 0)
     return source?.models ?? []
-  }, [remote0.models, remote1.models, remote2.models])
+  }, [remote0.models, remote1.models, remote2.models, remote3.models, remote4.models])
   const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
   const marqueeColor = themePreferences.theme === 'dark'
@@ -2329,7 +2337,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       setCompletionToast((current) => current?.completedAt === latest.completedAt ? null : current)
     }, 2_800)
     return () => window.clearTimeout(timer)
-  }, [remote0.latestThreadCompletion, remote1.latestThreadCompletion, remote2.latestThreadCompletion])
+  }, [remote0.latestThreadCompletion, remote1.latestThreadCompletion, remote2.latestThreadCompletion, remote3.latestThreadCompletion, remote4.latestThreadCompletion])
 
   useLayoutEffect(() => {
     const grid = paneGrid.current
@@ -2411,9 +2419,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       setSelectedPaneIndex(existingPane)
       return
     }
-    const freePane = [0, 1, 2].find((index) => !openPaneIndexes.includes(index))
+    const paneLimit = concurrentPaneLimit()
+    const freePane = Array.from({ length: paneLimit }, (_, index) => index).find((index) => !openPaneIndexes.includes(index))
     if (freePane === undefined) {
-      showPaneNotice('最多同时打开 3 个对话窗口')
+      showPaneNotice(`最多同时打开 ${paneLimit} 个对话窗口`)
       return
     }
     setOpenPaneIndexes((current) => [...current, freePane])
@@ -2476,7 +2485,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         rememberThreadComposerPreferences(thread.id, preferences)
       },
     })
-  }, [rememberThreadComposerPreferences, remote0, remote1, remote2, selectedPaneIndex])
+  }, [rememberThreadComposerPreferences, remote0, remote1, remote2, remote3, remote4, selectedPaneIndex])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
