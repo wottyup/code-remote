@@ -106,9 +106,12 @@ export class RemoteApiError extends Error {
 
 const networkRetryDelaysMs = [300, 900, 1_800]
 
-function isNetworkRequestFailure(reason: unknown) {
-  if (reason instanceof RemoteApiError || !(reason instanceof Error)) return false
-  return reason instanceof TypeError || /failed to fetch|network|load failed/i.test(reason.message)
+export function isAmbiguousNetworkFailure(reason: unknown) {
+  if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
+  if (!(reason instanceof Error)) return false
+  return reason instanceof TypeError
+    || /failed to fetch|network|load failed/i.test(reason.message)
+    || (reason instanceof SyntaxError && /unexpected end|unterminated/i.test(reason.message))
 }
 
 function wait(milliseconds: number) {
@@ -149,9 +152,11 @@ async function request<T>(
           : validationDetail || (detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : `请求失败 (${response.status})`)
         throw new RemoteApiError(message, response.status)
       }
-      return response.json() as Promise<T>
+      // Reading the body can fail after fetch has already received headers.
+      // Await it here so those failures use the same safe retry path.
+      return await response.json() as T
     } catch (reason) {
-      if (!isNetworkRequestFailure(reason) || attempt >= networkRetries) throw reason
+      if (!isAmbiguousNetworkFailure(reason) || attempt >= networkRetries) throw reason
       const delay = networkRetryDelaysMs[Math.min(attempt, networkRetryDelaysMs.length - 1)]
       attempt += 1
       await wait(delay)
@@ -232,6 +237,33 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
   return messages
 }
 
+export function threadContainsNewPayload(
+  thread: CodexThreadDetails,
+  previousMessageIds: Set<string>,
+  previousTurnIds: Set<string>,
+  payload: { requestText: string; images: CodexImageAttachment[] },
+) {
+  const recoveredMessages = messagesFromThread(thread)
+  let lastKnownMessageIndex = -1
+  for (let index = recoveredMessages.length - 1; index >= 0; index -= 1) {
+    const message = recoveredMessages[index]
+    if (previousMessageIds.has(message.id) || (message.turnId !== undefined && previousTurnIds.has(message.turnId))) {
+      lastKnownMessageIndex = index
+      break
+    }
+  }
+  // A cached history can omit older messages with the same short prompt.
+  // Confirm only messages after the last known turn, never those older ones.
+  if (lastKnownMessageIndex < 0) return false
+  return recoveredMessages.slice(lastKnownMessageIndex + 1).some((message) => {
+    if (message.role !== 'user') return false
+    if (payload.requestText) return message.text === payload.requestText
+    const images = message.images ?? []
+    return images.length === payload.images.length
+      && images.every((image, index) => image.name === payload.images[index]?.name)
+  })
+}
+
 function threadUpdatedAt(thread: CodexThread): number {
   const value = thread.updatedAt ?? thread.createdAt
   if (typeof value === 'number') return value > 10_000_000_000 ? value : value * 1000
@@ -282,9 +314,9 @@ export const codexRemoteClient = {
     return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`)
   },
   resumeThread(token: string, threadId: string, requestId: string) {
-    return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, {
+    return request<CodexThread>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, {
       method: 'POST',
-      body: JSON.stringify({ request_id: requestId }),
+      body: JSON.stringify({ request_id: requestId, include_history: false }),
     }, { networkRetries: 3 })
   },
   models(token: string) {

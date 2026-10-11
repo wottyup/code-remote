@@ -1,8 +1,10 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
 import {
   codexRemoteClient,
+  isAmbiguousNetworkFailure,
   messagesFromThread,
   RemoteApiError,
+  threadContainsNewPayload,
   type CodexDocumentAttachment,
   type CodexImageAttachment,
   type CodexMessage,
@@ -77,6 +79,13 @@ interface SendMessageInput {
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
   onThreadCreated?: (thread: CodexThread) => void
+}
+
+interface PendingTurnDelivery {
+  threadId: string
+  turnId: string | null
+  acknowledged: boolean
+  completedTurnIds: Set<string>
 }
 
 type FileChangesByTurn = Record<string, CodexFileChange[]>
@@ -243,21 +252,6 @@ function latestTurnState(thread: { turns?: unknown[] }) {
   const running = latest?.status === 'inProgress' || latest?.status === 'running'
   const turnId = typeof latest?.id === 'string' ? latest.id : null
   return { running, turnId }
-}
-
-function isAmbiguousNetworkFailure(reason: unknown) {
-  if (reason instanceof RemoteApiError || !(reason instanceof Error)) return false
-  return reason instanceof TypeError || /failed to fetch|network|load failed/i.test(reason.message)
-}
-
-function threadContainsNewPayload(thread: CodexThreadDetails, previousMessageIds: Set<string>, payload: QueuedTurnPayload) {
-  return messagesFromThread(thread).some((message) => {
-    if (message.role !== 'user' || previousMessageIds.has(message.id)) return false
-    if (payload.requestText) return message.text === payload.requestText
-    const images = message.images ?? []
-    return images.length === payload.images.length
-      && images.every((image, index) => image.name === payload.images[index]?.name)
-  })
 }
 
 function sendFailureMessage(reason: unknown) {
@@ -946,6 +940,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const queuedMessagesByThreadRef = useRef<QueuedMessagesByThread>(queuedMessagesByThread)
   const queuedTurnStartsInFlight = useRef(new Set<string>())
   const queuedTurnSteersInFlight = useRef(new Set<string>())
+  const pendingTurnDeliveries = useRef(new Map<string, PendingTurnDelivery>())
   const editingQueuedMessageByThread = useRef<Record<string, string>>({})
   const editingQueuedMessageThreadById = useRef(new Map<string, string>())
   const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
@@ -1356,7 +1351,42 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [onUnauthorized, token])
 
-  const requestTurnStart = useCallback(async (threadId: string, payload: QueuedTurnPayload) => {
+  const confirmedTurnDelivery = useCallback((requestId: string) => {
+    const delivery = pendingTurnDeliveries.current.get(requestId)
+    if (!delivery?.acknowledged) return null
+    return {
+      turn_id: delivery.turnId,
+      completed: delivery.turnId !== null && delivery.completedTurnIds.has(delivery.turnId),
+    }
+  }, [])
+
+  const requestTurnDelivery = useCallback(async (
+    threadId: string,
+    requestId: string,
+    send: () => Promise<{ turn_id: string | null }>,
+  ) => {
+    const delivery: PendingTurnDelivery = {
+      threadId,
+      turnId: null,
+      acknowledged: false,
+      completedTurnIds: new Set(),
+    }
+    // Callers keep this entry until their history verification also ends, so
+    // a receipt arriving during that fallback can still confirm the send.
+    pendingTurnDeliveries.current.set(requestId, delivery)
+    try {
+      const result = await send()
+      return { ...result, completed: result.turn_id !== null && delivery.completedTurnIds.has(result.turn_id) }
+    } catch (reason) {
+      // The receipt names the exact request, so it remains authoritative if
+      // the HTTP response (and a large history read) cannot reach the phone.
+      const receipt = confirmedTurnDelivery(requestId)
+      if (!isAmbiguousNetworkFailure(reason) || !receipt) throw reason
+      return receipt
+    }
+  }, [confirmedTurnDelivery])
+
+  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload) => requestTurnDelivery(threadId, payload.id, async () => {
     const start = () => codexRemoteClient.startTurn(token, threadId, {
       prompt: payload.requestText,
       images: payload.images,
@@ -1374,11 +1404,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (!(reason instanceof Error) || !/thread not found/i.test(reason.message)) throw reason
       resumedThreadId.current = null
-      await codexRemoteClient.resumeThread(token, threadId, payload.id)
+      // A cached acknowledgement from before an App Server restart cannot
+      // restore its new process. Give this recovery its own stable ID.
+      await codexRemoteClient.resumeThread(token, threadId, `${payload.id}:recover`)
       resumedThreadId.current = threadId
       return start()
     }
-  }, [token])
+  }), [requestTurnDelivery, token])
 
   const appendQueuedMessageToActiveThread = useCallback((threadId: string, payload: QueuedTurnPayload, turnId?: string | null) => {
     if (activeThreadId.current !== threadId) return
@@ -1438,6 +1470,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (handedOffRef.current) return false
     if (editingQueuedMessageByThread.current[threadId]) return false
     if (queuedTurnStartsInFlight.current.has(threadId)) return false
+    if ([...queuedTurnSteersInFlight.current].some((requestKey) => requestKey.startsWith(`${threadId}:`))) return false
     const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
     if (!payload) return false
     // A current active turn must only receive a steer request. This guard also
@@ -1450,6 +1483,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const turnResult = await requestTurnStart(threadId, payload)
       updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
       if (activeThreadId.current === threadId) {
+        if (turnResult.completed) {
+          setError(null)
+          void loadThread(threadId, ++historyRevision.current, true)
+          return true
+        }
         const turnId = turnResult.turn_id
         if (turnId) setActiveTurnId(turnId)
         appendQueuedMessageToActiveThread(threadId, payload, turnId)
@@ -1484,9 +1522,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       return false
     } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
       queuedTurnStartsInFlight.current.delete(threadId)
     }
-  }, [appendQueuedMessageToActiveThread, beginTurnTimer, onUnauthorized, requestTurnStart, setActiveTurnId, updateQueuedMessages])
+  }, [appendQueuedMessageToActiveThread, beginTurnTimer, loadThread, onUnauthorized, requestTurnStart, setActiveTurnId, updateQueuedMessages])
 
   const startNextQueuedMessage = useCallback(async (threadId: string) => {
     if (editingQueuedMessageByThread.current[threadId]) {
@@ -1514,14 +1553,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (queuedTurnSteersInFlight.current.has(requestKey)) return false
     queuedTurnSteersInFlight.current.add(requestKey)
     try {
-      const result = await codexRemoteClient.steerTurn(token, threadId, {
+      const result = await requestTurnDelivery(threadId, payload.id, () => codexRemoteClient.steerTurn(token, threadId, {
         prompt: payload.requestText,
         images: payload.images,
         requestId: payload.id,
-      })
+      }))
       updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
-      appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current)
-      setError(null)
+      if (activeThreadId.current === threadId) {
+        if (result.completed) void loadThread(threadId, ++historyRevision.current, true)
+        else appendQueuedMessageToActiveThread(threadId, payload, result.turn_id ?? activeTurnId.current)
+        setError(null)
+      }
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
@@ -1532,16 +1574,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (reason instanceof RemoteApiError && reason.status === 409) {
         const refreshed = await loadThread(threadId, historyRevision.current)
         if (!refreshed) return false
-        return startQueuedMessage(threadId, messageId)
+        queuedTurnSteersInFlight.current.delete(requestKey)
+        return await startQueuedMessage(threadId, messageId)
       }
       if (activeThreadId.current === threadId) {
         setError(reason instanceof Error ? reason.message : '立即发送排队消息失败')
       }
       return false
     } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
       queuedTurnSteersInFlight.current.delete(requestKey)
     }
-  }, [appendQueuedMessageToActiveThread, loadThread, onUnauthorized, startQueuedMessage, token, updateQueuedMessages])
+  }, [appendQueuedMessageToActiveThread, loadThread, onUnauthorized, requestTurnDelivery, startQueuedMessage, token, updateQueuedMessages])
 
   const removeQueuedMessage = useCallback((messageId: string) => {
     const threadId = activeThreadId.current
@@ -1623,6 +1667,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError(event.message ?? 'Codex 请求失败')
       return
     }
+    if (event.type === 'turn.delivery') {
+      const requestId = typeof event.request_id === 'string' ? event.request_id : null
+      const delivery = requestId ? pendingTurnDeliveries.current.get(requestId) : undefined
+      if (delivery && delivery.threadId === event.params?.threadId) {
+        delivery.acknowledged = true
+        delivery.turnId = typeof event.params.turnId === 'string' ? event.params.turnId : null
+      }
+      return
+    }
     if (event.type === 'server_request') {
       const requestMethod = event.method ?? ''
       const supportedApproval = requestMethod === 'item/commandExecution/requestApproval'
@@ -1644,6 +1697,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventTurnId = typeof eventTurn?.id === 'string'
       ? eventTurn.id
       : typeof params.turnId === 'string' ? params.turnId : null
+    if (event.method === 'turn/completed') {
+      const completedThreadId = eventThreadId ?? activeThreadId.current
+      const completedTurnId = eventTurnId ?? activeTurnId.current
+      if (completedThreadId && completedTurnId) {
+        for (const delivery of pendingTurnDeliveries.current.values()) {
+          if (delivery.threadId === completedThreadId) delivery.completedTurnIds.add(completedTurnId)
+        }
+      }
+    }
     // Older app-server notifications can omit threadId on item deltas. When
     // that happens, use the active turn as the second routing key so a second
     // pane does not render another pane's stream.
@@ -2155,8 +2217,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     const localId = payload.id
     const previousMessageIds = new Set(messages.map((message) => message.id))
+    const previousTurnIds = new Set(messages.flatMap((message) => message.turnId ? [message.turnId] : []))
     const rememberStartedTurn = (turnId: string | null) => {
-      if (!turnId) return
+      if (!turnId || activeThreadId.current !== thread.id) return
       setActiveTurnId(turnId)
       setMessages((current) => current.map((message) => message.id === localId && !message.turnId
         ? { ...message, turnId }
@@ -2178,14 +2241,20 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     setError(null)
     try {
       const turnResult = await requestTurnStart(thread.id, payload)
-      rememberStartedTurn(turnResult.turn_id)
+      if (!turnResult.completed) rememberStartedTurn(turnResult.turn_id)
       return true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (isAmbiguousNetworkFailure(reason) && activeThreadId.current === thread.id) {
         try {
+          const recoveryRevision = historyRevision.current
           const recoveredThread = await codexRemoteClient.readThread(token, thread.id)
-          if (threadContainsNewPayload(recoveredThread, previousMessageIds, payload)) {
+          if (threadContainsNewPayload(recoveredThread, previousMessageIds, previousTurnIds, payload)) {
+            if (activeThreadId.current !== thread.id) return true
+            if (historyRevision.current !== recoveryRevision) {
+              void loadThread(thread.id, historyRevision.current, true)
+              return true
+            }
             const { running, turnId } = latestTurnState(recoveredThread)
             setActiveThread(recoveredThread)
             setActiveTurnId(running ? turnId : null)
@@ -2207,7 +2276,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           // cannot be read while the mobile connection is still interrupted.
         }
       }
+      const receipt = isAmbiguousNetworkFailure(reason) ? confirmedTurnDelivery(payload.id) : null
+      if (receipt) {
+        if (!receipt.completed) rememberStartedTurn(receipt.turn_id)
+        if (activeThreadId.current === thread.id) setError(null)
+        return true
+      }
       if (isAmbiguousNetworkFailure(reason)) reconnectRef.current(true)
+      if (activeThreadId.current !== thread.id) return false
       historyRevision.current += 1
       setMessages((current) => current.filter((message) => message.id !== localId))
       setIsRunning(false)
@@ -2230,8 +2306,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           : message)
       }
       return false
+    } finally {
+      pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeThread, beginTurnTimer, clearTurnTimer, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshThreads, requestTurnStart, resetStreamingAssistant, setActiveTurnId, startNextQueuedMessage, token, updateQueuedMessages])
+  }, [activeThread, beginTurnTimer, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshThreads, requestTurnStart, resetStreamingAssistant, setActiveTurnId, startNextQueuedMessage, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false

@@ -257,6 +257,15 @@ class CodexAppServer:
     async def notify_threads_changed(self) -> None:
         await self._emit({"type": "threads.changed"})
 
+    async def notify_turn_delivery(self, thread_id: str, request_id: str | None, turn_id: str | None) -> None:
+        if request_id is None:
+            return
+        await self._emit({
+            "type": "turn.delivery",
+            "request_id": request_id,
+            "params": {"threadId": thread_id, "turnId": turn_id},
+        })
+
     async def connect(self) -> dict[str, Any]:
         await self._ensure_started()
         return self.status()

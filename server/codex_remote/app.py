@@ -118,6 +118,7 @@ class SteerRequest(BaseModel):
 
 class ResumeRequest(BaseModel):
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    include_history: bool = True
 
 
 class InterruptRequest(BaseModel):
@@ -705,7 +706,12 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads/{thread_id}/resume")
     async def resume_thread(thread_id: str, body: ResumeRequest | None = None) -> dict[str, Any]:
         async def resume() -> dict[str, Any]:
-            return await app_server.resume_thread(thread_id)
+            thread = await app_server.resume_thread(thread_id)
+            # Sending needs the resume acknowledgement, not another copy of
+            # the entire history. Keep legacy clients' full response intact.
+            if body is not None and not body.include_history:
+                return {key: value for key, value in thread.items() if key != "turns"}
+            return thread
 
         try:
             if body is None:
@@ -738,7 +744,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     body.approval_policy,
                 )
                 turn = result.get("turn", {})
-                return {"turn_id": turn.get("id") if isinstance(turn, dict) else None}
+                turn_id = turn.get("id") if isinstance(turn, dict) else None
+                await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
+                return {"turn_id": turn_id}
             except Exception:
                 for path in image_paths:
                     with suppress(FileNotFoundError):
@@ -778,6 +786,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 if not isinstance(turn_id, str):
                     turn = result.get("turn")
                     turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
             except Exception:
                 for path in image_paths:
