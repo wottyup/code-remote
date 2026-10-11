@@ -7,7 +7,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from watchfiles import Change
 
@@ -23,6 +23,44 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_starting_with_shared_codex_home_does_not_delete_database_missing_projection_table(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory:
+            history_home = Path(history_directory)
+            database = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values ('preserve')")
+                connection.commit()
+            finally:
+                connection.close()
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._resolve_executable = Mock(return_value="codex")  # type: ignore[method-assign]
+                with patch(
+                    "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
+                    new_callable=AsyncMock,
+                    side_effect=OSError("stop after database preparation"),
+                ), self.assertRaises(CodexRuntimeError):
+                    await app_server._ensure_started()
+
+                connection = sqlite3.connect(database)
+                try:
+                    self.assertEqual(("preserve",), connection.execute("select value from marker").fetchone())
+                finally:
+                    connection.close()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
     async def test_default_app_server_uses_main_codex_home_without_reseeding_its_database(self) -> None:
         with tempfile.TemporaryDirectory() as history_directory:
             history_home = Path(history_directory)

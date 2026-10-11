@@ -779,6 +779,10 @@ class CodexAppServer:
     def _seed_runtime_database(self, force: bool = False) -> None:
         source = self._history_home / "thread_history_1.sqlite"
         target = self._runtime_home / "thread_history_1.sqlite"
+        # In shared-home mode source and target are the same database. Seeding
+        # it would unlink the user's Codex database before trying to copy it.
+        if source.resolve() == target.resolve():
+            return
         if not source.is_file():
             return
         if not force and target.is_file() and self._database_has_threads(target):
