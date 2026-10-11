@@ -62,8 +62,6 @@ const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric',
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const themeImageTypes = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
-const maxThemeImageSize = 2 * 1024 * 1024
-const maxThemeImageDataUrlLength = Math.ceil(maxThemeImageSize * 4 / 3) + 256
 const maxImagesPerTurn = 4
 const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
@@ -303,7 +301,7 @@ function normalizeTransparency(value: unknown) {
 }
 
 function normalizeThemeBackgroundImage(value: unknown) {
-  if (typeof value !== 'string' || value.length > maxThemeImageDataUrlLength) return undefined
+  if (typeof value !== 'string') return undefined
   return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
 }
 
@@ -523,7 +521,7 @@ function readThemeBackgroundImage(file: File): Promise<string> {
     reader.onload = () => {
       const result = typeof reader.result === 'string' ? normalizeThemeBackgroundImage(reader.result) : undefined
       if (result) resolve(result)
-      else reject(new Error('背景图片格式无效或图片过大。'))
+      else reject(new Error('背景图片格式无效或无法读取。'))
     }
     reader.readAsDataURL(file)
   })
@@ -2923,10 +2921,6 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
       setImageError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
       return
     }
-    if (file.size > maxThemeImageSize) {
-      setImageError('背景图片不能超过 2 MB。')
-      return
-    }
     try {
       const customBackgroundImage = await readThemeBackgroundImage(file)
       onChange({ ...preferences, customBackgroundImage })
@@ -2992,7 +2986,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                 <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
               </label>
               <div className="theme-control-row theme-image-row">
-                <span><strong>背景图片</strong><small>仅保存在当前浏览器，最大 2 MB。</small></span>
+                <span><strong>背景图片</strong><small>仅保存在当前浏览器，实际空间受浏览器存储配额影响。</small></span>
                 <span className="theme-image-input">
                   <span className={`theme-image-preview${preferences.customBackgroundImage ? '' : ' theme-image-preview--empty'}`}>
                     {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt="当前背景图片预览" /> : <span>未设置</span>}
