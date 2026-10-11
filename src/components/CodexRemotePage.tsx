@@ -35,6 +35,8 @@ interface Props {
   token: string
   onUnauthorized: () => void
   onUnpair: () => void | Promise<void>
+  themePreferences: ThemePreferences
+  onThemePreferencesChange: (next: ThemePreferences) => void
 }
 
 declare global {
@@ -106,7 +108,7 @@ type ThreadComposerPreferences = Record<string, ComposerPreferences>
 
 type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
 
-interface ThemePreferences {
+export interface ThemePreferences {
   theme: AppTheme
   customBackgroundColor: string
   customTextColor: string
@@ -305,7 +307,7 @@ function normalizeThemeBackgroundImage(value: unknown) {
   return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
 }
 
-function readThemePreferences(): ThemePreferences {
+export function readThemePreferences(): ThemePreferences {
   if (typeof window === 'undefined') return defaultThemePreferences
   try {
     const value = window.localStorage.getItem(themePreferencesStorageKey)
@@ -331,6 +333,31 @@ function rgbaFromHex(hex: string, alpha: number) {
   const green = Number.parseInt(value.slice(2, 4), 16)
   const blue = Number.parseInt(value.slice(4, 6), 16)
   return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
+}
+
+export function saveThemePreferences(preferences: ThemePreferences) {
+  try {
+    window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(preferences))
+  } catch {
+    // Theme preferences still apply for the current session when storage is unavailable.
+  }
+}
+
+export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
+  const customBackgroundOpacity = (100 - preferences.customBackgroundTransparency) / 100
+  return {
+    '--custom-theme-background': preferences.customBackgroundColor,
+    '--custom-theme-background-opacity': customBackgroundOpacity,
+    '--custom-theme-background-image': preferences.customBackgroundImage
+      ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + preferences.customBackgroundImage + '")'
+      : 'none',
+    '--custom-theme-text-color': preferences.customTextColor,
+    '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
+    '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
+    '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
+    '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
+    '--custom-theme-panel-blur': '8px',
+  } as CSSProperties
 }
 
 function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
@@ -2043,7 +2070,7 @@ function RemoteChatPane({
   )
 }
 
-export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
+export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
@@ -2063,7 +2090,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string; diff?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
-  const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -2158,7 +2184,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   }, [remote0.models, remote1.models, remote2.models])
   const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
-  const customBackgroundOpacity = (100 - themePreferences.customBackgroundTransparency) / 100
   const marqueeColor = themePreferences.theme === 'dark'
     ? '#ffffff'
     : themePreferences.theme === 'light'
@@ -2167,21 +2192,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
         ? '#5a3b27'
         : themePreferences.customTextColor
   const themeStyle = {
+    ...themeRootStyle(themePreferences),
     '--marquee-color': marqueeColor,
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
     '--workspace-file-preview-handle-width': workspaceFilePreviewOpen ? '8px' : '0px',
     '--workspace-file-preview-width': workspaceFilePreviewOpen ? `${workspaceFilePreviewWidth}px` : '0px',
-    '--custom-theme-background': themePreferences.customBackgroundColor,
-    '--custom-theme-background-opacity': customBackgroundOpacity,
-    '--custom-theme-background-image': themePreferences.customBackgroundImage
-      ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + themePreferences.customBackgroundImage + '")'
-      : 'none',
-    '--custom-theme-text-color': themePreferences.customTextColor,
-    '--custom-theme-surface': rgbaFromHex(themePreferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
-    '--custom-theme-active': rgbaFromHex(themePreferences.customBackgroundColor, 0.24),
-    '--custom-theme-border': rgbaFromHex(themePreferences.customTextColor, 0.32),
-    '--custom-theme-panel-blur': '8px',
   } as CSSProperties
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
@@ -2207,14 +2222,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair }: Props) {
   const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(themePreferences))
-    } catch {
-      // Theme preferences still apply for the current session when storage is unavailable.
-    }
-  }, [themePreferences])
 
   useEffect(() => {
     saveComposerPreferences(defaultComposerPreferences)

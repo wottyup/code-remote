@@ -16,6 +16,21 @@ button, textarea, input { font: inherit; }
 button { color: inherit; }
 button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px solid #8da4d5; outline-offset: 2px; }
 
+.app-root { position: relative; isolation: isolate; width: 100%; height: 100%; min-height: 100%; background: #101114; }
+.app-root > * { position: relative; z-index: 1; }
+.app-root--theme-custom::before { position: fixed; z-index: 0; inset: 0; background-color: var(--custom-theme-background); background-image: var(--custom-theme-background-image); background-position: center; background-repeat: no-repeat; background-size: cover; content: ''; opacity: var(--custom-theme-background-opacity); pointer-events: none; }
+.app-root--theme-custom .remote-shell { background: transparent; }
+.app-root--theme-custom .pair-page { background: transparent; color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-card { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.app-root--theme-custom .pair-card__mark { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-eyebrow, .app-root--theme-custom .pair-description, .app-root--theme-custom .pair-card label, .app-root--theme-custom .pair-security, .app-root--theme-custom .pair-security svg { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
+.app-root--theme-custom .pair-card h1 { color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-input-wrap { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-input-wrap input { color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-input-wrap input::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 55%, transparent); }
+.app-root--theme-custom .pair-submit { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.app-root--theme-custom .pair-submit:hover:not(:disabled) { background: var(--custom-theme-surface); }
+
 .app-recovery { display: grid; width: 100%; min-height: var(--app-viewport-height); place-items: center; padding: max(22px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(22px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); background: radial-gradient(ellipse at 50% 25%, rgba(93, 107, 164, .16), transparent 45%), #101114; }
 .app-recovery__card { display: grid; width: min(100%, 340px); justify-items: center; gap: 10px; padding: 25px 22px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 16px; background: rgba(24, 27, 34, .94); box-shadow: 0 20px 55px rgba(0, 0, 0, .32); text-align: center; }
 .app-recovery__mark { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgba(170, 186, 255, .35); border-radius: 11px; background: rgba(105, 123, 194, .16); color: #dce3ff; font-size: 15px; font-weight: 700; }
@@ -859,8 +874,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-file-preview__line-content .hljs-code { color: #9a5b22; }
 .remote-shell--theme-warm .workspace-file-preview__line-content .hljs-link { color: #397b7c; }
 
-.remote-shell--theme-custom { --marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background-color: #101114; background-image: none; }
-.remote-shell--theme-custom::before { position: absolute; z-index: -1; inset: 0; background-color: var(--custom-theme-background); background-image: var(--custom-theme-background-image); background-position: center; background-repeat: no-repeat; background-size: cover; content: ''; opacity: var(--custom-theme-background-opacity); pointer-events: none; }
+.remote-shell--theme-custom { --marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background: transparent; }
 .remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .remote-chat, .remote-shell--theme-custom .remote-workspace, .remote-shell--theme-custom .remote-pane-grid, .remote-shell--theme-custom .remote-pane-slot { border-color: var(--custom-theme-border); background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .remote-shell--theme-custom .remote-chat__header, .remote-shell--theme-custom .theme-settings-panel__header { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); }

@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import { CodexRemotePage } from './components/CodexRemotePage'
+import { useCallback, useEffect, useState } from 'react'
+import { CodexRemotePage, readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './components/CodexRemotePage'
 import { PairingPage } from './components/PairingPage'
 import { codexRemoteClient } from './lib/codexRemoteClient'
 
@@ -7,6 +7,11 @@ const STORAGE_KEY = 'codex-remote-token'
 
 export default function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem(STORAGE_KEY))
+  const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
+
+  useEffect(() => {
+    saveThemePreferences(themePreferences)
+  }, [themePreferences])
 
   const paired = useCallback((nextToken: string) => {
     window.localStorage.setItem(STORAGE_KEY, nextToken)
@@ -25,6 +30,17 @@ export default function App() {
     }
   }, [])
 
-  if (!token) return <PairingPage onPaired={paired} />
-  return <CodexRemotePage token={token} onUnauthorized={unpair} onUnpair={unpair} />
+  return (
+    <div className={`app-root app-root--theme-${themePreferences.theme}`} style={themeRootStyle(themePreferences)}>
+      {!token ? <PairingPage onPaired={paired} /> : (
+        <CodexRemotePage
+          token={token}
+          onUnauthorized={unpair}
+          onUnpair={unpair}
+          themePreferences={themePreferences}
+          onThemePreferencesChange={setThemePreferences}
+        />
+      )}
+    </div>
+  )
 }
