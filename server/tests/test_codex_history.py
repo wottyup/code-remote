@@ -93,6 +93,34 @@ class CodexHistoryStoreTests(unittest.TestCase):
             self.assertEqual("agentMessage", thread["turns"][0]["items"][1]["type"])
             self.assertEqual("你好，我在。", thread["turns"][0]["items"][1]["text"])
 
+    def test_reads_message_events_without_turn_ids_in_active_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            session_dir = codex_home / "sessions" / "2026" / "10" / "12"
+            session_dir.mkdir(parents=True)
+            session_id = "event-format-session"
+            session_path = session_dir / "rollout-event-format-session.jsonl"
+            lines = [
+                {"timestamp": "2026-10-12T02:36:42Z", "type": "session_meta", "payload": {"id": session_id, "cwd": "F:/project"}},
+                {"timestamp": "2026-10-12T02:36:43Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-1", "root_turn_id": "turn-1"}},
+                {"timestamp": "2026-10-12T02:36:43Z", "type": "event_msg", "payload": {"type": "user_message", "client_id": "user-1", "message": "读取不到聊天", "images": ["data:image/png;base64,aGVsbG8="]}},
+                {"timestamp": "2026-10-12T02:36:53Z", "type": "event_msg", "payload": {"type": "agent_message", "message": "正在检查历史解析。", "phase": "commentary"}},
+                {"timestamp": "2026-10-12T02:36:53Z", "type": "response_item", "payload": {"type": "message", "id": "assistant-1", "role": "assistant", "content": [{"type": "output_text", "text": "正在检查历史解析。"}]}},
+                {"timestamp": "2026-10-12T02:37:00Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "turn-1", "completed_at": "2026-10-12T02:37:00Z"}},
+            ]
+            session_path.write_text("\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n", encoding="utf-8")
+
+            thread = CodexHistoryStore(codex_home).read_thread(session_id)
+
+            self.assertIsNotNone(thread)
+            assert thread is not None
+            self.assertEqual("读取不到聊天", thread["preview"])
+            self.assertEqual("completed", thread["turns"][0]["status"])
+            self.assertEqual(
+                [("userMessage", [{"type": "text", "text": "读取不到聊天"}, {"type": "localImage", "name": "image-1", "mediaType": "image/png", "data": "aGVsbG8="}]), ("agentMessage", "正在检查历史解析。")],
+                [(item["type"], item.get("content", item.get("text"))) for item in thread["turns"][0]["items"]],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -168,6 +168,7 @@ class CodexHistoryStore:
         latest_user_text = ""
         first_time: str | None = None
         model: str | None = None
+        active_turn_id: str | None = None
 
         try:
             lines = path.open("r", encoding="utf-8", errors="replace")
@@ -200,6 +201,12 @@ class CodexHistoryStore:
 
                 event_type = payload.get("type")
                 turn_id = payload.get("turn_id")
+                if event_type == "task_started":
+                    active_turn_id = turn_id if isinstance(turn_id, str) else None
+                elif event_type in {"user_message", "agent_message"} and not isinstance(turn_id, str):
+                    # Recent Codex JSONL logs omit turn_id from message events;
+                    # associate them with the task_started event currently in flight.
+                    turn_id = active_turn_id
                 if not isinstance(turn_id, str):
                     continue
                 turn = turns.get(turn_id)
@@ -232,13 +239,57 @@ class CodexHistoryStore:
                         text = _text_from_content(normalised.get("content"))
                         if text:
                             latest_user_text = text
+                elif event_type == "user_message":
+                    message = payload.get("message")
+                    message = message if isinstance(message, str) else ""
+                    content: list[dict[str, Any]] = []
+                    if message:
+                        content.append({"type": "text", "text": message})
+                    images = payload.get("images")
+                    if isinstance(images, list):
+                        for index, image in enumerate(images):
+                            if not isinstance(image, str) or not image.startswith("data:image/"):
+                                continue
+                            header, separator, data = image.partition(",")
+                            if not separator or ";base64" not in header:
+                                continue
+                            media_type = header[5:].split(";", 1)[0]
+                            content.append({
+                                "type": "localImage",
+                                "name": f"image-{index + 1}",
+                                "mediaType": media_type,
+                                "data": data,
+                            })
+                    client_id = payload.get("client_id")
+                    turn["items"].append({
+                        "type": "userMessage",
+                        "id": client_id if isinstance(client_id, str) else f"{turn_id}-user-{len(turn['items'])}",
+                        "content": content,
+                        "createdAt": timestamp,
+                    })
+                    if message:
+                        latest_user_text = message
+                elif event_type == "agent_message":
+                    message = payload.get("message")
+                    if isinstance(message, str) and message:
+                        turn["items"].append({
+                            "type": "agentMessage",
+                            "id": f"{turn_id}-agent-{len(turn['items'])}",
+                            "text": message,
+                            "phase": payload.get("phase"),
+                            "createdAt": timestamp,
+                        })
                 elif event_type == "task_complete":
                     turn["status"] = "completed"
                     turn["completedAt"] = _iso_time(payload.get("completed_at")) or timestamp
                     turn["durationMs"] = payload.get("duration_ms")
+                    if active_turn_id == turn_id:
+                        active_turn_id = None
                 elif event_type in {"turn_aborted", "turn_failed"}:
                     turn["status"] = "failed"
                     turn["completedAt"] = timestamp
+                    if active_turn_id == turn_id:
+                        active_turn_id = None
 
         turns_list = [turns[turn_id] for turn_id in turn_order]
         session_id = session_meta.get("id") or thread_id
