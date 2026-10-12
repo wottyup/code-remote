@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -31,6 +32,14 @@ class CodexNoActiveTurnError(CodexRuntimeError):
 
 
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
+
+
+def default_runtime_home(history_home: Path) -> Path:
+    """Keep mutable Codex runtime state out of the main home on Windows."""
+    if os.name == "nt":
+        project_root = Path(__file__).resolve().parents[2]
+        return project_root / ".codex-remote" / "app-server-home"
+    return history_home
 
 
 @dataclass
@@ -206,11 +215,12 @@ class CodexAppServer:
         self._runtime_home = (
             Path(configured_runtime_home).expanduser().resolve()
             if configured_runtime_home
-            else self._history_home
+            else default_runtime_home(self._history_home)
         )
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._history_sync_task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
         self._handoff_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
@@ -757,6 +767,7 @@ class CodexAppServer:
                 }, timeout=20)
                 await self._write({"method": "initialized", "params": {}})
                 self._initialized = True
+                self._schedule_runtime_history_sync()
                 await self._emit({"type": "connection", **self.status()})
             except Exception as error:
                 await self._stop_process()
@@ -832,7 +843,7 @@ class CodexAppServer:
             return False
 
     def _copy_thread_rollout(self, thread_id: str) -> None:
-        source = self._history._load_path_index().get(thread_id)
+        source = self._find_thread_rollout(self._history_home, thread_id)
         if source is None or not source.is_file():
             return
         try:
@@ -854,13 +865,138 @@ class CodexAppServer:
                 pass
             raise CodexRuntimeError(f"无法准备 Codex 对话历史：{error}") from error
 
-    def _app_server_environment(self) -> dict[str, str]:
-        """Use the main Codex home unless isolation was explicitly configured.
+    async def _sync_runtime_thread(self, thread_id: str) -> None:
+        if self._runtime_home == self._history_home:
+            return
+        try:
+            changed = await asyncio.to_thread(self._sync_runtime_thread_to_history, thread_id)
+        except OSError as error:
+            logger.warning("Unable to sync Codex Remote thread %s: %s", thread_id, error)
+            return
+        if changed:
+            self._history.invalidate()
 
-        The VS Code Codex process and this remote bridge can run at the same time.
-        Sharing CODEX_HOME makes the two processes contend for Codex's SQLite state
-        runtime, so only the read-only history/config source stays in the original
-        home; mutable app-server state is copied into a separate home.
+    def _schedule_runtime_history_sync(self) -> None:
+        if self._runtime_home == self._history_home:
+            return
+        if self._history_sync_task is not None and not self._history_sync_task.done():
+            return
+        self._history_sync_task = asyncio.create_task(self._sync_runtime_created_history())
+
+    async def _sync_runtime_created_history(self) -> None:
+        try:
+            changed = await asyncio.to_thread(self._sync_runtime_created_history_to_main)
+        except OSError as error:
+            logger.warning("Unable to sync existing Codex Remote history: %s", error)
+            return
+        if changed:
+            self._history.invalidate()
+            await self._emit({"type": "threads.changed"})
+
+    def _sync_runtime_created_history_to_main(self) -> bool:
+        changed = False
+        for directory_name in ("sessions", "archived_sessions"):
+            root = self._runtime_home / directory_name
+            if not root.is_dir():
+                continue
+            for source in root.rglob("*.jsonl"):
+                if not self._is_remote_created_rollout(source):
+                    continue
+                try:
+                    changed = self._sync_runtime_rollout(source) or changed
+                except OSError as error:
+                    logger.warning("Unable to sync Codex Remote rollout %s: %s", source, error)
+        return changed
+
+    @staticmethod
+    def _is_remote_created_rollout(path: Path) -> bool:
+        try:
+            with path.open("r", encoding="utf-8", errors="replace") as handle:
+                envelope = json.loads(handle.readline())
+        except (OSError, json.JSONDecodeError):
+            return False
+        payload = envelope.get("payload") if isinstance(envelope, dict) else None
+        return isinstance(payload, dict) and payload.get("originator") == "codex_remote_web"
+
+    def _sync_runtime_thread_to_history(self, thread_id: str) -> bool:
+        source = self._find_thread_rollout(self._runtime_home, thread_id)
+        if source is None:
+            return False
+        return self._sync_runtime_rollout(source)
+
+    @staticmethod
+    def _find_thread_rollout(codex_home: Path, thread_id: str) -> Path | None:
+        candidates: list[Path] = []
+        for directory_name in ("sessions", "archived_sessions"):
+            root = codex_home / directory_name
+            if not root.is_dir():
+                continue
+            candidates.extend(
+                path
+                for path in root.rglob("*.jsonl")
+                if thread_id in path.name
+            )
+        if not candidates:
+            return None
+        return max(candidates, key=lambda path: path.stat().st_mtime_ns)
+
+    def _sync_runtime_rollout(self, source: Path) -> bool:
+        try:
+            relative = source.resolve().relative_to(self._runtime_home)
+        except ValueError:
+            return False
+        if not relative.parts or relative.parts[0] != "sessions":
+            return False
+
+        target = self._history_home / relative
+        if target.is_file():
+            source_size = source.stat().st_size
+            target_size = target.stat().st_size
+            if source_size == target_size:
+                if self._file_is_prefix(target, source):
+                    return False
+                logger.warning("Not overwriting divergent Codex history: %s", target)
+                return False
+            if source_size < target_size:
+                if not self._file_is_prefix(source, target):
+                    logger.warning("Not overwriting divergent Codex history: %s", target)
+                return False
+            if not self._file_is_prefix(target, source):
+                logger.warning("Not overwriting divergent Codex history: %s", target)
+                return False
+
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = target.parent / f".{target.name}.codex-remote-{uuid.uuid4().hex}.tmp"
+        try:
+            with source.open("rb") as source_file, temporary.open("xb") as temporary_file:
+                shutil.copyfileobj(source_file, temporary_file)
+                temporary_file.flush()
+                os.fsync(temporary_file.fileno())
+            os.replace(temporary, target)
+        finally:
+            try:
+                temporary.unlink()
+            except FileNotFoundError:
+                pass
+        return True
+
+    @staticmethod
+    def _file_is_prefix(prefix: Path, full: Path) -> bool:
+        if prefix.stat().st_size > full.stat().st_size:
+            return False
+        with prefix.open("rb") as prefix_file, full.open("rb") as full_file:
+            while chunk := prefix_file.read(1024 * 1024):
+                if full_file.read(len(chunk)) != chunk:
+                    return False
+        return True
+
+    def _app_server_environment(self) -> dict[str, str]:
+        """Prepare the runtime home while keeping the main home as history source.
+
+        Windows isolates mutable state by default because sandbox ACLs and concurrent
+        SQLite writers can make a second Codex process exit during initialization.
+        Configuration is copied into the isolated home, while rollout files are
+        synchronized safely in both directions at the bridge boundaries.
         """
         if self._runtime_home == self._history_home:
             child_environment = os.environ.copy()
@@ -1035,6 +1171,7 @@ class CodexAppServer:
                             break
             if method == "turn/completed" and completed_thread_id:
                 await self._complete_workspace_change_watch(completed_thread_id, completed_turn_id)
+                await self._sync_runtime_thread(completed_thread_id)
             await self._emit({"type": "notification", "method": method, "params": params})
 
     async def _emit(self, event: dict[str, Any]) -> None:

@@ -38,7 +38,7 @@ function sleep(milliseconds) {
 
 function cleanCodexEnvironment() {
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODEX_REMOTE_COMMAND', 'CODEX_REMOTE_PYTHON', 'CODEX_REMOTE_WORKSPACE', 'CODEX_REMOTE_AUTH_FILE'].includes(key)) {
+    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODEX_REMOTE_APP_SERVER_HOME', 'CODEX_REMOTE_COMMAND', 'CODEX_REMOTE_PYTHON', 'CODEX_REMOTE_WORKSPACE', 'CODEX_REMOTE_AUTH_FILE'].includes(key)) {
       delete process.env[key]
     }
   }
