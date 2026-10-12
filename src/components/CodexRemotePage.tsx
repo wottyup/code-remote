@@ -2044,7 +2044,6 @@ function RemoteChatPane({
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
-  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
   const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
@@ -2124,7 +2123,7 @@ function RemoteChatPane({
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
-                {!hasStreamingAssistant && remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
+                {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
               </div>
             </div>
           ) : null}
@@ -3387,19 +3386,8 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
-  const [clockNow, setClockNow] = useState(() => Date.now())
-  const replyStartedAt = message.replyStartedAt ? Date.parse(message.replyStartedAt) : Number.NaN
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
-  const elapsedDurationMs = message.replyDurationMs
-    ?? (message.streaming && !Number.isNaN(replyStartedAt) ? Math.max(0, clockNow - replyStartedAt) : undefined)
-
-  useEffect(() => {
-    if (!message.streaming || Number.isNaN(replyStartedAt)) return
-    setClockNow(Date.now())
-    const timer = window.setInterval(() => setClockNow(Date.now()), 1000)
-    return () => window.clearInterval(timer)
-  }, [message.streaming, replyStartedAt])
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
@@ -3408,7 +3396,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
-          {elapsedDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">{message.streaming ? '已用' : '用时'} {formatTurnDuration(elapsedDurationMs)}</time> : null}
+          {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
