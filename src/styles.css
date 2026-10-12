@@ -343,8 +343,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message--user .chat-message__body--copy-outside { position: relative; margin-bottom: 31px; }
 .chat-message--user .chat-message__body--copy-outside .chat-message__actions { position: absolute; right: 0; bottom: -31px; width: max-content; margin-top: 0; }
 .running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -3px auto 0; }
-.running-indicator__row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; }
-.running-indicator__activity { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
+.running-indicator__row { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 8px; }
+.running-indicator__activity { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 5px; color: #8d939d; font-size: 9px; }
 .running-indicator__elapsed { flex: 0 0 auto; color: #788295; font-size: 9px; white-space: nowrap; }
 .running-indicator__activity .operation-activity__text { max-width: min(70vw, 620px); }
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100%; color: #9298a2; font-size: 11px; }
