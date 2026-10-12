@@ -3616,13 +3616,14 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
+  const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
-      <div className={`chat-message__body${message.role === 'user' && showCopyAction ? ' chat-message__body--copy-outside' : ''}`}>
+      <div className="chat-message__body">
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
@@ -3631,10 +3632,15 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
-        {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
-        {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
+        {message.role === 'assistant' ? copyAction : null}
       </div>
+      {message.role === 'user' && (sentAtLabel || copyAction) ? (
+        <div className="chat-message__footer">
+          {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
+          {copyAction}
+        </div>
+      ) : null}
     </article>
   )
 })
