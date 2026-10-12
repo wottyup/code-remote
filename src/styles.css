@@ -207,6 +207,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-rename-dialog__actions button:disabled { cursor: wait; opacity: .55; }
 .workspace-file-context-menu { z-index: 100; min-width: 176px; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-selection-context-menu { min-width: 220px; }
+.workspace-selection-context-menu .workspace-file-context-menu__name { max-width: 204px; }
 .pane-limit-notice { position: fixed; z-index: 21; top: 17px; left: 50%; min-height: 31px; padding: 8px 12px; transform: translateX(-50%); border: 1px solid rgba(216, 174, 101, .35); border-radius: 999px; background: rgba(49, 39, 25, .95); color: #ecd3a4; box-shadow: 0 12px 28px rgba(0, 0, 0, .28); font-size: 10px; }
 .remote-chat__header { grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; min-width: 0; padding: 0 27px; border-bottom: 1px solid var(--line); background: rgba(15, 17, 21, .72); box-shadow: 0 8px 28px rgba(0, 0, 0, .08); }
 .remote-chat__title-wrap { display: flex; min-width: 0; align-items: center; gap: 9px; }

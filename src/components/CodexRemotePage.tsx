@@ -34,6 +34,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { formatWorkspaceSelectionReference, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
 
 interface Props {
   token: string
@@ -745,6 +746,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
+  appendText(value: string, focus?: boolean): void
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
@@ -1017,6 +1019,19 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       }
       const separator = current && !/\s$/.test(current) ? '\n' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+    },
+    appendText(value, focus = true) {
+      if (!value) return
+      const current = draftRef.current
+      const separator = !current
+        ? ''
+        : /\n\n$/.test(current)
+          ? ''
+          : /\n$/.test(current)
+            ? '\n'
+            : '\n\n'
+      updateDraft(`${current}${separator}${value}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
@@ -1646,8 +1661,65 @@ interface WorkspaceExplorerProps {
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
+  onInsertText: (text: string, focus?: boolean) => void
   mobileOpen: boolean
   onCloseMobile: () => void
+}
+
+interface WorkspaceSelectionContextMenu {
+  path: string
+  startLine: number
+  endLine: number
+  content: string
+  x: number
+  y: number
+}
+
+function selectedCodeFromPreview(root: HTMLElement) {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
+
+  const selectedText: string[] = []
+  const selectedLineNumbers: number[] = []
+  for (const line of root.querySelectorAll<HTMLElement>('.workspace-file-preview__line')) {
+    const lineContent = line.querySelector<HTMLElement>('.workspace-file-preview__line-content')
+    if (!lineContent || !range.intersectsNode(lineContent)) continue
+
+    const lineRange = document.createRange()
+    lineRange.selectNodeContents(lineContent)
+    if (range.compareBoundaryPoints(Range.START_TO_START, lineRange) > 0) {
+      lineRange.setStart(range.startContainer, range.startOffset)
+    }
+    if (range.compareBoundaryPoints(Range.END_TO_END, lineRange) < 0) {
+      lineRange.setEnd(range.endContainer, range.endOffset)
+    }
+
+    const kind = line.dataset.diffKind
+    const prefix = kind === 'added' ? '+' : kind === 'deleted' ? '-' : root.dataset.diffPreview === 'true' ? ' ' : ''
+    selectedText.push(`${prefix}${lineRange.toString()}`)
+    const lineNumber = Number(line.dataset.fileLine)
+    if (Number.isInteger(lineNumber) && lineNumber > 0) selectedLineNumbers.push(lineNumber)
+  }
+
+  const content = selectedText.join('\n')
+  if (!content.trim() || selectedLineNumbers.length === 0) return null
+  return {
+    content,
+    startLine: Math.min(...selectedLineNumbers),
+    endLine: Math.max(...selectedLineNumbers),
+  }
+}
+
+function selectedCodeFromEditor(editor: HTMLTextAreaElement) {
+  const start = editor.selectionStart
+  const end = editor.selectionEnd
+  if (start === end) return null
+  const lineRange = workspaceTextSelectionLineRange(editor.value, start, end)
+  const content = editor.value.slice(start, end)
+  if (!lineRange || !content.trim()) return null
+  return { ...lineRange, content }
 }
 
 function desktopWorkspacePreviewAvailable() {
@@ -1661,7 +1733,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, onInsertText, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -1669,6 +1741,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
+  const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
@@ -1891,10 +1964,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
-    if (!contextMenu) return
-    const closeMenu = () => setContextMenu(null)
+    if (!contextMenu && !selectionContextMenu) return
+    const closeMenu = () => {
+      setContextMenu(null)
+      setSelectionContextMenu(null)
+    }
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setContextMenu(null)
+      if (event.key === 'Escape') closeMenu()
     }
     document.addEventListener('pointerdown', closeMenu)
     document.addEventListener('keydown', closeOnEscape)
@@ -1902,7 +1978,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       document.removeEventListener('pointerdown', closeMenu)
       document.removeEventListener('keydown', closeOnEscape)
     }
-  }, [contextMenu])
+  }, [contextMenu, selectionContextMenu])
 
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
@@ -1921,7 +1997,41 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(browsingRoot, path)))
     if (paths.length === 0) return
     setSelectedPaths(paths)
+    setSelectionContextMenu(null)
     setContextMenu({ entry, paths, x, y })
+  }
+
+  function openSelectionContextMenu(event: ReactMouseEvent<HTMLPreElement | HTMLTextAreaElement>) {
+    if (!previewFile) return
+    const selected = event.currentTarget instanceof HTMLTextAreaElement
+      ? selectedCodeFromEditor(event.currentTarget)
+      : selectedCodeFromPreview(event.currentTarget)
+    if (!selected) return
+
+    event.preventDefault()
+    setContextMenu(null)
+    const menuWidth = 226
+    const menuHeight = 104
+    setSelectionContextMenu({
+      ...selected,
+      path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
+      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
+      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+    })
+  }
+
+  function insertSelectedCodeIntoComposer() {
+    if (!selectionContextMenu) return
+    const { path, startLine, endLine, content } = selectionContextMenu
+    setSelectionContextMenu(null)
+    onInsertText(formatWorkspaceSelectionReference(path, startLine, endLine, content), !mobileOpen)
+  }
+
+  async function copySelectedCode() {
+    if (!selectionContextMenu) return
+    const content = selectionContextMenu.content
+    setSelectionContextMenu(null)
+    setPreviewCopied(await copyText(content))
   }
 
   function handleEntryClick(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
@@ -2143,9 +2253,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                 disabled={previewSaving}
                 onChange={(event) => setPreviewEditContent(event.currentTarget.value)}
                 onKeyDown={handlePreviewEditorKeyDown}
+                onContextMenu={openSelectionContextMenu}
               />
             ) : previewFile || previewDiffLines ? (
-              <pre className="workspace-file-preview__code"><code>{previewDiffLines
+              <pre className="workspace-file-preview__code" data-diff-preview={previewDiffLines ? 'true' : undefined} onContextMenu={openSelectionContextMenu}><code>{previewDiffLines
                 ? previewDiffLines.map((diffLine, index) => {
                   const content = diffLine.kind === 'added' || diffLine.kind === 'deleted'
                     ? diffLine.line.slice(1)
@@ -2154,7 +2265,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                       : diffLine.line
                   const highlightedLine = diffLine.newLine === null ? undefined : highlightedPreviewLines[diffLine.newLine - 1]
                   return (
-                    <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} key={`diff-${index}`}>
+                    <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} data-file-line={diffLine.newLine ?? diffLine.oldLine ?? ''} data-diff-kind={diffLine.kind} key={`diff-${index}`}>
                       <span className="workspace-file-preview__line-number" aria-hidden="true">{diffLine.newLine ?? diffLine.oldLine ?? ''}</span>
                       <span className="workspace-file-preview__line-content">{diffLine.kind !== 'deleted' && highlightedLine?.length
                         ? highlightedLine.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
@@ -2163,7 +2274,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                   )
                 })
                 : previewLines.map((line, index) => (
-                  <span className="workspace-file-preview__line" key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
+                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
                     ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
                     : line || ' '}</span></span>
                 ))}</code></pre>
@@ -2177,6 +2288,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
+        </div>,
+        document.body,
+      ) : null}
+      {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
+        <div className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu" style={{ left: selectionContextMenu.x, top: selectionContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+          <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
+          <button type="button" role="menuitem" onClick={insertSelectedCodeIntoComposer}><Link2 size={14} />插入引用到输入框</button>
+          <button type="button" role="menuitem" onClick={() => void copySelectedCode()}><Copy size={14} />复制选中内容</button>
         </div>,
         document.body,
       ) : null}
@@ -2960,6 +3079,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
+  const insertWorkspaceText = useCallback((text: string, focus = true) => {
+    composerHandle.current?.appendText(text, focus)
+  }, [])
 
   function setWorkspaceExplorerWidthValue(value: number, persist = false, commit = false) {
     const previewOpen = workspaceFilePreviewOpenRef.current
@@ -3395,6 +3517,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
+            onInsertText={insertWorkspaceText}
             mobileOpen={workspaceOpen}
             onCloseMobile={() => setWorkspaceOpen(false)}
           />
