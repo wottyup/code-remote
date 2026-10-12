@@ -198,6 +198,26 @@ function originalPdfAttachmentsFromText(value: string) {
   return { text, documents }
 }
 
+function textDocumentAttachmentsFromText(value: string) {
+  const documents: CodexDocumentAttachment[] = []
+  const text = value.replace(
+    /\[附件文档：([^\r\n]+)\]\r?\n([\s\S]*?)\r?\n\[\/附件文档\]/g,
+    (_block, name: string, content: string) => {
+      documents.push({ name, content })
+      return ''
+    },
+  ).replace(/\n{3,}/g, '\n\n').trim()
+  return { text, documents }
+}
+
+function messageRequestText(message: CodexMessage) {
+  const documentText = message.documents
+    ?.filter((document) => !document.sourceFileId)
+    .map((document) => `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`)
+    .join('') ?? ''
+  return `${message.text}${documentText}`.trim()
+}
+
 function imagesFromContent(value: unknown): CodexMessageImage[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((part, index) => {
@@ -248,9 +268,13 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
       const originalPdfAttachments = itemType === 'usermessage' ? originalPdfAttachmentsFromText(rawText) : { text: rawText, documents: [] }
-      const text = originalPdfAttachments.text
+      const textDocumentAttachments = itemType === 'usermessage'
+        ? textDocumentAttachmentsFromText(originalPdfAttachments.text)
+        : { text: originalPdfAttachments.text, documents: [] }
+      const text = textDocumentAttachments.text
+      const documents = [...originalPdfAttachments.documents, ...textDocumentAttachments.documents]
       const images = itemType === 'usermessage' ? imagesFromContent(item.content) : []
-      if (!text && images.length === 0 && originalPdfAttachments.documents.length === 0) continue
+      if (!text && images.length === 0 && documents.length === 0) continue
       const itemCreatedAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at)
       const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
 
@@ -271,8 +295,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
-        ...(originalPdfAttachments.documents.length > 0 ? {
-          documents: originalPdfAttachments.documents.map((document) => ({ ...document, charCount: 0 })),
+        ...(documents.length > 0 ? {
+          documents: documents.map((document) => ({ ...document, charCount: document.content.length })),
         } : {}),
       })
       assistantMessage = itemType === 'agentmessage' ? messages.at(-1)! : null
@@ -302,7 +326,7 @@ export function threadContainsNewPayload(
   const expectedPdfIds = (payload.documents ?? []).flatMap((document) => document.sourceFileId ? [document.sourceFileId] : [])
   return recoveredMessages.slice(lastKnownMessageIndex + 1).some((message) => {
     if (message.role !== 'user') return false
-    if (payload.requestText && message.text !== payload.requestText) return false
+    if (payload.requestText && message.text !== payload.requestText && messageRequestText(message) !== payload.requestText) return false
     if (expectedPdfIds.length > 0) {
       const actualPdfIds = (message.documents ?? []).flatMap((document) => document.sourceFileId ? [document.sourceFileId] : [])
       return expectedPdfIds.length === actualPdfIds.length && expectedPdfIds.every((id, index) => id === actualPdfIds[index])
