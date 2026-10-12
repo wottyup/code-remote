@@ -35,6 +35,27 @@ export function sameQueuedMessageHistoryContent(message: CodexMessage, localMess
     && sameMessageDocuments(message.documents, localMessage.documents)
 }
 
+export function reconcileDeliveredLocalMessage(
+  messages: CodexMessage[],
+  localMessageId: string,
+  turnId: string,
+  previousMessageIds: ReadonlySet<string>,
+) {
+  const localIndex = messages.findIndex((message) => message.id === localMessageId && message.role === 'user')
+  if (localIndex < 0) return messages
+
+  const localMessage = { ...messages[localIndex], turnId }
+  const alreadyInHistory = messages.some((message) => message.id !== localMessageId
+    && !message.id.startsWith('queued-')
+    && !previousMessageIds.has(message.id)
+    && sameQueuedMessageHistoryContent(message, localMessage))
+  if (alreadyInHistory) return messages.filter((message) => message.id !== localMessageId)
+
+  const next = [...messages]
+  next[localIndex] = localMessage
+  return next
+}
+
 function sameHistoryAnchor(message: CodexMessage, candidate: CodexMessage) {
   if (message.id === candidate.id) return true
   if (message.role !== candidate.role || message.turnId !== candidate.turnId) return false
