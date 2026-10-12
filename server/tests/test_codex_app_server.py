@@ -612,6 +612,44 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(disk_thread, await app_server.read_thread("disk-1"))
         app_server.request.assert_not_awaited()
 
+    async def test_read_thread_prefers_main_history_to_stale_isolated_snapshot(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        history_thread = {
+            "id": "disk-1",
+            "turns": [{"id": "turn-1", "items": [
+                {"id": "user-1", "type": "userMessage", "content": [{"text": "hello"}]},
+                {"id": "assistant-1", "type": "agentMessage", "text": "world"},
+            ]}],
+        }
+        stale_runtime_thread = {
+            "id": "disk-1",
+            "turns": [{"id": "turn-1", "items": [
+                {"id": "user-1", "type": "userMessage", "content": [{"text": "hello"}]},
+            ]}],
+        }
+        app_server._history.read_thread = Mock(return_value=history_thread)
+        app_server.request = AsyncMock(return_value={"thread": stale_runtime_thread})
+
+        self.assertEqual(history_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_not_awaited()
+
+    async def test_read_thread_uses_app_server_for_active_runtime_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        history_thread = {"id": "disk-1", "turns": [{"id": "turn-1", "items": []}]}
+        live_thread = {"id": "disk-1", "turns": [{"id": "turn-2", "items": [
+            {"id": "assistant-live", "type": "agentMessage", "text": "streaming"},
+        ]}]}
+        app_server._active_turn_ids["disk-1"] = "turn-2"
+        app_server._history.read_thread = Mock(return_value=history_thread)
+        app_server.request = AsyncMock(return_value={"thread": live_thread})
+
+        self.assertEqual(live_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_awaited_once()
+
     def test_configured_models_follow_codex_catalog_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)

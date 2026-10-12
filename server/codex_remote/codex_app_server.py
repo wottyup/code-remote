@@ -405,7 +405,8 @@ class CodexAppServer:
 
     async def read_thread(self, thread_id: str) -> dict[str, Any]:
         history_thread = self._history.read_thread(thread_id)
-        if not self.connected and history_thread is not None:
+        runtime_turn_id = self._active_turn_ids.get(thread_id)
+        if runtime_turn_id is None and history_thread is not None:
             return history_thread
         thread: dict[str, Any] | None = None
         try:
@@ -420,6 +421,10 @@ class CodexAppServer:
             server_turns = thread.get("turns") if thread is not None else None
             history_turns = history_thread.get("turns")
             if thread is None or (
+                runtime_turn_id is None
+                and isinstance(history_turns, list)
+                and history_turns
+            ) or (
                 isinstance(server_turns, list)
                 and not server_turns
                 and isinstance(history_turns, list)
