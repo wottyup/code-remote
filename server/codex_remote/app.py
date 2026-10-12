@@ -65,7 +65,7 @@ async def watch_codex_history(app_server: CodexAppServer) -> None:
             relative = path.relative_to(codex_home)
         except ValueError:
             return False
-        return relative.name == "session_index.jsonl" or relative.suffix == ".jsonl" or not relative.suffix
+        return relative.name in {"session_index.jsonl", "state_5.sqlite"} or relative.suffix == ".jsonl" or not relative.suffix
 
     try:
         async for changes in awatch(watch_root, watch_filter=is_session_change, debounce=500):

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -82,31 +84,71 @@ class CodexHistoryStore:
     def __init__(self, codex_home: Path) -> None:
         self.codex_home = codex_home.expanduser().resolve()
         self.sessions = self.codex_home / "sessions"
+        self.archived_sessions = self.codex_home / "archived_sessions"
         self.session_index = self.codex_home / "session_index.jsonl"
+        self.state_index = self.codex_home / "state_5.sqlite"
         self._path_index: dict[str, Path] | None = None
         self._index_entries: dict[str, dict[str, Any]] | None = None
 
     def list_threads(self) -> list[dict[str, Any]]:
         entries = self._load_index_entries()
         path_index = self._load_path_index()
-        threads: dict[str, dict[str, Any]] = {}
+        threads = self._load_state_threads(path_index)
 
         for session_id, entry in entries.items():
-            threads[session_id] = self._thread_summary(session_id, entry, path_index.get(session_id))
+            path = path_index.get(session_id)
+            if path is not None:
+                threads.setdefault(session_id, self._thread_summary(session_id, entry, path))
 
-        indexed_ids = set(threads)
         for session_id, path in path_index.items():
-            if session_id in indexed_ids:
+            if session_id in threads:
                 continue
             summary = self._read_file_summary(path)
             if summary is None:
                 continue
-            root_id = summary.get("session_id") or session_id
-            if not isinstance(root_id, str) or root_id in threads:
+            file_id = summary.get("id") or summary.get("session_id") or session_id
+            if not isinstance(file_id, str) or file_id in threads:
                 continue
-            threads[root_id] = self._thread_summary(root_id, summary, path)
+            thread = self._thread_summary(file_id, summary, path)
+            if path.is_relative_to(self.archived_sessions):
+                thread["archived"] = True
+            threads[file_id] = thread
 
         return list(threads.values())
+
+    def _load_state_threads(self, path_index: dict[str, Path]) -> dict[str, dict[str, Any]]:
+        """Read the desktop sidebar index without modifying Codex's database."""
+        if not self.state_index.is_file():
+            return {}
+        try:
+            with closing(sqlite3.connect(f"file:{self.state_index.as_posix()}?mode=ro", uri=True, timeout=5)) as connection:
+                rows = connection.execute(
+                    "SELECT id, title, name, preview, cwd, created_at_ms, updated_at_ms, archived "
+                    "FROM threads"
+                ).fetchall()
+        except sqlite3.Error:
+            return {}
+        threads: dict[str, dict[str, Any]] = {}
+        for thread_id, title, name, preview, cwd, created_at, updated_at, archived in rows:
+            if not isinstance(thread_id, str):
+                continue
+            path = path_index.get(thread_id)
+            if path is None:
+                continue
+            display_name = next((value for value in (name, title, preview) if isinstance(value, str) and value.strip()), thread_id)
+            threads[thread_id] = {
+                "id": thread_id,
+                "sessionId": thread_id,
+                "name": display_name,
+                "preview": preview if isinstance(preview, str) else "",
+                "cwd": cwd if isinstance(cwd, str) else None,
+                "createdAt": created_at,
+                "updatedAt": updated_at,
+                "path": str(path),
+                "archived": bool(archived),
+                "status": {"type": "notLoaded"},
+            }
+        return threads
 
     def invalidate(self) -> None:
         self._path_index = None
@@ -199,7 +241,7 @@ class CodexHistoryStore:
                     turn["completedAt"] = timestamp
 
         turns_list = [turns[turn_id] for turn_id in turn_order]
-        session_id = session_meta.get("session_id") or session_meta.get("id") or thread_id
+        session_id = session_meta.get("id") or thread_id
         cwd = session_meta.get("cwd")
         title = index_entry.get("thread_name")
         if not isinstance(title, str) or not title.strip():
@@ -264,8 +306,10 @@ class CodexHistoryStore:
         if self._path_index is not None:
             return self._path_index
         paths: dict[str, Path] = {}
-        if self.sessions.is_dir():
-            for path in self.sessions.rglob("*.jsonl"):
+        for directory in (self.sessions, self.archived_sessions):
+            if not directory.is_dir():
+                continue
+            for path in directory.rglob("*.jsonl"):
                 try:
                     with path.open("r", encoding="utf-8", errors="replace") as handle:
                         first_line = handle.readline()
@@ -275,14 +319,9 @@ class CodexHistoryStore:
                 payload = envelope.get("payload") if isinstance(envelope, dict) else None
                 if not isinstance(payload, dict):
                     continue
-                session_id = payload.get("session_id")
-                file_id = payload.get("id")
-                for candidate in (session_id, file_id):
-                    if not isinstance(candidate, str):
-                        continue
-                    previous = paths.get(candidate)
-                    if previous is None or candidate == file_id:
-                        paths[candidate] = path
+                file_id = payload.get("id") or payload.get("session_id")
+                if isinstance(file_id, str):
+                    paths[file_id] = path
         self._path_index = paths
         return paths
 

@@ -536,6 +536,8 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
         app_server.request = AsyncMock(side_effect=[
             {"data": [{"id": "server-1", "name": "server"}], "nextCursor": "cursor-1"},
             {"data": [{"id": "server-2", "name": "second"}], "nextCursor": None},
@@ -558,6 +560,23 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         threads = await app_server.list_threads()
 
         self.assertEqual([{"id": "disk-1", "name": "disk"}], threads)
+
+    async def test_list_threads_uses_disk_without_starting_offline_app_server(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._history.list_threads = Mock(return_value=[{"id": "disk-1", "name": "disk"}])
+        app_server.request = AsyncMock(side_effect=AssertionError("app-server must not start"))
+
+        self.assertEqual([{"id": "disk-1", "name": "disk"}], await app_server.list_threads())
+        app_server.request.assert_not_awaited()
+
+    async def test_read_thread_uses_disk_without_starting_offline_app_server(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        disk_thread = {"id": "disk-1", "sessionId": "disk-1", "turns": []}
+        app_server._history.read_thread = Mock(return_value=disk_thread)
+        app_server.request = AsyncMock(side_effect=AssertionError("app-server must not start"))
+
+        self.assertEqual(disk_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_not_awaited()
 
     def test_configured_models_follow_codex_catalog_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

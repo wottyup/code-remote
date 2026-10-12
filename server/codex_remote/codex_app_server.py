@@ -352,6 +352,9 @@ class CodexAppServer:
             return self.status()
 
     async def list_threads(self) -> list[dict[str, Any]]:
+        history_items = self._history.list_threads()
+        if not self.connected and history_items:
+            return history_items
         items: list[dict[str, Any]] = []
         cursor: str | None = None
         app_server_error: CodexRuntimeError | None = None
@@ -383,7 +386,6 @@ class CodexAppServer:
                 break
             cursor = next_cursor
 
-        history_items = self._history.list_threads()
         merged: dict[str, dict[str, Any]] = {
             item["id"]: item
             for item in history_items
@@ -401,6 +403,9 @@ class CodexAppServer:
         return []
 
     async def read_thread(self, thread_id: str) -> dict[str, Any]:
+        history_thread = self._history.read_thread(thread_id)
+        if not self.connected and history_thread is not None:
+            return history_thread
         thread: dict[str, Any] | None = None
         try:
             result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
@@ -410,7 +415,6 @@ class CodexAppServer:
         except CodexRuntimeError:
             pass
 
-        history_thread = self._history.read_thread(thread_id)
         if isinstance(history_thread, dict):
             server_turns = thread.get("turns") if thread is not None else None
             history_turns = history_thread.get("turns")
