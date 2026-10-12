@@ -181,6 +181,10 @@ class ThreadStartRequest(BaseModel):
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ThreadNameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=256)
+
+
 class TurnImage(BaseModel):
     name: str = Field(default="image", min_length=1, max_length=255)
     media_type: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
@@ -835,6 +839,21 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         try:
             thread = await app_server.read_thread(thread_id)
             return enrich_thread_images(thread, image_directory)
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads/{thread_id}/name")
+    async def rename_thread(thread_id: str, body: ThreadNameRequest) -> dict[str, str]:
+        name = " ".join(body.name.split())
+        if not name:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="会话名称不能为空。")
+        if len(name) > 72:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="会话名称不能超过 72 个字符。")
+        if any(unicodedata.category(character) == "Cc" for character in name):
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="会话名称不能包含控制字符。")
+        try:
+            await app_server.set_thread_name(thread_id, name)
+            return {"thread_id": thread_id, "name": name}
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

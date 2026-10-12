@@ -351,6 +351,9 @@ class CodexAppServer:
             raise CodexRuntimeError("Codex 无法恢复该对话")
         return thread
 
+    async def set_thread_name(self, thread_id: str, name: str) -> None:
+        await self.request("thread/name/set", {"threadId": thread_id, "name": name})
+
     async def _watch_workspace_changes(self, stop_event: asyncio.Event) -> dict[str, str]:
         changes: dict[str, str] = {}
         try:

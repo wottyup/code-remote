@@ -189,6 +189,21 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-context-menu { position: fixed; z-index: 20; display: grid; min-width: 154px; gap: 3px; padding: 5px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 9px; background: rgba(28, 31, 39, .98); box-shadow: 0 15px 38px rgba(0, 0, 0, .35); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
 .thread-context-menu button { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: #c8cedb; cursor: pointer; font-size: 10px; text-align: left; }
 .thread-context-menu button:hover { background: rgba(103, 120, 172, .28); color: #f3f5fa; }
+.thread-rename-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: max(18px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); background: rgba(5, 7, 11, .68); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
+.thread-rename-dialog { display: grid; width: min(100%, 380px); gap: 10px; padding: 19px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 14px; background: rgba(27, 30, 38, .98); color: #e9ebef; box-shadow: 0 22px 70px rgba(0, 0, 0, .48); }
+.thread-rename-dialog__heading { display: grid; gap: 5px; margin-bottom: 3px; }
+.thread-rename-dialog__heading h2 { margin: 0; color: #f0f1f4; font-size: 15px; font-weight: 620; }
+.thread-rename-dialog__heading p { margin: 0; color: #929aaa; font-size: 10px; line-height: 1.5; }
+.thread-rename-dialog > label { color: #bdc3cf; font-size: 10px; }
+.thread-rename-dialog > input { width: 100%; min-width: 0; min-height: 40px; padding: 0 10px; border: 1px solid rgba(146, 157, 184, .26); border-radius: 8px; outline: 0; background: #12151b; color: #f0f1f4; font-size: 12px; }
+.thread-rename-dialog > input:focus { border-color: rgba(160, 178, 244, .72); box-shadow: 0 0 0 3px rgba(115, 137, 208, .15); }
+.thread-rename-dialog > input:disabled { opacity: .65; }
+.thread-rename-dialog__error { margin: -3px 0 0; color: #e99a9d; font-size: 10px; line-height: 1.45; }
+.thread-rename-dialog__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.thread-rename-dialog__actions button { display: inline-flex; min-width: 66px; min-height: 34px; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 8px; background: rgba(55, 60, 72, .62); color: #cbd0da; cursor: pointer; font-size: 10px; }
+.thread-rename-dialog__actions button:last-child { border-color: rgba(158, 176, 243, .42); background: #5b6caa; color: #fff; }
+.thread-rename-dialog__actions button:hover:not(:disabled) { filter: brightness(1.12); }
+.thread-rename-dialog__actions button:disabled { cursor: wait; opacity: .55; }
 .workspace-file-context-menu { z-index: 100; min-width: 176px; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .pane-limit-notice { position: fixed; z-index: 21; top: 17px; left: 50%; min-height: 31px; padding: 8px 12px; transform: translateX(-50%); border: 1px solid rgba(216, 174, 101, .35); border-radius: 999px; background: rgba(49, 39, 25, .95); color: #ecd3a4; box-shadow: 0 12px 28px rgba(0, 0, 0, .28); font-size: 10px; }
@@ -719,6 +734,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .thread-row { color: #65707c; }
 .remote-shell--theme-light .thread-row:hover, .remote-shell--theme-light .sidebar-settings:hover, .remote-shell--theme-light .sidebar-settings--active { border-color: #e1e5ea; background: #e9edf2; color: #20252d; }
 .remote-shell--theme-light .thread-row--active { --thread-row-surface: #e5ebf3; color: #20252d; }
+.remote-shell--theme-light .thread-rename-dialog { border-color: #d7dee6; background: rgba(255, 255, 255, .98); color: #20252d; box-shadow: 0 22px 70px rgba(35, 45, 58, .22); }
+.remote-shell--theme-light .thread-rename-dialog__heading h2 { color: #20252d; }
+.remote-shell--theme-light .thread-rename-dialog__heading p, .remote-shell--theme-light .thread-rename-dialog > label { color: #6b7784; }
+.remote-shell--theme-light .thread-rename-dialog > input { border-color: #d5dde6; background: #f7f9fb; color: #25303b; }
+.remote-shell--theme-light .thread-rename-dialog__actions button { border-color: #d5dde6; background: #f0f3f6; color: #52606d; }
+.remote-shell--theme-light .thread-rename-dialog__actions button:last-child { border-color: #62769c; background: #52698e; color: #fff; }
 .remote-shell--theme-light .thread-completion-toast { border-color: #c8dfcd; background: rgba(247, 253, 248, .97); color: #275138; box-shadow: 0 18px 45px rgba(46, 74, 55, .16), 0 0 0 1px rgba(90, 174, 112, .08); }
 .remote-shell--theme-light .thread-completion-toast__open:hover, .remote-shell--theme-light .thread-completion-toast__close:hover { background: #e7f4e9; }
 .remote-shell--theme-light .thread-completion-toast__icon { border-color: #a9d9b3; background: #e2f2e5; color: #397d4d; }
@@ -810,6 +831,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .thread-row { color: #806f5e; }
 .remote-shell--theme-warm .thread-row:hover, .remote-shell--theme-warm .sidebar-settings:hover, .remote-shell--theme-warm .sidebar-settings--active { border-color: #e8d9c7; background: #f2e7d8; color: #46382c; }
 .remote-shell--theme-warm .thread-row--active { --thread-row-surface: #f1e3d1; color: #46382c; }
+.remote-shell--theme-warm .thread-rename-dialog { border-color: #e0d2c0; background: rgba(255, 250, 243, .98); color: #40362c; box-shadow: 0 22px 70px rgba(65, 49, 34, .2); }
+.remote-shell--theme-warm .thread-rename-dialog__heading h2 { color: #46382c; }
+.remote-shell--theme-warm .thread-rename-dialog__heading p, .remote-shell--theme-warm .thread-rename-dialog > label { color: #827260; }
+.remote-shell--theme-warm .thread-rename-dialog > input { border-color: #e0d2c0; background: #fffaf3; color: #4a392b; }
+.remote-shell--theme-warm .thread-rename-dialog__actions button { border-color: #e0d2c0; background: #f1e8dc; color: #6b5946; }
+.remote-shell--theme-warm .thread-rename-dialog__actions button:last-child { border-color: #987857; background: #927253; color: #fffaf3; }
 .remote-shell--theme-warm .thread-completion-toast { border-color: #c7ddc7; background: rgba(255, 250, 244, .97); color: #4b6048; box-shadow: 0 18px 45px rgba(93, 73, 50, .14); }
 .remote-shell--theme-warm .thread-completion-toast__open:hover, .remote-shell--theme-warm .thread-completion-toast__close:hover { background: #eef5e9; }
 .remote-shell--theme-warm .thread-completion-toast__icon { border-color: #afcfac; background: #e5f0df; color: #5c8354; }
@@ -901,6 +928,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .thread-row { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .thread-row:hover, .remote-shell--theme-custom .sidebar-settings:hover { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .thread-row--active { --thread-row-surface: var(--custom-theme-active); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-rename-dialog { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .thread-rename-dialog__heading h2 { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-rename-dialog__heading p, .remote-shell--theme-custom .thread-rename-dialog > label { color: color-mix(in srgb, var(--custom-theme-text-color) 72%, transparent); }
+.remote-shell--theme-custom .thread-rename-dialog > input { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-rename-dialog__actions button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-rename-dialog__actions button:last-child { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .thread-completion-toast { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); box-shadow: 0 18px 45px rgba(0, 0, 0, .2); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .thread-completion-toast__open:hover, .remote-shell--theme-custom .thread-completion-toast__close:hover { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .thread-completion-toast__copy small, .remote-shell--theme-custom .thread-completion-toast__close { color: var(--custom-theme-text-color); opacity: .72; }

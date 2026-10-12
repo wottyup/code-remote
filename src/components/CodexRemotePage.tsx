@@ -2394,6 +2394,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
+  const [threadRenameDraft, setThreadRenameDraft] = useState('')
+  const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
+  const [threadRenameSaving, setThreadRenameSaving] = useState(false)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
   const openSettingsPanel = useCallback(() => {
     const currentState = window.history.state
@@ -2412,6 +2416,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const sidebarTouchStart = useRef<{ x: number; y: number; sidebarWasOpen: boolean } | null>(null)
+  const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
   const paneGrid = useRef<HTMLDivElement>(null)
@@ -2430,6 +2435,85 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  function openThreadContextMenu(thread: CodexThread, x: number, y: number) {
+    setThreadContextMenu({
+      thread,
+      x: Math.max(8, Math.min(x, window.innerWidth - 174)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 122)),
+    })
+  }
+
+  function clearThreadLongPress() {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+    threadLongPress.current = null
+  }
+
+  function handleThreadTouchStart(event: ReactTouchEvent<HTMLButtonElement>, thread: CodexThread) {
+    clearThreadLongPress()
+    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const pending = {
+      threadId: thread.id,
+      x: touch.clientX,
+      y: touch.clientY,
+      timer: 0,
+      triggered: false,
+    }
+    pending.timer = window.setTimeout(() => {
+      if (threadLongPress.current !== pending) return
+      pending.triggered = true
+      openThreadContextMenu(thread, pending.x, pending.y)
+    }, 520)
+    threadLongPress.current = pending
+  }
+
+  function handleThreadTouchMove(event: ReactTouchEvent<HTMLButtonElement>) {
+    const pending = threadLongPress.current
+    const touch = event.touches[0]
+    if (!pending || !touch || Math.abs(touch.clientX - pending.x) > 10 || Math.abs(touch.clientY - pending.y) > 10) {
+      clearThreadLongPress()
+    }
+  }
+
+  function startThreadRename(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setThreadRenameTarget(thread)
+    setThreadRenameDraft((thread.name || thread.preview || '').slice(0, 72))
+    setThreadRenameError(null)
+  }
+
+  function closeThreadRename() {
+    if (threadRenameSaving) return
+    setThreadRenameTarget(null)
+    setThreadRenameError(null)
+  }
+
+  async function submitThreadRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!threadRenameTarget || threadRenameSaving) return
+    const name = threadRenameDraft.trim().replace(/\s+/g, ' ')
+    if (!name) {
+      setThreadRenameError('对话名称不能为空。')
+      return
+    }
+    if (name.length > 72) {
+      setThreadRenameError('对话名称不能超过 72 个字符。')
+      return
+    }
+    setThreadRenameSaving(true)
+    setThreadRenameError(null)
+    try {
+      await remote0.renameThread(threadRenameTarget.id, name)
+      setThreadRenameTarget(null)
+    } catch (reason) {
+      setThreadRenameError(reason instanceof Error ? reason.message : '重命名失败，请稍后重试。')
+    } finally {
+      setThreadRenameSaving(false)
+    }
+  }
 
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
     if (!window.matchMedia('(max-width: 700px)').matches || event.touches.length !== 1) {
@@ -2552,10 +2636,30 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }, [threadContextMenu])
 
+  useEffect(() => () => {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+  }, [])
+
+  useEffect(() => {
+    if (!threadRenameTarget) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      closeThreadRename()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [threadRenameTarget, threadRenameSaving])
+
   useLayoutEffect(() => {
     const handleBack = () => {
       if (settingsOpen) {
         closeSettingsPanel()
+        return true
+      }
+      if (threadRenameTarget) {
+        closeThreadRename()
         return true
       }
       if (workspacePreviewModeRef.current === 'mobile') {
@@ -2581,11 +2685,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, workspaceOpen])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadRenameTarget, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (threadRenameTarget) return
       if (workspacePreviewModeRef.current === 'mobile') {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
@@ -2597,7 +2702,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt])
+  }, [activeRemote.isRunning, activeRemote.interrupt, threadRenameTarget])
 
   useEffect(() => {
     if (availableModels.length === 0) return
@@ -3020,7 +3125,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
+              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
+                const pending = threadLongPress.current
+                if (pending?.threadId === thread.id && pending.triggered) {
+                  event.preventDefault()
+                  clearThreadLongPress()
+                  return
+                }
+                clearThreadLongPress()
+                void selectThread(thread)
+              }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
@@ -3040,8 +3154,27 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
-          <button type="button" role="menuitem" onClick={() => void openConcurrentThread(threadContextMenu.thread)}><MessagesSquare size={14} />并发打开</button>
-          <button type="button" role="menuitem" onClick={() => void selectThread(threadContextMenu.thread)}><Check size={14} />切换到此对话</button>
+          <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>
+          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
+          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void selectThread(thread) }}><Check size={14} />切换到此对话</button>
+        </div>
+      ) : null}
+
+      {threadRenameTarget ? (
+        <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadRename() }}>
+          <form className="thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title" onSubmit={(event) => { void submitThreadRename(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <h2 id="thread-rename-title">重命名对话</h2>
+              <p>名称会同步到连接的设备和后续刷新。</p>
+            </div>
+            <label htmlFor="thread-rename-input">对话名称</label>
+            <input id="thread-rename-input" type="text" value={threadRenameDraft} maxLength={72} autoComplete="off" autoFocus disabled={threadRenameSaving} aria-describedby={threadRenameError ? 'thread-rename-error' : undefined} onChange={(event) => { setThreadRenameDraft(event.target.value); setThreadRenameError(null) }} />
+            {threadRenameError ? <p className="thread-rename-dialog__error" id="thread-rename-error" role="alert">{threadRenameError}</p> : null}
+            <div className="thread-rename-dialog__actions">
+              <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>取消</button>
+              <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />保存中</> : '确定'}</button>
+            </div>
+          </form>
         </div>
       ) : null}
 

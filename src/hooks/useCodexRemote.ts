@@ -1357,6 +1357,36 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [loadThreads, onUnauthorized, scheduleThreadPrefetch, token])
 
+  const applyThreadName = useCallback((threadId: string, name: string | null) => {
+    const updateName = (thread: CodexThread) => thread.id === threadId ? { ...thread, name } : thread
+    setThreads((current) => current.map(updateName))
+    setActiveThread((current) => current ? updateName(current) : current)
+
+    const cached = threadHistoryCache.current.get(threadId)
+    if (cached) {
+      cacheThreadSnapshot(updateName(cached.thread), cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: cached.operationsByTurn,
+      })
+    }
+    if (persistActiveThread) {
+      const persisted = readPersistedActiveThreadCache(threadId)
+      if (persisted) persistActiveThreadCache(updateName(persisted.thread), persisted.messages)
+    }
+  }, [cacheThreadSnapshot, persistActiveThread])
+
+  const renameThread = useCallback(async (threadId: string, name: string) => {
+    try {
+      const result = await codexRemoteClient.renameThread(token, threadId, name)
+      applyThreadName(threadId, result.name)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      throw reason
+    }
+  }, [applyThreadName, onUnauthorized, token])
+
   const refreshModels = useCallback(async () => {
     if (!loadModels || handedOffRef.current) return null
     try {
@@ -1926,6 +1956,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventTurnId = typeof eventTurn?.id === 'string'
       ? eventTurn.id
       : typeof params.turnId === 'string' ? params.turnId : null
+    if (event.method === 'thread/name/updated') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : null
+      if (threadId && (typeof params.threadName === 'string' || params.threadName === null)) {
+        applyThreadName(threadId, params.threadName)
+      }
+      return
+    }
     if (event.method === 'turn/completed') {
       const completedThreadId = eventThreadId ?? activeThreadId.current
       const completedTurnId = eventTurnId ?? activeTurnId.current
@@ -1986,8 +2023,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         } else if (turnId && fileChange) {
           void prefetchThread({ id: eventThreadId }, true)
         }
-      } else if (event.method === 'thread/name/updated') {
-        void refreshThreads()
       }
       return
     }
@@ -2188,8 +2223,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-    if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, applyThreadName, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState])
 
   useEffect(() => {
     if (!enabled) {
@@ -2711,6 +2745,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     completedThreadIds,
     latestThreadCompletion,
     refreshThreads,
+    renameThread,
     refreshModels,
     selectThread,
     createThread,
