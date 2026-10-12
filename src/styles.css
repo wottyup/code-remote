@@ -671,6 +671,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-file-change-summary__file { max-width: 100%; flex: 0 1 auto; }
   .composer-file-change-summary__file > span:first-child { min-width: 0; max-width: min(120px, 34vw); white-space: nowrap; }
   .composer-file-change-summary__file-stats { flex: 0 0 auto; white-space: nowrap; }
+  .workspace-selection-context-menu__note { height: 56px; min-height: 56px; max-height: 56px; overflow-y: auto; font-size: 12px; resize: none; }
 }
 
 @media (max-width: 420px) {

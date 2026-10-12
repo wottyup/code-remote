@@ -3,6 +3,21 @@ export interface WorkspaceTextLineRange {
   endLine: number
 }
 
+export interface WorkspaceSelectionBounds {
+  top: number
+  bottom: number
+}
+
+export interface WorkspaceSelectionMenuPositionInput {
+  anchorX: number
+  anchorY: number
+  viewportWidth: number
+  viewportHeight: number
+  menuWidth: number
+  menuHeight: number
+  selectionBounds?: WorkspaceSelectionBounds | null
+}
+
 export interface WorkspaceSelectionDocument {
   name: string
   content: string
@@ -23,6 +38,30 @@ export function workspaceTextSelectionLineRange(text: string, selectionStart: nu
     : lastCharacterOffset
   const endLine = (text.slice(0, endPrefixOffset).match(/\r\n|\r|\n/g)?.length ?? 0) + 1
   return { startLine, endLine: Math.max(startLine, endLine) }
+}
+
+export function workspaceSelectionMenuPosition({ anchorX, anchorY, viewportWidth, viewportHeight, menuWidth, menuHeight, selectionBounds }: WorkspaceSelectionMenuPositionInput) {
+  const margin = 8
+  const maxX = Math.max(margin, viewportWidth - menuWidth - margin)
+  const maxY = Math.max(margin, viewportHeight - menuHeight - margin)
+  const x = Math.max(margin, Math.min(anchorX, maxX))
+  let y = Math.max(margin, Math.min(anchorY, maxY))
+
+  if (selectionBounds) {
+    const below = selectionBounds.bottom + margin
+    const above = selectionBounds.top - menuHeight - margin
+    if (below >= margin && below <= maxY) y = below
+    else if (above >= margin && above <= maxY) y = above
+    else {
+      const freeBelow = viewportHeight - margin - selectionBounds.bottom - margin
+      const freeAbove = selectionBounds.top - margin * 2
+      y = freeBelow >= freeAbove
+        ? Math.max(margin, Math.min(below, maxY))
+        : Math.max(margin, Math.min(above, maxY))
+    }
+  }
+
+  return { x, y }
 }
 
 function markdownInlineCode(value: string) {

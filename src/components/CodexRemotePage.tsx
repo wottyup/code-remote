@@ -34,7 +34,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
-import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
+import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
 interface Props {
   token: string
@@ -1712,6 +1712,31 @@ function selectedCodeFromPreview(root: HTMLElement) {
   }
 }
 
+function selectedCodeBoundsFromPreview(root: HTMLElement): WorkspaceSelectionBounds | null {
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
+  const range = selection.getRangeAt(0)
+  if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
+  const rectangles = Array.from(range.getClientRects()).filter((rect) => rect.height > 0)
+  if (rectangles.length === 0) return null
+  return {
+    top: Math.min(...rectangles.map((rect) => rect.top)),
+    bottom: Math.max(...rectangles.map((rect) => rect.bottom)),
+  }
+}
+
+function selectedCodeBoundsFromEditor(editor: HTMLTextAreaElement, startLine: number, endLine: number): WorkspaceSelectionBounds {
+  const editorRect = editor.getBoundingClientRect()
+  const editorStyle = window.getComputedStyle(editor)
+  const lineHeight = Number.parseFloat(editorStyle.lineHeight) || 18
+  const paddingTop = Number.parseFloat(editorStyle.paddingTop) || 0
+  const firstLineTop = editorRect.top + paddingTop - editor.scrollTop
+  return {
+    top: firstLineTop + (startLine - 1) * lineHeight,
+    bottom: firstLineTop + endLine * lineHeight,
+  }
+}
+
 function selectedCodeFromEditor(editor: HTMLTextAreaElement) {
   const start = editor.selectionStart
   const end = editor.selectionEnd
@@ -2013,21 +2038,36 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   function openSelectionContextMenu(event: ReactMouseEvent<HTMLPreElement | HTMLTextAreaElement>) {
     if (!previewFile) return
-    const selected = event.currentTarget instanceof HTMLTextAreaElement
-      ? selectedCodeFromEditor(event.currentTarget)
+    const editor = event.currentTarget instanceof HTMLTextAreaElement ? event.currentTarget : null
+    const selected = editor
+      ? selectedCodeFromEditor(editor)
       : selectedCodeFromPreview(event.currentTarget)
     if (!selected) return
 
     event.preventDefault()
     setContextMenu(null)
+    const isMobile = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
     const menuWidth = Math.min(300, window.innerWidth - 16)
-    const menuHeight = 240
+    const menuHeight = isMobile ? 132 : 240
+    const selectionBounds = isMobile
+      ? editor
+        ? selectedCodeBoundsFromEditor(editor, selected.startLine, selected.endLine)
+        : selectedCodeBoundsFromPreview(event.currentTarget)
+      : null
+    const position = workspaceSelectionMenuPosition({
+      anchorX: event.clientX,
+      anchorY: event.clientY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth,
+      menuHeight,
+      selectionBounds,
+    })
     setSelectionContextMenu({
       ...selected,
       path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
       note: '',
-      x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
-      y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
+      ...position,
     })
   }
 
