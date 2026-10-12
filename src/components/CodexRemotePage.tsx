@@ -33,6 +33,7 @@ import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOpe
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 
 interface Props {
   token: string
@@ -2400,13 +2401,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     setSettingsOpen(true)
     setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openSidebarPanel = useCallback(() => {
+    setWorkspaceOpen(false)
+    setSidebarOpen(true)
+  }, [])
+  const openWorkspacePanel = useCallback(() => {
+    setSidebarOpen(false)
+    setWorkspaceOpen(true)
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     if (isSettingsHistoryEntry(window.history.state)) window.history.back()
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
-  const sidebarTouchStart = useRef<{ x: number; y: number; sidebarWasOpen: boolean } | null>(null)
+  const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
@@ -2514,16 +2524,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const touch = event.touches[0]
     if (!touch) return
     const target = event.target
-    const sidebar = remoteShell.current?.querySelector('.remote-sidebar')
-    const startedInsideSidebar = sidebarOpen && target instanceof Node && Boolean(sidebar?.contains(target))
     const targetElement = target instanceof Element ? target : null
     const startedOnBackdrop = sidebarOpen && Boolean(targetElement?.closest('.sidebar-backdrop'))
-    const startedOnControl = Boolean(targetElement?.closest('button, input, textarea, select, [contenteditable="true"], [role="button"]'))
-    const startedInCodeBlock = Boolean(targetElement?.closest('.chat-message__code'))
-    const canOpenFromContent = !sidebarOpen && !startedOnControl && !startedInCodeBlock
-    sidebarTouchStart.current = startedInsideSidebar || startedOnBackdrop || canOpenFromContent
-      ? { x: touch.clientX, y: touch.clientY, sidebarWasOpen: sidebarOpen }
-      : null
+    const startedOnInteractiveSurface = Boolean(targetElement?.closest([
+      'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
+      '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
+      '.chat-message__code', '.workspace-file-preview__code', '.workspace-file-preview-panel',
+      '.workspace-file-preview-backdrop', '.theme-settings-panel', '.thread-context-menu',
+      '.thread-rename-backdrop', '.message-composer',
+    ].join(', ')))
+    sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop
+      ? null
+      : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
   }
 
   function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
@@ -2531,11 +2543,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     sidebarTouchStart.current = null
     const touch = event.changedTouches[0]
     if (!start || !touch) return
-    const deltaX = touch.clientX - start.x
-    const deltaY = touch.clientY - start.y
-    if (Math.abs(deltaX) < 64 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return
-    if (!start.sidebarWasOpen && deltaX > 0) setSidebarOpen(true)
-    else if (start.sidebarWasOpen && deltaX < 0) setSidebarOpen(false)
+    const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
+    if (action === 'open-sidebar') openSidebarPanel()
+    else if (action === 'close-sidebar') setSidebarOpen(false)
+    else if (action === 'open-workspace') openWorkspacePanel()
+    else if (action === 'close-workspace') setWorkspaceOpen(false)
   }
 
   const activeThreadId = activeRemote.activeThread?.id
@@ -3170,8 +3182,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
-                    onOpenSidebar={() => setSidebarOpen(true)}
-                    onOpenWorkspace={() => setWorkspaceOpen(true)}
+                    onOpenSidebar={openSidebarPanel}
+                    onOpenWorkspace={openWorkspacePanel}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
