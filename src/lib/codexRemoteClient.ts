@@ -84,6 +84,8 @@ export interface CodexWorkspaceFile {
   path: string
   content: string
   size: number
+  revision: string
+  hasBom?: boolean
 }
 
 export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
@@ -352,6 +354,12 @@ export const codexRemoteClient = {
     const query = new URLSearchParams({ path })
     if (cwd) query.set('cwd', cwd)
     return request<CodexWorkspaceFile>(token, `/api/v1/codex/workspace/file?${query.toString()}`)
+  },
+  saveWorkspaceFile(token: string, cwd: string | undefined, path: string, content: string, revision: string) {
+    return request<CodexWorkspaceFile>(token, '/api/v1/codex/workspace/file', {
+      method: 'POST',
+      body: JSON.stringify({ cwd, path, content, revision }),
+    })
   },
   threads(token: string) {
     return request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>

@@ -11,6 +11,7 @@ import os
 import re
 import secrets
 import shutil
+import stat
 import tempfile
 import time
 import unicodedata
@@ -345,6 +346,15 @@ WORKSPACE_TREE_MAX_ENTRIES = 400
 WORKSPACE_TREE_MAX_PATH_LENGTH = 1_024
 WORKSPACE_FILE_PREVIEW_MAX_BYTES = 1 * 1_024 * 1_024
 WORKSPACE_FILE_PREVIEW_MAX_LINES = 20_000
+
+
+class WorkspaceFileSaveRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+    content: str = Field(max_length=WORKSPACE_FILE_PREVIEW_MAX_BYTES)
+    revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 def workspace_base_for_cwd(workspace: Path, raw_cwd: str | None) -> Path:
     """Resolve a browser-selected or thread working directory on the server host."""
     try:
@@ -421,7 +431,14 @@ def workspace_directory_tree(base: Path, relative_path: str = "", offset: int = 
     }
 
 
-def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | int]:
+def workspace_text_line_count(content: str) -> int:
+    line_count = content.count("\n") + content.count("\r") - content.count("\r\n")
+    if content and not content.endswith(("\n", "\r")):
+        line_count += 1
+    return line_count
+
+
+def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | int | bool]:
     if not relative_path or len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件路径无效或过长")
     normalized_parts = relative_path.replace("\\", "/").split("/")
@@ -454,12 +471,66 @@ def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | in
         content = content_bytes.decode("utf-8-sig")
     except UnicodeDecodeError as error:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 UTF-8 文本文件预览") from error
-    line_count = content.count("\n") + content.count("\r") - content.count("\r\n")
-    if content and not content.endswith(("\n", "\r")):
-        line_count += 1
-    if line_count > WORKSPACE_FILE_PREVIEW_MAX_LINES:
+    if workspace_text_line_count(content) > WORKSPACE_FILE_PREVIEW_MAX_LINES:
         raise HTTPException(status_code=413, detail="文件行数过多，暂不支持预览")
-    return {"path": resolved_relative.as_posix(), "content": content, "size": len(content_bytes)}
+    return {
+        "path": resolved_relative.as_posix(),
+        "content": content,
+        "size": len(content_bytes),
+        "revision": hashlib.sha256(content_bytes).hexdigest(),
+        "hasBom": content_bytes.startswith(b"\xef\xbb\xbf"),
+    }
+
+
+def workspace_file_save(base: Path, relative_path: str, content: str, expected_revision: str) -> dict[str, str | int | bool]:
+    current = workspace_file_preview(base, relative_path)
+    current_revision = current["revision"]
+    if not isinstance(current_revision, str) or not hmac.compare_digest(current_revision, expected_revision):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="文件已被其他操作修改，请重新读取后再保存")
+
+    normalized_content = content.replace("\r\n", "\n").replace("\r", "\n")
+    if "\x00" in normalized_content:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文本内容不能包含二进制空字符")
+    if workspace_text_line_count(normalized_content) > WORKSPACE_FILE_PREVIEW_MAX_LINES:
+        raise HTTPException(status_code=413, detail="文件行数过多，最多支持 20,000 行")
+
+    current_content = current["content"]
+    line_ending = "\r\n" if isinstance(current_content, str) and "\r\n" in current_content else "\n"
+    content_for_disk = normalized_content.replace("\n", line_ending) if line_ending != "\n" else normalized_content
+    try:
+        content_bytes = content_for_disk.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="文件内容不是有效的 UTF-8 文本") from error
+    if current.get("hasBom"):
+        content_bytes = b"\xef\xbb\xbf" + content_bytes
+    if len(content_bytes) > WORKSPACE_FILE_PREVIEW_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="文件超过 1 MiB，暂不支持保存")
+
+    candidate = workspace_path(base, relative_path)
+    temporary_path: Path | None = None
+    try:
+        original_mode = stat.S_IMODE(candidate.stat().st_mode)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=".codex-remote-",
+            suffix=".tmp",
+            dir=candidate.parent,
+            delete=False,
+        ) as temporary_file:
+            temporary_path = Path(temporary_file.name)
+            temporary_file.write(content_bytes)
+            temporary_file.flush()
+            os.fsync(temporary_file.fileno())
+        os.chmod(temporary_path, original_mode)
+        os.replace(temporary_path, candidate)
+        temporary_path = None
+    except OSError as error:
+        if temporary_path is not None:
+            with suppress(OSError):
+                temporary_path.unlink()
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法保存该文件，请检查工作区写入权限") from error
+
+    return workspace_file_preview(base, relative_path)
 
 
 def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
@@ -780,9 +851,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return workspace_directory_tree(base, path, offset)
 
     @app.get("/api/v1/codex/workspace/file")
-    async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
+    async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int | bool]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_file_preview(base, path)
+
+    @app.post("/api/v1/codex/workspace/file")
+    async def save_workspace_file(request: WorkspaceFileSaveRequest) -> dict[str, str | int | bool]:
+        base = workspace_base_for_cwd(app_server.workspace, request.cwd)
+        return workspace_file_save(base, request.path, request.content, request.revision)
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:

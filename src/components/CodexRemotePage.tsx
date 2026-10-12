@@ -1669,26 +1669,33 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
-  const [mobilePanelHeight, setMobilePanelHeight] = useState(280)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
   const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
+  const [previewEditContent, setPreviewEditContent] = useState<string | null>(null)
+  const [previewSaving, setPreviewSaving] = useState(false)
   const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [previewCopied, setPreviewCopied] = useState(false)
   const previewCloseButton = useRef<HTMLButtonElement>(null)
+  const previewEditor = useRef<HTMLTextAreaElement>(null)
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
   const handledPreviewRequest = useRef(0)
+  const previousScopeKey = useRef<string | null>(null)
+  const pendingPreviewScopeReset = useRef(false)
   const browsingRoot = manualRoot || cwd
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
+  const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
 
   const directoryKey = (path: string) => path || '.'
   const closePreview = useCallback(() => {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
@@ -1697,8 +1704,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewLoading(false)
     setPreviewError(null)
     setPreviewCopied(false)
+    setPreviewEditContent(null)
     onPreviewStateChange(false)
-  }, [onPreviewStateChange])
+  }, [onPreviewStateChange, previewDirty, previewSaving])
 
   const loadDirectory = useCallback(async (path: string, offset = 0) => {
     if (!browsingRoot) return
@@ -1726,6 +1734,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }, [browsingRoot, token])
 
   const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string) => {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
+    pendingPreviewScopeReset.current = false
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
     onPreviewStateChange(true, closePreview)
@@ -1734,6 +1745,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewDiff(diff ?? null)
     setMobilePreviewDialog(mobileDialog)
     setPreviewFile(null)
+    setPreviewEditContent(null)
     setPreviewError(null)
     setPreviewCopied(false)
     setPreviewLoading(true)
@@ -1747,7 +1759,66 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
-  }, [closePreview, onPreviewStateChange, token])
+  }, [closePreview, onPreviewStateChange, previewDirty, previewSaving, token])
+
+  async function savePreviewEdits() {
+    if (!previewFile || previewEditContent === null || !previewDirty || previewSaving) return
+    const fileBeingSaved = previewFile
+    const contentBeingSaved = previewEditContent
+    setPreviewSaving(true)
+    setPreviewError(null)
+    try {
+      const savedFile = await codexRemoteClient.saveWorkspaceFile(
+        token,
+        previewCwd,
+        fileBeingSaved.path,
+        contentBeingSaved,
+        fileBeingSaved.revision,
+      )
+      setPreviewFile(savedFile)
+      setPreviewEditContent(null)
+      setPreviewDiff(null)
+      const fileDirectory = savedFile.path.split(/[\\/]/).slice(0, -1).join('/')
+      if ((previewCwd ?? '') === (browsingRoot ?? '')) void loadDirectory(fileDirectory)
+    } catch (reason) {
+      setPreviewError(reason instanceof Error ? reason.message : '保存失败，文件内容仍保留在编辑器中。')
+    } finally {
+      setPreviewSaving(false)
+    }
+  }
+
+  function beginPreviewEditing() {
+    if (!previewFile || previewLoading || previewSaving) return
+    setPreviewEditContent(previewFile.content)
+    setPreviewError(null)
+    window.requestAnimationFrame(() => previewEditor.current?.focus())
+  }
+
+  function cancelPreviewEditing() {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm('确定放弃当前未保存的修改吗？')) return
+    setPreviewEditContent(null)
+    setPreviewError(null)
+  }
+
+  function handlePreviewEditorKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault()
+      void savePreviewEdits()
+      return
+    }
+    if (event.key !== 'Tab' || previewEditContent === null) return
+    event.preventDefault()
+    const editor = event.currentTarget
+    const start = editor.selectionStart
+    const end = editor.selectionEnd
+    const nextContent = `${previewEditContent.slice(0, start)}  ${previewEditContent.slice(end)}`
+    setPreviewEditContent(nextContent)
+    window.requestAnimationFrame(() => {
+      editor.selectionStart = start + 2
+      editor.selectionEnd = start + 2
+    })
+  }
 
   function bindRoot(path = rootInput) {
     const nextRoot = path.trim()
@@ -1779,25 +1850,34 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }
 
   useEffect(() => {
-    requestGeneration.current += 1
-    previewRequestGeneration.current += 1
-    setDirectories({})
-    setExpanded({})
-    setLoadingPaths({})
-    setSelectedPaths([])
-    setContextMenu(null)
-    setError(null)
+    const scopeChanged = previousScopeKey.current !== scopeKey
+    if (scopeChanged) {
+      previousScopeKey.current = scopeKey
+      requestGeneration.current += 1
+      previewRequestGeneration.current += 1
+      setDirectories({})
+      setExpanded({})
+      setLoadingPaths({})
+      setSelectedPaths([])
+      setContextMenu(null)
+      setError(null)
+      if (browsingRoot) void loadDirectory('')
+      if (previewDirty) pendingPreviewScopeReset.current = true
+    }
+    if (!scopeChanged && !(pendingPreviewScopeReset.current && !previewDirty)) return
+    if (previewDirty) return
     setPreviewPath(null)
     setPreviewCwd(undefined)
     setPreviewDiff(null)
     setMobilePreviewDialog(false)
     setPreviewFile(null)
+    setPreviewEditContent(null)
     setPreviewLoading(false)
     setPreviewError(null)
     setPreviewCopied(false)
+    pendingPreviewScopeReset.current = false
     onPreviewStateChange(false)
-    if (browsingRoot) void loadDirectory('')
-  }, [browsingRoot, cwd, loadDirectory, onPreviewStateChange, scopeKey])
+  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, scopeKey])
 
   useEffect(() => {
     if (!manualRoot) setRootInput(cwd ?? '')
@@ -1823,28 +1903,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       document.removeEventListener('keydown', closeOnEscape)
     }
   }, [contextMenu])
-
-  useLayoutEffect(() => {
-    if (!mobileOpen || typeof window === 'undefined') return
-    const composer = document.querySelector<HTMLElement>('.message-composer')
-    const updatePanelHeight = () => {
-      const rect = composer?.getBoundingClientRect()
-      const composerTop = rect?.top ?? Math.max(56, window.innerHeight - 128)
-      const availableHeight = Math.max(0, composerTop - 56 - 8)
-      setMobilePanelHeight(Math.round(availableHeight * 0.75))
-    }
-    updatePanelHeight()
-    window.addEventListener('resize', updatePanelHeight)
-    let observer: ResizeObserver | null = null
-    if (composer && typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(updatePanelHeight)
-      observer.observe(composer)
-    }
-    return () => {
-      window.removeEventListener('resize', updatePanelHeight)
-      observer?.disconnect()
-    }
-  }, [mobileOpen])
 
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
@@ -1880,7 +1938,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   async function copyPreview() {
     if (!previewFile) return
-    setPreviewCopied(await copyText(previewFile.content))
+    setPreviewCopied(await copyText(previewEditContent ?? previewFile.content))
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
@@ -1989,7 +2047,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }, [mobilePreviewDialog, previewPath])
   return (
     <>
-      <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} style={{ '--workspace-mobile-height': `${mobilePanelHeight}px` } as CSSProperties} aria-label="工作区文件资源管理器">
+      <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} aria-label="工作区文件资源管理器">
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
@@ -2035,9 +2093,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
           aria-label="工作区文件预览"
           onKeyDown={(event) => {
             if (!mobilePreviewDialog || event.key !== 'Tab') return
-            const buttons = event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')
-            const first = buttons.item(0)
-            const last = buttons.item(buttons.length - 1)
+            const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')
+            const first = controls.item(0)
+            const last = controls.item(controls.length - 1)
             if (event.shiftKey && document.activeElement === first) {
               event.preventDefault()
               last?.focus()
@@ -2049,7 +2107,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         >
           <header className="workspace-explorer__header workspace-file-preview-panel__header">
             <div>
-              <span className="workspace-explorer__eyebrow">只读预览</span>
+              <span className="workspace-explorer__eyebrow">{previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
               <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
             </div>
             <button ref={previewCloseButton} className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
@@ -2058,13 +2116,35 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
             <div className="workspace-file-preview__toolbar">
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
+                {previewEditContent === null ? (
+                  <button className="workspace-file-preview__copy" type="button" onClick={beginPreviewEditing} disabled={!previewFile || previewLoading || previewSaving} title="编辑并保存文件"><Pencil size={13} />编辑</button>
+                ) : (
+                  <>
+                    <button className="workspace-file-preview__copy" type="button" onClick={() => void savePreviewEdits()} disabled={!previewDirty || previewSaving} title="保存到本机工作区">{previewSaving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}保存</button>
+                    <button className="workspace-file-preview__copy" type="button" onClick={cancelPreviewEditing} disabled={previewSaving} title="取消编辑">取消</button>
+                  </>
+                )}
                 <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button>
-                <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined)} disabled={previewLoading} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button>
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined)} disabled={previewLoading || previewSaving} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
               </div>
             </div>
             {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件内容…</div> : null}
             {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
-            {previewFile || previewDiffLines ? (
+            {previewEditContent !== null && previewFile ? (
+              <textarea
+                ref={previewEditor}
+                className="workspace-file-preview__editor"
+                aria-label={`编辑文件 ${previewFile.path}`}
+                value={previewEditContent}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                wrap="off"
+                disabled={previewSaving}
+                onChange={(event) => setPreviewEditContent(event.currentTarget.value)}
+                onKeyDown={handlePreviewEditorKeyDown}
+              />
+            ) : previewFile || previewDiffLines ? (
               <pre className="workspace-file-preview__code"><code>{previewDiffLines
                 ? previewDiffLines.map((diffLine, index) => {
                   const content = diffLine.kind === 'added' || diffLine.kind === 'deleted'
@@ -2089,7 +2169,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                 ))}</code></pre>
             ) : null}
           </section>
-          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">只读预览 · {previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行` : 'UTF-8 文本'}</footer>
+          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</footer>
         </aside>
         </>
       ) : null}
