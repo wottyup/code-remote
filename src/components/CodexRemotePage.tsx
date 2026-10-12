@@ -1671,6 +1671,11 @@ interface WorkspaceSelectionContextMenu {
   endLine: number
   content: string
   note: string
+  anchorX: number
+  anchorY: number
+  mobile: boolean
+  selectionBounds: WorkspaceSelectionBounds | null
+  maxHeight: number
   x: number
   y: number
 }
@@ -1767,6 +1772,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
+  const selectionContextMenuElement = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
@@ -2015,6 +2021,30 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }, [contextMenu, selectionContextMenu])
 
+  useLayoutEffect(() => {
+    const current = selectionContextMenu
+    const menu = selectionContextMenuElement.current
+    if (!current?.mobile || !menu) return
+    const menuBounds = menu.getBoundingClientRect()
+    if (menuBounds.width <= 0 || menuBounds.height <= 0) return
+    const position = workspaceSelectionMenuPosition({
+      anchorX: current.anchorX,
+      anchorY: current.anchorY,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      menuWidth: menuBounds.width,
+      menuHeight: menuBounds.height,
+      selectionBounds: current.selectionBounds,
+    })
+    if (Math.abs(current.x - position.x) < 1
+      && Math.abs(current.y - position.y) < 1
+      && Math.abs(current.maxHeight - position.maxHeight) < 1) return
+    setSelectionContextMenu((latest) => {
+      if (!latest || latest.anchorX !== current.anchorX || latest.anchorY !== current.anchorY) return latest
+      return { ...latest, ...position }
+    })
+  }, [selectionContextMenu])
+
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
     setExpanded((current) => ({ ...current, [path]: nextExpanded }))
@@ -2067,6 +2097,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       ...selected,
       path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
       note: '',
+      anchorX: event.clientX,
+      anchorY: event.clientY,
+      mobile: isMobile,
+      selectionBounds,
       ...position,
     })
   }
@@ -2336,7 +2370,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         document.body,
       ) : null}
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu" style={{ left: selectionContextMenu.x, top: selectionContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div
+          ref={selectionContextMenuElement}
+          className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu"
+          style={{ left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
+          role="menu"
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
           <textarea
             className="workspace-selection-context-menu__note"

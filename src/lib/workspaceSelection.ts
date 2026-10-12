@@ -43,25 +43,22 @@ export function workspaceTextSelectionLineRange(text: string, selectionStart: nu
 export function workspaceSelectionMenuPosition({ anchorX, anchorY, viewportWidth, viewportHeight, menuWidth, menuHeight, selectionBounds }: WorkspaceSelectionMenuPositionInput) {
   const margin = 8
   const maxX = Math.max(margin, viewportWidth - menuWidth - margin)
-  const maxY = Math.max(margin, viewportHeight - menuHeight - margin)
   const x = Math.max(margin, Math.min(anchorX, maxX))
-  let y = Math.max(margin, Math.min(anchorY, maxY))
+  let maxHeight = Math.min(menuHeight, Math.max(0, viewportHeight - margin * 2))
+  let y = Math.max(margin, Math.min(anchorY, viewportHeight - maxHeight - margin))
 
   if (selectionBounds) {
-    const below = selectionBounds.bottom + margin
-    const above = selectionBounds.top - menuHeight - margin
-    if (below >= margin && below <= maxY) y = below
-    else if (above >= margin && above <= maxY) y = above
-    else {
-      const freeBelow = viewportHeight - margin - selectionBounds.bottom - margin
-      const freeAbove = selectionBounds.top - margin * 2
-      y = freeBelow >= freeAbove
-        ? Math.max(margin, Math.min(below, maxY))
-        : Math.max(margin, Math.min(above, maxY))
-    }
+    const freeAbove = Math.max(0, selectionBounds.top - margin * 2)
+    const freeBelow = Math.max(0, viewportHeight - selectionBounds.bottom - margin * 2)
+    const placeBelow = menuHeight <= freeBelow || (menuHeight > freeAbove && freeBelow >= freeAbove)
+    maxHeight = Math.min(menuHeight, placeBelow ? freeBelow : freeAbove)
+    const desiredY = placeBelow
+      ? selectionBounds.bottom + margin
+      : selectionBounds.top - maxHeight - margin
+    y = Math.max(margin, Math.min(desiredY, viewportHeight - maxHeight - margin))
   }
 
-  return { x, y }
+  return { x, y, maxHeight }
 }
 
 function markdownInlineCode(value: string) {
