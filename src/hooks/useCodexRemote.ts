@@ -1368,7 +1368,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [loadModels, onUnauthorized, token])
 
-  const loadThread = useCallback(async (threadId: string, revision = historyRevision.current, silent = false) => {
+  const loadThread = useCallback(async (
+    threadId: string,
+    revision = historyRevision.current,
+    silent = false,
+    preserveRunningTurnId: string | null = null,
+  ) => {
     if (handedOffRef.current) return false
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
@@ -1388,7 +1393,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         thread.id === activeThreadId.current ? operationsByTurnRef.current : currentOperations,
       )
       if (persistActiveThread) persistActiveThreadCache(thread, messagesWithLocalTiming)
-      const { running, turnId: latestTurnId } = latestTurnState(thread)
+      const historyTurnState = latestTurnState(thread)
+      const preserveStartedTurn = preserveRunningTurnId !== null && activeTurnId.current === preserveRunningTurnId
+      const running = historyTurnState.running || preserveStartedTurn
+      const latestTurnId = preserveStartedTurn ? preserveRunningTurnId : historyTurnState.turnId
       // A history read can finish while a reply is streaming (for example
       // after reconnecting). Give that partial server message the same stable
       // bubble as the socket stream instead of rendering both versions.
@@ -1462,6 +1470,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return false
     }
   }, [cacheThreadSnapshot, onUnauthorized, persistActiveThread, resetStreamingAssistant, setActiveTurnId, token])
+
+  const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string) => {
+    if (!threadId || threadId !== activeThreadId.current) return
+    if ([...pendingTurnDeliveries.current.values()].some((delivery) => delivery.threadId === threadId)) return
+    const cachedMessages = threadHistoryCache.current.get(threadId)?.messages ?? []
+    if (messageItemId && (messagesRef.current.some((message) => message.id === messageItemId)
+      || cachedMessages.some((message) => message.id === messageItemId))) return
+    if (!messageItemId && turnId && messagesRef.current.some((message) => message.role === 'user' && message.turnId === turnId)) return
+    const revision = ++historyRevision.current
+    void loadThread(threadId, revision, true, turnId)
+  }, [loadThread])
 
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
@@ -2001,6 +2020,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       beginTurnTimer(startedAt)
       setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
       activityItemId.current = null
+      if (turnThreadId) refreshThreadForRemoteMessage(turnThreadId, turnId)
       return
     }
     if (event.method === 'turn/completed') {
@@ -2073,6 +2093,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const item = params.item as Record<string, unknown> | undefined
       const fileChange = fileChangeForItem(item)
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'usermessage' && activeThreadId.current) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, typeof item?.id === 'string' ? item.id : undefined)
+      }
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem(item, 'running')
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
@@ -2149,7 +2173,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
 
   useEffect(() => {
     if (!enabled) {
