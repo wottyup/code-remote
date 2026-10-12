@@ -246,6 +246,7 @@ class CodexAppServer:
         self._start_lock = asyncio.Lock()
         self._handoff_lock = asyncio.Lock()
         self._write_lock = asyncio.Lock()
+        self._runtime_history_lock = asyncio.Lock()
         self._request_id = 1
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
@@ -533,6 +534,10 @@ class CodexAppServer:
 
     async def resume_thread(self, thread_id: str) -> dict[str, Any]:
         await self._prepare_runtime_thread(thread_id)
+        if self._runtime_home != self._history_home and not self._database_has_thread(
+            self._runtime_home / "thread_history_1.sqlite", thread_id,
+        ):
+            raise CodexRuntimeError("本机 Codex 历史数据库没有该对话，无法在隔离运行时中恢复。")
         result = await self.request("thread/resume", {"threadId": thread_id})
         thread = result.get("thread")
         if not isinstance(thread, dict):
@@ -910,13 +915,14 @@ class CodexAppServer:
         """Make a local Codex thread visible when a separate runtime home is configured."""
         if self._runtime_home == self._history_home:
             return
-        self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
-        runtime_database = self._runtime_home / "thread_history_1.sqlite"
-        if not self._database_has_thread(runtime_database, thread_id):
-            if self.connected:
-                await self._stop_process()
-            self._seed_runtime_database(force=True)
-        self._copy_thread_rollout(thread_id)
+        async with self._runtime_history_lock:
+            self._runtime_home.mkdir(mode=0o700, parents=True, exist_ok=True)
+            runtime_database = self._runtime_home / "thread_history_1.sqlite"
+            if not self._database_has_thread(runtime_database, thread_id):
+                if self.connected:
+                    await self._stop_process()
+                self._seed_runtime_database(force=True)
+            await self._copy_thread_rollout(thread_id)
 
     def _seed_runtime_database(self, force: bool = False) -> None:
         source = self._history_home / "thread_history_1.sqlite"
@@ -973,7 +979,7 @@ class CodexAppServer:
         except sqlite3.Error:
             return False
 
-    def _copy_thread_rollout(self, thread_id: str) -> None:
+    async def _copy_thread_rollout(self, thread_id: str) -> None:
         source = self._find_thread_rollout(self._history_home, thread_id)
         if source is None or not source.is_file():
             return
@@ -985,10 +991,19 @@ class CodexAppServer:
         if target.is_file() and target.stat().st_size == source.stat().st_size:
             return
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = target.with_suffix(f"{target.suffix}.tmp")
+        temporary = target.parent / f".{target.name}.{uuid.uuid4().hex}.tmp"
         try:
             shutil.copy2(source, temporary)
-            os.replace(temporary, target)
+            try:
+                os.replace(temporary, target)
+            except PermissionError:
+                # Windows Codex app-server may keep an older rollout open.
+                # Close our runtime before replacing that handle's target.
+                if self.has_active_turns:
+                    raise
+                if self.connected:
+                    await self._stop_process()
+                os.replace(temporary, target)
         except OSError as error:
             try:
                 temporary.unlink()

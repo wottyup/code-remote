@@ -151,6 +151,40 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             staged_path = runtime_home / "sessions" / "2026" / "10" / "01" / session_path.name
             self.assertEqual("session", staged_path.read_text(encoding="utf-8"))
 
+    async def test_runtime_rollout_copy_uses_unique_temp_and_replaces_with_stopped_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            relative = Path("sessions") / "2026" / "10" / "01" / "rollout-thread-id.jsonl"
+            source = history_home / relative
+            target = runtime_home / relative
+            source.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            source.write_text("updated", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            app_server = CodexAppServer("codex", Path.cwd())
+            app_server._history_home = history_home
+            app_server._runtime_home = runtime_home
+            app_server._initialized = True
+            app_server._process = Mock(returncode=None)
+            app_server._stop_process = AsyncMock()  # type: ignore[method-assign]
+            replace = os.replace
+            replace_calls = 0
+
+            def fail_once_for_open_target(source_path: Path, target_path: Path) -> None:
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 1:
+                    self.assertNotEqual(Path(f"{target}.tmp"), source_path)
+                    raise PermissionError("target is open")
+                replace(source_path, target_path)
+
+            with patch("codex_remote.codex_app_server.os.replace", side_effect=fail_once_for_open_target):
+                await app_server._copy_thread_rollout("thread-id")
+
+            self.assertEqual("updated", target.read_text(encoding="utf-8"))
+            app_server._stop_process.assert_awaited_once()
+
     async def test_app_server_uses_isolated_runtime_home_and_original_history_home(self) -> None:
         with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
             history_home = Path(history_directory)
