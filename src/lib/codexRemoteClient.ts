@@ -115,6 +115,7 @@ export class RemoteApiError extends Error {
 }
 
 const networkRetryDelaysMs = [300, 900, 1_800]
+const webSocketConnectionTimeoutMs = 60_000
 
 export function isAmbiguousNetworkFailure(reason: unknown) {
   if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
@@ -472,6 +473,14 @@ export const codexRemoteClient = {
     url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(url)
     onState('connecting')
+    let receivedConnection = false
+    const connectionTimeout = window.setTimeout(() => {
+      if (receivedConnection || socket.readyState === 3) return
+      socket.close()
+      onEvent({ type: 'connection', connected: false, available: false, error: 'Codex 引擎连接超时，请检查本机 Codex app-server 是否已就绪。' })
+      onState('unavailable')
+    }, webSocketConnectionTimeoutMs)
+    const clearConnectionTimeout = () => window.clearTimeout(connectionTimeout)
     socket.addEventListener('open', () => {
       socket.send(JSON.stringify({ type: 'codex.client.hello', protocol_version: 1, token }))
     })
@@ -480,15 +489,24 @@ export const codexRemoteClient = {
         const event = JSON.parse(String(message.data)) as RemoteEvent
         if (!event.type) return
         if (event.type === 'connection') {
+          receivedConnection = true
+          clearConnectionTimeout()
           onState(event.connected ? 'connected' : event.available ? 'disconnected' : 'unavailable')
         }
         onEvent(event)
       } catch {
+        clearConnectionTimeout()
         onState('unavailable')
       }
     })
-    socket.addEventListener('error', () => onState('unavailable'))
-    socket.addEventListener('close', () => onState('disconnected'))
+    socket.addEventListener('error', () => {
+      clearConnectionTimeout()
+      onState('unavailable')
+    })
+    socket.addEventListener('close', () => {
+      clearConnectionTimeout()
+      onState('disconnected')
+    })
     return {
       respondToApproval(requestId: string | number, decision: 'accept' | 'decline' | 'cancel') {
         if (socket.readyState !== WebSocket.OPEN) return false

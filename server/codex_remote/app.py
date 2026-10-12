@@ -1038,8 +1038,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         await websocket.accept()
         try:
             hello = await asyncio.wait_for(websocket.receive_json(), timeout=8)
-        except (TimeoutError, ValueError, WebSocketDisconnect):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="client hello required")
+        except WebSocketDisconnect:
+            return
+        except (TimeoutError, ValueError):
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="client hello required")
             return
         if (
             not isinstance(hello, dict)
@@ -1047,7 +1050,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             or hello.get("protocol_version") != 1
             or not auth.accepts(hello.get("token"))
         ):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
             return
 
         queue = await app_server.subscribe()
@@ -1056,7 +1060,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             runtime_status = app_server.status()
             runtime_status["error"] = str(error)
-        await websocket.send_json({"type": "connection", **runtime_status})
+        try:
+            await websocket.send_json({"type": "connection", **runtime_status})
+        except WebSocketDisconnect:
+            app_server.unsubscribe(queue)
+            return
 
         async def send_events() -> None:
             while True:
@@ -1067,7 +1075,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             while True:
                 payload = await websocket.receive_json()
                 if not isinstance(payload, dict) or payload.get("type") != "approval.response":
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
+                    with suppress(WebSocketDisconnect):
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
                     return
                 request_id = payload.get("request_id")
                 decision = payload.get("decision")
