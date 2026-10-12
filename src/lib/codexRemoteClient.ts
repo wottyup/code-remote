@@ -31,6 +31,9 @@ export interface CodexMessage {
   role: 'user' | 'assistant'
   text: string
   createdAt: string
+  sentAt?: string
+  replyStartedAt?: string
+  replyDurationMs?: number
   turnId?: string
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
@@ -189,13 +192,18 @@ function imagesFromContent(value: unknown): CodexMessageImage[] {
   })
 }
 
-function timestamp(value: unknown) {
+function parsedTimestamp(value: unknown): string | null {
   if (typeof value === 'number') {
     const normalized = value > 10_000_000_000 ? value : value * 1000
-    return new Date(normalized).toISOString()
+    const date = new Date(normalized)
+    return Number.isNaN(date.getTime()) ? null : date.toISOString()
   }
   if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString()
-  return new Date().toISOString()
+  return null
+}
+
+function timestamp(value: unknown) {
+  return parsedTimestamp(value) ?? new Date().toISOString()
 }
 
 export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
@@ -206,6 +214,11 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
     const turnId = typeof turn.id === 'string' ? turn.id : undefined
+    const turnStartedAt = parsedTimestamp(turn.startedAt)
+    const turnCompletedAt = parsedTimestamp(turn.completedAt)
+    const replyDurationMs = turnStartedAt && turnCompletedAt
+      ? Math.max(0, Date.parse(turnCompletedAt) - Date.parse(turnStartedAt))
+      : undefined
     let assistantMessage: CodexMessage | null = null
     for (const itemValue of turn.items) {
       if (!itemValue || typeof itemValue !== 'object') continue
@@ -215,6 +228,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const text = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
       const images = itemType === 'usermessage' ? imagesFromContent(item.content) : []
       if (!text && images.length === 0) continue
+      const itemCreatedAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at)
+      const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
 
       if (itemType === 'agentmessage' && assistantMessage) {
         assistantMessage.text = assistantMessage.text
@@ -227,7 +242,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: itemType === 'usermessage' ? 'user' : 'assistant',
         text,
-        createdAt: timestamp(turn.startedAt),
+        createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt),
+        ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
+        ...(replyStartedAt ? { replyStartedAt } : {}),
+        ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
       })

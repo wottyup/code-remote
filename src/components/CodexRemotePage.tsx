@@ -59,6 +59,14 @@ const connectionLabel = {
 
 const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
+const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+})
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
@@ -68,6 +76,22 @@ const maxImagesPerTurn = 4
 const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
+
+function formatMessageTimestamp(value: string | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : messageTimestampFormatter.format(date)
+}
+
+function formatTurnDuration(durationMs: number) {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`
+  if (minutes > 0) return `${minutes}分${seconds}秒`
+  return `${seconds}秒`
+}
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
@@ -2098,7 +2122,10 @@ function RemoteChatPane({
           ) : null}
           {remote.isRunning && !hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
-              <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+              <div className="running-indicator__row">
+                <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+                {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
+              </div>
             </div>
           ) : null}
         </div>
@@ -3344,11 +3371,36 @@ const OperationActivityLine = memo(function OperationActivityLine({ className, o
   )
 })
 
+const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [startedAt])
+
+  return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
+})
+
 const MessageBubble = memo(function MessageBubble({ message, activity, operations, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
   const currentOperation = [...operations].reverse().find((operation) => operation.status === 'running') ?? null
+  const [clockNow, setClockNow] = useState(() => Date.now())
+  const replyStartedAt = message.replyStartedAt ? Date.parse(message.replyStartedAt) : Number.NaN
+  const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
+  const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
+  const elapsedDurationMs = message.replyDurationMs
+    ?? (message.streaming && !Number.isNaN(replyStartedAt) ? Math.max(0, clockNow - replyStartedAt) : undefined)
+
+  useEffect(() => {
+    if (!message.streaming || Number.isNaN(replyStartedAt)) return
+    setClockNow(Date.now())
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [message.streaming, replyStartedAt])
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
@@ -3356,6 +3408,8 @@ const MessageBubble = memo(function MessageBubble({ message, activity, operation
       <div className={`chat-message__body${message.role === 'user' && showCopyAction ? ' chat-message__body--copy-outside' : ''}`}>
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
+          {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
+          {elapsedDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">{message.streaming ? '已用' : '用时'} {formatTurnDuration(elapsedDurationMs)}</time> : null}
           {message.streaming ? (
             <OperationActivityLine className="chat-message__activity" operation={currentOperation} activity={activity} iconSize={12} />
           ) : null}
@@ -3363,6 +3417,7 @@ const MessageBubble = memo(function MessageBubble({ message, activity, operation
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+        {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
         {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
       </div>
