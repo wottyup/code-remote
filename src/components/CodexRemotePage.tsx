@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Menu,
   MessagesSquare,
+  Paperclip,
   Pencil,
   Plus,
   RefreshCw,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { documentAttachmentAccept, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 
 interface Props {
   token: string
@@ -73,7 +75,6 @@ const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageDataUrlLength = 1_450_000
 const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
-const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
 
@@ -92,6 +93,12 @@ function formatTurnDuration(durationMs: number) {
   if (minutes > 0) return `${minutes}分${seconds}秒`
   return `${seconds}秒`
 }
+function truncateAttachmentText(value: string, limit: number, marker: string) {
+  if (value.length <= limit) return value
+  if (limit <= marker.length) return value.slice(0, limit)
+  return `${value.slice(0, limit - marker.length)}${marker}`
+}
+
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
@@ -803,6 +810,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [sending, setSending] = useState(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
+  const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
@@ -819,6 +827,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const attachedDocumentsRef = useRef(attachedDocuments)
+  attachedDocumentsRef.current = attachedDocuments
   const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
@@ -1055,8 +1065,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const canCompose = !sending && !writerConflict && connection === 'connected'
   const canConfigure = canCompose && !isRunning
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
+    && !readingDocuments
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
+  const canAttachDocuments = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments
   const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
@@ -1102,8 +1114,68 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }
 
+  async function attachDocuments(files: File[]) {
+    if (files.length === 0 || readingDocuments) return
+    const availableSlots = maxDocumentsPerTurn - attachedDocumentsRef.current.length
+    if (availableSlots <= 0) {
+      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return
+    }
+    setReadingDocuments(true)
+    const parsed: CodexDocumentAttachment[] = []
+    const notices: string[] = files.length > availableSlots
+      ? [`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`]
+      : []
+    try {
+      const { readDocumentAttachment } = await import('../lib/documentAttachments')
+      for (const file of files.slice(0, availableSlots)) {
+        try {
+          if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
+          if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
+          const result = await readDocumentAttachment(file)
+          parsed.push({ name: result.name, content: result.content })
+          if (result.truncated) notices.push(`${file.name} 内容较长，已截取前 ${maxDocumentTextLength.toLocaleString()} 个字符。`)
+        } catch (reason) {
+          notices.push(`${file.name || '文件'}：${reason instanceof Error ? reason.message : '读取失败。'}`)
+        }
+      }
+
+      let nextDocuments = [...attachedDocumentsRef.current]
+      let totalCharacters = nextDocuments.reduce((total, item) => total + item.content.length, 0)
+      for (const item of parsed) {
+        if (nextDocuments.some((current) => current.name === item.name && current.content === item.content)) continue
+        if (nextDocuments.length >= maxDocumentsPerTurn) {
+          notices.push(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`)
+          break
+        }
+        const remaining = maxDocumentTextPerTurn - totalCharacters
+        if (remaining <= 0) {
+          notices.push(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
+          break
+        }
+        const marker = '\n\n[已达到单条消息文档文字上限，后续内容未附加]'
+        const content = truncateAttachmentText(item.content, remaining, marker)
+        if (item.content.length > remaining) {
+          notices.push(`已达到单条消息 ${maxDocumentTextPerTurn.toLocaleString()} 字符上限，后续文件内容未附加。`)
+        }
+        nextDocuments.push({ ...item, content })
+        totalCharacters += content.length
+      }
+      if (nextDocuments !== attachedDocumentsRef.current) {
+        attachedDocumentsRef.current = nextDocuments
+        setAttachedDocuments(nextDocuments)
+      }
+      setAttachmentError(notices.length > 0 ? notices.slice(0, 4).join(' ') : null)
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '无法加载文档解析器，请刷新页面后重试。')
+    } finally {
+      setReadingDocuments(false)
+    }
+  }
+
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (readingDocuments) return
     if (editingQueuedMessageId) {
       confirmQueuedEdit()
       return
@@ -1121,6 +1193,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setSending(true)
     updateDraft('')
     setAttachedImages([])
+    attachedDocumentsRef.current = []
     setAttachedDocuments([])
     setAttachmentError(null)
     const sent = await onSend({
@@ -1134,7 +1207,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (!sent) {
       updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
       setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
-      setAttachedDocuments((current) => current.length > 0 ? [...previousDocuments, ...current] : previousDocuments)
+      const currentDocuments = attachedDocumentsRef.current
+      const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
+      attachedDocumentsRef.current = restoredDocuments
+      setAttachedDocuments(restoredDocuments)
       setAttachmentError((current) => current ?? previousAttachmentError)
     }
     setSending(false)
@@ -1146,6 +1222,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (!snapshot) return
     updateDraft(snapshot.draft)
     setAttachedImages(snapshot.images)
+    attachedDocumentsRef.current = snapshot.documents
     setAttachedDocuments(snapshot.documents)
     setAttachmentError(snapshot.attachmentError)
   }
@@ -1166,6 +1243,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setEditingQueuedMessageId(message.id)
     updateDraft(message.text)
     setAttachedImages(message.images)
+    attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
     setAttachmentError(null)
     window.requestAnimationFrame(() => composer.current?.focus())
@@ -1222,6 +1300,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (readingDocuments) return
     const directFiles = Array.from(event.clipboardData.files)
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
@@ -1240,7 +1319,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     appendDocument({ name: 'pasted-content.md', content: pastedText })
-    setAttachmentError(null)
   }
 
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1252,11 +1330,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function appendDocument(document: CodexDocumentAttachment) {
-    setAttachedDocuments((current) => {
-      if (current.some((item) => item.name === document.name && item.content === document.content)) return current
-      return [...current, document].slice(0, maxDocumentsPerTurn)
-    })
-    setAttachmentError(null)
+    const current = attachedDocumentsRef.current
+    if (current.some((item) => item.name === document.name && item.content === document.content)) return
+    if (current.length >= maxDocumentsPerTurn) {
+      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return
+    }
+    const total = current.reduce((count, item) => count + item.content.length, 0)
+    const remaining = maxDocumentTextPerTurn - total
+    if (remaining <= 0) {
+      setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
+      return
+    }
+    const content = truncateAttachmentText(document.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
+    const next = [...current, { ...document, content }]
+    attachedDocumentsRef.current = next
+    setAttachedDocuments(next)
+    setAttachmentError(document.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
   }
 
   return (
@@ -1301,13 +1391,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
+      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取并提取文档文字…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
           {attachedDocuments.map((document, index) => (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
-              <button type="button" onClick={() => setAttachedDocuments((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
+              <span><strong>{document.name}</strong><small>{document.content.length.toLocaleString()} 个字符 · 已提取文字</small></span>
+              <button type="button" disabled={readingDocuments} onClick={() => {
+                const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
             </div>
           ))}
         </div>
@@ -1384,6 +1479,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
             <ImagePlus size={16} />
             <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
+          </span>
+          <span className={`attach-button attach-button--native${canAttachDocuments ? '' : ' attach-button--disabled'}`} title={readingDocuments ? '正在读取文档' : '附加文档或源码文件'}>
+            {readingDocuments ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
+            <input className="image-input" type="file" accept={documentAttachmentAccept} multiple disabled={!canAttachDocuments} onChange={(event) => { void attachDocuments(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加文档或源码文件" />
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
