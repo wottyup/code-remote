@@ -515,6 +515,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .send-button:disabled, .attach-button:disabled, .attach-button--disabled { background: #35383f; color: #727883; cursor: not-allowed; }
 .send-button--queue:not(:disabled) { background: #9eafff; color: #151827; }
 .attach-button { border: 1px solid #454950; background: #282a30; color: #c9cbd1; }
+.attach-button--image { display: none; }
 .attach-button--native { position: relative; overflow: hidden; }
 .attach-button--native > svg { pointer-events: none; }
 .attach-button--native:focus-within { border-color: #8da4d5; box-shadow: 0 0 0 2px rgba(141, 164, 213, .22); }
@@ -636,6 +637,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-warm .composer-menu--open .composer-menu__trigger { background: #fbf3e9; }
   .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { background: var(--custom-theme-control); }
   .composer-actions { min-width: 0; gap: 4px; }
+  .attach-button--image { display: inline-flex; }
   .send-button, .stop-button, .attach-button { padding-inline: 6px; }
   .composer-hint { display: none; }
   .remote-error { width: auto; max-width: none; margin-right: 16px; margin-left: 16px; }
