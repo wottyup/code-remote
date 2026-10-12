@@ -2444,7 +2444,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const targetElement = target instanceof Element ? target : null
     const startedOnBackdrop = sidebarOpen && Boolean(targetElement?.closest('.sidebar-backdrop'))
     const startedOnControl = Boolean(targetElement?.closest('button, input, textarea, select, [contenteditable="true"], [role="button"]'))
-    const canOpenFromContent = !sidebarOpen && !startedOnControl
+    const startedInCodeBlock = Boolean(targetElement?.closest('.chat-message__code'))
+    const canOpenFromContent = !sidebarOpen && !startedOnControl && !startedInCodeBlock
     sidebarTouchStart.current = startedInsideSidebar || startedOnBackdrop || canOpenFromContent
       ? { x: touch.clientX, y: touch.clientY, sidebarWasOpen: sidebarOpen }
       : null
