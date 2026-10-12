@@ -2108,7 +2108,9 @@ interface RemoteChatPaneProps {
   marqueeColor: string
   active: boolean
   showActiveFrame: boolean
+  showPaneClose: boolean
   onActivate: () => void
+  onClose: () => void
   onCreateThread: () => void
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
@@ -2123,7 +2125,9 @@ function RemoteChatPane({
   marqueeColor,
   active,
   showActiveFrame,
+  showPaneClose,
   onActivate,
+  onClose,
   onCreateThread,
   onOpenSidebar,
   onOpenWorkspace,
@@ -2284,6 +2288,7 @@ function RemoteChatPane({
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
+          {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
       </header>
 
@@ -2811,6 +2816,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSelectedPaneIndex(freePane)
     await remotes[freePane].selectThread(thread)
   }
+  function closePane(paneIndex: number) {
+    if (openPaneIndexes.length <= 1) return
+    const position = openPaneIndexes.indexOf(paneIndex)
+    const nextOpen = openPaneIndexes.filter((index) => index !== paneIndex)
+    setOpenPaneIndexes(nextOpen)
+    if (selectedPaneIndex === paneIndex) {
+      setSelectedPaneIndex(nextOpen[Math.min(Math.max(position, 0), nextOpen.length - 1)] ?? nextOpen[0] ?? 0)
+    }
+  }
+
   function activatePane(paneIndex: number) {
     if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
   }
@@ -3151,7 +3166,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
+                    showPaneClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
+                    onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
                     onOpenSidebar={() => setSidebarOpen(true)}
                     onOpenWorkspace={() => setWorkspaceOpen(true)}
