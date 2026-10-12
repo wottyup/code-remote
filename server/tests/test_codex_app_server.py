@@ -363,6 +363,45 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             app_server._app_server_arguments("codex.exe"),
         )
 
+    async def test_fallback_re_resolves_to_the_managed_cli_after_shared_daemon_failure(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows managed Codex CLI selection")
+
+        with tempfile.TemporaryDirectory() as home_directory:
+            home = Path(home_directory)
+            managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
+            fallback_home = home / "compat-runtime"
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(home)
+                app_server = CodexAppServer("legacy-codex.exe", Path.cwd())
+                app_server._fallback_runtime_home = fallback_home
+                app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
+                app_server._emit = AsyncMock()  # type: ignore[method-assign]
+                started_with: list[str] = []
+
+                async def start_runtime(executable: str) -> None:
+                    started_with.append(executable)
+                    if len(started_with) == 1:
+                        managed.parent.mkdir(parents=True)
+                        managed.touch()
+                        raise CodexRuntimeError("unrecognized subcommand 'daemon'")
+
+                app_server._start_runtime = AsyncMock(side_effect=start_runtime)  # type: ignore[method-assign]
+                with patch("codex_remote.codex_app_server.shutil.which", return_value="legacy-codex.exe"):
+                    await app_server._ensure_started()
+
+                self.assertEqual(started_with, ["legacy-codex.exe", str(managed)])
+                self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
     def test_shared_windows_proxy_permission_failure_is_recognized_from_stderr(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._use_shared_daemon = True

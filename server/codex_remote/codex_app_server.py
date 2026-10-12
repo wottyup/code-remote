@@ -774,8 +774,9 @@ class CodexAppServer:
                 raise
             await self._stop_process()
             self._activate_isolated_fallback(error)
+            fallback_executable = self._resolve_executable() or executable
             try:
-                await self._start_runtime(executable)
+                await self._start_runtime(fallback_executable)
             except CodexRuntimeError as fallback_error:
                 self._last_error = str(fallback_error)
                 raise
