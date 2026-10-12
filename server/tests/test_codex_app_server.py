@@ -64,10 +64,9 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 else:
                     os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
 
-    async def test_default_windows_app_server_isolates_runtime_without_modifying_main_database(self) -> None:
-        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+    async def test_default_app_server_uses_main_codex_home_without_reseeding_its_database(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory:
             history_home = Path(history_directory)
-            runtime_home = Path(runtime_directory) / "app-server-home"
             database = history_home / "thread_history_1.sqlite"
             connection = sqlite3.connect(database)
             try:
@@ -81,15 +80,18 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
             try:
                 os.environ["CODEX_HOME"] = str(history_home)
-                with patch(
-                    "codex_remote.codex_app_server.default_runtime_home",
-                    return_value=runtime_home,
-                ):
-                    app_server = CodexAppServer("codex", Path.cwd())
-                    child_environment = app_server._app_server_environment()
+                app_server = CodexAppServer("codex", Path.cwd())
+                child_environment = app_server._app_server_environment()
 
-                self.assertEqual(runtime_home.resolve(), app_server._runtime_home)
-                self.assertEqual(str(runtime_home.resolve()), child_environment["CODEX_HOME"])
+                self.assertEqual(history_home.resolve(), app_server._runtime_home)
+                self.assertEqual(str(history_home.resolve()), child_environment["CODEX_HOME"])
+                self.assertEqual(os.name == "nt", app_server._use_shared_daemon)
+                self.assertEqual(
+                    ["codex", "app-server", "proxy"]
+                    if os.name == "nt"
+                    else ["codex", "app-server", "--listen", "stdio://"],
+                    app_server._app_server_arguments("codex"),
+                )
                 await app_server._prepare_runtime_thread("not-in-history")
 
                 connection = sqlite3.connect(database)
@@ -170,6 +172,11 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(history_home.resolve(), app_server._history.codex_home)
             self.assertEqual(str(Path(runtime_directory).resolve()), child_environment["CODEX_HOME"])
+            self.assertFalse(app_server._use_shared_daemon)
+            self.assertEqual(
+                ["codex", "app-server", "--listen", "stdio://"],
+                app_server._app_server_arguments("codex"),
+            )
             self.assertEqual('model = "gpt-test"', (Path(runtime_directory) / "config.toml").read_text(encoding="utf-8").strip())
 
     async def test_runtime_rollout_is_copied_to_main_history_and_extended_atomically(self) -> None:
@@ -226,7 +233,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 os.environ["CODEX_HOME"] = str(history_home)
                 os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
                 app_server = CodexAppServer("codex", Path.cwd())
-                self.assertFalse(app_server._sync_runtime_rollout(source))
+                self.assertFalse(app_server._sync_runtime_rollout(source, runtime_home))
                 self.assertEqual('local\n', target.read_text(encoding="utf-8"))
             finally:
                 if old_home is None:
@@ -274,8 +281,8 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 app_server = CodexAppServer("codex", Path.cwd())
                 app_server._sync_runtime_rollout = Mock(return_value=True)  # type: ignore[method-assign]
 
-                self.assertTrue(app_server._sync_runtime_created_history_to_main())
-                app_server._sync_runtime_rollout.assert_called_once_with(remote)
+                self.assertTrue(app_server._sync_runtime_created_history_to_main(runtime_home))
+                app_server._sync_runtime_rollout.assert_called_once_with(remote, runtime_home)
             finally:
                 if old_home is None:
                     os.environ.pop("CODEX_HOME", None)
@@ -285,6 +292,46 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                     os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
                 else:
                     os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_shared_runtime_backfills_the_previous_windows_isolated_home(self) -> None:
+        with tempfile.TemporaryDirectory() as legacy_directory:
+            app_server = CodexAppServer("codex", Path.cwd())
+            legacy_home = Path(legacy_directory).resolve()
+            app_server._runtime_home = app_server._history_home
+            app_server._legacy_runtime_home = legacy_home
+            app_server._sync_runtime_created_history = AsyncMock()  # type: ignore[method-assign]
+
+            app_server._schedule_runtime_history_sync()
+            assert app_server._history_sync_task is not None
+            await app_server._history_sync_task
+
+            app_server._sync_runtime_created_history.assert_awaited_once_with(legacy_home)
+
+    async def test_shared_windows_runtime_starts_the_official_daemon_before_proxying(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        process = Mock(returncode=0)
+        process.communicate = AsyncMock(return_value=(b'{"status":"running"}', b""))
+        child_environment = {"CODEX_HOME": str(app_server._history_home)}
+
+        with patch(
+            "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=process,
+        ) as create_process:
+            await app_server._ensure_shared_daemon("codex.exe", child_environment)
+
+        create_process.assert_awaited_once_with(
+            "codex.exe",
+            "app-server",
+            "daemon",
+            "start",
+            cwd=app_server.workspace,
+            env=child_environment,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
+        )
 
     async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

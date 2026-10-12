@@ -9,6 +9,12 @@ const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js
 const isWindows = process.platform === 'win32'
 const configuredPython = process.env.CODEX_REMOTE_PYTHON
 const configuredCodex = process.env.CODEX_REMOTE_COMMAND
+const pathDirectories = (process.env.PATH || '').split(isWindows ? ';' : ':').filter(Boolean)
+const pathCodexCandidates = pathDirectories.flatMap((directory) =>
+  isWindows
+    ? [join(directory, 'codex.cmd'), join(directory, 'codex.exe')]
+    : [join(directory, 'codex')],
+)
 const vscodeExtensionRoot = isWindows ? join(process.env.USERPROFILE || '', '.vscode', 'extensions') : ''
 const vscodeCodexCandidates = isWindows && existsSync(vscodeExtensionRoot)
   ? readdirSync(vscodeExtensionRoot, { withFileTypes: true })
@@ -18,6 +24,10 @@ const vscodeCodexCandidates = isWindows && existsSync(vscodeExtensionRoot)
   : []
 const windowsCodexCandidates = isWindows
   ? [
+      ...pathCodexCandidates,
+      join(process.env.USERPROFILE || '', '.codex', 'packages', 'app-server-daemon', 'current', 'bin', 'codex.exe'),
+      join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'codex.exe'),
+      join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin', 'codex.exe'),
       ...vscodeCodexCandidates,
       join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin', '8aaf1547b825b104', 'codex.exe'),
     ]

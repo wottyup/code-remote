@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.187] - 共享 Windows Codex 主运行时并优先使用新版 CLI
+
 ## [0.0.186] - 隔离 Windows Codex 运行状态并同步远程会话
 
 ## [0.0.185] - 修复手机端 WebSocket 连接反复重建

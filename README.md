@@ -71,7 +71,7 @@ CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:d
 
 历史列表读取本机 Codex 最近 100 条未归档会话，包含其他工作目录创建的会话；打开会话后，标题下方会显示该会话的工作目录。后端监听 Codex 会话文件变化，并通过 WebSocket 通知侧栏更新，无需刷新网页。
 
-Windows 上，本地 Codex App Server 默认把临时文件和可变运行状态隔离到项目的 `.codex-remote/app-server-home`，避免主 `.codex` 的沙箱 ACL 或并发 SQLite 写入导致引擎反复退出。主 Codex 的配置、模型目录和历史仍作为来源；网页会话在每轮完成时以原子方式同步回主 `.codex/sessions`，因此桌面 Codex 可以继续发现它们。可用 `CODEX_REMOTE_APP_SERVER_HOME` 显式指定其他运行目录。
+本地 Codex App Server 默认直接使用用户级 `CODEX_HOME`，因此网页端与桌面 Codex 读取并写入同一套配置、模型和会话历史。Windows 通过 Codex 官方共享 daemon 与 stdio proxy 接入主运行时，避免再启动一套争抢 SQLite 的独立引擎；启动器会优先使用 PATH 或官方安装目录中的 Codex CLI，找不到时才回退到 VS Code 扩展内置版本。若需要兼容旧 CLI，可显式设置 `CODEX_REMOTE_APP_SERVER_HOME` 使用独立运行目录；隔离模式会在权限允许时把网页会话安全同步回主 `.codex/sessions`。
 
 ## 在网页与本机 Codex 间交还会话
 

@@ -34,14 +34,6 @@ class CodexNoActiveTurnError(CodexRuntimeError):
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 
 
-def default_runtime_home(history_home: Path) -> Path:
-    """Keep mutable Codex runtime state out of the main home on Windows."""
-    if os.name == "nt":
-        project_root = Path(__file__).resolve().parents[2]
-        return project_root / ".codex-remote" / "app-server-home"
-    return history_home
-
-
 @dataclass
 class WorkspaceChangeWatch:
     stop_event: asyncio.Event
@@ -215,7 +207,16 @@ class CodexAppServer:
         self._runtime_home = (
             Path(configured_runtime_home).expanduser().resolve()
             if configured_runtime_home
-            else default_runtime_home(self._history_home)
+            else self._history_home
+        )
+        self._use_shared_daemon = os.name == "nt" and configured_runtime_home is None
+        default_history_home = (Path.home() / ".codex").resolve()
+        self._legacy_runtime_home = (
+            Path(__file__).resolve().parents[2] / ".codex-remote" / "app-server-home"
+            if os.name == "nt"
+            and configured_runtime_home is None
+            and self._history_home == default_history_home
+            else None
         )
         self._process: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
@@ -729,7 +730,9 @@ class CodexAppServer:
             try:
                 self._seed_runtime_database()
                 child_environment = self._app_server_environment()
-                arguments = [executable, "app-server", "--listen", "stdio://"]
+                if self._use_shared_daemon:
+                    await self._ensure_shared_daemon(executable, child_environment)
+                arguments = self._app_server_arguments(executable)
                 process_options = {
                     "cwd": self.workspace,
                     "env": child_environment,
@@ -774,6 +777,46 @@ class CodexAppServer:
                 if isinstance(error, CodexRuntimeError):
                     raise
                 raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+
+    def _app_server_arguments(self, executable: str) -> list[str]:
+        if self._use_shared_daemon:
+            return [executable, "app-server", "proxy"]
+        return [executable, "app-server", "--listen", "stdio://"]
+
+    async def _ensure_shared_daemon(self, executable: str, child_environment: dict[str, str]) -> None:
+        """Start Codex's user-level shared App Server before attaching its stdio proxy."""
+        arguments = [executable, "app-server", "daemon", "start"]
+        process_options = {
+            "cwd": self.workspace,
+            "env": child_environment,
+            "stdin": asyncio.subprocess.DEVNULL,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.PIPE,
+            "limit": 1024 * 1024,
+        }
+        try:
+            if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
+                process = await asyncio.create_subprocess_shell(
+                    subprocess.list2cmdline(arguments),
+                    **process_options,
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(*arguments, **process_options)
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            except TimeoutError as error:
+                process.kill()
+                await process.wait()
+                raise CodexRuntimeError("启动共享 Codex app-server 超时") from error
+        except OSError as error:
+            raise CodexRuntimeError(f"无法启动共享 Codex app-server：{error}") from error
+
+        if process.returncode != 0:
+            detail = stderr.decode("utf-8", errors="replace").strip()
+            if not detail:
+                detail = stdout.decode("utf-8", errors="replace").strip()
+            suffix = f"：{detail}" if detail else ""
+            raise CodexRuntimeError(f"共享 Codex app-server 启动失败{suffix}")
 
     async def _prepare_runtime_thread(self, thread_id: str) -> None:
         """Make a local Codex thread visible when a separate runtime home is configured."""
@@ -877,15 +920,20 @@ class CodexAppServer:
             self._history.invalidate()
 
     def _schedule_runtime_history_sync(self) -> None:
-        if self._runtime_home == self._history_home:
+        source_home = (
+            self._runtime_home
+            if self._runtime_home != self._history_home
+            else self._legacy_runtime_home
+        )
+        if source_home is None or not source_home.is_dir():
             return
         if self._history_sync_task is not None and not self._history_sync_task.done():
             return
-        self._history_sync_task = asyncio.create_task(self._sync_runtime_created_history())
+        self._history_sync_task = asyncio.create_task(self._sync_runtime_created_history(source_home))
 
-    async def _sync_runtime_created_history(self) -> None:
+    async def _sync_runtime_created_history(self, source_home: Path) -> None:
         try:
-            changed = await asyncio.to_thread(self._sync_runtime_created_history_to_main)
+            changed = await asyncio.to_thread(self._sync_runtime_created_history_to_main, source_home)
         except OSError as error:
             logger.warning("Unable to sync existing Codex Remote history: %s", error)
             return
@@ -893,17 +941,17 @@ class CodexAppServer:
             self._history.invalidate()
             await self._emit({"type": "threads.changed"})
 
-    def _sync_runtime_created_history_to_main(self) -> bool:
+    def _sync_runtime_created_history_to_main(self, source_home: Path) -> bool:
         changed = False
         for directory_name in ("sessions", "archived_sessions"):
-            root = self._runtime_home / directory_name
+            root = source_home / directory_name
             if not root.is_dir():
                 continue
             for source in root.rglob("*.jsonl"):
                 if not self._is_remote_created_rollout(source):
                     continue
                 try:
-                    changed = self._sync_runtime_rollout(source) or changed
+                    changed = self._sync_runtime_rollout(source, source_home) or changed
                 except OSError as error:
                     logger.warning("Unable to sync Codex Remote rollout %s: %s", source, error)
         return changed
@@ -922,7 +970,7 @@ class CodexAppServer:
         source = self._find_thread_rollout(self._runtime_home, thread_id)
         if source is None:
             return False
-        return self._sync_runtime_rollout(source)
+        return self._sync_runtime_rollout(source, self._runtime_home)
 
     @staticmethod
     def _find_thread_rollout(codex_home: Path, thread_id: str) -> Path | None:
@@ -940,9 +988,9 @@ class CodexAppServer:
             return None
         return max(candidates, key=lambda path: path.stat().st_mtime_ns)
 
-    def _sync_runtime_rollout(self, source: Path) -> bool:
+    def _sync_runtime_rollout(self, source: Path, source_home: Path) -> bool:
         try:
-            relative = source.resolve().relative_to(self._runtime_home)
+            relative = source.resolve().relative_to(source_home)
         except ValueError:
             return False
         if not relative.parts or relative.parts[0] != "sessions":
@@ -991,12 +1039,10 @@ class CodexAppServer:
         return True
 
     def _app_server_environment(self) -> dict[str, str]:
-        """Prepare the runtime home while keeping the main home as history source.
+        """Use the main Codex home unless isolation is explicitly configured.
 
-        Windows isolates mutable state by default because sandbox ACLs and concurrent
-        SQLite writers can make a second Codex process exit during initialization.
-        Configuration is copied into the isolated home, while rollout files are
-        synchronized safely in both directions at the bridge boundaries.
+        An explicit CODEX_REMOTE_APP_SERVER_HOME keeps mutable state separate while
+        the main home remains the source for configuration and imported history.
         """
         if self._runtime_home == self._history_home:
             child_environment = os.environ.copy()

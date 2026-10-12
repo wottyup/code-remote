@@ -27,9 +27,6 @@ echo Web: http://localhost:4173
 echo Close this window to stop the service.
 echo.
 
-if not defined CODEX_REMOTE_COMMAND for /d %%E in ("%USERPROFILE%\.vscode\extensions\openai.chatgpt-*") do if exist "%%~fE\bin\windows-x86_64\codex.exe" if not defined CODEX_REMOTE_COMMAND set "CODEX_REMOTE_COMMAND=%%~fE\bin\windows-x86_64\codex.exe"
-if not defined CODEX_REMOTE_COMMAND for /d %%E in ("%LOCALAPPDATA%\OpenAI\Codex\bin\*") do if exist "%%~fE\codex.exe" if not defined CODEX_REMOTE_COMMAND set "CODEX_REMOTE_COMMAND=%%~fE\codex.exe"
-
 call "%PNPM_CMD%" dev
 set "EXIT_CODE=%ERRORLEVEL%"
 
