@@ -58,6 +58,9 @@ export interface CodexRuntime {
   connected: boolean
   workspace: string
   handedOff: boolean
+  runtimeMode?: 'shared' | 'isolated' | 'isolated-fallback' | 'direct'
+  runtimeMessage?: string | null
+  fallbackReason?: string | null
   error: string | null
 }
 
@@ -92,6 +95,9 @@ export interface RemoteEvent {
   available?: boolean
   workspace?: string
   handedOff?: boolean
+  runtimeMode?: CodexRuntime['runtimeMode']
+  runtimeMessage?: string | null
+  fallbackReason?: string | null
   error?: string | null
   request_id?: string | number
   message?: string

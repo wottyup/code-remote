@@ -94,7 +94,7 @@ type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
 
 const emptyQueuedMessages: QueuedTurnMessage[] = []
 
-const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, error: null }
+const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, runtimeMode: 'direct', runtimeMessage: null, fallbackReason: null, error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 const activeThreadStorageKey = 'codex-remote.active-thread-id'
 const activeThreadCacheStorageKey = 'codex-remote.active-thread-cache'
@@ -1805,6 +1805,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         connected: Boolean(event.connected),
         workspace: event.workspace ?? '',
         handedOff: eventHandedOff,
+        runtimeMode: event.runtimeMode,
+        runtimeMessage: event.runtimeMessage ?? null,
+        fallbackReason: event.fallbackReason ?? null,
         error: event.error ?? null,
       })
       if (eventHandedOff) setError(null)

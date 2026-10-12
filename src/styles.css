@@ -210,6 +210,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .handoff-notice { display: grid; gap: 5px; width: min(100%, 840px); margin: 0 auto; padding: 11px 13px; border: 1px solid rgba(112, 163, 226, .34); border-radius: 10px; background: rgba(35, 57, 88, .38); color: #bed8fb; font-size: 10px; line-height: 1.55; }
 .handoff-notice strong { color: #dceaff; font-size: 11px; font-weight: 620; }
 .handoff-notice span { color: #9eb9de; }
+.runtime-notice { display: grid; gap: 5px; width: min(100%, 840px); margin: 0 auto; padding: 11px 13px; border: 1px solid rgba(130, 190, 155, .34); border-radius: 10px; background: rgba(28, 65, 48, .31); color: #c2ead0; font-size: 10px; line-height: 1.55; }
+.runtime-notice strong { color: #dcf7e6; font-size: 11px; font-weight: 620; }
+.runtime-notice span { color: #a9dabb; }
 .thread-completion-toast { position: fixed; z-index: 50; top: max(14px, calc(env(safe-area-inset-top) + 8px)); left: 50%; display: flex; width: min(calc(100vw - 32px), 410px); min-height: 58px; align-items: stretch; padding: 6px; border: 1px solid rgba(112, 201, 143, .34); border-radius: 13px; background: rgba(22, 35, 28, .97); color: #e5f4e9; box-shadow: 0 18px 45px rgba(0, 0, 0, .3), 0 0 0 1px rgba(93, 203, 133, .05); transform: translateX(-50%); animation: thread-completion-toast-enter .22s ease-out; backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
 .thread-completion-toast__open { display: flex; min-width: 0; flex: 1; align-items: center; gap: 9px; padding: 3px 7px; border: 0; border-radius: 8px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
 .thread-completion-toast__open:hover { background: rgba(123, 213, 154, .11); }
@@ -599,6 +602,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .connection-label { min-width: 0; max-width: 100%; padding: 5px 8px; font-size: 8px; }
   .handoff-button { min-height: 27px; gap: 4px; padding-inline: 7px; font-size: 8px; }
   .handoff-notice { padding: 10px 11px; font-size: 9.5px; }
+  .runtime-notice { padding: 10px 11px; font-size: 9.5px; }
   .connection-label span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .message-stream { padding: 0 16px 18px; }
   .message-stream__content { gap: 14px; padding-top: 24px; }

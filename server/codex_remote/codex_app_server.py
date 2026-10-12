@@ -19,6 +19,21 @@ from .codex_history import CodexHistoryStore
 logger = logging.getLogger(__name__)
 
 
+_SHARED_DAEMON_FALLBACK_MARKERS = (
+    "daemon.lock",
+    "daemon operation lock",
+    "app-server-control.sock",
+    "app-server control socket",
+    "failed to connect to socket",
+    "unrecognized subcommand 'daemon'",
+)
+_WINDOWS_ACCESS_DENIED_MARKERS = ("os error 5", "os error 10013", "access is denied", "permission denied", "拒绝访问")
+_SHARED_DAEMON_FALLBACK_MESSAGE = (
+    "Windows 当前进程无法访问桌面 Codex 的私有 app-server，已切换到兼容运行时；"
+    "网页新建的会话保存在兼容运行时中。"
+)
+
+
 class CodexRuntimeError(RuntimeError):
     pass
 
@@ -211,8 +226,13 @@ class CodexAppServer:
         )
         self._use_shared_daemon = os.name == "nt" and configured_runtime_home is None
         default_history_home = (Path.home() / ".codex").resolve()
-        self._legacy_runtime_home = (
+        self._fallback_runtime_home = (
             Path(__file__).resolve().parents[2] / ".codex-remote" / "app-server-home"
+            if os.name == "nt" and configured_runtime_home is None
+            else None
+        )
+        self._legacy_runtime_home = (
+            self._fallback_runtime_home
             if os.name == "nt"
             and configured_runtime_home is None
             and self._history_home == default_history_home
@@ -238,6 +258,16 @@ class CodexAppServer:
         self._subscribers: set[asyncio.Queue[dict[str, Any]]] = set()
         self._initialized = False
         self._handed_off = False
+        self._last_error: str | None = None
+        self._runtime_mode = (
+            "shared"
+            if self._use_shared_daemon
+            else "isolated"
+            if configured_runtime_home
+            else "direct"
+        )
+        self._fallback_reason: str | None = None
+        self._recent_stderr: list[str] = []
         self._history = CodexHistoryStore(self._history_home)
 
     @property
@@ -258,7 +288,10 @@ class CodexAppServer:
             "connected": self.connected,
             "workspace": str(self.workspace),
             "handedOff": self._handed_off,
-            "error": None,
+            "runtimeMode": self._runtime_mode,
+            "runtimeMessage": _SHARED_DAEMON_FALLBACK_MESSAGE if self._runtime_mode == "isolated-fallback" else None,
+            "fallbackReason": self._fallback_reason,
+            "error": self._last_error,
         }
 
     async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
@@ -727,56 +760,102 @@ class CodexAppServer:
                 raise CodexRuntimeError(f"找不到 Codex CLI：{self.command}")
             if not self.workspace.is_dir():
                 raise CodexRuntimeError(f"工作目录不存在：{self.workspace}")
-            try:
-                self._seed_runtime_database()
-                child_environment = self._app_server_environment()
-                if self._use_shared_daemon:
-                    await self._ensure_shared_daemon(executable, child_environment)
-                arguments = self._app_server_arguments(executable)
-                process_options = {
-                    "cwd": self.workspace,
-                    "env": child_environment,
-                    "stdin": asyncio.subprocess.PIPE,
-                    "stdout": asyncio.subprocess.PIPE,
-                    "stderr": asyncio.subprocess.PIPE,
-                    # thread/read returns a whole conversation as one JSONL line.
-                    # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
-                    "limit": 64 * 1024 * 1024,
-                }
-                if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
-                    process = await asyncio.create_subprocess_shell(
-                        subprocess.list2cmdline(arguments),
-                        **process_options,
-                    )
-                else:
-                    process = await asyncio.create_subprocess_exec(*arguments, **process_options)
-            except OSError as error:
-                raise CodexRuntimeError(f"无法启动 Codex app-server：{error}") from error
+            await self._start_with_shared_fallback(executable)
+            self._last_error = None
+            self._schedule_runtime_history_sync()
+            await self._emit({"type": "connection", **self.status()})
 
-            self._process = process
-            self._reader_task = asyncio.create_task(self._read_stdout(process))
-            self._stderr_task = asyncio.create_task(self._read_stderr(process))
+    async def _start_with_shared_fallback(self, executable: str) -> None:
+        try:
+            await self._start_runtime(executable)
+        except CodexRuntimeError as error:
+            if not self._should_fallback_from_shared_daemon(error):
+                self._last_error = str(error)
+                raise
+            await self._stop_process()
+            self._activate_isolated_fallback(error)
             try:
-                await self._request("initialize", {
-                    "clientInfo": {
-                        "name": "codex_remote_web",
-                        "title": "Codex Remote Web",
-                        "version": "0.0.30",
-                    },
-                    "capabilities": {
-                        "experimentalApi": False,
-                        "requestAttestation": False,
-                    },
-                }, timeout=20)
-                await self._write({"method": "initialized", "params": {}})
-                self._initialized = True
-                self._schedule_runtime_history_sync()
-                await self._emit({"type": "connection", **self.status()})
-            except Exception as error:
-                await self._stop_process()
-                if isinstance(error, CodexRuntimeError):
-                    raise
-                raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+                await self._start_runtime(executable)
+            except CodexRuntimeError as fallback_error:
+                self._last_error = str(fallback_error)
+                raise
+
+    async def _start_runtime(self, executable: str) -> None:
+        self._recent_stderr.clear()
+        try:
+            self._seed_runtime_database()
+            child_environment = self._app_server_environment()
+            if self._use_shared_daemon:
+                await self._ensure_shared_daemon(executable, child_environment)
+            arguments = self._app_server_arguments(executable)
+            process_options = {
+                "cwd": self.workspace,
+                "env": child_environment,
+                "stdin": asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.PIPE,
+                "stderr": asyncio.subprocess.PIPE,
+                # thread/read returns a whole conversation as one JSONL line.
+                # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
+                "limit": 64 * 1024 * 1024,
+            }
+            if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
+                process = await asyncio.create_subprocess_shell(
+                    subprocess.list2cmdline(arguments),
+                    **process_options,
+                )
+            else:
+                process = await asyncio.create_subprocess_exec(*arguments, **process_options)
+        except OSError as error:
+            raise CodexRuntimeError(f"无法启动 Codex app-server：{error}") from error
+
+        self._process = process
+        self._reader_task = asyncio.create_task(self._read_stdout(process))
+        self._stderr_task = asyncio.create_task(self._read_stderr(process))
+        try:
+            await self._request("initialize", {
+                "clientInfo": {
+                    "name": "codex_remote_web",
+                    "title": "Codex Remote Web",
+                    "version": "0.0.30",
+                },
+                "capabilities": {
+                    "experimentalApi": False,
+                    "requestAttestation": False,
+                },
+            }, timeout=20)
+            await self._write({"method": "initialized", "params": {}})
+            self._initialized = True
+        except Exception as error:
+            recent_stderr = "\n".join(self._recent_stderr)
+            await self._stop_process()
+            if isinstance(error, CodexRuntimeError):
+                if recent_stderr:
+                    raise CodexRuntimeError(f"{error}：{recent_stderr}") from error
+                raise
+            raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
+
+    def _should_fallback_from_shared_daemon(self, error: CodexRuntimeError) -> bool:
+        if not self._use_shared_daemon or self._fallback_runtime_home is None:
+            return False
+        detail = "\n".join((str(error), *self._recent_stderr)).casefold()
+        if "unrecognized subcommand 'daemon'" in detail:
+            return True
+        has_private_runtime_path = any(
+            marker.casefold() in detail
+            for marker in _SHARED_DAEMON_FALLBACK_MARKERS
+            if marker != "unrecognized subcommand 'daemon'"
+        )
+        return has_private_runtime_path and any(marker.casefold() in detail for marker in _WINDOWS_ACCESS_DENIED_MARKERS)
+
+    def _activate_isolated_fallback(self, error: CodexRuntimeError) -> None:
+        fallback_home = self._fallback_runtime_home
+        if fallback_home is None:
+            raise error
+        self._runtime_home = fallback_home
+        self._use_shared_daemon = False
+        self._runtime_mode = "isolated-fallback"
+        self._fallback_reason = str(error)
+        logger.warning("%s Cause: %s", _SHARED_DAEMON_FALLBACK_MESSAGE, error)
 
     def _app_server_arguments(self, executable: str) -> list[str]:
         if self._use_shared_daemon:
@@ -909,7 +988,7 @@ class CodexAppServer:
             raise CodexRuntimeError(f"无法准备 Codex 对话历史：{error}") from error
 
     async def _sync_runtime_thread(self, thread_id: str) -> None:
-        if self._runtime_home == self._history_home:
+        if self._runtime_home == self._history_home or self._runtime_mode == "isolated-fallback":
             return
         try:
             changed = await asyncio.to_thread(self._sync_runtime_thread_to_history, thread_id)
@@ -920,6 +999,8 @@ class CodexAppServer:
             self._history.invalidate()
 
     def _schedule_runtime_history_sync(self) -> None:
+        if self._runtime_mode == "isolated-fallback":
+            return
         source_home = (
             self._runtime_home
             if self._runtime_home != self._history_home
@@ -1063,6 +1144,14 @@ class CodexAppServer:
         return child_environment
 
     def _resolve_executable(self) -> str | None:
+        # The shared-daemon protocol is part of the managed Windows CLI.  npm
+        # shims and editor-bundled binaries can report a similar version while
+        # resolving a different command set at runtime, so use the managed
+        # executable whenever it is installed.
+        if self._use_shared_daemon or self._runtime_mode == "isolated-fallback":
+            managed = self._history_home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
+            if managed.is_file():
+                return str(managed)
         candidates = [self.command]
         if os.name == "nt" and not Path(self.command).suffix:
             candidates.extend((f"{self.command}.cmd", f"{self.command}.exe"))
@@ -1119,18 +1208,20 @@ class CodexAppServer:
         finally:
             if process is self._process:
                 self._initialized = False
-                self._fail_pending("Codex app-server 已断开")
-                await self._emit({
-                    "type": "connection",
-                    **self.status(),
-                    "error": "Codex app-server 已断开",
-                })
+                error = CodexRuntimeError("Codex app-server 已断开")
+                self._last_error = str(error)
+                self._fail_pending(str(error))
+                await self._emit({"type": "connection", **self.status()})
 
     async def _read_stderr(self, process: asyncio.subprocess.Process) -> None:
         assert process.stderr is not None
         try:
             while line := await process.stderr.readline():
-                logger.info("Codex: %s", line.decode("utf-8", errors="replace").rstrip())
+                detail = line.decode("utf-8", errors="replace").rstrip()
+                if detail:
+                    self._recent_stderr.append(detail)
+                    del self._recent_stderr[:-12]
+                    logger.info("Codex: %s", detail)
         except asyncio.CancelledError:
             raise
 
@@ -1236,15 +1327,16 @@ class CodexAppServer:
         self._pending_turn_starts.clear()
 
     async def _cancel_io_tasks(self) -> None:
-        for task in (self._reader_task, self._stderr_task):
-            if task and not task.done():
+        current_task = asyncio.current_task()
+        tasks = tuple(task for task in (self._reader_task, self._stderr_task) if task and task is not current_task)
+        for task in tasks:
+            if not task.done():
                 task.cancel()
-        for task in (self._reader_task, self._stderr_task):
-            if task:
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
+        for task in tasks:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
         self._reader_task = None
         self._stderr_task = None
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import sqlite3
 import tempfile
 import unittest
@@ -332,6 +333,95 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             stderr=asyncio.subprocess.PIPE,
             limit=1024 * 1024,
         )
+
+    async def test_shared_windows_permission_failure_retries_with_an_isolated_runtime(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        fallback_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, fallback_home, ignore_errors=True)
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = fallback_home
+        app_server._runtime_mode = "shared"
+        app_server._start_runtime = AsyncMock(side_effect=[
+            CodexRuntimeError("failed to open daemon operation lock: 拒绝访问 (os error 5)"),
+            None,
+        ])  # type: ignore[method-assign]
+        app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
+        app_server._emit = AsyncMock()  # type: ignore[method-assign]
+        app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
+
+        await app_server._ensure_started()
+
+        self.assertEqual(2, app_server._start_runtime.await_count)
+        self.assertFalse(app_server._use_shared_daemon)
+        self.assertEqual(fallback_home, app_server._runtime_home)
+        self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
+        self.assertIn("已切换到兼容运行时", app_server.status()["runtimeMessage"])
+        self.assertIn("daemon operation lock", app_server.status()["fallbackReason"])
+        self.assertEqual("codex.exe", app_server._resolve_executable())
+        self.assertEqual(
+            ["codex.exe", "app-server", "--listen", "stdio://"],
+            app_server._app_server_arguments("codex.exe"),
+        )
+
+    def test_shared_windows_proxy_permission_failure_is_recognized_from_stderr(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        app_server._recent_stderr = [
+            "failed to connect to socket at C:\\Users\\user\\.codex\\app-server-control\\app-server-control.sock",
+            "Caused by: 拒绝访问 (os error 10013)",
+        ]
+
+        self.assertTrue(app_server._should_fallback_from_shared_daemon(CodexRuntimeError("Codex app-server 已断开")))
+
+    async def test_isolated_fallback_keeps_web_history_out_of_the_unwritable_main_home(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._runtime_mode = "isolated-fallback"
+        app_server._runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._runtime_home, ignore_errors=True)
+        app_server._sync_runtime_thread_to_history = Mock()  # type: ignore[method-assign]
+
+        await app_server._sync_runtime_thread("thread-id")
+
+        app_server._sync_runtime_thread_to_history.assert_not_called()
+
+    async def test_shared_windows_non_permission_failure_does_not_fallback(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        app_server._start_runtime = AsyncMock(side_effect=CodexRuntimeError("共享 Codex app-server 启动失败：网络超时"))  # type: ignore[method-assign]
+        app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(CodexRuntimeError, "网络超时"):
+            await app_server._ensure_started()
+
+        app_server._start_runtime.assert_awaited_once_with("codex.exe")
+        self.assertTrue(app_server._use_shared_daemon)
+
+    def test_shared_windows_runtime_prefers_the_managed_daemon_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as home_directory:
+            home = Path(home_directory)
+            managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
+            managed.parent.mkdir(parents=True)
+            managed.touch()
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(home)
+                app_server = CodexAppServer("stale-codex.cmd", Path.cwd())
+                if os.name == "nt":
+                    self.assertEqual(str(managed), app_server._resolve_executable())
+                else:
+                    self.assertIsNone(app_server._resolve_executable())
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
 
     async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

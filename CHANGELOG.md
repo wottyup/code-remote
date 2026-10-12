@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.188] - 为 Windows 共享 Codex 守护进程权限限制增加兼容运行时回退
+
 ## [0.0.187] - 共享 Windows Codex 主运行时并优先使用新版 CLI
 
 ## [0.0.186] - 隔离 Windows Codex 运行状态并同步远程会话
