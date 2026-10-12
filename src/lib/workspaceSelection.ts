@@ -8,6 +8,9 @@ export interface WorkspaceSelectionDocument {
   content: string
 }
 
+const numberedSelectionNamePattern = /^【代码选区 #(\d+)】\s*/
+const numberedSelectionContentPattern = /^代码选区 #(\d+)\n\n/
+
 export function workspaceTextSelectionLineRange(text: string, selectionStart: number, selectionEnd: number): WorkspaceTextLineRange | null {
   const start = Math.max(0, Math.min(text.length, Math.trunc(selectionStart)))
   const end = Math.max(start, Math.min(text.length, Math.trunc(selectionEnd)))
@@ -44,5 +47,54 @@ export function createWorkspaceSelectionDocument(path: string, startLine: number
   return {
     name: `${basename}-L${lineSuffix}-selection.md`,
     content: formatWorkspaceSelectionReference(path, startLine, endLine, selectedText),
+  }
+}
+
+function isUnnumberedWorkspaceSelectionDocument(document: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
+  return /-L\d+(?:-\d+)?-selection\.md$/i.test(document.name)
+    && /^文件：.+（第 \d+(?:–\d+)? 行）\n/.test(document.content)
+}
+
+export function isWorkspaceSelectionDocument(document: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
+  return numberedSelectionNamePattern.test(document.name)
+    || numberedSelectionContentPattern.test(document.content)
+    || isUnnumberedWorkspaceSelectionDocument(document)
+}
+
+export function workspaceSelectionNumber(document: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
+  const nameMatch = numberedSelectionNamePattern.exec(document.name)
+  if (nameMatch) return Number(nameMatch[1])
+  const contentMatch = numberedSelectionContentPattern.exec(document.content)
+  return contentMatch ? Number(contentMatch[1]) : null
+}
+
+function unnumberWorkspaceSelectionDocument(document: WorkspaceSelectionDocument): WorkspaceSelectionDocument {
+  return {
+    name: document.name.replace(numberedSelectionNamePattern, ''),
+    content: document.content.replace(numberedSelectionContentPattern, ''),
+  }
+}
+
+export function sameWorkspaceSelectionDocument(left: Pick<WorkspaceSelectionDocument, 'name' | 'content'>, right: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
+  if (!isWorkspaceSelectionDocument(left) || !isWorkspaceSelectionDocument(right)) return false
+  const normalizedLeft = unnumberWorkspaceSelectionDocument(left as WorkspaceSelectionDocument)
+  const normalizedRight = unnumberWorkspaceSelectionDocument(right as WorkspaceSelectionDocument)
+  return normalizedLeft.name === normalizedRight.name && normalizedLeft.content === normalizedRight.content
+}
+
+export function numberWorkspaceSelectionDocument<T extends WorkspaceSelectionDocument>(document: T, attachedDocuments: readonly Pick<WorkspaceSelectionDocument, 'name' | 'content'>[]): T {
+  if (!isWorkspaceSelectionDocument(document) || workspaceSelectionNumber(document) !== null) return document
+  const unnumberedDocument = unnumberWorkspaceSelectionDocument(document)
+  const { lastNumber, unnumberedCount } = attachedDocuments.reduce((result, attachedDocument) => {
+    if (!isWorkspaceSelectionDocument(attachedDocument)) return result
+    const number = workspaceSelectionNumber(attachedDocument)
+    if (number === null) return { ...result, unnumberedCount: result.unnumberedCount + 1 }
+    return { ...result, lastNumber: Math.max(result.lastNumber, number) }
+  }, { lastNumber: 0, unnumberedCount: 0 })
+  const number = lastNumber + unnumberedCount + 1
+  return {
+    ...document,
+    name: `【代码选区 #${number}】 ${unnumberedDocument.name}`,
+    content: `代码选区 #${number}\n\n${unnumberedDocument.content}`,
   }
 }

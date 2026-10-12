@@ -34,7 +34,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
-import { createWorkspaceSelectionDocument, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
+import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
 
 interface Props {
   token: string
@@ -1455,31 +1455,39 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function appendDocument(document: CodexDocumentAttachment) {
     const current = attachedDocumentsRef.current
+    const isSelection = isWorkspaceSelectionDocument(document)
     if (current.some((item) => document.sourceFileId
       ? item.sourceFileId === document.sourceFileId
-      : !item.sourceFileId && item.name === document.name && item.content === document.content)) return
+      : !item.sourceFileId && (isSelection
+        ? sameWorkspaceSelectionDocument(item, document)
+        : item.name === document.name && item.content === document.content))) return
     if (current.length >= maxDocumentsPerTurn) {
       setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
       return
     }
+    const numberedCurrent = current.reduce<CodexDocumentAttachment[]>((documents, item) => {
+      documents.push(isWorkspaceSelectionDocument(item) ? numberWorkspaceSelectionDocument(item, documents) : item)
+      return documents
+    }, [])
+    const nextDocument = isSelection ? numberWorkspaceSelectionDocument(document, numberedCurrent) : document
     if (document.sourceFileId) {
-      const next = [...current, document]
+      const next = [...numberedCurrent, nextDocument]
       attachedDocumentsRef.current = next
       setAttachedDocuments(next)
       setAttachmentError(null)
       return
     }
-    const total = current.reduce((count, item) => count + item.content.length, 0)
+    const total = numberedCurrent.reduce((count, item) => count + item.content.length, 0)
     const remaining = maxDocumentTextPerTurn - total
     if (remaining <= 0) {
       setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
       return
     }
-    const content = truncateAttachmentText(document.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
-    const next = [...current, { ...document, content }]
+    const content = truncateAttachmentText(nextDocument.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
+    const next = [...numberedCurrent, { ...nextDocument, content }]
     attachedDocumentsRef.current = next
     setAttachedDocuments(next)
-    setAttachmentError(document.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
+    setAttachmentError(nextDocument.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
   }
 
   return (
