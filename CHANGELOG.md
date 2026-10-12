@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.190] - 恢复 Windows 兼容运行时会话写回 Codex 历史
+
 ## [0.0.189] - 回退共享 daemon 时重新选择官方 Windows Codex CLI
 
 ## [0.0.188] - 为 Windows 共享 Codex 守护进程权限限制增加兼容运行时回退

@@ -414,16 +414,18 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(app_server._should_fallback_from_shared_daemon(CodexRuntimeError("Codex app-server 已断开")))
 
-    async def test_isolated_fallback_keeps_web_history_out_of_the_unwritable_main_home(self) -> None:
+    async def test_isolated_fallback_syncs_web_history_to_the_main_home(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._runtime_mode = "isolated-fallback"
         app_server._runtime_home = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, app_server._runtime_home, ignore_errors=True)
-        app_server._sync_runtime_thread_to_history = Mock()  # type: ignore[method-assign]
+        app_server._sync_runtime_thread_to_history = Mock(return_value=True)  # type: ignore[method-assign]
+        app_server._history.invalidate = Mock()  # type: ignore[method-assign]
 
         await app_server._sync_runtime_thread("thread-id")
 
-        app_server._sync_runtime_thread_to_history.assert_not_called()
+        app_server._sync_runtime_thread_to_history.assert_called_once_with("thread-id")
+        app_server._history.invalidate.assert_called_once()
 
     async def test_shared_windows_non_permission_failure_does_not_fallback(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

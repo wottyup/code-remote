@@ -989,7 +989,7 @@ class CodexAppServer:
             raise CodexRuntimeError(f"无法准备 Codex 对话历史：{error}") from error
 
     async def _sync_runtime_thread(self, thread_id: str) -> None:
-        if self._runtime_home == self._history_home or self._runtime_mode == "isolated-fallback":
+        if self._runtime_home == self._history_home:
             return
         try:
             changed = await asyncio.to_thread(self._sync_runtime_thread_to_history, thread_id)
@@ -1000,8 +1000,6 @@ class CodexAppServer:
             self._history.invalidate()
 
     def _schedule_runtime_history_sync(self) -> None:
-        if self._runtime_mode == "isolated-fallback":
-            return
         source_home = (
             self._runtime_home
             if self._runtime_home != self._history_home
