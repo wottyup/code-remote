@@ -2108,12 +2108,8 @@ interface RemoteChatPaneProps {
   marqueeColor: string
   active: boolean
   showActiveFrame: boolean
-  canClose: boolean
   onActivate: () => void
-  onClose: () => void
   onCreateThread: () => void
-  onHandoff: () => void
-  onReclaim: () => void
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
@@ -2127,12 +2123,8 @@ function RemoteChatPane({
   marqueeColor,
   active,
   showActiveFrame,
-  canClose,
   onActivate,
-  onClose,
   onCreateThread,
-  onHandoff,
-  onReclaim,
   onOpenSidebar,
   onOpenWorkspace,
   onOpenWorkspaceFile,
@@ -2291,13 +2283,7 @@ function RemoteChatPane({
         </div>
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
-          {remote.handedOff ? (
-            <button className="handoff-button handoff-button--reclaim" type="button" onClick={(event) => { event.stopPropagation(); onReclaim() }} disabled={remote.handoffInProgress}>{remote.handoffInProgress ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}{remote.handoffInProgress ? '接管中' : '重新接管'}</button>
-          ) : remote.activeThread ? (
-            <button className="handoff-button" type="button" onClick={(event) => { event.stopPropagation(); onHandoff() }} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
-          ) : null}
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
-          <button className="pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} disabled={!canClose} aria-label="关闭并发窗口" title={canClose ? '关闭窗口' : '至少保留一个窗口'}><X size={15} /></button>
         </div>
       </header>
 
@@ -2825,34 +2811,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSelectedPaneIndex(freePane)
     await remotes[freePane].selectThread(thread)
   }
-  function closePane(paneIndex: number) {
-    if (openPaneIndexes.length <= 1) return
-    const position = openPaneIndexes.indexOf(paneIndex)
-    const nextOpen = openPaneIndexes.filter((index) => index !== paneIndex)
-    setOpenPaneIndexes(nextOpen)
-    if (selectedPaneIndex === paneIndex) {
-      setSelectedPaneIndex(nextOpen[Math.min(Math.max(position, 0), nextOpen.length - 1)] ?? nextOpen[0] ?? 0)
-    }
-  }
-
   function activatePane(paneIndex: number) {
     if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
-  }
-
-  async function handoffToLocalCodex(paneIndex = selectedPaneIndex) {
-    const target = remotes[paneIndex]
-    if (!target.activeThread || target.isRunning || target.isInterrupting || target.handoffInProgress) return
-    const confirmed = window.confirm('交还后网页端会停止持有已加载的 Codex 会话，网页不会自动重新连接。开发服务、SSH 和配对不会重启。确认交还给本机 Codex？')
-    if (!confirmed) return
-    await target.handoffToLocalCodex()
-  }
-
-  async function reclaimForRemote(paneIndex = selectedPaneIndex) {
-    const target = remotes[paneIndex]
-    if (target.handoffInProgress) return
-    const confirmed = window.confirm('重新接管后网页端会恢复连接。请确认本机 Codex 不再运行需要保留的任务。')
-    if (!confirmed) return
-    await target.reclaimForRemote()
   }
 
   function openCompletedThread() {
@@ -3191,12 +3151,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
-                    canClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
-                    onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
-                    onHandoff={() => void handoffToLocalCodex(paneIndex)}
-                    onReclaim={() => void reclaimForRemote(paneIndex)}
                     onOpenSidebar={() => setSidebarOpen(true)}
                     onOpenWorkspace={() => setWorkspaceOpen(true)}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
