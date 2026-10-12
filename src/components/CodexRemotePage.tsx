@@ -1960,14 +1960,21 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       setContextMenu(null)
       setSelectionContextMenu(null)
     }
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') closeMenu()
+    const handleMenuKeyboard = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closeMenu()
+        return
+      }
+      if (selectionContextMenu && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault()
+        void copyText(selectionContextMenu.content).then(setPreviewCopied)
+      }
     }
     document.addEventListener('pointerdown', closeMenu)
-    document.addEventListener('keydown', closeOnEscape)
+    document.addEventListener('keydown', handleMenuKeyboard)
     return () => {
       document.removeEventListener('pointerdown', closeMenu)
-      document.removeEventListener('keydown', closeOnEscape)
+      document.removeEventListener('keydown', handleMenuKeyboard)
     }
   }, [contextMenu, selectionContextMenu])
 
@@ -2002,7 +2009,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     event.preventDefault()
     setContextMenu(null)
     const menuWidth = 226
-    const menuHeight = 104
+    const menuHeight = 64
     setSelectionContextMenu({
       ...selected,
       path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
@@ -2016,13 +2023,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     const { path, startLine, endLine, content } = selectionContextMenu
     setSelectionContextMenu(null)
     onAddDocument(createWorkspaceSelectionDocument(path, startLine, endLine, content), !mobileOpen)
-  }
-
-  async function copySelectedCode() {
-    if (!selectionContextMenu) return
-    const content = selectionContextMenu.content
-    setSelectionContextMenu(null)
-    setPreviewCopied(await copyText(content))
   }
 
   function handleEntryClick(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
@@ -2285,8 +2285,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu" style={{ left: selectionContextMenu.x, top: selectionContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
-          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />作为文档添加</button>
-          <button type="button" role="menuitem" onClick={() => void copySelectedCode()}><Copy size={14} />复制选中内容</button>
+          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />添加到对话</button>
         </div>,
         document.body,
       ) : null}
