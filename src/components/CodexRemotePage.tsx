@@ -1670,6 +1670,7 @@ interface WorkspaceSelectionContextMenu {
   startLine: number
   endLine: number
   content: string
+  note: string
   x: number
   y: number
 }
@@ -1970,10 +1971,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
     const handleMenuKeyboard = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
+        if (event.isComposing) return
         closeMenu()
         return
       }
       if (selectionContextMenu && (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        const target = event.target
+        if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
         event.preventDefault()
         void copyText(selectionContextMenu.content).then(setPreviewCopied)
       }
@@ -2016,11 +2020,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
     event.preventDefault()
     setContextMenu(null)
-    const menuWidth = 226
-    const menuHeight = 64
+    const menuWidth = Math.min(300, window.innerWidth - 16)
+    const menuHeight = 240
     setSelectionContextMenu({
       ...selected,
       path: workspaceAbsolutePath(previewCwd ?? browsingRoot, previewFile.path),
+      note: '',
       x: Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8)),
       y: Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8)),
     })
@@ -2028,9 +2033,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   function addSelectedCodeAsDocument() {
     if (!selectionContextMenu) return
-    const { path, startLine, endLine, content } = selectionContextMenu
+    const { path, startLine, endLine, content, note } = selectionContextMenu
     setSelectionContextMenu(null)
-    onAddDocument(createWorkspaceSelectionDocument(path, startLine, endLine, content), !mobileOpen)
+    onAddDocument(createWorkspaceSelectionDocument(path, startLine, endLine, content, note), !mobileOpen)
   }
 
   function handleEntryClick(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
@@ -2293,6 +2298,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu" style={{ left: selectionContextMenu.x, top: selectionContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
+          <textarea
+            className="workspace-selection-context-menu__note"
+            aria-label="选区备注"
+            placeholder="写下这段代码需要修改什么…（可选）"
+            value={selectionContextMenu.note}
+            onChange={(event) => {
+              const note = event.currentTarget.value
+              setSelectionContextMenu((current) => current ? { ...current, note } : current)
+            }}
+          />
           <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />添加到对话</button>
         </div>,
         document.body,

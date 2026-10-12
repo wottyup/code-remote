@@ -41,18 +41,19 @@ export function formatWorkspaceSelectionReference(path: string, startLine: numbe
   return `文件：${markdownInlineCode(path)}（${lineRange}）\n${fence}\n${snippet}${trailingNewline}${fence}`
 }
 
-export function createWorkspaceSelectionDocument(path: string, startLine: number, endLine: number, selectedText: string): WorkspaceSelectionDocument {
+export function createWorkspaceSelectionDocument(path: string, startLine: number, endLine: number, selectedText: string, note = ''): WorkspaceSelectionDocument {
   const basename = path.split(/[\\/]/).at(-1)?.replace(/[<>:"|?*\u0000-\u001f]/g, '_').trim().slice(0, 96) || 'selected-code'
   const lineSuffix = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`
+  const normalizedNote = note.trim()
   return {
     name: `${basename}-L${lineSuffix}-selection.md`,
-    content: formatWorkspaceSelectionReference(path, startLine, endLine, selectedText),
+    content: `${normalizedNote ? `备注：\n${normalizedNote}\n\n` : ''}${formatWorkspaceSelectionReference(path, startLine, endLine, selectedText)}`,
   }
 }
 
 function isUnnumberedWorkspaceSelectionDocument(document: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
   return /-L\d+(?:-\d+)?-selection\.md$/i.test(document.name)
-    && /^文件：.+（第 \d+(?:–\d+)? 行）\n/.test(document.content)
+    && /(?:^|\n)文件：.+（第 \d+(?:–\d+)? 行）\n/.test(document.content)
 }
 
 export function isWorkspaceSelectionDocument(document: Pick<WorkspaceSelectionDocument, 'name' | 'content'>) {
