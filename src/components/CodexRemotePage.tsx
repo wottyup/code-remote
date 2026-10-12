@@ -18,6 +18,7 @@ import {
   LoaderCircle,
   Menu,
   MessagesSquare,
+  Paperclip,
   Pencil,
   Plus,
   RefreshCw,
@@ -30,6 +31,9 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
+import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 
 interface Props {
   token: string
@@ -59,15 +63,44 @@ const connectionLabel = {
 
 const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
 const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
+const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+})
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageDataUrlLength = 1_450_000
 const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
-const maxDocumentsPerTurn = 8
 const longPasteThreshold = 4_000
 const maxLongPasteChars = 24_000
+
+function formatMessageTimestamp(value: string | undefined) {
+  if (!value) return null
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? null : messageTimestampFormatter.format(date)
+}
+
+function formatTurnDuration(durationMs: number) {
+  const totalSeconds = Math.floor(Math.max(0, durationMs) / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`
+  if (minutes > 0) return `${minutes}分${seconds}秒`
+  return `${seconds}秒`
+}
+function truncateAttachmentText(value: string, limit: number, marker: string) {
+  if (value.length <= limit) return value
+  if (limit <= marker.length) return value.slice(0, limit)
+  return `${value.slice(0, limit - marker.length)}${marker}`
+}
+
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
@@ -357,7 +390,7 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
       : 'none',
     '--custom-theme-text-color': preferences.customTextColor,
     '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
+    '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
     '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
@@ -712,7 +745,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
-  adoptUnassignedDraft(threadId: string): void
+  adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
 
@@ -735,6 +768,7 @@ interface MessageComposerProps {
   onModelChange: (model: string) => void
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
@@ -765,6 +799,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onModelChange,
   onEffortChange,
   onApprovalPolicyChange,
+  onUploadPdf,
   onSend,
   queuedMessages,
   onSendQueuedNow,
@@ -778,7 +813,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [imagesReady, setImagesReady] = useState(false)
+  const [readingImages, setReadingImages] = useState(false)
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
+  const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
@@ -795,6 +833,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const draftScopeRef = useRef(draftScope)
+  draftScopeRef.current = draftScope
+  const attachedImagesRef = useRef(attachedImages)
+  attachedImagesRef.current = attachedImages
+  const attachedDocumentsRef = useRef(attachedDocuments)
+  attachedDocumentsRef.current = attachedDocuments
   const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const draftSaveTimer = useRef<number | undefined>(undefined)
@@ -871,6 +915,47 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setDraft(value)
   }, [])
 
+  const updateAttachedImages = useCallback((next: CodexImageAttachment[], persist = true) => {
+    const images = next.slice(0, maxImagesPerTurn)
+    attachedImagesRef.current = images
+    setAttachedImages(images)
+    if (persist && !editingQueuedMessageIdRef.current) {
+      void saveComposerImageDraft(draftScope, images).catch((reason: unknown) => {
+        if (draftScopeRef.current !== draftScope) return
+        setAttachmentError(reason instanceof Error
+          ? `图片草稿暂未保存：${reason.message} 刷新后可能无法恢复。`
+          : '图片草稿暂未保存，刷新后可能无法恢复。')
+      })
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    let active = true
+    setImagesReady(false)
+    const unsubscribe = subscribeToComposerImageDraft(draftScope, (images) => {
+      if (!active) return
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+      setImagesReady(true)
+    })
+    void readComposerImageDraft(draftScope).then((images) => {
+      if (!active) return
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+    }).catch((reason: unknown) => {
+      if (!active) return
+      setAttachmentError(reason instanceof Error
+        ? `待发送图片恢复失败：${reason.message}`
+        : '待发送图片恢复失败。')
+    }).finally(() => {
+      if (active) setImagesReady(true)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [draftScope])
+
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
   useLayoutEffect(() => {
@@ -934,11 +1019,26 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
-    adoptUnassignedDraft(threadId) {
+    adoptUnassignedDraft(threadId, includeImages = true) {
       const targetScope = composerDraftScopeForThread(threadId)
       const unassignedDraft = draftScope === newThreadComposerDraftScope
         ? draftRef.current
         : readComposerDraft(newThreadComposerDraftScope)
+      if (includeImages
+        && targetScope !== newThreadComposerDraftScope
+        && (attachedImagesRef.current.length > 0 || !imagesReady)) {
+        void moveComposerImageDraft(newThreadComposerDraftScope, targetScope).then((images) => {
+          if (draftScopeRef.current === targetScope) updateAttachedImages(images, false)
+        }).catch((reason: unknown) => {
+          if (draftScopeRef.current === targetScope) {
+            setAttachmentError(reason instanceof Error
+              ? `图片草稿转移失败：${reason.message}`
+              : '图片草稿转移失败。')
+          }
+        })
+      } else if (targetScope !== newThreadComposerDraftScope) {
+        rememberComposerImageDraftTarget(newThreadComposerDraftScope, targetScope)
+      }
       if (!unassignedDraft) return
       saveComposerDraft(targetScope, unassignedDraft)
       // The old keyed composer may unmount immediately after this callback.
@@ -956,7 +1056,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       changeOpenMenu(null)
       return true
     },
-  }), [changeOpenMenu, draftScope, updateDraft])
+  }), [changeOpenMenu, draftScope, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -1031,8 +1131,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const canCompose = !sending && !writerConflict && connection === 'connected'
   const canConfigure = canCompose && !isRunning
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
+    && !readingDocuments
+    && !readingImages
+    && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
-  const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
+  const canAttachImages = imagesReady && !readingImages && (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
+  const canAttachDocuments = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments
   const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
@@ -1048,7 +1152,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ) : null
 
   async function attachImages(files: File[]) {
-    if (files.length === 0) return
+    if (files.length === 0 || !imagesReady || readingImages) return
     if (!modelSupportsImages) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
@@ -1063,55 +1167,165 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError('单张图片不能超过 8 MB。')
       return
     }
-    const remaining = maxImagesPerTurn - attachedImages.length
+    const remaining = maxImagesPerTurn - attachedImagesRef.current.length
     if (remaining <= 0) {
       setAttachmentError('单条消息最多附加 4 张图片。')
       return
     }
     const chosen = files.slice(0, remaining)
+    setReadingImages(true)
     try {
       const next = await Promise.all(chosen.map(readImage))
-      setAttachedImages((current) => [...current, ...next].slice(0, maxImagesPerTurn))
+      updateAttachedImages([...attachedImagesRef.current, ...next])
       setAttachmentError(files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
+    } finally {
+      setReadingImages(false)
+    }
+  }
+
+  async function attachDocuments(files: File[]) {
+    if (files.length === 0 || readingDocuments) return
+    const availableSlots = maxDocumentsPerTurn - attachedDocumentsRef.current.length
+    if (availableSlots <= 0) {
+      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return
+    }
+    setReadingDocuments(true)
+    const parsed: CodexDocumentAttachment[] = []
+    const notices: string[] = files.length > availableSlots
+      ? [`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`]
+      : []
+    try {
+      const { readDocumentAttachment } = await import('../lib/documentAttachments')
+      for (const file of files.slice(0, availableSlots)) {
+        try {
+          if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
+          if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
+          if (documentExtensionOf(file.name) === 'pdf' || file.type === 'application/pdf') {
+            const uploaded = await onUploadPdf(file)
+            parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
+            continue
+          }
+          const result = await readDocumentAttachment(file)
+          parsed.push({ name: result.name, content: result.content })
+          if (result.truncated) notices.push(`${file.name} 内容较长，已截取前 ${maxDocumentTextLength.toLocaleString()} 个字符。`)
+        } catch (reason) {
+          notices.push(`${file.name || '文件'}：${reason instanceof Error ? reason.message : '读取失败。'}`)
+        }
+      }
+
+      let nextDocuments = [...attachedDocumentsRef.current]
+      let totalCharacters = nextDocuments.reduce((total, item) => total + item.content.length, 0)
+      for (const item of parsed) {
+        if (nextDocuments.some((current) => item.sourceFileId
+          ? current.sourceFileId === item.sourceFileId
+          : !current.sourceFileId && current.name === item.name && current.content === item.content)) continue
+        if (nextDocuments.length >= maxDocumentsPerTurn) {
+          notices.push(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`)
+          break
+        }
+        if (item.sourceFileId) {
+          nextDocuments.push(item)
+          continue
+        }
+        const remaining = maxDocumentTextPerTurn - totalCharacters
+        if (remaining <= 0) {
+          notices.push(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
+          break
+        }
+        const marker = '\n\n[已达到单条消息文档文字上限，后续内容未附加]'
+        const content = truncateAttachmentText(item.content, remaining, marker)
+        if (item.content.length > remaining) {
+          notices.push(`已达到单条消息 ${maxDocumentTextPerTurn.toLocaleString()} 字符上限，后续文件内容未附加。`)
+        }
+        nextDocuments.push({ ...item, content })
+        totalCharacters += content.length
+      }
+      if (nextDocuments !== attachedDocumentsRef.current) {
+        attachedDocumentsRef.current = nextDocuments
+        setAttachedDocuments(nextDocuments)
+      }
+      setAttachmentError(notices.length > 0 ? notices.slice(0, 4).join(' ') : null)
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '无法加载文档解析器，请刷新页面后重试。')
+    } finally {
+      setReadingDocuments(false)
     }
   }
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
       confirmQueuedEdit()
       return
     }
     const prompt = draft.trim()
-    if ((!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) || !canCompose) return
-    if (!modelSupportsImages && attachedImages.length > 0) {
+    if ((!prompt && attachedImagesRef.current.length === 0 && attachedDocuments.length === 0) || !canCompose) return
+    if (!modelSupportsImages && attachedImagesRef.current.length > 0) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
     const previousDraft = draft
-    const previousImages = attachedImages
+    const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocuments
     const previousAttachmentError = attachmentError
     setSending(true)
     updateDraft('')
-    setAttachedImages([])
+    saveComposerDraft(draftScope, '')
+    updateAttachedImages([], false)
+    attachedDocumentsRef.current = []
     setAttachedDocuments([])
     setAttachmentError(null)
-    const sent = await onSend({
-      prompt,
-      images: previousImages,
-      documents: previousDocuments,
-      model: selectedModel || undefined,
-      effort: selectedEffort || undefined,
-      approvalPolicy: selectedApprovalPolicy,
-    })
+    let sent = false
+    try {
+      sent = await onSend({
+        prompt,
+        images: previousImages,
+        documents: previousDocuments,
+        model: selectedModel || undefined,
+        effort: selectedEffort || undefined,
+        approvalPolicy: selectedApprovalPolicy,
+      })
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
+    }
     if (!sent) {
+      const transferredImageTarget = pendingComposerImageDraftTarget(draftScope)
+      let imagesMovedToNewThread = false
+      if (transferredImageTarget) {
+        try {
+          await moveComposerImageDraft(draftScope, transferredImageTarget)
+          forgetComposerImageDraftTarget(draftScope)
+          imagesMovedToNewThread = true
+        } catch (reason) {
+          forgetComposerImageDraftTarget(draftScope)
+          setAttachmentError(reason instanceof Error
+            ? `发送失败，图片仍保留在原草稿：${reason.message}`
+            : '发送失败，图片仍保留在原草稿。')
+        }
+      }
       updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
-      setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
-      setAttachedDocuments((current) => current.length > 0 ? [...previousDocuments, ...current] : previousDocuments)
+      const currentImages = attachedImagesRef.current
+      updateAttachedImages(currentImages.length > 0 ? [...previousImages, ...currentImages] : previousImages, !imagesMovedToNewThread)
+      const currentDocuments = attachedDocumentsRef.current
+      const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
+      attachedDocumentsRef.current = restoredDocuments
+      setAttachedDocuments(restoredDocuments)
       setAttachmentError((current) => current ?? previousAttachmentError)
+    } else {
+      forgetComposerImageDraftTarget(draftScope)
+      try {
+        await saveComposerImageDraft(draftScope, [])
+      } catch (reason) {
+        if (draftScopeRef.current === draftScope) {
+          setAttachmentError(reason instanceof Error
+            ? `消息已发送，但清除图片草稿失败：${reason.message}`
+            : '消息已发送，但清除图片草稿失败。')
+        }
+      }
     }
     setSending(false)
   }
@@ -1121,27 +1335,33 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     editingDraftSnapshot.current = null
     if (!snapshot) return
     updateDraft(snapshot.draft)
-    setAttachedImages(snapshot.images)
+    updateAttachedImages(snapshot.images)
+    attachedDocumentsRef.current = snapshot.documents
     setAttachedDocuments(snapshot.documents)
     setAttachmentError(snapshot.attachmentError)
   }
 
   function beginQueuedEdit(message: QueuedTurnMessage) {
     if (editingQueuedMessageId || sending || sendingQueuedId) return
+    if (!imagesReady) {
+      setAttachmentError('图片草稿恢复完成后再编辑排队消息。')
+      return
+    }
     if (!onBeginQueuedEdit(message.id)) {
       setAttachmentError('这条排队消息正在处理中，请稍后再试。')
       return
     }
     editingDraftSnapshot.current = {
       draft: draftRef.current,
-      images: attachedImages,
+      images: attachedImagesRef.current,
       documents: attachedDocuments,
       attachmentError,
     }
     editingQueuedMessageIdRef.current = message.id
     setEditingQueuedMessageId(message.id)
     updateDraft(message.text)
-    setAttachedImages(message.images)
+    updateAttachedImages(message.images, false)
+    attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
     setAttachmentError(null)
     window.requestAnimationFrame(() => composer.current?.focus())
@@ -1198,6 +1418,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    if (readingDocuments) return
     const directFiles = Array.from(event.clipboardData.files)
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
@@ -1216,7 +1437,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     appendDocument({ name: 'pasted-content.md', content: pastedText })
-    setAttachmentError(null)
   }
 
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -1228,11 +1448,32 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function appendDocument(document: CodexDocumentAttachment) {
-    setAttachedDocuments((current) => {
-      if (current.some((item) => item.name === document.name && item.content === document.content)) return current
-      return [...current, document].slice(0, maxDocumentsPerTurn)
-    })
-    setAttachmentError(null)
+    const current = attachedDocumentsRef.current
+    if (current.some((item) => document.sourceFileId
+      ? item.sourceFileId === document.sourceFileId
+      : !item.sourceFileId && item.name === document.name && item.content === document.content)) return
+    if (current.length >= maxDocumentsPerTurn) {
+      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return
+    }
+    if (document.sourceFileId) {
+      const next = [...current, document]
+      attachedDocumentsRef.current = next
+      setAttachedDocuments(next)
+      setAttachmentError(null)
+      return
+    }
+    const total = current.reduce((count, item) => count + item.content.length, 0)
+    const remaining = maxDocumentTextPerTurn - total
+    if (remaining <= 0) {
+      setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
+      return
+    }
+    const content = truncateAttachmentText(document.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
+    const next = [...current, { ...document, content }]
+    attachedDocumentsRef.current = next
+    setAttachedDocuments(next)
+    setAttachmentError(document.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
   }
 
   return (
@@ -1273,17 +1514,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       >
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
-          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
+      {!imagesReady || readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{readingImages ? '正在读取图片…' : '正在恢复待发送图片…'}</p> : null}
+      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
           {attachedDocuments.map((document, index) => (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.content.length.toLocaleString()} 个字符 · 将随消息发送</small></span>
-              <button type="button" onClick={() => setAttachedDocuments((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 将读取文件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
+              <button type="button" disabled={readingDocuments} onClick={() => {
+                const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
             </div>
           ))}
         </div>
@@ -1357,9 +1604,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className="composer-hint"><ShieldCheck size={14} />{editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
+          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
             <ImagePlus size={16} />
             <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
+          </span>
+          <span className={`attach-button attach-button--native${canAttachDocuments ? '' : ' attach-button--disabled'}`} title={readingDocuments ? '正在读取文档' : '附加文档或源码文件'}>
+            {readingDocuments ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
+            <input className="image-input" type="file" accept={documentAttachmentAccept} multiple disabled={!canAttachDocuments} onChange={(event) => { void attachDocuments(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加文档或源码文件" />
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
@@ -1858,12 +2109,10 @@ interface RemoteChatPaneProps {
   marqueeColor: string
   active: boolean
   showActiveFrame: boolean
-  canClose: boolean
+  showPaneClose: boolean
   onActivate: () => void
   onClose: () => void
   onCreateThread: () => void
-  onHandoff: () => void
-  onReclaim: () => void
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
@@ -1877,12 +2126,10 @@ function RemoteChatPane({
   marqueeColor,
   active,
   showActiveFrame,
-  canClose,
+  showPaneClose,
   onActivate,
   onClose,
   onCreateThread,
-  onHandoff,
-  onReclaim,
   onOpenSidebar,
   onOpenWorkspace,
   onOpenWorkspaceFile,
@@ -2046,13 +2293,8 @@ function RemoteChatPane({
         </div>
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
-          {remote.handedOff ? (
-            <button className="handoff-button handoff-button--reclaim" type="button" onClick={(event) => { event.stopPropagation(); onReclaim() }} disabled={remote.handoffInProgress}>{remote.handoffInProgress ? <LoaderCircle className="spin" size={13} /> : <RefreshCw size={13} />}{remote.handoffInProgress ? '接管中' : '重新接管'}</button>
-          ) : remote.activeThread ? (
-            <button className="handoff-button" type="button" onClick={(event) => { event.stopPropagation(); onHandoff() }} disabled={remote.isRunning || remote.isInterrupting || remote.handoffInProgress} title="停止网页端持有的 Codex 会话，让本机 Codex 可以打开"><Square size={11} />{remote.handoffInProgress ? '交还中' : '交还本机'}</button>
-          ) : null}
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
-          <button className="pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} disabled={!canClose} aria-label="关闭并发窗口" title={canClose ? '关闭窗口' : '至少保留一个窗口'}><X size={15} /></button>
+          {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
       </header>
 
@@ -2083,7 +2325,7 @@ function RemoteChatPane({
               : []
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} activity={message.streaming ? remote.activity : null} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble message={message} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -2101,9 +2343,12 @@ function RemoteChatPane({
               </div>
             </div>
           ) : null}
-          {remote.isRunning && !hasStreamingAssistant ? (
+          {remote.isRunning || remote.runningTurnId !== null ? (
             <div className="running-indicator" role="status" aria-live="polite">
-              <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+              <div className="running-indicator__row">
+                <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+                {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
+              </div>
             </div>
           ) : null}
         </div>
@@ -2147,6 +2392,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
+  const [threadRenameDraft, setThreadRenameDraft] = useState('')
+  const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
+  const [threadRenameSaving, setThreadRenameSaving] = useState(false)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
   const openSettingsPanel = useCallback(() => {
     const currentState = window.history.state
@@ -2158,13 +2407,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     setSettingsOpen(true)
     setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openSidebarPanel = useCallback(() => {
+    setWorkspaceOpen(false)
+    setSidebarOpen(true)
+  }, [])
+  const openWorkspacePanel = useCallback(() => {
+    setSidebarOpen(false)
+    setWorkspaceOpen(true)
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     if (isSettingsHistoryEntry(window.history.state)) window.history.back()
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
-  const sidebarTouchStart = useRef<{ x: number; y: number; sidebarWasOpen: boolean } | null>(null)
+  const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
+  const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
   const paneGrid = useRef<HTMLDivElement>(null)
@@ -2184,6 +2443,85 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
 
+  function openThreadContextMenu(thread: CodexThread, x: number, y: number) {
+    setThreadContextMenu({
+      thread,
+      x: Math.max(8, Math.min(x, window.innerWidth - 174)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 122)),
+    })
+  }
+
+  function clearThreadLongPress() {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+    threadLongPress.current = null
+  }
+
+  function handleThreadTouchStart(event: ReactTouchEvent<HTMLButtonElement>, thread: CodexThread) {
+    clearThreadLongPress()
+    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const pending = {
+      threadId: thread.id,
+      x: touch.clientX,
+      y: touch.clientY,
+      timer: 0,
+      triggered: false,
+    }
+    pending.timer = window.setTimeout(() => {
+      if (threadLongPress.current !== pending) return
+      pending.triggered = true
+      openThreadContextMenu(thread, pending.x, pending.y)
+    }, 520)
+    threadLongPress.current = pending
+  }
+
+  function handleThreadTouchMove(event: ReactTouchEvent<HTMLButtonElement>) {
+    const pending = threadLongPress.current
+    const touch = event.touches[0]
+    if (!pending || !touch || Math.abs(touch.clientX - pending.x) > 10 || Math.abs(touch.clientY - pending.y) > 10) {
+      clearThreadLongPress()
+    }
+  }
+
+  function startThreadRename(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setThreadRenameTarget(thread)
+    setThreadRenameDraft((thread.name || thread.preview || '').slice(0, 72))
+    setThreadRenameError(null)
+  }
+
+  function closeThreadRename() {
+    if (threadRenameSaving) return
+    setThreadRenameTarget(null)
+    setThreadRenameError(null)
+  }
+
+  async function submitThreadRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!threadRenameTarget || threadRenameSaving) return
+    const name = threadRenameDraft.trim().replace(/\s+/g, ' ')
+    if (!name) {
+      setThreadRenameError('对话名称不能为空。')
+      return
+    }
+    if (name.length > 72) {
+      setThreadRenameError('对话名称不能超过 72 个字符。')
+      return
+    }
+    setThreadRenameSaving(true)
+    setThreadRenameError(null)
+    try {
+      await remote0.renameThread(threadRenameTarget.id, name)
+      setThreadRenameTarget(null)
+    } catch (reason) {
+      setThreadRenameError(reason instanceof Error ? reason.message : '重命名失败，请稍后重试。')
+    } finally {
+      setThreadRenameSaving(false)
+    }
+  }
+
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
     if (!window.matchMedia('(max-width: 700px)').matches || event.touches.length !== 1) {
       sidebarTouchStart.current = null
@@ -2192,15 +2530,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const touch = event.touches[0]
     if (!touch) return
     const target = event.target
-    const sidebar = remoteShell.current?.querySelector('.remote-sidebar')
-    const startedInsideSidebar = sidebarOpen && target instanceof Node && Boolean(sidebar?.contains(target))
     const targetElement = target instanceof Element ? target : null
-    const startedOnBackdrop = sidebarOpen && Boolean(targetElement?.closest('.sidebar-backdrop'))
-    const startedOnControl = Boolean(targetElement?.closest('button, input, textarea, select, [contenteditable="true"], [role="button"]'))
-    const canOpenFromContent = !sidebarOpen && !startedOnControl
-    sidebarTouchStart.current = startedInsideSidebar || startedOnBackdrop || canOpenFromContent
-      ? { x: touch.clientX, y: touch.clientY, sidebarWasOpen: sidebarOpen }
-      : null
+    const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
+    const startedInsideSidebar = sidebarOpen && Boolean(targetElement?.closest('.remote-sidebar'))
+    const startedInsideWorkspaceTree = workspaceOpen && Boolean(targetElement?.closest('.workspace-explorer__tree'))
+    const startedOnInteractiveSurface = Boolean(targetElement?.closest([
+      'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
+      '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
+      '.chat-message__code', '.workspace-file-preview__code', '.workspace-file-preview-panel',
+      '.workspace-file-preview-backdrop', '.theme-settings-panel', '.thread-context-menu',
+      '.thread-rename-backdrop', '.message-composer',
+    ].join(', ')))
+    sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop && !startedInsideSidebar && !startedInsideWorkspaceTree
+      ? null
+      : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
   }
 
   function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
@@ -2208,11 +2551,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     sidebarTouchStart.current = null
     const touch = event.changedTouches[0]
     if (!start || !touch) return
-    const deltaX = touch.clientX - start.x
-    const deltaY = touch.clientY - start.y
-    if (Math.abs(deltaX) < 64 || Math.abs(deltaX) < Math.abs(deltaY) * 1.25) return
-    if (!start.sidebarWasOpen && deltaX > 0) setSidebarOpen(true)
-    else if (start.sidebarWasOpen && deltaX < 0) setSidebarOpen(false)
+    const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
+    if (!action) return
+    event.preventDefault()
+    if (action === 'open-sidebar') openSidebarPanel()
+    else if (action === 'close-sidebar') setSidebarOpen(false)
+    else if (action === 'open-workspace') openWorkspacePanel()
+    else if (action === 'close-workspace') setWorkspaceOpen(false)
   }
 
   const activeThreadId = activeRemote.activeThread?.id
@@ -2304,10 +2649,30 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }, [threadContextMenu])
 
+  useEffect(() => () => {
+    const pending = threadLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+  }, [])
+
+  useEffect(() => {
+    if (!threadRenameTarget) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      closeThreadRename()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [threadRenameTarget, threadRenameSaving])
+
   useLayoutEffect(() => {
     const handleBack = () => {
       if (settingsOpen) {
         closeSettingsPanel()
+        return true
+      }
+      if (threadRenameTarget) {
+        closeThreadRename()
         return true
       }
       if (workspacePreviewModeRef.current === 'mobile') {
@@ -2333,11 +2698,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, workspaceOpen])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadRenameTarget, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (threadRenameTarget) return
       if (workspacePreviewModeRef.current === 'mobile') {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
@@ -2349,7 +2715,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt])
+  }, [activeRemote.isRunning, activeRemote.interrupt, threadRenameTarget])
 
   useEffect(() => {
     if (availableModels.length === 0) return
@@ -2486,22 +2852,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
   }
 
-  async function handoffToLocalCodex(paneIndex = selectedPaneIndex) {
-    const target = remotes[paneIndex]
-    if (!target.activeThread || target.isRunning || target.isInterrupting || target.handoffInProgress) return
-    const confirmed = window.confirm('交还后网页端会停止持有已加载的 Codex 会话，网页不会自动重新连接。开发服务、SSH 和配对不会重启。确认交还给本机 Codex？')
-    if (!confirmed) return
-    await target.handoffToLocalCodex()
-  }
-
-  async function reclaimForRemote(paneIndex = selectedPaneIndex) {
-    const target = remotes[paneIndex]
-    if (target.handoffInProgress) return
-    const confirmed = window.confirm('重新接管后网页端会恢复连接。请确认本机 Codex 不再运行需要保留的任务。')
-    if (!confirmed) return
-    await target.reclaimForRemote()
-  }
-
   function openCompletedThread() {
     if (!completionToast) return
     const thread = remote0.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
@@ -2510,7 +2860,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   const copyMessage = useCallback(async (message: CodexMessage) => {
-    const documentText = message.documents?.map((document) => '\n\n' + document.name + '\n' + document.content).join('') ?? ''
+    const documentText = message.documents?.map((document) => document.sourceFileId
+      ? `\n\n[原始 PDF 附件：${document.name}]`
+      : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
     const value = (message.text + documentText).trim()
     if (!value || !(await copyText(value))) return
     setCopiedMessageId(message.id)
@@ -2524,7 +2876,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return target.sendMessage({
       ...input,
       onThreadCreated: (thread) => {
-        composerHandle.current?.adoptUnassignedDraft(thread.id)
+        composerHandle.current?.adoptUnassignedDraft(thread.id, false)
         rememberThreadComposerPreferences(thread.id, preferences)
       },
     })
@@ -2770,7 +3122,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={() => void selectThread(thread)} onContextMenu={(event) => { event.preventDefault(); setThreadContextMenu({ thread, x: event.clientX, y: event.clientY }) }} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
+              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
+                const pending = threadLongPress.current
+                if (pending?.threadId === thread.id && pending.triggered) {
+                  event.preventDefault()
+                  clearThreadLongPress()
+                  return
+                }
+                clearThreadLongPress()
+                void selectThread(thread)
+              }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
@@ -2788,10 +3149,30 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       </aside>
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      {workspaceOpen ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
-          <button type="button" role="menuitem" onClick={() => void openConcurrentThread(threadContextMenu.thread)}><MessagesSquare size={14} />并发打开</button>
-          <button type="button" role="menuitem" onClick={() => void selectThread(threadContextMenu.thread)}><Check size={14} />切换到此对话</button>
+          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
+          <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>
+          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void selectThread(thread) }}><Check size={14} />切换到此对话</button>
+        </div>
+      ) : null}
+
+      {threadRenameTarget ? (
+        <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadRename() }}>
+          <form className="thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title" onSubmit={(event) => { void submitThreadRename(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <h2 id="thread-rename-title">重命名对话</h2>
+              <p>名称会同步到连接的设备和后续刷新。</p>
+            </div>
+            <label htmlFor="thread-rename-input">对话名称</label>
+            <input id="thread-rename-input" type="text" value={threadRenameDraft} maxLength={72} autoComplete="off" autoFocus disabled={threadRenameSaving} aria-describedby={threadRenameError ? 'thread-rename-error' : undefined} onChange={(event) => { setThreadRenameDraft(event.target.value); setThreadRenameError(null) }} />
+            {threadRenameError ? <p className="thread-rename-dialog__error" id="thread-rename-error" role="alert">{threadRenameError}</p> : null}
+            <div className="thread-rename-dialog__actions">
+              <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>取消</button>
+              <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />保存中</> : '确定'}</button>
+            </div>
+          </form>
         </div>
       ) : null}
 
@@ -2808,14 +3189,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
-                    canClose={openPaneIndexes.length > 1}
+                    showPaneClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
-                    onHandoff={() => void handoffToLocalCodex(paneIndex)}
-                    onReclaim={() => void reclaimForRemote(paneIndex)}
-                    onOpenSidebar={() => setSidebarOpen(true)}
-                    onOpenWorkspace={() => setWorkspaceOpen(true)}
+                    onOpenSidebar={openSidebarPanel}
+                    onOpenWorkspace={openWorkspacePanel}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
@@ -2849,6 +3228,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onModelChange={changeModel}
               onEffortChange={changeEffort}
               onApprovalPolicyChange={changeApprovalPolicy}
+              onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
@@ -3349,28 +3729,47 @@ const OperationActivityLine = memo(function OperationActivityLine({ className, o
   )
 })
 
-const MessageBubble = memo(function MessageBubble({ message, activity, operations, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    setNow(Date.now())
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [startedAt])
+
+  return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
+})
+
+const MessageBubble = memo(function MessageBubble({ message, operations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
-  const currentOperation = [...operations].reverse().find((operation) => operation.status === 'running') ?? null
+  const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null
+  const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
+  const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
 
   return (
     <article className={`chat-message chat-message--${message.role}`}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
-      <div className={`chat-message__body${message.role === 'user' && showCopyAction ? ' chat-message__body--copy-outside' : ''}`}>
+      <div className="chat-message__body">
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
-          {message.streaming ? (
-            <OperationActivityLine className="chat-message__activity" operation={currentOperation} activity={activity} iconSize={12} />
-          ) : null}
+          {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
+          {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
-        {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
+        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
-        {showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null}
+        {message.role === 'assistant' ? copyAction : null}
       </div>
+      {message.role === 'user' && (sentAtLabel || copyAction) ? (
+        <div className="chat-message__footer">
+          {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
+          {copyAction}
+        </div>
+      ) : null}
     </article>
   )
 })

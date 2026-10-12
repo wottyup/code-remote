@@ -594,6 +594,17 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(["gpt-new"], [model["model"] for model in models])
             self.assertTrue(models[0]["isDefault"])
             self.assertEqual("high", models[0]["defaultReasoningEffort"])
+    async def test_set_thread_name_uses_the_codex_app_server_method(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(return_value={})
+
+        await app_server.set_thread_name("thread-id", "Project notes")
+
+        app_server.request.assert_awaited_once_with(
+            "thread/name/set",
+            {"threadId": "thread-id", "name": "Project notes"},
+        )
+
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[

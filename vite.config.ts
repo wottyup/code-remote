@@ -10,6 +10,9 @@ const engineProxy = {
 export default defineConfig({
   plugins: [react()],
   publicDir: 'punlic',
+  optimizeDeps: {
+    exclude: ['pdfjs-dist'],
+  },
   server: {
     host: '0.0.0.0',
     port: 4173,
