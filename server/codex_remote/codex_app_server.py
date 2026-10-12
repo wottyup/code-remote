@@ -9,6 +9,7 @@ import shutil
 import sqlite3
 import subprocess
 import uuid
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -30,7 +31,7 @@ _SHARED_DAEMON_FALLBACK_MARKERS = (
 _WINDOWS_ACCESS_DENIED_MARKERS = ("os error 5", "os error 10013", "access is denied", "permission denied", "拒绝访问")
 _SHARED_DAEMON_FALLBACK_MESSAGE = (
     "Windows 当前进程无法访问桌面 Codex 的私有 app-server，已切换到兼容运行时；"
-    "网页会话会同步到本机 Codex 历史。"
+    "网页会话会尝试同步到本机 Codex 历史；若主索引不可写，桌面侧栏暂时不会显示这些会话。"
 )
 
 
@@ -1031,7 +1032,9 @@ class CodexAppServer:
                 if not self._is_remote_created_rollout(source):
                     continue
                 try:
-                    changed = self._sync_runtime_rollout(source, source_home) or changed
+                    copied = self._sync_runtime_rollout(source, source_home)
+                    indexed = self._sync_runtime_thread_index(source, source_home)
+                    changed = copied or indexed or changed
                 except OSError as error:
                     logger.warning("Unable to sync Codex Remote rollout %s: %s", source, error)
         return changed
@@ -1050,7 +1053,75 @@ class CodexAppServer:
         source = self._find_thread_rollout(self._runtime_home, thread_id)
         if source is None:
             return False
-        return self._sync_runtime_rollout(source, self._runtime_home)
+        copied = self._sync_runtime_rollout(source, self._runtime_home)
+        indexed = self._sync_runtime_thread_index(source, self._runtime_home)
+        return copied or indexed
+
+    def _sync_runtime_thread_index(self, source: Path, source_home: Path) -> bool:
+        """Register a copied web session in the desktop sidebar's state index.
+
+        The index is optional for the web client.  When Windows only grants
+        read access to the desktop state database, the rollout stays intact
+        and a later launch with write access can fill in the missing row.
+        """
+        if not self._is_remote_created_rollout(source):
+            return False
+        try:
+            relative = source.resolve().relative_to(source_home)
+        except ValueError:
+            return False
+        if not relative.parts or relative.parts[0] != "sessions":
+            return False
+        target = self._history_home / relative
+        source_db = source_home / "state_5.sqlite"
+        target_db = self._history_home / "state_5.sqlite"
+        if not source_db.is_file() or not target_db.is_file() or not target.is_file():
+            return False
+        try:
+            if target.stat().st_size != source.stat().st_size or not self._file_is_prefix(target, source):
+                return False
+            with source.open("r", encoding="utf-8") as handle:
+                envelope = json.loads(handle.readline())
+            payload = envelope.get("payload", {})
+            thread_id = payload.get("id") or payload.get("session_id")
+            if not isinstance(thread_id, str):
+                return False
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+
+        try:
+            with closing(sqlite3.connect(target_db, timeout=5)) as connection:
+                with closing(sqlite3.connect(source_db, timeout=5)) as runtime_connection:
+                    main_columns = connection.execute("PRAGMA main.table_info(threads)").fetchall()
+                    runtime_columns = runtime_connection.execute("PRAGMA table_info(threads)").fetchall()
+                    if not main_columns or main_columns != runtime_columns:
+                        logger.warning("Skipping Codex Remote index sync: desktop and runtime schemas differ")
+                        return False
+                    columns = [column[1] for column in main_columns]
+                    if "originator" not in columns or "rollout_path" not in columns or "history_mode" not in columns:
+                        return False
+                    row = runtime_connection.execute(
+                        "SELECT * FROM threads WHERE id = ? AND originator = ?",
+                        (thread_id, "codex_remote_web"),
+                    ).fetchone()
+                    if row is None:
+                        return False
+                    values = list(row)
+                    values[columns.index("rollout_path")] = str(target)
+                    values[columns.index("history_mode")] = "legacy"
+                    for field in ("project_id", "thread_section_id", "section_position", "section_entered_at_ms"):
+                        if field in columns:
+                            values[columns.index(field)] = None
+                    placeholders = ",".join("?" for _ in columns)
+                    cursor = connection.execute(
+                        f"INSERT INTO main.threads VALUES ({placeholders}) ON CONFLICT(id) DO NOTHING",
+                        values,
+                    )
+                    connection.commit()
+                    return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            logger.warning("Unable to index Codex Remote thread %s in desktop history: %s", thread_id, error)
+            return False
 
     @staticmethod
     def _find_thread_rollout(codex_home: Path, thread_id: str) -> Path | None:

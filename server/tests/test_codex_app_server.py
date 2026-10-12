@@ -7,6 +7,7 @@ import shutil
 import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -197,6 +198,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 os.environ["CODEX_HOME"] = str(history_home)
                 os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
                 app_server = CodexAppServer("codex", Path.cwd())
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
                 self.assertTrue(app_server._sync_runtime_thread_to_history("thread-id"))
                 target = history_home / source.relative_to(runtime_home)
                 self.assertEqual(first_line, target.read_text(encoding="utf-8"))
@@ -234,8 +236,74 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 os.environ["CODEX_HOME"] = str(history_home)
                 os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
                 app_server = CodexAppServer("codex", Path.cwd())
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
                 self.assertFalse(app_server._sync_runtime_rollout(source, runtime_home))
                 self.assertEqual('local\n', target.read_text(encoding="utf-8"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    def test_runtime_index_registers_only_copied_web_sessions_without_overwriting_desktop_rows(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as history_directory, tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            relative = Path("sessions") / "2026" / "10" / "12" / "rollout-web-thread.jsonl"
+            source = runtime_home / relative
+            target = history_home / relative
+            source.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            source.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "web-thread", "originator": "codex_remote_web"},
+            }) + "\n", encoding="utf-8")
+            shutil.copy2(source, target)
+            schema = (
+                "create table threads (id text primary key, rollout_path text not null, "
+                "title text not null, originator text, history_mode text not null, project_id text)"
+            )
+            for home in (history_home, runtime_home):
+                with closing(sqlite3.connect(home / "state_5.sqlite")) as connection, connection:
+                    connection.execute(schema)
+            with closing(sqlite3.connect(runtime_home / "state_5.sqlite")) as connection, connection:
+                connection.execute(
+                    "insert into threads values (?, ?, ?, ?, ?, ?)",
+                    ("web-thread", str(source), "Web conversation", "codex_remote_web", "paginated", None),
+                )
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                target.write_text("divergent\n", encoding="utf-8")
+                self.assertFalse(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection:
+                    self.assertIsNone(connection.execute("select id from threads where id = ?", ("web-thread",)).fetchone())
+                shutil.copy2(source, target)
+                self.assertTrue(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection, connection:
+                    self.assertEqual(
+                        (str(target), "Web conversation", "codex_remote_web", "legacy"),
+                        connection.execute(
+                            "select rollout_path, title, originator, history_mode from threads where id = ?",
+                            ("web-thread",),
+                        ).fetchone(),
+                    )
+                    connection.execute("update threads set title = ? where id = ?", ("Desktop edit", "web-thread"))
+                self.assertFalse(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection:
+                    self.assertEqual(
+                        ("Desktop edit",),
+                        connection.execute("select title from threads where id = ?", ("web-thread",)).fetchone(),
+                    )
+
             finally:
                 if old_home is None:
                     os.environ.pop("CODEX_HOME", None)
@@ -281,9 +349,11 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
                 app_server = CodexAppServer("codex", Path.cwd())
                 app_server._sync_runtime_rollout = Mock(return_value=True)  # type: ignore[method-assign]
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
 
                 self.assertTrue(app_server._sync_runtime_created_history_to_main(runtime_home))
                 app_server._sync_runtime_rollout.assert_called_once_with(remote, runtime_home)
+                app_server._sync_runtime_thread_index.assert_called_once_with(remote, runtime_home)
             finally:
                 if old_home is None:
                     os.environ.pop("CODEX_HOME", None)

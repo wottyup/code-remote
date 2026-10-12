@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.0.191] - 将兼容运行时的网页会话登记到本机 Codex 对话索引
+
 ## [0.0.190] - 恢复 Windows 兼容运行时会话写回 Codex 历史
 
 ## [0.0.189] - 回退共享 daemon 时重新选择官方 Windows Codex CLI
