@@ -2102,7 +2102,7 @@ function RemoteChatPane({
               : []
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} activity={message.streaming ? remote.activity : null} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble message={message} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -2120,11 +2120,11 @@ function RemoteChatPane({
               </div>
             </div>
           ) : null}
-          {remote.isRunning && !hasStreamingAssistant ? (
+          {remote.isRunning ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
-                {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
+                {!hasStreamingAssistant && remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
               </div>
             </div>
           ) : null}
@@ -3383,11 +3383,10 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, activity, operations, copied, onCopy }: { message: CodexMessage; activity: CodexActivity | null; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const MessageBubble = memo(function MessageBubble({ message, operations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
-  const currentOperation = [...operations].reverse().find((operation) => operation.status === 'running') ?? null
   const [clockNow, setClockNow] = useState(() => Date.now())
   const replyStartedAt = message.replyStartedAt ? Date.parse(message.replyStartedAt) : Number.NaN
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
@@ -3410,9 +3409,6 @@ const MessageBubble = memo(function MessageBubble({ message, activity, operation
           {message.role === 'assistant' ? <strong>Codex</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {elapsedDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">{message.streaming ? '已用' : '用时'} {formatTurnDuration(elapsedDurationMs)}</time> : null}
-          {message.streaming ? (
-            <OperationActivityLine className="chat-message__activity" operation={currentOperation} activity={activity} iconSize={12} />
-          ) : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
