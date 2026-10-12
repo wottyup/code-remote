@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _SHARED_DAEMON_FALLBACK_MARKERS = (
     "daemon.lock",
     "daemon operation lock",
+    "daemon state directory",
     "app-server-control.sock",
     "app-server control socket",
     "failed to connect to socket",

@@ -518,6 +518,21 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertTrue(app_server._should_fallback_from_shared_daemon(CodexRuntimeError("Codex app-server 已断开")))
 
+    def test_shared_windows_daemon_state_directory_permission_failure_triggers_fallback(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        error = CodexRuntimeError(
+            "共享 Codex app-server 启动失败：WARNING: failed to clean up stale arg0 temp dirs: "
+            "拒绝访问。 (os error 5) WARNING: proceeding, even though we could not create PATH aliases: "
+            "拒绝访问。 (os error 5) at path \"C:\\Users\\05110\\.codex\\tmp\\arg0\\codex-arg0fobSfm\" "
+            "Error: failed to create daemon state directory C:\\Users\\05110\\.codex\\app-server-daemon "
+            "Caused by: 拒绝访问。 (os error 5)"
+        )
+
+        self.assertTrue(app_server._should_fallback_from_shared_daemon(error))
+
     async def test_isolated_fallback_syncs_web_history_to_the_main_home(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._runtime_mode = "isolated-fallback"
