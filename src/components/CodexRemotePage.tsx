@@ -2526,6 +2526,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const target = event.target
     const targetElement = target instanceof Element ? target : null
     const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
+    const startedInsideSidebar = sidebarOpen && Boolean(targetElement?.closest('.remote-sidebar'))
+    const startedInsideWorkspaceTree = workspaceOpen && Boolean(targetElement?.closest('.workspace-explorer__tree'))
     const startedOnInteractiveSurface = Boolean(targetElement?.closest([
       'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
       '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
@@ -2533,7 +2535,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       '.workspace-file-preview-backdrop', '.theme-settings-panel', '.thread-context-menu',
       '.thread-rename-backdrop', '.message-composer',
     ].join(', ')))
-    sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop
+    sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop && !startedInsideSidebar && !startedInsideWorkspaceTree
       ? null
       : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
   }
@@ -2544,6 +2546,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const touch = event.changedTouches[0]
     if (!start || !touch) return
     const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
+    if (!action) return
+    event.preventDefault()
     if (action === 'open-sidebar') openSidebarPanel()
     else if (action === 'close-sidebar') setSidebarOpen(false)
     else if (action === 'open-workspace') openWorkspacePanel()
