@@ -389,7 +389,7 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
       : 'none',
     '--custom-theme-text-color': preferences.customTextColor,
     '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex('#ffffff', 0.72),
+    '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
     '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
