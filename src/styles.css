@@ -642,6 +642,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 
 @media (max-width: 700px), (orientation: landscape) and (pointer: coarse) {
+  .running-indicator__row { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .running-indicator__elapsed { margin-left: 20px; }
   .composer-file-change-summary__file { max-width: 100%; flex: 0 1 auto; }
   .composer-file-change-summary__file > span:first-child { min-width: 0; max-width: min(120px, 34vw); white-space: nowrap; }
   .composer-file-change-summary__file-stats { flex: 0 0 auto; white-space: nowrap; }
