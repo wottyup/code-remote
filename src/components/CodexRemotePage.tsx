@@ -2525,7 +2525,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!touch) return
     const target = event.target
     const targetElement = target instanceof Element ? target : null
-    const startedOnBackdrop = sidebarOpen && Boolean(targetElement?.closest('.sidebar-backdrop'))
+    const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
     const startedOnInteractiveSurface = Boolean(targetElement?.closest([
       'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
       '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
@@ -3139,6 +3139,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       </aside>
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      {workspaceOpen ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
