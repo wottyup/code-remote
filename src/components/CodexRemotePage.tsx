@@ -32,7 +32,7 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
-import { documentAttachmentAccept, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 
 interface Props {
   token: string
@@ -767,6 +767,7 @@ interface MessageComposerProps {
   onModelChange: (model: string) => void
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
@@ -797,6 +798,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onModelChange,
   onEffortChange,
   onApprovalPolicyChange,
+  onUploadPdf,
   onSend,
   queuedMessages,
   onSendQueuedNow,
@@ -1200,6 +1202,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         try {
           if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
           if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
+          if (documentExtensionOf(file.name) === 'pdf' || file.type === 'application/pdf') {
+            const uploaded = await onUploadPdf(file)
+            parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
+            continue
+          }
           const result = await readDocumentAttachment(file)
           parsed.push({ name: result.name, content: result.content })
           if (result.truncated) notices.push(`${file.name} 内容较长，已截取前 ${maxDocumentTextLength.toLocaleString()} 个字符。`)
@@ -1211,10 +1218,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       let nextDocuments = [...attachedDocumentsRef.current]
       let totalCharacters = nextDocuments.reduce((total, item) => total + item.content.length, 0)
       for (const item of parsed) {
-        if (nextDocuments.some((current) => current.name === item.name && current.content === item.content)) continue
+        if (nextDocuments.some((current) => item.sourceFileId
+          ? current.sourceFileId === item.sourceFileId
+          : !current.sourceFileId && current.name === item.name && current.content === item.content)) continue
         if (nextDocuments.length >= maxDocumentsPerTurn) {
           notices.push(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档，其余文件未添加。`)
           break
+        }
+        if (item.sourceFileId) {
+          nextDocuments.push(item)
+          continue
         }
         const remaining = maxDocumentTextPerTurn - totalCharacters
         if (remaining <= 0) {
@@ -1435,9 +1448,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function appendDocument(document: CodexDocumentAttachment) {
     const current = attachedDocumentsRef.current
-    if (current.some((item) => item.name === document.name && item.content === document.content)) return
+    if (current.some((item) => document.sourceFileId
+      ? item.sourceFileId === document.sourceFileId
+      : !item.sourceFileId && item.name === document.name && item.content === document.content)) return
     if (current.length >= maxDocumentsPerTurn) {
       setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
+      return
+    }
+    if (document.sourceFileId) {
+      const next = [...current, document]
+      attachedDocumentsRef.current = next
+      setAttachedDocuments(next)
+      setAttachmentError(null)
       return
     }
     const total = current.reduce((count, item) => count + item.content.length, 0)
@@ -1496,13 +1518,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
       {!imagesReady || readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{readingImages ? '正在读取图片…' : '正在恢复待发送图片…'}</p> : null}
-      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取并提取文档文字…</p> : null}
+      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
           {attachedDocuments.map((document, index) => (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.content.length.toLocaleString()} 个字符 · 已提取文字</small></span>
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 将读取文件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
               <button type="button" disabled={readingDocuments} onClick={() => {
                 const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
                 attachedDocumentsRef.current = next
@@ -2735,7 +2757,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   const copyMessage = useCallback(async (message: CodexMessage) => {
-    const documentText = message.documents?.map((document) => '\n\n' + document.name + '\n' + document.content).join('') ?? ''
+    const documentText = message.documents?.map((document) => document.sourceFileId
+      ? `\n\n[原始 PDF 附件：${document.name}]`
+      : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
     const value = (message.text + documentText).trim()
     if (!value || !(await copyText(value))) return
     setCopiedMessageId(message.id)
@@ -3074,6 +3098,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onModelChange={changeModel}
               onEffortChange={changeEffort}
               onApprovalPolicyChange={changeApprovalPolicy}
+              onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
@@ -3603,7 +3628,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
-        {message.documents?.map((document) => <div className="message-document" key={document.name}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.charCount.toLocaleString()} 个字符</small></span></div>)}
+        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}

@@ -39,6 +39,7 @@ export function documentExtensionOf(name: string) {
 
 export function isSupportedDocumentFile(file: Pick<File, 'name' | 'type'>) {
   return specialTextNames.has(file.name.toLowerCase())
+    || file.type === 'application/pdf'
     || documentExtensions.has(documentExtensionOf(file.name))
     || file.type.startsWith('text/')
     || file.type === 'application/json'

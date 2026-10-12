@@ -8,6 +8,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import tempfile
@@ -18,6 +19,7 @@ from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -87,6 +89,90 @@ IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EX
 MAX_IMAGES_PER_TURN = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
+MAX_PDF_BYTES = 20 * 1024 * 1024
+MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
+PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
+MAX_PDF_ATTACHMENTS_PER_TURN = 8
+PDF_ATTACHMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{24,64}$")
+
+
+@dataclass
+class StoredPdfAttachment:
+    attachment_id: str
+    name: str
+    path: Path
+    size: int
+    last_accessed_at: float
+
+
+class PdfAttachmentStore:
+    """Keeps original PDFs in a private, bounded, process-lifetime directory."""
+
+    def __init__(self, directory: Path) -> None:
+        self.directory = directory
+        self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.attachments: dict[str, StoredPdfAttachment] = {}
+
+    @staticmethod
+    def safe_name(name: str) -> str:
+        leaf = name.replace("\\", "/").rsplit("/", 1)[-1]
+        normalized = "".join(character for character in leaf if character.isprintable()).strip().strip(".")
+        if not normalized or len(normalized) > 255 or not normalized.lower().endswith(".pdf"):
+            raise ValueError("请附加有效的 PDF 文件。")
+        return normalized
+
+    def _prune_expired(self, now: float) -> None:
+        expired = [
+            attachment_id
+            for attachment_id, attachment in self.attachments.items()
+            if now - attachment.last_accessed_at >= PDF_ATTACHMENT_TTL_SECONDS
+        ]
+        for attachment_id in expired:
+            attachment = self.attachments.pop(attachment_id)
+            with suppress(FileNotFoundError):
+                attachment.path.unlink()
+
+    def save(self, name: str, content: bytes) -> StoredPdfAttachment:
+        now = time.time()
+        self._prune_expired(now)
+        safe_name = self.safe_name(name)
+        if not content:
+            raise ValueError("PDF 文件是空的。")
+        if len(content) > MAX_PDF_BYTES:
+            raise ValueError("单个 PDF 不能超过 20 MB。")
+        if b"%PDF-" not in content[:1024]:
+            raise ValueError("文件内容不是有效的 PDF。")
+        current_size = sum(attachment.size for attachment in self.attachments.values())
+        if current_size + len(content) > MAX_STAGED_PDF_BYTES:
+            raise OverflowError("临时 PDF 附件空间已满，请稍后重试。")
+
+        attachment_id = secrets.token_urlsafe(24)
+        path = self.directory / f"{attachment_id}.pdf"
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+        attachment = StoredPdfAttachment(attachment_id, safe_name, path, len(content), now)
+        self.attachments[attachment_id] = attachment
+        return attachment
+
+    def get(self, attachment_id: str) -> StoredPdfAttachment | None:
+        now = time.time()
+        self._prune_expired(now)
+        if not PDF_ATTACHMENT_ID_PATTERN.fullmatch(attachment_id):
+            return None
+        attachment = self.attachments.get(attachment_id)
+        if attachment is None:
+            return None
+        try:
+            attachment.path.resolve().relative_to(self.directory.resolve())
+            if not attachment.path.is_file() or attachment.path.stat().st_size != attachment.size:
+                self.attachments.pop(attachment_id, None)
+                return None
+        except (OSError, ValueError):
+            self.attachments.pop(attachment_id, None)
+            return None
+        attachment.last_accessed_at = now
+        return attachment
 
 
 class ThreadStartRequest(BaseModel):
@@ -104,6 +190,7 @@ class TurnImage(BaseModel):
 class TurnRequest(BaseModel):
     prompt: str = Field(default="", max_length=32_000)
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
+    pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approval_policy: ApprovalPolicy | None = None
@@ -113,7 +200,19 @@ class TurnRequest(BaseModel):
 class SteerRequest(BaseModel):
     prompt: str = Field(default="", max_length=32_000)
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
+    pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+async def read_limited_pdf_body(request: Request) -> bytes:
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > MAX_PDF_BYTES:
+            raise OverflowError("单个 PDF 不能超过 20 MB。")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 class ResumeRequest(BaseModel):
@@ -385,6 +484,40 @@ def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Pat
         raise
 
 
+def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: PdfAttachmentStore) -> str:
+    blocks: list[str] = []
+    seen: set[str] = set()
+    for attachment_id in attachment_ids:
+        if attachment_id in seen:
+            continue
+        seen.add(attachment_id)
+        attachment = store.get(attachment_id)
+        if attachment is None:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="PDF 临时附件已失效，请重新添加 PDF 后发送。",
+            )
+        encoded_name = quote(attachment.name, safe="")
+        path = str(attachment.path.resolve())
+        blocks.append(
+            f"[[CODEX_REMOTE_PDF_BEGIN id={attachment.attachment_id} name={encoded_name}]]\n"
+            f'用户附加的原始 PDF 文件名："{attachment.name}"\n'
+            f"原始文件在运行 Codex 的本机路径：`{path}`\n"
+            "请使用本机可用工具直接读取这个 PDF 原件，并根据实际读取到的内容回答；不要使用或假设网页端已经提取了文字。"
+            "如果无法访问或解析这个文件，请明确说明，不要猜测内容。\n"
+            f"[[CODEX_REMOTE_PDF_END id={attachment.attachment_id}]]"
+        )
+    if not blocks:
+        return prompt
+    combined = "\n\n".join(([prompt.strip()] if prompt.strip() else []) + blocks)
+    if len(combined) > 32_000:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="消息和 PDF 附件信息合计超过 32000 个字符，请缩短消息后重试。",
+        )
+    return combined
+
+
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
     """Embed images created by this process so a refreshed thread can render them."""
     image_root = image_directory.resolve()
@@ -549,6 +682,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     auth = PairingAuth()
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
+    pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -567,6 +701,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
+    app.state.pdf_attachments = pdf_attachments
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -703,6 +838,32 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
+    @app.post("/api/v1/codex/pdf-attachments")
+    async def upload_pdf_attachment(request: Request) -> dict[str, Any]:
+        media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if media_type != "application/pdf":
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="只支持上传 PDF 原件。")
+        name = request.query_params.get("name", "")
+        try:
+            PdfAttachmentStore.safe_name(name)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_PDF_BYTES:
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="单个 PDF 不能超过 20 MB。")
+            except ValueError:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="PDF 上传长度无效。")
+        try:
+            content = await read_limited_pdf_body(request)
+            attachment = pdf_attachments.save(name, content)
+        except OverflowError as error:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        return {"attachment_id": attachment.attachment_id, "name": attachment.name, "size": attachment.size}
+
     @app.post("/api/v1/codex/threads/{thread_id}/resume")
     async def resume_thread(thread_id: str, body: ResumeRequest | None = None) -> dict[str, Any]:
         async def resume() -> dict[str, Any]:
@@ -729,15 +890,16 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads/{thread_id}/turns")
     async def start_turn(thread_id: str, body: TurnRequest) -> dict[str, Any]:
         prompt = body.prompt.strip()
-        if not prompt and not body.images:
+        if not prompt and not body.images and not body.pdf_attachments:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
 
         async def start() -> dict[str, Any]:
             image_paths = save_turn_images(body.images, image_directory)
             try:
+                turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
                 result = await app_server.start_turn(
                     thread_id,
-                    prompt,
+                    turn_prompt,
                     image_paths,
                     body.model.strip() or None if body.model else None,
                     body.effort.strip() or None if body.effort else None,
@@ -775,13 +937,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads/{thread_id}/steer")
     async def steer_turn(thread_id: str, body: SteerRequest) -> dict[str, str | None]:
         prompt = body.prompt.strip()
-        if not prompt and not body.images:
+        if not prompt and not body.images and not body.pdf_attachments:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
 
         async def steer() -> dict[str, Any]:
             image_paths = save_turn_images(body.images, image_directory)
             try:
-                result = await app_server.steer_turn(thread_id, prompt, image_paths)
+                turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
+                result = await app_server.steer_turn(thread_id, turn_prompt, image_paths)
                 turn_id = result.get("turnId")
                 if not isinstance(turn_id, str):
                     turn = result.get("turn")

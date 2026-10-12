@@ -276,6 +276,7 @@ function streamingMessageId(turnId: string | null) {
 
 function queuedRequestText(text: string, documents: CodexDocumentAttachment[] = []) {
   const documentText = documents
+    .filter((document) => !document.sourceFileId)
     .map((document) => `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`)
     .join('')
   return `${text}${documentText}`.trim()
@@ -312,6 +313,10 @@ function persistedQueuedDocument(value: unknown): CodexDocumentAttachment | unde
   if (!value || typeof value !== 'object') return undefined
   const document = value as Record<string, unknown>
   if (typeof document.name !== 'string' || typeof document.content !== 'string') return undefined
+  if (typeof document.sourceFileId === 'string') {
+    if (!/^[A-Za-z0-9_-]{24,64}$/.test(document.sourceFileId) || !document.name || document.name.length > 512) return undefined
+    return { name: document.name, content: '', sourceFileId: document.sourceFileId }
+  }
   if (!document.name || document.name.length > 512 || document.content.length > maxPersistedQueuedTextCharacters) return undefined
   return { name: document.name, content: document.content }
 }
@@ -412,6 +417,7 @@ function sameQueuedMessageHistoryContent(message: CodexMessage, localMessage: Co
   const expectedText = queuedRequestText(localMessage.text, localMessage.documents)
   if (message.text !== localMessage.text && message.text !== expectedText) return false
   return sameMessageImages(message.images, localMessage.images)
+    && sameMessageDocuments(message.documents, localMessage.documents)
 }
 
 function sameHistoryAnchor(message: CodexMessage, candidate: CodexMessage) {
@@ -503,7 +509,8 @@ function sameMessageDocuments(left: CodexMessage['documents'], right: CodexMessa
   return leftItems.length === rightItems.length && leftItems.every((document, index) =>
     document.name === rightItems[index]?.name
       && document.content === rightItems[index]?.content
-      && document.charCount === rightItems[index]?.charCount,
+      && document.charCount === rightItems[index]?.charCount
+      && document.sourceFileId === rightItems[index]?.sourceFileId,
   )
 }
 
@@ -1561,6 +1568,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const start = () => codexRemoteClient.startTurn(token, threadId, {
       prompt: payload.requestText,
       images: payload.images,
+      documents: payload.documents,
       model: payload.model,
       effort: payload.effort,
       approvalPolicy: payload.approvalPolicy,
@@ -1770,6 +1778,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const result = await requestTurnDelivery(threadId, payload.id, () => codexRemoteClient.steerTurn(token, threadId, {
         prompt: payload.requestText,
         images: payload.images,
+        documents: payload.documents,
         requestId: payload.id,
       }))
       updateQueuedMessages(threadId, (current) => current.filter((message) => message.id !== payload.id))
@@ -2669,6 +2678,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (activeThreadId.current) void loadThread(activeThreadId.current)
   }, [loadThread])
 
+  const uploadPdfAttachment = useCallback(async (file: File) => {
+    try {
+      return await codexRemoteClient.uploadPdfAttachment(token, file)
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      throw reason
+    }
+  }, [onUnauthorized, token])
+
   return {
     connection,
     runtime,
@@ -2697,6 +2715,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     selectThread,
     createThread,
     sendMessage,
+    uploadPdfAttachment,
     sendQueuedMessageNow,
     beginEditQueuedMessage,
     updateQueuedMessage,
