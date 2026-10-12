@@ -15,6 +15,7 @@ import {
   type CodexThreadDetails,
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
+import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 
 interface ApprovalRequest {
   requestId: string | number
@@ -254,14 +255,6 @@ function threadIsRunning(thread: CodexThread) {
   return thread.status?.type === 'inProgress' || thread.status?.type === 'running'
 }
 
-function latestTurnState(thread: { turns?: unknown[] }) {
-  const turns = Array.isArray(thread.turns) ? thread.turns : []
-  const latest = turns.at(-1) as Record<string, unknown> | undefined
-  const running = latest?.status === 'inProgress' || latest?.status === 'running'
-  const turnId = typeof latest?.id === 'string' ? latest.id : null
-  return { running, turnId }
-}
-
 function sendFailureMessage(reason: unknown) {
   if (isAmbiguousNetworkFailure(reason)) {
     return '连接中断，无法确认消息是否送达。草稿已保留；恢复后先检查对话记录，再决定是否重试。'
@@ -279,18 +272,6 @@ function queuedMessageId() {
 
 function streamingMessageId(turnId: string | null) {
   return `streaming-assistant-${turnId ?? 'turn'}-${queuedMessageId()}`
-}
-
-function eventTimestamp(value: unknown): number | null {
-  if (typeof value === 'number') {
-    const normalized = value > 10_000_000_000 ? value : value * 1000
-    return Number.isNaN(new Date(normalized).getTime()) ? null : normalized
-  }
-  if (typeof value === 'string') {
-    const parsed = Date.parse(value)
-    return Number.isNaN(parsed) ? null : parsed
-  }
-  return null
 }
 
 function queuedRequestText(text: string, documents: CodexDocumentAttachment[] = []) {
@@ -1011,6 +992,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [runningTurnId, setRunningTurnId] = useState<string | null>(null)
   const [isInterrupting, setIsInterrupting] = useState(false)
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const turnStartedAtRef = useRef<number | null>(null)
   const [activity, setActivity] = useState<CodexActivity | null>(null)
   const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
   const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
@@ -1096,16 +1078,28 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [persistActiveThread])
 
   const beginTurnTimer = useCallback((startedAt: number) => {
+    turnStartedAtRef.current = startedAt
     setTurnStartedAt(startedAt)
   }, [])
 
   const finishTurnTimer = useCallback(() => {
+    turnStartedAtRef.current = null
     setTurnStartedAt(null)
   }, [])
 
   const clearTurnTimer = useCallback(() => {
+    turnStartedAtRef.current = null
     setTurnStartedAt(null)
   }, [])
+
+  const startTurnTimerForTurn = useCallback((turnId: string | null, historyStartedAt: number | null = null) => {
+    const savedStartedAt = turnId
+      ? turnStartedAtById.current.get(turnId)
+      : turnStartedAtRef.current ?? undefined
+    const startedAt = resolveTurnStartedAt(historyStartedAt, savedStartedAt)
+    if (turnId) turnStartedAtById.current.set(turnId, startedAt)
+    beginTurnTimer(startedAt)
+  }, [beginTurnTimer])
 
   const resetStreamingAssistant = useCallback(() => {
     streamingRenderGeneration.current += 1
@@ -1395,8 +1389,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (persistActiveThread) persistActiveThreadCache(thread, messagesWithLocalTiming)
       const historyTurnState = latestTurnState(thread)
       const preserveStartedTurn = preserveRunningTurnId !== null && activeTurnId.current === preserveRunningTurnId
-      const running = historyTurnState.running || preserveStartedTurn
-      const latestTurnId = preserveStartedTurn ? preserveRunningTurnId : historyTurnState.turnId
+      const running = historyTurnState.running || (!historyTurnState.hasTurn && threadIsRunning(thread)) || preserveStartedTurn
+      const latestTurnId = preserveStartedTurn
+        ? preserveRunningTurnId
+        : historyTurnState.turnId ?? (running ? activeTurnId.current : null)
       // A history read can finish while a reply is streaming (for example
       // after reconnecting). Give that partial server message the same stable
       // bubble as the socket stream instead of rendering both versions.
@@ -1431,6 +1427,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       operationsByTurnRef.current = historicalOperationsByTurn
       setOperationsByTurn(historicalOperationsByTurn)
       setActiveTurnId(running ? latestTurnId : null)
+      if (running) startTurnTimerForTurn(latestTurnId, historyTurnState.startedAt)
+      else {
+        if (historyTurnState.turnId) turnStartedAtById.current.delete(historyTurnState.turnId)
+        finishTurnTimer()
+      }
       if (!running) {
         resetStreamingAssistant()
         if (interruptRequestedThreadId.current === threadId) {
@@ -1469,7 +1470,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       return false
     }
-  }, [cacheThreadSnapshot, onUnauthorized, persistActiveThread, resetStreamingAssistant, setActiveTurnId, token])
+  }, [cacheThreadSnapshot, finishTurnTimer, onUnauthorized, persistActiveThread, resetStreamingAssistant, setActiveTurnId, startTurnTimerForTurn, token])
 
   const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string) => {
     if (!threadId || threadId !== activeThreadId.current) return
@@ -1694,7 +1695,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             interruptRequestedTurnId.current === previousTurnId ? 'stopped' : 'completed',
           )
         }
-        if (turnId) setActiveTurnId(turnId)
+        if (turnId) {
+          setActiveTurnId(turnId)
+          startTurnTimerForTurn(turnId)
+        }
         appendQueuedMessageToActiveThread(threadId, payload, turnId)
         interruptRequestedThreadId.current = null
         interruptRequestedTurnId.current = null
@@ -1730,7 +1734,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       pendingTurnDeliveries.current.delete(payload.id)
       queuedTurnStartsInFlight.current.delete(threadId)
     }
-  }, [appendQueuedMessageToActiveThread, finalizeTurnOperations, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, requestTurnStart, setActiveTurnId, updateQueuedMessages])
+  }, [appendQueuedMessageToActiveThread, finalizeTurnOperations, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, requestTurnStart, setActiveTurnId, startTurnTimerForTurn, updateQueuedMessages])
 
   const startNextQueuedMessage = useCallback(async (threadId: string) => {
     if (editingQueuedMessageByThread.current[threadId]) {
@@ -1988,7 +1992,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : null
       const startedAt = eventTimestamp(turn?.startedAt) ?? Date.now()
-      if (turnId) turnStartedAtById.current.set(turnId, startedAt)
       const previousTurnId = activeTurnId.current
       if (previousTurnId && turnId && previousTurnId !== turnId) {
         finalizeVisibleStreamingTurn(previousTurnId)
@@ -2017,7 +2020,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
       setIsRunning(true)
-      beginTurnTimer(startedAt)
+      startTurnTimerForTurn(turnId, startedAt)
       setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
       activityItemId.current = null
       if (turnThreadId) refreshThreadForRemoteMessage(turnThreadId, turnId)
@@ -2093,6 +2096,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const item = params.item as Record<string, unknown> | undefined
       const fileChange = fileChangeForItem(item)
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType === 'usermessage' && activeThreadId.current) {
         refreshThreadForRemoteMessage(activeThreadId.current, turnId, typeof item?.id === 'string' ? item.id : undefined)
@@ -2102,6 +2106,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       activityItemId.current = typeof item?.id === 'string' ? item.id : null
       setIsRunning(true)
+      startTurnTimerForTurn(turnId)
       setActivity(activityForItem(item))
       return
     }
@@ -2114,6 +2119,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         changes: params.changes,
       })
       const turnId = typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
+      if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem({
         id: itemId,
@@ -2123,6 +2129,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }, 'running')
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       setIsRunning(true)
+      startTurnTimerForTurn(turnId)
       setActivity({ label: '正在修改文件', detail: fileChange ? `${fileChange.changes.length} 个文件` : undefined })
       return
     }
@@ -2173,7 +2180,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
     if (event.method === 'thread/name/updated') void refreshThreads()
-  }, [addFileChangeToTurn, beginTurnTimer, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, updateCachedThreadRunState])
+  }, [addFileChangeToTurn, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, prefetchThread, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState])
 
   useEffect(() => {
     if (!enabled) {
@@ -2482,6 +2489,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const rememberStartedTurn = (turnId: string | null) => {
       if (!turnId || activeThreadId.current !== thread.id) return
       setActiveTurnId(turnId)
+      startTurnTimerForTurn(turnId)
       setMessages((current) => current.map((message) => message.id === localId && !message.turnId
         ? { ...message, turnId }
         : message))
@@ -2519,13 +2527,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
               void loadThread(thread.id, historyRevision.current, true)
               return true
             }
-            const { running, turnId } = latestTurnState(recoveredThread)
+            const recoveredTurnState = latestTurnState(recoveredThread)
+            const running = recoveredTurnState.running || (!recoveredTurnState.hasTurn && threadIsRunning(recoveredThread))
+            const turnId = recoveredTurnState.turnId
             setActiveThread(recoveredThread)
             setActiveTurnId(running ? turnId : null)
             setIsRunning(running)
             setIsInterrupting(false)
             setActivity(running ? { label: '正在思考' } : null)
-            if (!running) {
+            if (running) {
+              startTurnTimerForTurn(turnId, recoveredTurnState.startedAt)
+            } else {
               finishTurnTimer()
               resetStreamingAssistant()
             }
@@ -2574,7 +2586,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeThread, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshThreads, requestTurnStart, resetStreamingAssistant, setActiveTurnId, startNextQueuedMessage, token, updateQueuedMessages])
+  }, [activeThread, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshThreads, requestTurnStart, resetStreamingAssistant, setActiveTurnId, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false

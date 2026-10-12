@@ -31,6 +31,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 
 interface Props {
@@ -743,7 +744,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
-  adoptUnassignedDraft(threadId: string): void
+  adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
 
@@ -809,6 +810,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
+  const [imagesReady, setImagesReady] = useState(false)
+  const [readingImages, setReadingImages] = useState(false)
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
@@ -827,6 +830,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
+  const draftScopeRef = useRef(draftScope)
+  draftScopeRef.current = draftScope
+  const attachedImagesRef = useRef(attachedImages)
+  attachedImagesRef.current = attachedImages
   const attachedDocumentsRef = useRef(attachedDocuments)
   attachedDocumentsRef.current = attachedDocuments
   const editingQueuedMessageIdRef = useRef<string | null>(null)
@@ -905,6 +912,47 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setDraft(value)
   }, [])
 
+  const updateAttachedImages = useCallback((next: CodexImageAttachment[], persist = true) => {
+    const images = next.slice(0, maxImagesPerTurn)
+    attachedImagesRef.current = images
+    setAttachedImages(images)
+    if (persist && !editingQueuedMessageIdRef.current) {
+      void saveComposerImageDraft(draftScope, images).catch((reason: unknown) => {
+        if (draftScopeRef.current !== draftScope) return
+        setAttachmentError(reason instanceof Error
+          ? `图片草稿暂未保存：${reason.message} 刷新后可能无法恢复。`
+          : '图片草稿暂未保存，刷新后可能无法恢复。')
+      })
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    let active = true
+    setImagesReady(false)
+    const unsubscribe = subscribeToComposerImageDraft(draftScope, (images) => {
+      if (!active) return
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+      setImagesReady(true)
+    })
+    void readComposerImageDraft(draftScope).then((images) => {
+      if (!active) return
+      attachedImagesRef.current = images
+      setAttachedImages(images)
+    }).catch((reason: unknown) => {
+      if (!active) return
+      setAttachmentError(reason instanceof Error
+        ? `待发送图片恢复失败：${reason.message}`
+        : '待发送图片恢复失败。')
+    }).finally(() => {
+      if (active) setImagesReady(true)
+    })
+    return () => {
+      active = false
+      unsubscribe()
+    }
+  }, [draftScope])
+
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
   useLayoutEffect(() => {
@@ -968,11 +1016,26 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
-    adoptUnassignedDraft(threadId) {
+    adoptUnassignedDraft(threadId, includeImages = true) {
       const targetScope = composerDraftScopeForThread(threadId)
       const unassignedDraft = draftScope === newThreadComposerDraftScope
         ? draftRef.current
         : readComposerDraft(newThreadComposerDraftScope)
+      if (includeImages
+        && targetScope !== newThreadComposerDraftScope
+        && (attachedImagesRef.current.length > 0 || !imagesReady)) {
+        void moveComposerImageDraft(newThreadComposerDraftScope, targetScope).then((images) => {
+          if (draftScopeRef.current === targetScope) updateAttachedImages(images, false)
+        }).catch((reason: unknown) => {
+          if (draftScopeRef.current === targetScope) {
+            setAttachmentError(reason instanceof Error
+              ? `图片草稿转移失败：${reason.message}`
+              : '图片草稿转移失败。')
+          }
+        })
+      } else if (targetScope !== newThreadComposerDraftScope) {
+        rememberComposerImageDraftTarget(newThreadComposerDraftScope, targetScope)
+      }
       if (!unassignedDraft) return
       saveComposerDraft(targetScope, unassignedDraft)
       // The old keyed composer may unmount immediately after this callback.
@@ -990,7 +1053,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       changeOpenMenu(null)
       return true
     },
-  }), [changeOpenMenu, draftScope, updateDraft])
+  }), [changeOpenMenu, draftScope, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -1066,8 +1129,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const canConfigure = canCompose && !isRunning
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
     && !readingDocuments
+    && !readingImages
+    && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
-  const canAttachImages = (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
+  const canAttachImages = imagesReady && !readingImages && (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
   const canAttachDocuments = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments
   const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
   const fileChangeSummaryExpanded = Boolean(
@@ -1084,7 +1149,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ) : null
 
   async function attachImages(files: File[]) {
-    if (files.length === 0) return
+    if (files.length === 0 || !imagesReady || readingImages) return
     if (!modelSupportsImages) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
@@ -1099,18 +1164,21 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError('单张图片不能超过 8 MB。')
       return
     }
-    const remaining = maxImagesPerTurn - attachedImages.length
+    const remaining = maxImagesPerTurn - attachedImagesRef.current.length
     if (remaining <= 0) {
       setAttachmentError('单条消息最多附加 4 张图片。')
       return
     }
     const chosen = files.slice(0, remaining)
+    setReadingImages(true)
     try {
       const next = await Promise.all(chosen.map(readImage))
-      setAttachedImages((current) => [...current, ...next].slice(0, maxImagesPerTurn))
+      updateAttachedImages([...attachedImagesRef.current, ...next])
       setAttachmentError(files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
+    } finally {
+      setReadingImages(false)
     }
   }
 
@@ -1175,43 +1243,75 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (readingDocuments) return
+    if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
       confirmQueuedEdit()
       return
     }
     const prompt = draft.trim()
-    if ((!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) || !canCompose) return
-    if (!modelSupportsImages && attachedImages.length > 0) {
+    if ((!prompt && attachedImagesRef.current.length === 0 && attachedDocuments.length === 0) || !canCompose) return
+    if (!modelSupportsImages && attachedImagesRef.current.length > 0) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
     const previousDraft = draft
-    const previousImages = attachedImages
+    const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocuments
     const previousAttachmentError = attachmentError
     setSending(true)
     updateDraft('')
-    setAttachedImages([])
+    saveComposerDraft(draftScope, '')
+    updateAttachedImages([], false)
     attachedDocumentsRef.current = []
     setAttachedDocuments([])
     setAttachmentError(null)
-    const sent = await onSend({
-      prompt,
-      images: previousImages,
-      documents: previousDocuments,
-      model: selectedModel || undefined,
-      effort: selectedEffort || undefined,
-      approvalPolicy: selectedApprovalPolicy,
-    })
+    let sent = false
+    try {
+      sent = await onSend({
+        prompt,
+        images: previousImages,
+        documents: previousDocuments,
+        model: selectedModel || undefined,
+        effort: selectedEffort || undefined,
+        approvalPolicy: selectedApprovalPolicy,
+      })
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
+    }
     if (!sent) {
+      const transferredImageTarget = pendingComposerImageDraftTarget(draftScope)
+      let imagesMovedToNewThread = false
+      if (transferredImageTarget) {
+        try {
+          await moveComposerImageDraft(draftScope, transferredImageTarget)
+          forgetComposerImageDraftTarget(draftScope)
+          imagesMovedToNewThread = true
+        } catch (reason) {
+          forgetComposerImageDraftTarget(draftScope)
+          setAttachmentError(reason instanceof Error
+            ? `发送失败，图片仍保留在原草稿：${reason.message}`
+            : '发送失败，图片仍保留在原草稿。')
+        }
+      }
       updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
-      setAttachedImages((current) => current.length > 0 ? [...previousImages, ...current].slice(0, maxImagesPerTurn) : previousImages)
+      const currentImages = attachedImagesRef.current
+      updateAttachedImages(currentImages.length > 0 ? [...previousImages, ...currentImages] : previousImages, !imagesMovedToNewThread)
       const currentDocuments = attachedDocumentsRef.current
       const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
       attachedDocumentsRef.current = restoredDocuments
       setAttachedDocuments(restoredDocuments)
       setAttachmentError((current) => current ?? previousAttachmentError)
+    } else {
+      forgetComposerImageDraftTarget(draftScope)
+      try {
+        await saveComposerImageDraft(draftScope, [])
+      } catch (reason) {
+        if (draftScopeRef.current === draftScope) {
+          setAttachmentError(reason instanceof Error
+            ? `消息已发送，但清除图片草稿失败：${reason.message}`
+            : '消息已发送，但清除图片草稿失败。')
+        }
+      }
     }
     setSending(false)
   }
@@ -1221,7 +1321,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     editingDraftSnapshot.current = null
     if (!snapshot) return
     updateDraft(snapshot.draft)
-    setAttachedImages(snapshot.images)
+    updateAttachedImages(snapshot.images)
     attachedDocumentsRef.current = snapshot.documents
     setAttachedDocuments(snapshot.documents)
     setAttachmentError(snapshot.attachmentError)
@@ -1229,20 +1329,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function beginQueuedEdit(message: QueuedTurnMessage) {
     if (editingQueuedMessageId || sending || sendingQueuedId) return
+    if (!imagesReady) {
+      setAttachmentError('图片草稿恢复完成后再编辑排队消息。')
+      return
+    }
     if (!onBeginQueuedEdit(message.id)) {
       setAttachmentError('这条排队消息正在处理中，请稍后再试。')
       return
     }
     editingDraftSnapshot.current = {
       draft: draftRef.current,
-      images: attachedImages,
+      images: attachedImagesRef.current,
       documents: attachedDocuments,
       attachmentError,
     }
     editingQueuedMessageIdRef.current = message.id
     setEditingQueuedMessageId(message.id)
     updateDraft(message.text)
-    setAttachedImages(message.images)
+    updateAttachedImages(message.images, false)
     attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
     setAttachmentError(null)
@@ -1387,10 +1491,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       >
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
-          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => setAttachedImages((current) => current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
+      {!imagesReady || readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{readingImages ? '正在读取图片…' : '正在恢复待发送图片…'}</p> : null}
       {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取并提取文档文字…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
@@ -2218,7 +2323,7 @@ function RemoteChatPane({
               </div>
             </div>
           ) : null}
-          {remote.isRunning ? (
+          {remote.isRunning || remote.runningTurnId !== null ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
@@ -2644,7 +2749,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return target.sendMessage({
       ...input,
       onThreadCreated: (thread) => {
-        composerHandle.current?.adoptUnassignedDraft(thread.id)
+        composerHandle.current?.adoptUnassignedDraft(thread.id, false)
         rememberThreadComposerPreferences(thread.id, preferences)
       },
     })
