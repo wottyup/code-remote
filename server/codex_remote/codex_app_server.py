@@ -30,7 +30,7 @@ _SHARED_DAEMON_FALLBACK_MARKERS = (
 _WINDOWS_ACCESS_DENIED_MARKERS = ("os error 5", "os error 10013", "access is denied", "permission denied", "拒绝访问")
 _SHARED_DAEMON_FALLBACK_MESSAGE = (
     "Windows 当前进程无法访问桌面 Codex 的私有 app-server，已切换到兼容运行时；"
-    "网页新建的会话保存在兼容运行时中。"
+    "网页会话会同步到本机 Codex 历史。"
 )
 
 
