@@ -34,7 +34,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
-import { formatWorkspaceSelectionReference, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
+import { createWorkspaceSelectionDocument, workspaceTextSelectionLineRange } from '../lib/workspaceSelection'
 
 interface Props {
   token: string
@@ -746,7 +746,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
-  appendText(value: string, focus?: boolean): void
+  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): void
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
@@ -1021,17 +1021,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
-    appendText(value, focus = true) {
-      if (!value) return
-      const current = draftRef.current
-      const separator = !current
-        ? ''
-        : /\n\n$/.test(current)
-          ? ''
-          : /\n$/.test(current)
-            ? '\n'
-            : '\n\n'
-      updateDraft(`${current}${separator}${value}`)
+    addDocumentAttachment(document, focus = true) {
+      appendDocument(document)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
@@ -1661,7 +1652,7 @@ interface WorkspaceExplorerProps {
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
-  onInsertText: (text: string, focus?: boolean) => void
+  onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   onCloseMobile: () => void
 }
@@ -1733,7 +1724,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, onInsertText, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2020,11 +2011,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     })
   }
 
-  function insertSelectedCodeIntoComposer() {
+  function addSelectedCodeAsDocument() {
     if (!selectionContextMenu) return
     const { path, startLine, endLine, content } = selectionContextMenu
     setSelectionContextMenu(null)
-    onInsertText(formatWorkspaceSelectionReference(path, startLine, endLine, content), !mobileOpen)
+    onAddDocument(createWorkspaceSelectionDocument(path, startLine, endLine, content), !mobileOpen)
   }
 
   async function copySelectedCode() {
@@ -2294,7 +2285,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu workspace-selection-context-menu" style={{ left: selectionContextMenu.x, top: selectionContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
-          <button type="button" role="menuitem" onClick={insertSelectedCodeIntoComposer}><Link2 size={14} />插入引用到输入框</button>
+          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />作为文档添加</button>
           <button type="button" role="menuitem" onClick={() => void copySelectedCode()}><Copy size={14} />复制选中内容</button>
         </div>,
         document.body,
@@ -3079,8 +3070,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
-  const insertWorkspaceText = useCallback((text: string, focus = true) => {
-    composerHandle.current?.appendText(text, focus)
+  const addWorkspaceDocument = useCallback((document: CodexDocumentAttachment, focus = true) => {
+    composerHandle.current?.addDocumentAttachment(document, focus)
   }, [])
 
   function setWorkspaceExplorerWidthValue(value: number, persist = false, commit = false) {
@@ -3517,7 +3508,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
-            onInsertText={insertWorkspaceText}
+            onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
             onCloseMobile={() => setWorkspaceOpen(false)}
           />

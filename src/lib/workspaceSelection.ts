@@ -3,6 +3,11 @@ export interface WorkspaceTextLineRange {
   endLine: number
 }
 
+export interface WorkspaceSelectionDocument {
+  name: string
+  content: string
+}
+
 export function workspaceTextSelectionLineRange(text: string, selectionStart: number, selectionEnd: number): WorkspaceTextLineRange | null {
   const start = Math.max(0, Math.min(text.length, Math.trunc(selectionStart)))
   const end = Math.max(start, Math.min(text.length, Math.trunc(selectionEnd)))
@@ -31,4 +36,13 @@ export function formatWorkspaceSelectionReference(path: string, startLine: numbe
   const fence = '`'.repeat(Math.max(3, longestBacktickRun + 1))
   const trailingNewline = snippet.endsWith('\n') ? '' : '\n'
   return `文件：${markdownInlineCode(path)}（${lineRange}）\n${fence}\n${snippet}${trailingNewline}${fence}`
+}
+
+export function createWorkspaceSelectionDocument(path: string, startLine: number, endLine: number, selectedText: string): WorkspaceSelectionDocument {
+  const basename = path.split(/[\\/]/).at(-1)?.replace(/[<>:"|?*\u0000-\u001f]/g, '_').trim().slice(0, 96) || 'selected-code'
+  const lineSuffix = startLine === endLine ? `${startLine}` : `${startLine}-${endLine}`
+  return {
+    name: `${basename}-L${lineSuffix}-selection.md`,
+    content: formatWorkspaceSelectionReference(path, startLine, endLine, selectedText),
+  }
 }
