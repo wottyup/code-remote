@@ -268,9 +268,9 @@ async function parseSpreadsheet(buffer: ArrayBuffer) {
 async function parsePdf(buffer: ArrayBuffer) {
   const pdfjs = await import('pdfjs-dist')
   const pdfPageLimit = 120
-  pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
   let loading: ReturnType<typeof pdfjs.getDocument> | undefined
   try {
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
     loading = pdfjs.getDocument({ data: new Uint8Array(buffer) })
     const document = await loading.promise
     const output = new LimitedTextBuilder()
@@ -287,8 +287,9 @@ async function parsePdf(buffer: ArrayBuffer) {
     }
     if (document.numPages > pdfPageLimit) output.truncated = true
     return output.finish()
-  } catch {
-    throw new Error('无法读取 PDF；文件可能已损坏或加密。扫描版 PDF 暂不支持 OCR。')
+  } catch (reason) {
+    const detail = reason instanceof Error ? reason.message : '未知解析错误'
+    throw new Error(`PDF 解析失败：${detail}`)
   } finally {
     try {
       await loading?.destroy()
