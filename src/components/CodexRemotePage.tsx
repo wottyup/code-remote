@@ -35,6 +35,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
@@ -2348,10 +2349,14 @@ function RemoteChatPane({
   const forceMessageStreamBottomFor = useRef<string | null>(null)
   const forceMessageStreamBottomVersion = useRef(0)
   const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
+  const olderMessageScrollAnchor = useRef<{ messageId: string; top: number } | null>(null)
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeThreadId = remote.activeThread?.id
+  const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
+  const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
+  const visibleMessages = remote.messages.slice(visibleStartIndex)
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -2400,17 +2405,42 @@ function RemoteChatPane({
     const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
     followMessageStream.current = atBottom
     setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
-  }, [activeThreadId])
+    if (atBottom) {
+      setMessageWindow((current) => current.threadId === activeThreadId && !current.anchoredToLatest
+        ? recentMessageWindow(activeThreadId ?? null, remote.messages.length)
+        : current)
+    }
+  }, [activeThreadId, remote.messages.length])
 
   const scrollToBottom = useCallback(() => {
     followMessageStream.current = true
     setShowScrollToBottom(false)
+    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
     positionMessageStreamAtBottom()
-  }, [positionMessageStreamAtBottom])
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.messages.length])
+
+  const loadEarlierMessages = useCallback(() => {
+    if (visibleStartIndex === 0) return
+    const firstMessage = messageContent.current?.querySelector<HTMLElement>('[data-message-id]')
+    olderMessageScrollAnchor.current = firstMessage?.dataset.messageId
+      ? { messageId: firstMessage.dataset.messageId, top: firstMessage.getBoundingClientRect().top }
+      : null
+    followMessageStream.current = false
+    forceMessageStreamBottomFor.current = null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    forceMessageStreamBottomTimer.current = undefined
+    scrollAnimationFrame.current = undefined
+    setShowScrollToBottom(true)
+    setMessageWindow((current) => earlierMessageWindow(current, activeThreadId ?? null, remote.messages.length))
+  }, [activeThreadId, remote.messages.length, visibleStartIndex])
 
   useLayoutEffect(() => {
     if (!active) return
     forceMessageStreamToBottom(activeThreadId)
+    olderMessageScrollAnchor.current = null
+    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   }, [active, activeThreadId, forceMessageStreamToBottom])
 
   useLayoutEffect(() => {
@@ -2447,7 +2477,17 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
+  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
+
+  useLayoutEffect(() => {
+    const anchor = olderMessageScrollAnchor.current
+    if (!anchor) return
+    olderMessageScrollAnchor.current = null
+    const container = messageContainer.current
+    const message = [...(messageContent.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])]
+      .find((element) => element.dataset.messageId === anchor.messageId)
+    if (container && message) container.scrollTop += message.getBoundingClientRect().top - anchor.top
+  }, [visibleStartIndex])
 
   useLayoutEffect(() => {
     if (!active) return
@@ -2514,7 +2554,9 @@ function RemoteChatPane({
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message, index) => {
+          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>查看更早消息（还有 {visibleStartIndex} 条）</button> : null}
+          {visibleMessages.map((message, visibleIndex) => {
+            const index = visibleStartIndex + visibleIndex
             const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId
             const changes = turnComplete && message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
               ? remote.fileChangesByTurn[message.turnId]
@@ -3970,7 +4012,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
 
   return (
-    <article className={`chat-message chat-message--${message.role}`}>
+    <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">

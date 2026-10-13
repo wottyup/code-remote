@@ -304,6 +304,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-settings-hint { margin: 0; padding: 0 22px 22px; color: #737b89; font-size: 9px; }
 .message-stream { grid-column: 1; grid-row: 2; min-height: 0; overflow-y: auto; padding: 0 25px 28px; }
 .message-stream__content { display: flex; min-height: 100%; flex-direction: column; gap: 16px; padding-top: 32px; }
+.message-stream__older { align-self: center; min-height: 30px; padding: 5px 12px; border: 1px solid var(--custom-theme-border, rgba(128, 128, 128, .38)); border-radius: 999px; background: var(--custom-theme-control, rgba(128, 128, 128, .16)); color: inherit; cursor: pointer; font-size: 12px; }
+.message-stream__older:hover { border-color: currentColor; }
 /* Browsers kept open across older hot updates can retain these removed nodes.
    Hide them defensively so an obsolete reply timer cannot draw a full-width line. */
 .message-stream :is(.turn-duration, .stream-cursor, hr) { display: none !important; }

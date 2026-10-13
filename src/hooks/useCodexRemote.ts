@@ -574,6 +574,17 @@ function collapseAssistantMessagesForTurn(
   incomingText: string,
   replyStartedAt?: string,
 ) {
+  // The normal streaming path only changes the last assistant bubble. Avoid
+  // searching/merging the whole history for every rendered text chunk.
+  const tail = messages.at(-1)
+  if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) {
+    const text = mergeStreamingText(tail.text, incomingText)
+    if (text === tail.text && (tail.replyStartedAt || !replyStartedAt)) return messages
+    return [
+      ...messages.slice(0, -1),
+      { ...tail, text, ...(tail.replyStartedAt || !replyStartedAt ? {} : { replyStartedAt }) },
+    ]
+  }
   const matching = assistantMessagesForStreamSegment(messages, turnId, messageId)
   const text = mergeStreamingText(assistantTextForTurn(messages, turnId, messageId), incomingText)
   if (matching.length === 0 && !text) return messages
@@ -1171,6 +1182,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
         const next = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt)
+        const tail = current.at(-1)
+        if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) return next
         return sameMessages(current, next) ? current : next
       })
     }
@@ -1691,8 +1704,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [activeThread, cacheThreadSnapshot, fileChangesByTurn, isRunning, messages, operationsByTurn])
 
   useEffect(() => {
-    cacheVisibleThread()
-  }, [cacheVisibleThread])
+    // Keep the in-memory/IndexedDB snapshot complete at idle. While a reply
+    // streams, every new chunk changes messages; scanning and scheduling a
+    // whole-thread snapshot for each chunk makes long conversations jank.
+    // Switching threads still calls cacheVisibleThread() explicitly.
+    if (!isRunning) cacheVisibleThread()
+  }, [cacheVisibleThread, isRunning])
 
   const dispatchInterrupt = useCallback(async (threadId: string, turnId: string) => {
     if (handedOffRef.current) return false
