@@ -687,10 +687,12 @@ interface ComposerHandle {
 interface MessageComposerProps {
   draftScope: string
   onDraftChange: (draft: string) => void
+  composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
   connection: RemoteConnection
   isRunning: boolean
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
+  reserveFileChangeSummarySpace: boolean
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
@@ -719,10 +721,12 @@ interface MessageComposerProps {
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   draftScope,
   onDraftChange,
+  composerHeightMemory,
   connection,
   isRunning,
   fileChangeSummary,
   fileChangeSummaryKey,
+  reserveFileChangeSummarySpace,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
@@ -762,6 +766,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
+    if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
   })
@@ -782,7 +787,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
-  const composerHeightWasResized = useRef(false)
+  const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
   const editingDraftSnapshot = useRef<{
     draft: string
@@ -790,6 +795,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     documents: CodexDocumentAttachment[]
     attachmentError: string | null
   } | null>(null)
+
+  useLayoutEffect(() => {
+    composerHeightMemory.current = { height: composerHeight, manuallyResized: composerHeightWasResized.current }
+  }, [composerHeight, composerHeightMemory])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
@@ -1399,6 +1408,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault()
     composerHeightWasResized.current = true
+    composerHeightMemory.current = { height: composerHeight, manuallyResized: true }
     resizeState.current = { startY: event.clientY, startHeight: composerHeight }
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
@@ -1474,6 +1484,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
         </div>
       ) : null}
+      {reserveFileChangeSummarySpace && !mobileLayout && (!fileChangeSummary || fileChangeSummary.files.length === 0) ? (
+        <div className="composer-file-change-summary composer-file-change-summary--placeholder" aria-hidden="true">
+          <FileText size={12} />
+          <span>1 个文件已更改</span>
+          <span className="composer-file-change-summary__stats"><i>+1</i><em>-1</em></span>
+        </div>
+      ) : null}
       <form
         className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
         onSubmit={(event) => void send(event)}
@@ -1484,7 +1501,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-      {!imagesReady || readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{readingImages ? '正在读取图片…' : '正在恢复待发送图片…'}</p> : null}
+      {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取图片…</p> : null}
       {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
@@ -1501,7 +1518,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ))}
         </div>
       ) : null}
-      {reserveQueuedMessageSpace && queuedMessages.length === 0 ? <div className="composer-queue-spacer" aria-hidden="true" /> : null}
+      {reserveQueuedMessageSpace && !mobileLayout && queuedMessages.length === 0 ? (
+        <div className="composer-queue composer-queue--collapsed composer-queue--placeholder" aria-hidden="true">
+          <span className="composer-queue__heading"><span>已排队 0 条</span><ChevronDown size={14} /></span>
+        </div>
+      ) : null}
       {queuedMessages.length > 0 ? (
         <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <button
@@ -1569,11 +1590,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
           <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
           <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-          <span className="composer-hint"><ShieldCheck size={14} />{editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
+          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
-            <ImagePlus size={16} />
+          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={!imagesReady ? '正在恢复待发送图片' : modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
+            {imagesReady ? <ImagePlus size={16} /> : <LoaderCircle className="spin" size={16} />}
             <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
           </span>
           <span className={`attach-button attach-button--native${canAttachDocuments ? '' : ' attach-button--disabled'}`} title={readingDocuments ? '正在读取文档' : '附加文档或源码文件'}>
@@ -1593,7 +1614,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               aria-label={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
               title={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
             >
-              {sending || (stopWithSendButton && isInterrupting)
+              {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
                 : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Square size={14} fill="currentColor" /> : <Send size={16} />}
               {editingQueuedMessageId ? <span>确定</span> : null}
@@ -2648,6 +2669,7 @@ function RemoteChatPane({
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
+  const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
@@ -2658,6 +2680,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const hasQueuedMessagesInOpenPanes = openPaneIndexes.some(
     (paneIndex) => (remotes[paneIndex]?.queuedMessages.length ?? 0) > 0,
   )
+  const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
+    const remote = remotes[paneIndex]
+    return remote?.isRunning && remote.runningTurnId
+      && remote.fileChangesByTurn[remote.runningTurnId]?.some((change) => change.changes.length > 0)
+  })
   const runningFileChangeSummary = useMemo(() => {
     if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
@@ -3615,10 +3642,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ref={composerHandle}
               draftScope={composerDraftScope}
               onDraftChange={syncWorkspaceDraft}
+              composerHeightMemory={composerHeightMemory}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
+              reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
