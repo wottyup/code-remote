@@ -149,14 +149,6 @@ function readPinnedThreadIds() {
   }
 }
 
-function savePinnedThreadIds(ids: ReadonlySet<string>) {
-  try {
-    window.localStorage.setItem(pinnedThreadIdsStorageKey, JSON.stringify([...ids]))
-  } catch {
-    // Keep the selected order for this page if browser storage is unavailable.
-  }
-}
-
 function isSettingsHistoryEntry(state: unknown): boolean {
   return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
 }
@@ -716,10 +708,10 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   reserveQueuedMessageSpace: boolean
   onSendQueuedNow: (messageId: string) => Promise<boolean>
-  onBeginQueuedEdit: (messageId: string) => boolean
-  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean
-  onEndQueuedEdit: (messageId: string) => void
-  onRemoveQueued: (messageId: string) => void
+  onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
+  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean | Promise<boolean>
+  onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
+  onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -1211,7 +1203,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
-      confirmQueuedEdit()
+      void confirmQueuedEdit()
       return
     }
     const prompt = draft.trim()
@@ -1295,13 +1287,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(snapshot.attachmentError)
   }
 
-  function beginQueuedEdit(message: QueuedTurnMessage) {
+  async function beginQueuedEdit(message: QueuedTurnMessage) {
     if (editingQueuedMessageId || sending || sendingQueuedId) return
     if (!imagesReady) {
       setAttachmentError('图片草稿恢复完成后再编辑排队消息。')
       return
     }
-    if (!onBeginQueuedEdit(message.id)) {
+    if (!await onBeginQueuedEdit(message.id)) {
       setAttachmentError('这条排队消息正在处理中，请稍后再试。')
       return
     }
@@ -1321,36 +1313,47 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     window.requestAnimationFrame(() => composer.current?.focus())
   }
 
-  function finishQueuedEdit() {
+  async function finishQueuedEdit() {
     const messageId = editingQueuedMessageIdRef.current
-    if (messageId) onEndQueuedEdit(messageId)
+    if (messageId && await onEndQueuedEdit(messageId) === false) {
+      setAttachmentError('无法结束排队消息编辑，请检查连接后重试。')
+      return false
+    }
     editingQueuedMessageIdRef.current = null
     setEditingQueuedMessageId(null)
     restoreDraftAfterQueuedEdit()
+    return true
   }
 
-  function confirmQueuedEdit() {
+  async function confirmQueuedEdit() {
     const messageId = editingQueuedMessageIdRef.current
-    if (!messageId || sending) return
+    if (!messageId || sendingRef.current) return
     const prompt = draftRef.current.trim()
     if (!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) {
       setAttachmentError('消息内容和附件不能同时为空。')
       return
     }
-    if (!onUpdateQueuedMessage(messageId, {
-      prompt,
-      images: attachedImages,
-      documents: attachedDocuments,
-    })) {
-      setAttachmentError('排队消息更新失败，请取消后重试。')
-      return
+    sendingRef.current = true
+    setSending(true)
+    try {
+      if (!await onUpdateQueuedMessage(messageId, {
+        prompt,
+        images: attachedImages,
+        documents: attachedDocuments,
+      })) {
+        setAttachmentError('排队消息更新失败，请检查连接后重试。')
+        return
+      }
+      await finishQueuedEdit()
+    } finally {
+      sendingRef.current = false
+      setSending(false)
     }
-    finishQueuedEdit()
   }
 
   function cancelQueuedEdit() {
     if (!editingQueuedMessageIdRef.current) return
-    finishQueuedEdit()
+    void finishQueuedEdit()
   }
 
   async function sendQueuedNow(messageId: string) {
@@ -1510,7 +1513,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>已排队 {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
@@ -1525,14 +1528,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
-                  <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
-                    <Pencil size={11} /><span>{isEditing ? '编辑中' : '编辑'}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待自动发送')}</small></span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
+                    <Pencil size={11} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : '立即发送给当前 Codex 回复'}>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : '立即发送给当前 Codex 回复'}>
                     {sendingNow ? <LoaderCircle className="spin" size={12} /> : <Send size={12} />}<span>立即发送</span>
                   </button>
-                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
                 </div>
               )
             })}
@@ -3075,8 +3078,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   useEffect(() => {
-    savePinnedThreadIds(pinnedThreadIds)
-  }, [pinnedThreadIds])
+    let cancelled = false
+    void (async () => {
+      try {
+        const legacy = readPinnedThreadIds()
+        const result = legacy.size > 0
+          ? await codexRemoteClient.initializePins(token, [...legacy])
+          : await codexRemoteClient.pins(token)
+        if (legacy.size > 0) window.localStorage.removeItem(pinnedThreadIdsStorageKey)
+        if (cancelled) return
+        setPinnedThreadIds(new Set(result.thread_ids))
+      } catch (reason) {
+        if (cancelled) return
+        setPaneNotice(reason instanceof Error ? `同步置顶失败：${reason.message}` : '同步置顶失败')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [remote0.pinRevision, token])
 
   function showPaneNotice(message: string) {
     setPaneNotice(message)
@@ -3087,14 +3105,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }, 2_400)
   }
 
-  function toggleThreadPin(thread: CodexThread) {
-    setPinnedThreadIds((current) => {
-      const next = new Set(current)
-      if (next.has(thread.id)) next.delete(thread.id)
-      else next.add(thread.id)
-      return next
-    })
+  async function toggleThreadPin(thread: CodexThread) {
+    const pinned = !pinnedThreadIds.has(thread.id)
     setThreadContextMenu(null)
+    try {
+      const result = await codexRemoteClient.setThreadPin(token, thread.id, pinned)
+      setPinnedThreadIds(new Set(result.thread_ids))
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? reason.message : '置顶操作失败')
+    }
   }
 
   async function readThreadTranscript(thread: CodexThread) {
@@ -3535,7 +3554,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
-          <button type="button" role="menuitem" onClick={() => toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</button>
+          <button type="button" role="menuitem" onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</button>
           <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</button>
           <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</button>
           <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>

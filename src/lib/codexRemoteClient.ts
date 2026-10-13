@@ -47,6 +47,21 @@ export interface CodexImageAttachment {
   data: string
 }
 
+export interface CodexQueuedMessage {
+  id: string
+  text: string
+  requestText: string
+  images: CodexImageAttachment[]
+  documents?: CodexDocumentAttachment[]
+  createdAt: string
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  editing?: boolean
+  blockedReason?: string
+  sendAttempt?: { at: string; afterTurnId?: string; afterMessageId?: string; inTurnId?: string }
+}
+
 export interface CodexModel {
   id?: string
   model?: string
@@ -92,6 +107,8 @@ export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
   type: string
+  threadId?: string
+  pinned?: boolean
   method?: string
   params?: Record<string, unknown>
   connected?: boolean
@@ -398,6 +415,45 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({ name }),
     })
+  },
+  queuedMessages(token: string, threadId: string) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
+  },
+  enqueueMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  queueAction(token: string, threadId: string, action: 'edit/begin' | 'edit/end' | 'remove' | 'send-now', messageId: string, ownerId?: string) {
+    return request<{ queue: CodexQueuedMessage[]; sent?: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/${action}`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
+    }, { networkRetries: 3 })
+  },
+  startQueuedIfIdle(token: string, threadId: string, messageId: string) {
+    return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/start-if-idle`, {
+      method: 'POST', body: JSON.stringify({ message_id: messageId }),
+    }, { networkRetries: 3 })
+  },
+  updateQueuedMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/update`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  pins(token: string) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/pins')
+  },
+  initializePins(token: string, threadIds: string[]) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/pins/initialize', {
+      method: 'POST', body: JSON.stringify({ thread_ids: threadIds }),
+    }, { networkRetries: 3 })
+  },
+  setThreadPin(token: string, threadId: string, pinned: boolean) {
+    return request<{ thread_ids: string[] }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/pin`, {
+      method: 'POST', body: JSON.stringify({ pinned }),
+    }, { networkRetries: 3 })
   },
   resumeThread(token: string, threadId: string, requestId: string) {
     return request<CodexThread>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, {

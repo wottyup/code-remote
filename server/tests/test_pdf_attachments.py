@@ -35,6 +35,7 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
             patch("codex_remote.app.tempfile.mkdtemp", return_value=str(image_directory)),
         ):
             self.app = create_app(workspace)
+        self.addCleanup(self.app.state.shared_state.close)
         self.server = self.app.state.codex
         self.store: PdfAttachmentStore = self.app.state.pdf_attachments
 

@@ -1,0 +1,415 @@
+"""Durable, single-authority queue and sidebar pins for paired devices."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import sqlite3
+from collections.abc import Awaitable, Callable
+from contextlib import suppress
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from .codex_app_server import CodexAppServer, CodexRuntimeError
+
+logger = logging.getLogger(__name__)
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class QueueConflictError(RuntimeError):
+    pass
+
+
+class SharedStateStore:
+    def __init__(self, path: Path) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(path, isolation_level=None)
+        os.chmod(path, 0o600)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript("""
+            CREATE TABLE IF NOT EXISTS queued_messages (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+                id TEXT UNIQUE NOT NULL,
+                thread_id TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                state TEXT NOT NULL DEFAULT 'pending',
+                editing INTEGER NOT NULL DEFAULT 0,
+                edit_owner TEXT,
+                attempt_at TEXT
+            );
+            CREATE INDEX IF NOT EXISTS queued_messages_thread ON queued_messages(thread_id, sequence);
+            CREATE TABLE IF NOT EXISTS queue_receipts (
+                id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                delivered_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS queue_barriers (thread_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS queue_blocks (thread_id TEXT PRIMARY KEY, reason TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS pinned_threads (thread_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS state_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        """)
+        columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queued_messages)")}
+        if "edit_owner" not in columns:
+            self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_owner TEXT")
+        # A process may have died after Codex accepted a turn but before it
+        # received an acknowledgement. Never turn such an item into "pending".
+        self.connection.execute("UPDATE queued_messages SET state = 'unverified' WHERE state = 'sending'")
+
+    def close(self) -> None:
+        self.connection.close()
+
+    def thread_ids(self) -> list[str]:
+        rows = self.connection.execute("SELECT DISTINCT thread_id FROM queued_messages").fetchall()
+        return [row[0] for row in rows]
+
+    def queue(self, thread_id: str) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT payload, state, editing, attempt_at FROM queued_messages WHERE thread_id = ? ORDER BY sequence",
+            (thread_id,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if row["state"] != "pending":
+                payload["sendAttempt"] = payload.get("sendAttempt") or {"at": row["attempt_at"] or _now()}
+            payload["editing"] = bool(row["editing"])
+            result.append(payload)
+        if result:
+            block = self.connection.execute("SELECT reason FROM queue_blocks WHERE thread_id = ?", (thread_id,)).fetchone()
+            if block:
+                result[0]["blockedReason"] = block["reason"]
+        return result
+
+    def enqueue(self, thread_id: str, payload: dict[str, Any]) -> bool:
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        existing = self.connection.execute("SELECT thread_id, payload FROM queued_messages WHERE id = ?", (payload["id"],)).fetchone()
+        if existing:
+            if existing["thread_id"] != thread_id or existing["payload"] != serialized:
+                raise QueueConflictError("这条排队消息的编号已用于其它内容。")
+            return False
+        receipt = self.connection.execute("SELECT thread_id, fingerprint FROM queue_receipts WHERE id = ?", (payload["id"],)).fetchone()
+        if receipt:
+            if receipt["thread_id"] != thread_id or receipt["fingerprint"] != hashlib.sha256(serialized.encode()).hexdigest():
+                raise QueueConflictError("这条排队消息的编号已用于其它内容。")
+            return False
+        if self.connection.execute("SELECT COUNT(*) FROM queued_messages WHERE thread_id = ?", (thread_id,)).fetchone()[0] >= 30:
+            raise QueueConflictError("每条对话最多保留 30 条排队消息。")
+        attempt = payload.get("sendAttempt")
+        self.connection.execute(
+            "INSERT INTO queued_messages(id, thread_id, payload, state, attempt_at) VALUES (?, ?, ?, ?, ?)",
+            (payload["id"], thread_id, serialized, "unverified" if attempt else "pending", attempt.get("at") if attempt else None),
+        )
+        return True
+
+    def update(self, thread_id: str, message_id: str, payload: dict[str, Any]) -> None:
+        row = self.connection.execute(
+            "SELECT payload, state, editing FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id),
+        ).fetchone()
+        if not row or row["state"] != "pending" or not row["editing"]:
+            raise QueueConflictError("这条排队消息已发送或不在编辑状态。")
+        original = json.loads(row["payload"])
+        payload["id"] = message_id
+        payload["createdAt"] = original["createdAt"]
+        self.connection.execute(
+            "UPDATE queued_messages SET payload = ? WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), message_id),
+        )
+
+    def edit(self, thread_id: str, message_id: str, editing: bool, owner: str = "legacy") -> None:
+        if editing:
+            row = self.connection.execute(
+                "SELECT editing, edit_owner, state FROM queued_messages WHERE thread_id = ? AND id = ?",
+                (thread_id, message_id),
+            ).fetchone()
+            if row and row["state"] == "pending" and row["editing"] and row["edit_owner"] == owner:
+                return
+            changed = self.connection.execute(
+                "UPDATE queued_messages SET editing = 1, edit_owner = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+                (owner, thread_id, message_id),
+            ).rowcount
+        else:
+            existing = self.connection.execute(
+                "SELECT 1 FROM queued_messages WHERE thread_id = ? AND id = ?",
+                (thread_id, message_id),
+            ).fetchone()
+            if not existing:
+                return
+            changed = self.connection.execute(
+                "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE thread_id = ? AND id = ? AND editing = 1",
+                (thread_id, message_id),
+            ).rowcount
+            if not changed and self.connection.execute(
+                "SELECT 1 FROM queued_messages WHERE thread_id = ? AND id = ? AND editing = 0",
+                (thread_id, message_id),
+            ).fetchone():
+                return
+        if not changed:
+            raise QueueConflictError("这条排队消息已变更，请刷新后重试。")
+
+    def remove(self, thread_id: str, message_id: str) -> None:
+        existing = self.connection.execute(
+            "SELECT state FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id),
+        ).fetchone()
+        if not existing:
+            return
+        if existing["state"] == "sending":
+            raise QueueConflictError("这条排队消息正在发送或已不存在。")
+        changed = self.connection.execute(
+            "DELETE FROM queued_messages WHERE thread_id = ? AND id = ? AND state != 'sending'",
+            (thread_id, message_id),
+        ).rowcount
+        if not changed:
+            raise QueueConflictError("这条排队消息正在发送或已不存在。")
+
+    def claim(self, thread_id: str, message_id: str) -> dict[str, Any] | None:
+        attempt_at = _now()
+        changed = self.connection.execute(
+            "UPDATE queued_messages SET state = 'sending', attempt_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            (attempt_at, thread_id, message_id),
+        ).rowcount
+        if not changed:
+            return None
+        row = self.connection.execute("SELECT payload FROM queued_messages WHERE id = ?", (message_id,)).fetchone()
+        return json.loads(row["payload"])
+
+    def unverified(self, message_id: str) -> None:
+        self.connection.execute("UPDATE queued_messages SET state = 'unverified' WHERE id = ?", (message_id,))
+
+    def delivered(self, thread_id: str, message_id: str, turn_id: str | None, *, new_turn: bool) -> None:
+        row = self.connection.execute("SELECT payload FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id)).fetchone()
+        if not row:
+            return
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            self.connection.execute(
+                "INSERT OR IGNORE INTO queue_receipts(id, thread_id, fingerprint, delivered_at) VALUES (?, ?, ?, ?)",
+                (message_id, thread_id, hashlib.sha256(row["payload"].encode()).hexdigest(), _now()),
+            )
+            self.connection.execute("DELETE FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id))
+            if new_turn and turn_id:
+                self.connection.execute(
+                    "INSERT INTO queue_barriers(thread_id, turn_id) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET turn_id = excluded.turn_id",
+                    (thread_id, turn_id),
+                )
+
+    def barrier(self, thread_id: str) -> str | None:
+        row = self.connection.execute("SELECT turn_id FROM queue_barriers WHERE thread_id = ?", (thread_id,)).fetchone()
+        return row["turn_id"] if row else None
+
+    def clear_barrier(self, thread_id: str) -> None:
+        self.connection.execute("DELETE FROM queue_barriers WHERE thread_id = ?", (thread_id,))
+
+    def set_block(self, thread_id: str, reason: str | None) -> bool:
+        current = self.connection.execute("SELECT reason FROM queue_blocks WHERE thread_id = ?", (thread_id,)).fetchone()
+        if (current["reason"] if current else None) == reason:
+            return False
+        if reason:
+            self.connection.execute(
+                "INSERT INTO queue_blocks(thread_id, reason) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET reason = excluded.reason",
+                (thread_id, reason),
+            )
+        else:
+            self.connection.execute("DELETE FROM queue_blocks WHERE thread_id = ?", (thread_id,))
+        return True
+
+    def was_delivered(self, thread_id: str, message_id: str) -> bool:
+        return self.connection.execute(
+            "SELECT 1 FROM queue_receipts WHERE thread_id = ? AND id = ?", (thread_id, message_id),
+        ).fetchone() is not None
+
+    def pins(self) -> list[str]:
+        return [row[0] for row in self.connection.execute("SELECT thread_id FROM pinned_threads ORDER BY thread_id")]
+
+    def initialize_pins(self, thread_ids: list[str]) -> list[str]:
+        if not thread_ids:
+            return self.pins()
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            initialized = self.connection.execute("SELECT value FROM state_metadata WHERE key = 'pins_initialized'").fetchone()
+            if not initialized:
+                self.connection.executemany("INSERT OR IGNORE INTO pinned_threads(thread_id) VALUES (?)", ((thread_id,) for thread_id in thread_ids))
+                self.connection.execute("INSERT INTO state_metadata(key, value) VALUES ('pins_initialized', '1')")
+        return self.pins()
+
+    def set_pin(self, thread_id: str, pinned: bool) -> None:
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            self.connection.execute("INSERT OR IGNORE INTO state_metadata(key, value) VALUES ('pins_initialized', '1')")
+            if pinned:
+                self.connection.execute("INSERT OR IGNORE INTO pinned_threads(thread_id) VALUES (?)", (thread_id,))
+            else:
+                self.connection.execute("DELETE FROM pinned_threads WHERE thread_id = ?", (thread_id,))
+
+
+def _turn_status(turn: dict[str, Any]) -> str:
+    value = turn.get("status")
+    return value.replace("-", "").replace("_", "").lower() if isinstance(value, str) else ""
+
+
+class SharedQueueService:
+    def __init__(
+        self,
+        store: SharedStateStore,
+        codex: CodexAppServer,
+        send: Callable[[str, dict[str, Any], bool], Awaitable[str | None]],
+    ) -> None:
+        self.store = store
+        self.codex = codex
+        self.send = send
+        self._wake = asyncio.Event()
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._runner: asyncio.Task[None] | None = None
+        self._listener: asyncio.Task[None] | None = None
+
+    def _lock(self, thread_id: str) -> asyncio.Lock:
+        return self._locks.setdefault(thread_id, asyncio.Lock())
+
+    async def changed(self, thread_id: str) -> None:
+        self._wake.set()
+        await self.codex._emit({"type": "remote.queue.changed", "threadId": thread_id})
+
+    async def _block(self, thread_id: str, reason: str | None) -> None:
+        if self.store.set_block(thread_id, reason):
+            await self.changed(thread_id)
+
+    def start(self) -> None:
+        self._runner = asyncio.create_task(self._run())
+        self._listener = asyncio.create_task(self._listen())
+
+    async def close(self) -> None:
+        for task in (self._runner, self._listener):
+            if task:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    async def _listen(self) -> None:
+        events = await self.codex.subscribe()
+        try:
+            while True:
+                event = await events.get()
+                if event.get("type") == "notification" and event.get("method") == "turn/completed":
+                    self._wake.set()
+                elif event.get("type") == "connection" and event.get("connected"):
+                    self._wake.set()
+        finally:
+            self.codex.unsubscribe(events)
+
+    async def _run(self) -> None:
+        while True:
+            self._wake.clear()
+            for thread_id in self.store.thread_ids():
+                try:
+                    await self.advance(thread_id)
+                except asyncio.CancelledError:
+                    raise
+                except CodexRuntimeError as error:
+                    # A disconnected App Server must not lose or double-send
+                    # the queue; the next wake or periodic check retries.
+                    logger.debug("Queue waits for Codex thread %s: %s", thread_id, error)
+                except Exception:
+                    logger.exception("Could not advance queued thread %s", thread_id)
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=15)
+            except TimeoutError:
+                pass
+
+    async def advance(self, thread_id: str) -> None:
+        async with self._lock(thread_id):
+            queue = self.store.queue(thread_id)
+            if not queue or queue[0].get("editing") or queue[0].get("sendAttempt") or self.codex.handed_off:
+                return
+            if await self.codex._active_turn_id(thread_id):
+                return
+            thread = await self.codex.read_thread(thread_id)
+            turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
+            latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
+            barrier = self.store.barrier(thread_id)
+            if barrier:
+                waited = next((turn for turn in turns if isinstance(turn, dict) and turn.get("id") == barrier), None)
+                if not waited:
+                    await self._block(thread_id, "等待确认上一条回复，暂不自动发送")
+                    return
+                waited_status = _turn_status(waited)
+                if waited_status not in {"completed", "complete", "success"}:
+                    if waited_status not in {"inprogress", "running", "started"}:
+                        await self._block(thread_id, "上一条回复未正常完成，请手动检查后点击立即发送")
+                    return
+                self.store.clear_barrier(thread_id)
+            if latest and _turn_status(latest) not in {"completed", "complete", "success"}:
+                if _turn_status(latest) not in {"inprogress", "running", "started"}:
+                    await self._block(thread_id, "上一条回复未正常完成，请手动检查后点击立即发送")
+                return
+            if not latest and isinstance(thread.get("status"), dict):
+                status = thread["status"].get("type")
+                if status not in {None, "idle", "notLoaded"}:
+                    return
+            if await self.codex._active_turn_id(thread_id):
+                return
+            await self._block(thread_id, None)
+            # Resume before claiming. A failed resume cannot create a delivery
+            # ambiguity and leaves the item safely pending.
+            await self.codex.resume_thread(thread_id)
+            payload = self.store.claim(thread_id, queue[0]["id"])
+            if not payload:
+                return
+            await self.changed(thread_id)
+            await self._send_claimed(thread_id, payload, new_turn=True)
+
+    async def _send_claimed(self, thread_id: str, payload: dict[str, Any], *, new_turn: bool) -> bool:
+        try:
+            turn_id = await self.send(thread_id, payload, not new_turn)
+            if not turn_id:
+                raise RuntimeError("Codex 未确认消息所属的回复轮次")
+        except asyncio.CancelledError:
+            self.store.unverified(payload["id"])
+            await self.changed(thread_id)
+            raise
+        except Exception:
+            logger.exception("Queued message %s delivery is unverified", payload["id"])
+            self.store.unverified(payload["id"])
+            await self.changed(thread_id)
+            return False
+        self.store.delivered(thread_id, payload["id"], turn_id, new_turn=new_turn)
+        self.store.set_block(thread_id, None)
+        await self.changed(thread_id)
+        return True
+
+    async def send_now(self, thread_id: str, message_id: str, *, allow_steer: bool = True, require_head: bool = False) -> bool:
+        async with self._lock(thread_id):
+            if require_head:
+                queue = self.store.queue(thread_id)
+                if not queue or queue[0]["id"] != message_id:
+                    return self.store.was_delivered(thread_id, message_id)
+            active_turn = await self.codex._active_turn_id(thread_id)
+            if active_turn and not allow_steer:
+                return False
+            if not active_turn:
+                # A manual send can release an interrupted/failed barrier, but
+                # never race an active turn that history still shows running.
+                thread = await self.codex.read_thread(thread_id)
+                turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
+                latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
+                if latest and _turn_status(latest) in {"inprogress", "running", "started"}:
+                    if not allow_steer:
+                        return False
+                    raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
+                await self.codex.resume_thread(thread_id)
+            payload = self.store.claim(thread_id, message_id)
+            if not payload:
+                if self.store.was_delivered(thread_id, message_id):
+                    return True
+                raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
+            await self.changed(thread_id)
+            if not active_turn:
+                self.store.clear_barrier(thread_id)
+            self.store.set_block(thread_id, None)
+            return await self._send_claimed(thread_id, payload, new_turn=not bool(active_turn))
