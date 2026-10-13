@@ -714,6 +714,7 @@ interface MessageComposerProps {
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
+  reserveQueuedMessageSpace: boolean
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean
   onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean
@@ -745,6 +746,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onUploadPdf,
   onSend,
   queuedMessages,
+  reserveQueuedMessageSpace,
   onSendQueuedNow,
   onBeginQueuedEdit,
   onUpdateQueuedMessage,
@@ -1492,6 +1494,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ))}
         </div>
       ) : null}
+      {reserveQueuedMessageSpace && queuedMessages.length === 0 ? <div className="composer-queue-spacer" aria-hidden="true" /> : null}
       {queuedMessages.length > 0 ? (
         <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <button
@@ -2644,6 +2647,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const hasQueuedMessagesInOpenPanes = openPaneIndexes.some(
+    (paneIndex) => (remotes[paneIndex]?.queuedMessages.length ?? 0) > 0,
+  )
   const runningFileChangeSummary = useMemo(() => {
     if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
@@ -3604,6 +3610,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
+              reserveQueuedMessageSpace={openPaneIndexes.length > 1 && hasQueuedMessagesInOpenPanes}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}

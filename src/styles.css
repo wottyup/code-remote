@@ -511,6 +511,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-document > button:hover { background: #303744; color: #e2e7f0; }
 .composer-queue { display: grid; gap: 5px; margin: 1px 1px 9px; padding: 7px 8px; border: 1px solid rgba(113, 136, 255, .35); border-radius: 10px; background: rgba(47, 55, 84, .48); }
 .composer-queue--collapsed { gap: 0; padding-block: 4px; }
+.composer-queue-spacer { display: none; }
 .composer-queue__heading { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; color: #cbd4ff; cursor: pointer; font: inherit; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 600; text-align: left; }
 .composer-queue__heading > span { flex: 0 0 auto; }
 .composer-queue__heading small { overflow: hidden; color: #929dbc; font-size: calc(10px + var(--mobile-font-offset)); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
@@ -535,6 +536,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-edit-cancel:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #f0f2f8; }
 .composer-edit-cancel:disabled { cursor: wait; opacity: .55; }
 .send-button--confirm { min-width: 50px; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 500; }
+@media (min-width: 701px) {
+  .composer-queue-spacer { display: block; height: 24px; margin: 1px 1px 9px; }
+}
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
 .composer-preferences { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .composer-menu { position: relative; min-width: 0; }
