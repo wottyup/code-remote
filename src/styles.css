@@ -93,7 +93,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 @media (min-width: 701px) and (pointer: fine) {
   .remote-sidebar__collapse { display: grid; }
-  .remote-shell--sidebar-collapsed { grid-template-columns: 132px minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px) var(--workspace-file-preview-handle-width, 0px) var(--workspace-file-preview-width, 0px); }
+  .remote-shell--sidebar-collapsed { grid-template-columns: 112px minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px) var(--workspace-file-preview-handle-width, 0px) var(--workspace-file-preview-width, 0px); }
   .remote-shell--sidebar-collapsed .remote-sidebar { padding-inline: 8px; }
   .remote-shell--sidebar-collapsed .remote-sidebar__heading { justify-content: space-between; }
   .remote-shell--sidebar-collapsed .remote-brand__copy { display: none; }
