@@ -2606,7 +2606,7 @@ function RemoteChatPane({
             <div className="welcome-state">
               <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
               <span className="welcome-state__mark">C</span>
-              <h1>你想在本机项目中完成什么？</h1>
+              <h1>与Codex Remote一起完成伟大项目</h1>
               <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
               <div className="prompt-suggestions">
                 <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。') }}>了解这个项目</button>
