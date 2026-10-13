@@ -112,7 +112,7 @@ type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
 
 const emptyQueuedMessages: QueuedTurnMessage[] = []
 
-const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, error: null }
+const emptyRuntime: CodexRuntime = { available: false, connected: false, workspace: '', handedOff: false, runtimeMode: 'direct', runtimeMessage: null, fallbackReason: null, error: null }
 const activeWriterError = '这条对话正被另一个 Codex 实例使用。可查看历史，待原实例结束后再发送。'
 const activeThreadStorageKey = 'codex-remote.active-thread-id'
 const activeThreadCacheStorageKey = 'codex-remote.active-thread-cache'
@@ -2550,11 +2550,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (event.type === 'threads.changed') {
       void refreshThreads()
-      if (writerConflictRef.current && activeThreadId.current) {
-        if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      if (activeThreadId.current && writerRefreshTimer.current === undefined) {
         writerRefreshTimer.current = window.setTimeout(() => {
           writerRefreshTimer.current = undefined
-          if (writerConflictRef.current && activeThreadId.current) void loadThread(activeThreadId.current)
+          if (activeThreadId.current) void loadThread(activeThreadId.current, historyRevision.current, true)
         }, 700)
       }
       return
@@ -2571,6 +2570,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         connected: Boolean(event.connected),
         workspace: event.workspace ?? '',
         handedOff: eventHandedOff,
+        runtimeMode: event.runtimeMode,
+        runtimeMessage: event.runtimeMessage ?? null,
+        fallbackReason: event.fallbackReason ?? null,
         error: event.error ?? null,
       })
       if (eventHandedOff) setError(null)
@@ -2944,6 +2946,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
   }, [addFileChangeToTurn, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  const handleEventRef = useRef(handleEvent)
+  handleEventRef.current = handleEvent
 
   useEffect(() => {
     if (!enabled) {
@@ -2966,7 +2970,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const currentGeneration = ++socketGeneration
       socketRef.current?.close()
       socketRef.current = codexRemoteClient.connect(token, (event) => {
-        if (!disposed && currentGeneration === socketGeneration) handleEvent(event)
+        if (!disposed && currentGeneration === socketGeneration) handleEventRef.current(event)
       }, (nextState) => {
         if (disposed || currentGeneration !== socketGeneration) return
         if (handedOffRef.current) {
@@ -3078,7 +3082,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('online', handleOnline)
     }
-  }, [enabled, handleEvent, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+  }, [enabled, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return

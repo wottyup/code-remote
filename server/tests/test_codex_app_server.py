@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
+import shutil
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 from watchfiles import Change
 
@@ -24,6 +29,697 @@ from codex_remote.codex_app_server import (
 
 
 class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_starting_with_shared_codex_home_does_not_delete_database_missing_projection_table(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory:
+            history_home = Path(history_directory)
+            database = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values ('preserve')")
+                connection.commit()
+            finally:
+                connection.close()
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(history_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._resolve_executable = Mock(return_value="codex")  # type: ignore[method-assign]
+                with patch(
+                    "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
+                    new_callable=AsyncMock,
+                    side_effect=OSError("stop after database preparation"),
+                ), self.assertRaises(CodexRuntimeError):
+                    await app_server._ensure_started()
+
+                connection = sqlite3.connect(database)
+                try:
+                    self.assertEqual(("preserve",), connection.execute("select value from marker").fetchone())
+                finally:
+                    connection.close()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_default_app_server_uses_main_codex_home_without_reseeding_its_database(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory:
+            history_home = Path(history_directory)
+            database = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values ('preserve')")
+                connection.commit()
+            finally:
+                connection.close()
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                child_environment = app_server._app_server_environment()
+
+                self.assertEqual(history_home.resolve(), app_server._runtime_home)
+                self.assertEqual(str(history_home.resolve()), child_environment["CODEX_HOME"])
+                self.assertEqual(os.name == "nt", app_server._use_shared_daemon)
+                self.assertEqual(
+                    ["codex", "app-server", "proxy"]
+                    if os.name == "nt"
+                    else ["codex", "app-server", "--listen", "stdio://"],
+                    app_server._app_server_arguments("codex"),
+                )
+                await app_server._prepare_runtime_thread("not-in-history")
+
+                connection = sqlite3.connect(database)
+                try:
+                    self.assertEqual(("preserve",), connection.execute("select value from marker").fetchone())
+                finally:
+                    connection.close()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_runtime_history_is_seeded_from_original_database_and_rollout(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            source_db = history_home / "thread_history_1.sqlite"
+            connection = sqlite3.connect(source_db)
+            try:
+                connection.execute("create table marker (value text not null)")
+                connection.execute("insert into marker values (?)", ("source",))
+                connection.execute("create table thread_history_projection_state (thread_id text not null)")
+                connection.execute("insert into thread_history_projection_state values (?)", ("thread-id",))
+                connection.commit()
+            finally:
+                connection.close()
+            session_path = history_home / "sessions" / "2026" / "10" / "01" / "rollout-thread-id.jsonl"
+            session_path.parent.mkdir(parents=True)
+            session_path.write_text("session", encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                await app_server._prepare_runtime_thread("thread-id")
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+            connection = sqlite3.connect(runtime_home / "thread_history_1.sqlite")
+            try:
+                self.assertEqual(("source",), connection.execute("select value from marker").fetchone())
+            finally:
+                connection.close()
+            staged_path = runtime_home / "sessions" / "2026" / "10" / "01" / session_path.name
+            self.assertEqual("session", staged_path.read_text(encoding="utf-8"))
+
+    async def test_runtime_rollout_copy_uses_unique_temp_and_replaces_with_stopped_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            relative = Path("sessions") / "2026" / "10" / "01" / "rollout-thread-id.jsonl"
+            source = history_home / relative
+            target = runtime_home / relative
+            source.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            source.write_text("updated", encoding="utf-8")
+            target.write_text("old", encoding="utf-8")
+            app_server = CodexAppServer("codex", Path.cwd())
+            app_server._history_home = history_home
+            app_server._runtime_home = runtime_home
+            app_server._initialized = True
+            app_server._process = Mock(returncode=None)
+            app_server._stop_process = AsyncMock()  # type: ignore[method-assign]
+            replace = os.replace
+            replace_calls = 0
+
+            def fail_once_for_open_target(source_path: Path, target_path: Path) -> None:
+                nonlocal replace_calls
+                replace_calls += 1
+                if replace_calls == 1:
+                    self.assertNotEqual(Path(f"{target}.tmp"), source_path)
+                    raise PermissionError("target is open")
+                replace(source_path, target_path)
+
+            with patch("codex_remote.codex_app_server.os.replace", side_effect=fail_once_for_open_target):
+                await app_server._copy_thread_rollout("thread-id")
+
+            self.assertEqual("updated", target.read_text(encoding="utf-8"))
+            app_server._stop_process.assert_awaited_once()
+
+    async def test_app_server_uses_isolated_runtime_home_and_original_history_home(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            (history_home / "config.toml").write_text('model = "gpt-test"\n', encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = runtime_directory
+                app_server = CodexAppServer("codex", Path.cwd())
+                child_environment = app_server._app_server_environment()
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+            self.assertEqual(history_home.resolve(), app_server._history.codex_home)
+            self.assertEqual(str(Path(runtime_directory).resolve()), child_environment["CODEX_HOME"])
+            self.assertFalse(app_server._use_shared_daemon)
+            self.assertEqual(
+                ["codex", "app-server", "--listen", "stdio://"],
+                app_server._app_server_arguments("codex"),
+            )
+            self.assertEqual('model = "gpt-test"', (Path(runtime_directory) / "config.toml").read_text(encoding="utf-8").strip())
+
+    async def test_runtime_rollout_is_copied_to_main_history_and_extended_atomically(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            source = runtime_home / "sessions" / "2026" / "10" / "12" / "rollout-thread-id.jsonl"
+            source.parent.mkdir(parents=True)
+            first_line = json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "thread-id", "session_id": "thread-id"},
+            }) + "\n"
+            source.write_text(first_line, encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
+                self.assertTrue(app_server._sync_runtime_thread_to_history("thread-id"))
+                target = history_home / source.relative_to(runtime_home)
+                self.assertEqual(first_line, target.read_text(encoding="utf-8"))
+
+                source.write_text(first_line + '{"type":"event_msg"}\n', encoding="utf-8")
+                self.assertTrue(app_server._sync_runtime_thread_to_history("thread-id"))
+                self.assertEqual(
+                    first_line + '{"type":"event_msg"}\n',
+                    target.read_text(encoding="utf-8"),
+                )
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_runtime_rollout_never_overwrites_divergent_main_history(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            relative = Path("sessions") / "2026" / "10" / "12" / "rollout-thread-id.jsonl"
+            source = runtime_home / relative
+            target = history_home / relative
+            source.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            source.write_text('remote\nnew\n', encoding="utf-8")
+            target.write_text('local\n', encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
+                self.assertFalse(app_server._sync_runtime_rollout(source, runtime_home))
+                self.assertEqual('local\n', target.read_text(encoding="utf-8"))
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    def test_runtime_index_registers_only_copied_web_sessions_without_overwriting_desktop_rows(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as history_directory, tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            relative = Path("sessions") / "2026" / "10" / "12" / "rollout-web-thread.jsonl"
+            source = runtime_home / relative
+            target = history_home / relative
+            source.parent.mkdir(parents=True)
+            target.parent.mkdir(parents=True)
+            source.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "web-thread", "originator": "codex_remote_web"},
+            }) + "\n", encoding="utf-8")
+            shutil.copy2(source, target)
+            schema = (
+                "create table threads (id text primary key, rollout_path text not null, "
+                "title text not null, originator text, history_mode text not null, project_id text)"
+            )
+            for home in (history_home, runtime_home):
+                with closing(sqlite3.connect(home / "state_5.sqlite")) as connection, connection:
+                    connection.execute(schema)
+            with closing(sqlite3.connect(runtime_home / "state_5.sqlite")) as connection, connection:
+                connection.execute(
+                    "insert into threads values (?, ?, ?, ?, ?, ?)",
+                    ("web-thread", str(source), "Web conversation", "codex_remote_web", "paginated", None),
+                )
+
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                target.write_text("divergent\n", encoding="utf-8")
+                self.assertFalse(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection:
+                    self.assertIsNone(connection.execute("select id from threads where id = ?", ("web-thread",)).fetchone())
+                shutil.copy2(source, target)
+                self.assertTrue(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection, connection:
+                    self.assertEqual(
+                        (str(target), "Web conversation", "codex_remote_web", "legacy"),
+                        connection.execute(
+                            "select rollout_path, title, originator, history_mode from threads where id = ?",
+                            ("web-thread",),
+                        ).fetchone(),
+                    )
+                    connection.execute("update threads set title = ? where id = ?", ("Desktop edit", "web-thread"))
+                self.assertFalse(app_server._sync_runtime_thread_index(source, runtime_home))
+                with closing(sqlite3.connect(history_home / "state_5.sqlite")) as connection:
+                    self.assertEqual(
+                        ("Desktop edit",),
+                        connection.execute("select title from threads where id = ?", ("web-thread",)).fetchone(),
+                    )
+
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    def test_thread_rollout_lookup_uses_filename_without_parsing_unrelated_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            sessions = codex_home / "sessions" / "2026" / "10" / "12"
+            sessions.mkdir(parents=True)
+            unrelated = sessions / "rollout-unrelated.jsonl"
+            unrelated.write_text("not-json\n", encoding="utf-8")
+            expected = sessions / "rollout-2026-10-12-thread-id.jsonl"
+            expected.write_text("also-not-json\n", encoding="utf-8")
+
+            self.assertEqual(expected, CodexAppServer._find_thread_rollout(codex_home, "thread-id"))
+
+    def test_runtime_history_backfill_only_syncs_remote_created_rollouts(self) -> None:
+        with tempfile.TemporaryDirectory() as history_directory, tempfile.TemporaryDirectory() as runtime_directory:
+            history_home = Path(history_directory)
+            runtime_home = Path(runtime_directory)
+            sessions = runtime_home / "sessions" / "2026" / "10" / "12"
+            sessions.mkdir(parents=True)
+            remote = sessions / "rollout-remote-id.jsonl"
+            remote.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "remote-id", "originator": "codex_remote_web"},
+            }) + "\n", encoding="utf-8")
+            imported = sessions / "rollout-imported-id.jsonl"
+            imported.write_text(json.dumps({
+                "type": "session_meta",
+                "payload": {"id": "imported-id", "originator": "codex_vscode"},
+            }) + "\n", encoding="utf-8")
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+            try:
+                os.environ["CODEX_HOME"] = str(history_home)
+                os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = str(runtime_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                app_server._sync_runtime_rollout = Mock(return_value=True)  # type: ignore[method-assign]
+                app_server._sync_runtime_thread_index = Mock(return_value=False)  # type: ignore[method-assign]
+
+                self.assertTrue(app_server._sync_runtime_created_history_to_main(runtime_home))
+                app_server._sync_runtime_rollout.assert_called_once_with(remote, runtime_home)
+                app_server._sync_runtime_thread_index.assert_called_once_with(remote, runtime_home)
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is None:
+                    os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+                else:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_shared_runtime_backfills_the_previous_windows_isolated_home(self) -> None:
+        with tempfile.TemporaryDirectory() as legacy_directory:
+            app_server = CodexAppServer("codex", Path.cwd())
+            legacy_home = Path(legacy_directory).resolve()
+            app_server._runtime_home = app_server._history_home
+            app_server._legacy_runtime_home = legacy_home
+            app_server._sync_runtime_created_history = AsyncMock()  # type: ignore[method-assign]
+
+            app_server._schedule_runtime_history_sync()
+            assert app_server._history_sync_task is not None
+            await app_server._history_sync_task
+
+            app_server._sync_runtime_created_history.assert_awaited_once_with(legacy_home)
+
+    async def test_shared_windows_runtime_starts_the_official_daemon_before_proxying(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        process = Mock(returncode=0)
+        process.communicate = AsyncMock(return_value=(b'{"status":"running"}', b""))
+        child_environment = {"CODEX_HOME": str(app_server._history_home)}
+
+        with patch(
+            "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+            return_value=process,
+        ) as create_process:
+            await app_server._ensure_shared_daemon("codex.exe", child_environment)
+
+        create_process.assert_awaited_once_with(
+            "codex.exe",
+            "app-server",
+            "daemon",
+            "start",
+            cwd=app_server.workspace,
+            env=child_environment,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            limit=1024 * 1024,
+        )
+
+    async def test_missing_standalone_keeps_main_history_for_direct_runtime(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.gettempdir()) / "unused-runtime"
+        app_server._start_runtime = AsyncMock(side_effect=[
+            CodexRuntimeError("managed standalone Codex install not found at C:/missing/codex.exe"),
+            None,
+        ])
+        app_server._resolve_executable = Mock(return_value="codex.exe")
+        await app_server._start_with_shared_fallback("codex.exe")
+        self.assertEqual(2, app_server._start_runtime.await_count)
+        self.assertFalse(app_server._use_shared_daemon)
+        self.assertEqual(app_server._history_home, app_server._runtime_home)
+        self.assertEqual("direct", app_server.status()["runtimeMode"])
+        self.assertEqual(["codex.exe", "app-server", "--listen", "stdio://"], app_server._app_server_arguments("codex.exe"))
+
+    async def test_shared_windows_permission_failure_retries_with_an_isolated_runtime(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        fallback_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, fallback_home, ignore_errors=True)
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = fallback_home
+        app_server._runtime_mode = "shared"
+        app_server._start_runtime = AsyncMock(side_effect=[
+            CodexRuntimeError("failed to open daemon operation lock: 拒绝访问 (os error 5)"),
+            None,
+        ])  # type: ignore[method-assign]
+        app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
+        app_server._emit = AsyncMock()  # type: ignore[method-assign]
+        app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
+
+        await app_server._ensure_started()
+
+        self.assertEqual(2, app_server._start_runtime.await_count)
+        self.assertFalse(app_server._use_shared_daemon)
+        self.assertEqual(fallback_home, app_server._runtime_home)
+        self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
+        self.assertIn("已切换到兼容运行时", app_server.status()["runtimeMessage"])
+        self.assertIn("daemon operation lock", app_server.status()["fallbackReason"])
+        self.assertEqual("codex.exe", app_server._resolve_executable())
+        self.assertEqual(
+            ["codex.exe", "app-server", "--listen", "stdio://"],
+            app_server._app_server_arguments("codex.exe"),
+        )
+
+    async def test_fallback_re_resolves_to_the_managed_cli_after_shared_daemon_failure(self) -> None:
+        if os.name != "nt":
+            self.skipTest("Windows managed Codex CLI selection")
+
+        with tempfile.TemporaryDirectory() as home_directory:
+            home = Path(home_directory)
+            managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
+            fallback_home = home / "compat-runtime"
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(home)
+                app_server = CodexAppServer("legacy-codex.exe", Path.cwd())
+                app_server._fallback_runtime_home = fallback_home
+                app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
+                app_server._emit = AsyncMock()  # type: ignore[method-assign]
+                started_with: list[str] = []
+
+                async def start_runtime(executable: str) -> None:
+                    started_with.append(executable)
+                    if len(started_with) == 1:
+                        managed.parent.mkdir(parents=True)
+                        managed.touch()
+                        raise CodexRuntimeError("unrecognized subcommand 'daemon'")
+
+                app_server._start_runtime = AsyncMock(side_effect=start_runtime)  # type: ignore[method-assign]
+                with patch("codex_remote.codex_app_server.shutil.which", return_value="legacy-codex.exe"):
+                    await app_server._ensure_started()
+
+                self.assertEqual(started_with, ["legacy-codex.exe", str(managed)])
+                self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    def test_shared_windows_proxy_permission_failure_is_recognized_from_stderr(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        app_server._recent_stderr = [
+            "failed to connect to socket at C:\\Users\\user\\.codex\\app-server-control\\app-server-control.sock",
+            "Caused by: 拒绝访问 (os error 10013)",
+        ]
+
+        self.assertTrue(app_server._should_fallback_from_shared_daemon(CodexRuntimeError("Codex app-server 已断开")))
+
+    def test_shared_windows_daemon_state_directory_permission_failure_triggers_fallback(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        error = CodexRuntimeError(
+            "共享 Codex app-server 启动失败：WARNING: failed to clean up stale arg0 temp dirs: "
+            "拒绝访问。 (os error 5) WARNING: proceeding, even though we could not create PATH aliases: "
+            "拒绝访问。 (os error 5) at path \"C:\\Users\\05110\\.codex\\tmp\\arg0\\codex-arg0fobSfm\" "
+            "Error: failed to create daemon state directory C:\\Users\\05110\\.codex\\app-server-daemon "
+            "Caused by: 拒绝访问。 (os error 5)"
+        )
+
+        self.assertTrue(app_server._should_fallback_from_shared_daemon(error))
+
+    async def test_isolated_fallback_syncs_web_history_to_the_main_home(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._runtime_mode = "isolated-fallback"
+        app_server._runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._runtime_home, ignore_errors=True)
+        app_server._sync_runtime_thread_to_history = Mock(return_value=True)  # type: ignore[method-assign]
+        app_server._history.invalidate = Mock()  # type: ignore[method-assign]
+
+        await app_server._sync_runtime_thread("thread-id")
+
+        app_server._sync_runtime_thread_to_history.assert_called_once_with("thread-id")
+        app_server._history.invalidate.assert_called_once()
+
+    async def test_shared_windows_non_permission_failure_does_not_fallback(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
+        app_server._start_runtime = AsyncMock(side_effect=CodexRuntimeError("共享 Codex app-server 启动失败：网络超时"))  # type: ignore[method-assign]
+        app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
+
+        with self.assertRaisesRegex(CodexRuntimeError, "网络超时"):
+            await app_server._ensure_started()
+
+        app_server._start_runtime.assert_awaited_once_with("codex.exe")
+        self.assertTrue(app_server._use_shared_daemon)
+
+    def test_shared_windows_runtime_prefers_the_managed_daemon_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as home_directory:
+            home = Path(home_directory)
+            managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
+            managed.parent.mkdir(parents=True)
+            managed.touch()
+            old_home = os.environ.get("CODEX_HOME")
+            old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
+            try:
+                os.environ["CODEX_HOME"] = str(home)
+                app_server = CodexAppServer("stale-codex.cmd", Path.cwd())
+                if os.name == "nt":
+                    self.assertEqual(str(managed), app_server._resolve_executable())
+                else:
+                    self.assertIsNone(app_server._resolve_executable())
+            finally:
+                if old_home is None:
+                    os.environ.pop("CODEX_HOME", None)
+                else:
+                    os.environ["CODEX_HOME"] = old_home
+                if old_runtime_home is not None:
+                    os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
+
+    async def test_list_threads_reads_all_pages_and_merges_disk_history(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        app_server.request = AsyncMock(side_effect=[
+            {"data": [{"id": "server-1", "name": "server"}], "nextCursor": "cursor-1"},
+            {"data": [{"id": "server-2", "name": "second"}], "nextCursor": None},
+        ])
+        app_server._history.list_threads = Mock(return_value=[
+            {"id": "disk-1", "name": "disk"},
+            {"id": "server-1", "name": "disk copy"},
+        ])
+
+        threads = await app_server.list_threads()
+
+        self.assertEqual({"disk-1", "server-1", "server-2"}, {thread["id"] for thread in threads})
+        self.assertEqual("server", next(thread["name"] for thread in threads if thread["id"] == "server-1"))
+        self.assertEqual(2, app_server.request.await_count)
+
+    async def test_list_threads_falls_back_to_disk_when_app_server_is_unavailable(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._history.list_threads = Mock(return_value=[{"id": "disk-1", "name": "disk"}])
+        app_server.request = AsyncMock(side_effect=CodexRuntimeError("offline"))
+        threads = await app_server.list_threads()
+
+        self.assertEqual([{"id": "disk-1", "name": "disk"}], threads)
+
+    async def test_list_threads_uses_disk_without_starting_offline_app_server(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._history.list_threads = Mock(return_value=[{"id": "disk-1", "name": "disk"}])
+        app_server.request = AsyncMock(side_effect=AssertionError("app-server must not start"))
+
+        self.assertEqual([{"id": "disk-1", "name": "disk"}], await app_server.list_threads())
+        app_server.request.assert_not_awaited()
+
+    async def test_read_thread_uses_disk_without_starting_offline_app_server(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        disk_thread = {"id": "disk-1", "sessionId": "disk-1", "turns": []}
+        app_server._history.read_thread = Mock(return_value=disk_thread)
+        app_server.request = AsyncMock(side_effect=AssertionError("app-server must not start"))
+
+        self.assertEqual(disk_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_not_awaited()
+
+    async def test_read_thread_prefers_main_history_to_stale_isolated_snapshot(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        history_thread = {
+            "id": "disk-1",
+            "turns": [{"id": "turn-1", "items": [
+                {"id": "user-1", "type": "userMessage", "content": [{"text": "hello"}]},
+                {"id": "assistant-1", "type": "agentMessage", "text": "world"},
+            ]}],
+        }
+        stale_runtime_thread = {
+            "id": "disk-1",
+            "turns": [{"id": "turn-1", "items": [
+                {"id": "user-1", "type": "userMessage", "content": [{"text": "hello"}]},
+            ]}],
+        }
+        app_server._history.read_thread = Mock(return_value=history_thread)
+        app_server.request = AsyncMock(return_value={"thread": stale_runtime_thread})
+
+        self.assertEqual(history_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_not_awaited()
+
+    async def test_read_thread_uses_app_server_for_active_runtime_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        history_thread = {"id": "disk-1", "turns": [{"id": "turn-1", "items": []}]}
+        live_thread = {"id": "disk-1", "turns": [{"id": "turn-2", "items": [
+            {"id": "assistant-live", "type": "agentMessage", "text": "streaming"},
+        ]}]}
+        app_server._active_turn_ids["disk-1"] = "turn-2"
+        app_server._history.read_thread = Mock(return_value=history_thread)
+        app_server.request = AsyncMock(return_value={"thread": live_thread})
+
+        self.assertEqual(live_thread, await app_server.read_thread("disk-1"))
+        app_server.request.assert_awaited_once()
+
+    def test_configured_models_follow_codex_catalog_and_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            catalog_path = codex_home / "models-custom.json"
+            catalog_path.write_text(json.dumps({
+                "models": [
+                    {
+                        "slug": "gpt-new",
+                        "display_name": "GPT New",
+                        "visibility": "list",
+                        "input_modalities": ["text", "image"],
+                        "default_reasoning_level": "high",
+                        "supported_reasoning_levels": [{"effort": "high", "description": "deep"}],
+                    },
+                    {"slug": "hidden", "visibility": "hide"},
+                ]
+            }), encoding="utf-8")
+            (codex_home / "config.toml").write_text(
+                f'model = "gpt-new"\nmodel_catalog_json = "{catalog_path.as_posix()}"\n',
+                encoding="utf-8",
+            )
+            old_home = __import__("os").environ.get("CODEX_HOME")
+            try:
+                __import__("os").environ["CODEX_HOME"] = str(codex_home)
+                app_server = CodexAppServer("codex", Path.cwd())
+                models = app_server._configured_models()
+            finally:
+                if old_home is None:
+                    __import__("os").environ.pop("CODEX_HOME", None)
+                else:
+                    __import__("os").environ["CODEX_HOME"] = old_home
+
+            self.assertEqual(["gpt-new"], [model["model"] for model in models])
+            self.assertTrue(models[0]["isDefault"])
+            self.assertEqual("high", models[0]["defaultReasoningEffort"])
     async def test_set_thread_name_uses_the_codex_app_server_method(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(return_value={})

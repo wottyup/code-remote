@@ -71,6 +71,8 @@ CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:d
 
 历史列表读取本机 Codex 最近 100 条未归档会话，包含其他工作目录创建的会话；打开会话后，标题下方会显示该会话的工作目录。后端监听 Codex 会话文件变化，并通过 WebSocket 通知侧栏更新，无需刷新网页。
 
+本地 Codex App Server 默认直接使用用户级 `CODEX_HOME`，因此网页端与桌面 Codex 读取并写入同一套配置、模型和会话历史。Windows 会先通过 Codex 官方共享 daemon 与 stdio proxy 接入主运行时，启动器优先使用官方受控 CLI；如果 Codex 的 Windows 沙箱令牌不能访问桌面实例私有的 daemon socket，服务会自动切换到兼容运行时，不会无限重连。兼容运行时继续读取主 `.codex` 的模型和配置，并在主 `.codex/sessions` 可写时将网页会话同步到本机 Codex 历史。桌面侧栏还依赖主 `state_5.sqlite` 索引；该文件可写时会补登网页会话，无写入权限时则保留网页会话，待以有权限的终端启动后补登。可显式设置 `CODEX_REMOTE_APP_SERVER_HOME` 固定使用独立运行目录。
+
 ## 在网页与本机 Codex 间交还会话
 
 网页端发送过消息的会话会由网页专用 App Server 持有写入权；如果要回到本机 Codex 继续该会话，先等网页端回复结束，再点击聊天页右上角的“交还本机”并确认。该操作只关闭网页专用的 Codex 子进程，不会重启开发服务、SSH 会话或浏览器配对；网页也不会自动重新占回会话。

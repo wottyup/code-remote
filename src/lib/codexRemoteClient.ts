@@ -79,6 +79,9 @@ export interface CodexRuntime {
   connected: boolean
   workspace: string
   handedOff: boolean
+  runtimeMode?: 'shared' | 'isolated' | 'isolated-fallback' | 'direct'
+  runtimeMessage?: string | null
+  fallbackReason?: string | null
   error: string | null
 }
 
@@ -117,6 +120,9 @@ export interface RemoteEvent {
   available?: boolean
   workspace?: string
   handedOff?: boolean
+  runtimeMode?: CodexRuntime['runtimeMode']
+  runtimeMessage?: string | null
+  fallbackReason?: string | null
   error?: string | null
   request_id?: string | number
   message?: string
@@ -130,6 +136,7 @@ export class RemoteApiError extends Error {
 }
 
 const networkRetryDelaysMs = [300, 900, 1_800]
+const webSocketConnectionTimeoutMs = 60_000
 
 export function isAmbiguousNetworkFailure(reason: unknown) {
   if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
@@ -141,6 +148,13 @@ export function isAmbiguousNetworkFailure(reason: unknown) {
 
 function wait(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
+}
+
+function timeoutSignal(milliseconds: number) {
+  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(milliseconds)
+  const controller = new AbortController()
+  window.setTimeout(() => controller.abort(), milliseconds)
+  return controller.signal
 }
 
 async function request<T>(
@@ -410,6 +424,12 @@ export const codexRemoteClient = {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
       method: 'POST',
       body: JSON.stringify({ code }),
+      signal: timeoutSignal(10_000),
+    }).catch((reason) => {
+      if (reason instanceof Error && (reason.name === 'TimeoutError' || reason.name === 'AbortError')) {
+        throw new Error('连接超时，请确认 Codex Remote 服务正在运行后重试。')
+      }
+      throw reason
     })
   },
   unpair(token: string) {
@@ -581,6 +601,14 @@ export const codexRemoteClient = {
     url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(url)
     onState('connecting')
+    let receivedConnection = false
+    const connectionTimeout = window.setTimeout(() => {
+      if (receivedConnection || socket.readyState === 3) return
+      socket.close()
+      onEvent({ type: 'connection', connected: false, available: false, error: 'Codex 引擎连接超时，请检查本机 Codex app-server 是否已就绪。' })
+      onState('unavailable')
+    }, webSocketConnectionTimeoutMs)
+    const clearConnectionTimeout = () => window.clearTimeout(connectionTimeout)
     socket.addEventListener('open', () => {
       socket.send(JSON.stringify({ type: 'codex.client.hello', protocol_version: 1, token }))
     })
@@ -589,15 +617,24 @@ export const codexRemoteClient = {
         const event = JSON.parse(String(message.data)) as RemoteEvent
         if (!event.type) return
         if (event.type === 'connection') {
+          receivedConnection = true
+          clearConnectionTimeout()
           onState(event.connected ? 'connected' : event.available ? 'disconnected' : 'unavailable')
         }
         onEvent(event)
       } catch {
+        clearConnectionTimeout()
         onState('unavailable')
       }
     })
-    socket.addEventListener('error', () => onState('unavailable'))
-    socket.addEventListener('close', () => onState('disconnected'))
+    socket.addEventListener('error', () => {
+      clearConnectionTimeout()
+      onState('unavailable')
+    })
+    socket.addEventListener('close', () => {
+      clearConnectionTimeout()
+      onState('disconnected')
+    })
     return {
       respondToApproval(requestId: string | number, decision: 'accept' | 'decline' | 'cancel') {
         if (socket.readyState !== WebSocket.OPEN) return false

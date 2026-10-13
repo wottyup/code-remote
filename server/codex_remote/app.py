@@ -40,22 +40,37 @@ from .shared_state import QueueConflictError, SharedQueueService, SharedStateSto
 logger = logging.getLogger(__name__)
 
 
+def resolve_default_workspace(
+    project_root: Path,
+    *,
+    configured: Path | None = None,
+) -> Path:
+    """Use the app repository's parent so sibling repositories are accessible."""
+    if configured is not None:
+        return configured.expanduser().resolve()
+    root = project_root.expanduser().resolve()
+    return root.parent
+
+
 async def watch_codex_history(app_server: CodexAppServer) -> None:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
     sessions = codex_home / "sessions"
-    watch_root = sessions if sessions.is_dir() else codex_home
+    watch_root = codex_home if codex_home.is_dir() else sessions
     if not watch_root.is_dir():
         return
 
     def is_session_change(_change: object, changed_path: str) -> bool:
         path = Path(changed_path).resolve()
-        if path == sessions:
+        if path == codex_home or path == sessions:
             return True
         try:
-            relative = path.relative_to(sessions)
+            relative = path.relative_to(codex_home)
         except ValueError:
             return False
-        return relative.suffix == ".jsonl" or not relative.suffix
+        return relative.name in {
+            "session_index.jsonl", "state_5.sqlite", "state_5.sqlite-wal",
+            "thread_history_1.sqlite", "thread_history_1.sqlite-wal",
+        } or relative.suffix == ".jsonl" or not relative.suffix
 
     try:
         async for changes in awatch(watch_root, watch_filter=is_session_change, debounce=500):
@@ -680,8 +695,14 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
 class PairingAuth:
     def __init__(self, state_path: Path | None = None) -> None:
         self.code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
+        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
         self.state_path = state_path or self._default_state_path()
-        self.token_hashes = self._load_token_hashes()
+        state_exists = self.state_path.is_file()
+        self.token_hashes = self._load_token_hashes(self.state_path)
+        if state_path is None and not configured_path and not state_exists:
+            for legacy_path in self._legacy_state_paths():
+                if legacy_path.resolve() != self.state_path.resolve():
+                    self.token_hashes.update(self._load_token_hashes(legacy_path))
         self.failed_attempts = 0
         self.blocked_until = 0.0
 
@@ -690,16 +711,31 @@ class PairingAuth:
         configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
         if configured_path:
             return Path(configured_path).expanduser()
+        if os.name == "nt":
+            project_root = Path(__file__).resolve().parents[2]
+            return project_root / ".codex-remote" / "trusted-devices-v2.json"
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return codex_home / "codex-remote" / "trusted-devices.json"
+
+    @staticmethod
+    def _legacy_state_paths() -> tuple[Path, ...]:
+        if os.name != "nt":
+            return ()
+        project_root = Path(__file__).resolve().parents[2]
+        codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+        return (
+            project_root / ".codex-remote" / "trusted-devices.json",
+            codex_home / "codex-remote" / "trusted-devices.json",
+        )
 
     @staticmethod
     def _token_hash(token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-    def _load_token_hashes(self) -> set[str]:
+    @staticmethod
+    def _load_token_hashes(state_path: Path) -> set[str]:
         try:
-            raw_state = self.state_path.read_text(encoding="utf-8")
+            raw_state = state_path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return set()
         except OSError as error:
@@ -728,6 +764,14 @@ class PairingAuth:
     def _save_token_hashes(self) -> None:
         try:
             self.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.name == "nt":
+                with self.state_path.open("w", encoding="utf-8") as state_file:
+                    json.dump({"version": 1, "token_hashes": sorted(self.token_hashes)}, state_file)
+                    state_file.write("\n")
+                    state_file.flush()
+                    os.fsync(state_file.fileno())
+                os.chmod(self.state_path, 0o600)
+                return
             descriptor, temporary_path = tempfile.mkstemp(
                 prefix=f".{self.state_path.name}.", suffix=".tmp", dir=self.state_path.parent,
             )
@@ -788,7 +832,10 @@ class PairingAuth:
 
 def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
     project_root = Path(__file__).resolve().parents[2]
-    configured_workspace = workspace or Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root.parent))
+    configured_workspace = resolve_default_workspace(
+        project_root,
+        configured=workspace or (Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None),
+    )
     app_server = CodexAppServer(
         codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex"),
         configured_workspace,
@@ -1238,8 +1285,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         await websocket.accept()
         try:
             hello = await asyncio.wait_for(websocket.receive_json(), timeout=8)
-        except (TimeoutError, ValueError, WebSocketDisconnect):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="client hello required")
+        except WebSocketDisconnect:
+            return
+        except (TimeoutError, ValueError):
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="client hello required")
             return
         if (
             not isinstance(hello, dict)
@@ -1247,7 +1297,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             or hello.get("protocol_version") != 1
             or not auth.accepts(hello.get("token"))
         ):
-            await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
             return
 
         queue = await app_server.subscribe()
@@ -1256,7 +1307,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             runtime_status = app_server.status()
             runtime_status["error"] = str(error)
-        await websocket.send_json({"type": "connection", **runtime_status})
+        try:
+            await websocket.send_json({"type": "connection", **runtime_status})
+        except WebSocketDisconnect:
+            app_server.unsubscribe(queue)
+            return
 
         async def send_events() -> None:
             while True:
@@ -1267,7 +1322,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             while True:
                 payload = await websocket.receive_json()
                 if not isinstance(payload, dict) or payload.get("type") != "approval.response":
-                    await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
+                    with suppress(WebSocketDisconnect):
+                        await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
                     return
                 request_id = payload.get("request_id")
                 decision = payload.get("decision")

@@ -2572,7 +2572,12 @@ function RemoteChatPane({
   }, [])
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const currentConnectionLabel = remote.handedOff ? '已交还给本机' : connectionLabel[remote.connection]
+  const currentConnectionLabel = remote.handedOff
+    ? '已交还给本机'
+    : remote.runtime.runtimeMode === 'isolated-fallback' && remote.connection === 'connected'
+      ? 'Codex 已连接（兼容运行时）'
+      : connectionLabel[remote.connection]
+  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
   const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
@@ -2602,6 +2607,7 @@ function RemoteChatPane({
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} Codex 对话`}>
         <div className="message-stream__content" ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
+          {remote.runtime.runtimeMode === 'isolated-fallback' && remote.runtime.runtimeMessage ? <div className="runtime-notice" role="status"><strong>已启用 Windows 兼容运行时</strong><span>{remote.runtime.runtimeMessage}</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
               <h1>与Codex Remote一起完成伟大项目</h1>

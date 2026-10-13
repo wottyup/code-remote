@@ -23,6 +23,7 @@ export default defineConfig({
       ignored: [
         '**/android/**',
         '**/artifacts/**',
+        '**/.codex-remote/**',
         '**/docs/**',
         '**/dist/**',
         '**/server/**',

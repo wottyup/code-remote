@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 
-from .app import create_app
+from .app import create_app, resolve_default_workspace
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -14,7 +14,12 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the local Codex Remote web engine")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address; defaults to loopback only")
     parser.add_argument("--port", type=int, default=18766)
-    parser.add_argument("--workspace", type=Path, default=Path(os.environ.get("CODEX_REMOTE_WORKSPACE", project_root.parent)))
+    configured_workspace = Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=resolve_default_workspace(project_root, configured=configured_workspace),
+    )
     parser.add_argument("--codex-command", default=os.environ.get("CODEX_REMOTE_COMMAND", "codex"))
     return parser.parse_args()
 
