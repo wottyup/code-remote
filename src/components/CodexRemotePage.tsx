@@ -6,6 +6,7 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   Copy,
@@ -2577,6 +2578,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
   const [workspaceFilePreviewWidth, setWorkspaceFilePreviewWidth] = useState(readWorkspaceFilePreviewWidth)
@@ -3295,7 +3297,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchEndCapture={handleSidebarTouchEnd}
@@ -3317,7 +3319,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
         <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
-        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading">
+          <span>{sidebarCollapsed ? '聊天对话记录' : '最近对话'}</span>
+          <div className="thread-list-heading__actions">
+            <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+              {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+            </button>
+            <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button>
+          </div>
+        </div>
         <nav className="thread-list">
           {remote0.threads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
@@ -3343,10 +3353,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
-          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
+          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
-        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} /><span>{currentConnectionLabel}</span><button type="button" onClick={() => void onUnpair()}>退出</button></footer>
+        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
