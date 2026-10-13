@@ -1087,3 +1087,20 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .theme-image-input { justify-content: space-between; }
   .theme-settings-hint { padding-inline: 16px; }
 }
+
+/* Keep neutral interface text at full contrast in the monochrome themes. */
+.remote-shell--theme-light { color: #000; }
+.remote-shell--theme-dark { color: #fff; }
+.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *) { color: #000; }
+.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *) { color: #fff; }
+.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *)::placeholder { color: #000; opacity: 1; }
+.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *)::placeholder { color: #fff; opacity: 1; }
+.remote-shell--theme-light :is(.remote-shell *) .operation-activity__text { background-image: none; color: #000; animation: none; -webkit-text-fill-color: #000; }
+.remote-shell--theme-dark :is(.remote-shell *) .operation-activity__text { background-image: none; color: #fff; animation: none; -webkit-text-fill-color: #fff; }
+.remote-shell--theme-light :is(.remote-shell *) .file-change-card__diff-line--added { color: var(--file-change-added-text); }
+.remote-shell--theme-light :is(.remote-shell *) .file-change-card__diff-line--deleted { color: var(--file-change-deleted-text); }
+.remote-shell--theme-light :is(.remote-shell *) .file-change-card__diff-line--hunk { color: #5c626d; }
+.remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--added { color: var(--file-change-added-text); }
+.remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--deleted { color: var(--file-change-deleted-text); }
+.remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--hunk { color: var(--file-change-hunk-text); }
+.remote-shell--theme-light :is(.remote-shell *) .send-button:not(:disabled), .remote-shell--theme-light :is(.remote-shell *) .thread-rename-dialog__actions button:last-child { color: #fff; }
