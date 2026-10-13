@@ -783,7 +783,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .running-indicator__elapsed { color: #707070; }
 .remote-shell--theme-light .scroll-to-bottom { border-color: #d8d8d8; background: rgba(255, 255, 255, .96); color: #555; box-shadow: 0 9px 22px rgba(40, 40, 40, .1); }
 .remote-shell--theme-light .scroll-to-bottom:hover { border-color: #bdbdbd; background: #efefef; color: #292929; }
-.remote-shell--theme-light .chat-message--user .chat-message__body { background: linear-gradient(145deg, #f2f2f2, #e8e8e8); box-shadow: none; }
+.remote-shell--theme-light .chat-message--user .chat-message__body { background: #ececec; box-shadow: none; }
 .remote-shell--theme-light .chat-message--user .chat-message__content { color: #303030; }
 .remote-shell--theme-light .message-composer { background: #fff; box-shadow: 0 18px 45px rgba(40, 40, 40, .1), inset 0 1px 0 #fff; }
 .remote-shell--theme-light .message-composer textarea { color: #303030; }
