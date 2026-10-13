@@ -49,7 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.86";
+    private static final String APP_VERSION = "0.0.87";
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
@@ -333,13 +333,12 @@ public class MainActivity extends Activity {
                     pendingFileChooser.onReceiveValue(null);
                 }
                 pendingFileChooser = filePathCallback;
-                Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                Intent picker = fileChooserParams.createIntent();
                 picker.addCategory(Intent.CATEGORY_OPENABLE);
-                picker.setType("image/*");
-                picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-                picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
+                picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+                picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 try {
-                    startActivityForResult(Intent.createChooser(picker, "选择图片"), FILE_CHOOSER_REQUEST_CODE);
+                    startActivityForResult(Intent.createChooser(picker, "选择附件"), FILE_CHOOSER_REQUEST_CODE);
                 } catch (ActivityNotFoundException error) {
                     pendingFileChooser = null;
                     filePathCallback.onReceiveValue(null);

@@ -81,6 +81,15 @@ const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
   hourCycle: 'h23',
 })
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType']> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  webp: 'image/webp',
+  gif: 'image/gif',
+}
+const imageAttachmentAccept = [...imageTypes].join(',')
+const mobileAttachmentAccept = `${imageAttachmentAccept},${documentAttachmentAccept}`
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageEdge = 1_920
@@ -464,6 +473,16 @@ function effortLabelOf(effort: string) {
   return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' } as Record<string, string>)[effort] ?? effort
 }
 
+function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachment['mediaType'] | null {
+  if (imageTypes.has(file.type as CodexImageAttachment['mediaType'])) return file.type as CodexImageAttachment['mediaType']
+  const extension = file.name.toLowerCase().split('.').at(-1) ?? ''
+  return imageMediaTypesByExtension[extension] ?? null
+}
+
+function isImageAttachmentFile(file: Pick<File, 'name' | 'type'>) {
+  return file.type.startsWith('image/') || imageMediaTypeFor(file) !== null
+}
+
 const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
   { value: 'on-request', label: '请求批准' },
   { value: 'untrusted', label: '帮我批准' },
@@ -481,7 +500,12 @@ function readImage(file: File): Promise<CodexImageAttachment> {
         reject(new Error(`无法读取图片：${file.name}`))
         return
       }
-      resolve({ name: file.name || 'image', mediaType: file.type as CodexImageAttachment['mediaType'], data: result.slice(separator + 1) })
+      const mediaType = imageMediaTypeFor(file)
+      if (!mediaType) {
+        reject(new Error(`不支持的图片格式：${file.name}`))
+        return
+      }
+      resolve({ name: file.name || 'image', mediaType, data: result.slice(separator + 1) })
     }
     reader.readAsDataURL(file)
   })
@@ -1088,8 +1112,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && !readingImages
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
-  const canAttachImages = imagesReady && !readingImages && (editingQueuedMessageId ? !sending : canCompose) && modelSupportsImages
-  const canAttachDocuments = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments
+  const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
@@ -1104,46 +1127,70 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     </>
   ) : null
 
-  async function attachImages(files: File[]) {
-    if (files.length === 0 || !imagesReady || readingImages) return
-    if (!modelSupportsImages) {
-      setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
-      return
+  async function attachImages(files: File[]): Promise<string | null> {
+    if (files.length === 0) return null
+    if (!imagesReady) {
+      const message = '正在恢复待发送图片，请稍后再添加图片。'
+      setAttachmentError(message)
+      return message
     }
-    const unsupported = files.find((file) => !imageTypes.has(file.type as CodexImageAttachment['mediaType']))
+    if (readingImages) {
+      const message = '图片仍在处理中，请稍后再添加。'
+      setAttachmentError(message)
+      return message
+    }
+    if (!modelSupportsImages) {
+      const message = '当前模型不支持图片输入，请选择支持图片的模型。'
+      setAttachmentError(message)
+      return message
+    }
+    const unsupported = files.find((file) => !imageMediaTypeFor(file))
     if (unsupported) {
-      setAttachmentError('只支持 PNG、JPEG、WebP 和 GIF 图片。')
-      return
+      const message = '只支持 PNG、JPEG、WebP 和 GIF 图片。'
+      setAttachmentError(message)
+      return message
     }
     const oversized = files.find((file) => file.size > maxImageSize)
     if (oversized) {
-      setAttachmentError('单张图片不能超过 8 MB。')
-      return
+      const message = '单张图片不能超过 8 MB。'
+      setAttachmentError(message)
+      return message
     }
     const remaining = maxImagesPerTurn - attachedImagesRef.current.length
     if (remaining <= 0) {
-      setAttachmentError('单条消息最多附加 4 张图片。')
-      return
+      const message = '单条消息最多附加 4 张图片。'
+      setAttachmentError(message)
+      return message
     }
     const chosen = files.slice(0, remaining)
     setReadingImages(true)
     try {
       const next = await Promise.all(chosen.map(readImage))
       updateAttachedImages([...attachedImagesRef.current, ...next])
-      setAttachmentError(files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null)
+      const message = files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null
+      setAttachmentError(message)
+      return message
     } catch (reason) {
-      setAttachmentError(reason instanceof Error ? reason.message : '图片读取失败。')
+      const message = reason instanceof Error ? reason.message : '图片读取失败。'
+      setAttachmentError(message)
+      return message
     } finally {
       setReadingImages(false)
     }
   }
 
-  async function attachDocuments(files: File[]) {
-    if (files.length === 0 || readingDocuments) return
+  async function attachDocuments(files: File[]): Promise<string | null> {
+    if (files.length === 0) return null
+    if (readingDocuments) {
+      const message = '文档仍在处理中，请稍后再添加。'
+      setAttachmentError(message)
+      return message
+    }
     const availableSlots = maxDocumentsPerTurn - attachedDocumentsRef.current.length
     if (availableSlots <= 0) {
-      setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
-      return
+      const message = `单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`
+      setAttachmentError(message)
+      return message
     }
     setReadingDocuments(true)
     const parsed: CodexDocumentAttachment[] = []
@@ -1200,12 +1247,36 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         attachedDocumentsRef.current = nextDocuments
         setAttachedDocuments(nextDocuments)
       }
-      setAttachmentError(notices.length > 0 ? notices.slice(0, 4).join(' ') : null)
+      const message = notices.length > 0 ? notices.slice(0, 4).join(' ') : null
+      setAttachmentError(message)
+      return message
     } catch (reason) {
-      setAttachmentError(reason instanceof Error ? reason.message : '无法加载文档解析器，请刷新页面后重试。')
+      const message = reason instanceof Error ? reason.message : '无法加载文档解析器，请刷新页面后重试。'
+      setAttachmentError(message)
+      return message
     } finally {
       setReadingDocuments(false)
     }
+  }
+
+  async function attachSelectedFiles(files: File[]) {
+    if (!mobileLayout) {
+      await attachDocuments(files)
+      return
+    }
+
+    const imageFiles = files.filter(isImageAttachmentFile)
+    const documentFiles = files.filter((file) => !isImageAttachmentFile(file))
+    const notices: string[] = []
+    if (imageFiles.length > 0) {
+      const notice = await attachImages(imageFiles)
+      if (notice) notices.push(notice)
+    }
+    if (documentFiles.length > 0) {
+      const notice = await attachDocuments(documentFiles)
+      if (notice) notices.push(notice)
+    }
+    setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
   }
 
   async function send(event: FormEvent<HTMLFormElement>) {
@@ -1594,13 +1665,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={!imagesReady ? '正在恢复待发送图片' : modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
-            {imagesReady ? <ImagePlus size={16} /> : <LoaderCircle className="spin" size={16} />}
-            <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
-          </span>
-          <span className={`attach-button attach-button--native${canAttachDocuments ? '' : ' attach-button--disabled'}`} title={readingDocuments ? '正在读取文档' : '附加文档或源码文件'}>
-            {readingDocuments ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
-            <input className="image-input" type="file" accept={documentAttachmentAccept} multiple disabled={!canAttachDocuments} onChange={(event) => { void attachDocuments(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加文档或源码文件" />
+          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
+            {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
+            <input className="image-input" type="file" accept={mobileLayout ? mobileAttachmentAccept : documentAttachmentAccept} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>

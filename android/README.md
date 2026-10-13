@@ -11,4 +11,4 @@ cd android
 ANDROID_HOME=/path/to/android-sdk ./gradlew assembleDebug
 ```
 
-APK 输出在 `app/build/outputs/apk/debug/app-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
+APK 输出在 `app/build/outputs/apk/debug/codex-remote-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
