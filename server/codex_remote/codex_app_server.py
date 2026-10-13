@@ -792,7 +792,16 @@ class CodexAppServer:
                 self._last_error = str(error)
                 raise
             await self._stop_process()
-            self._activate_isolated_fallback(error)
+            if "managed standalone codex install not found at" in str(error).casefold():
+                # Missing daemon packaging does not imply that the main history
+                # is inaccessible. Keep the same home so desktop and web use
+                # Codex's own history and sidebar indexes in both directions.
+                self._use_shared_daemon = False
+                self._runtime_mode = "direct"
+                self._fallback_reason = str(error)
+                logger.info("Managed daemon unavailable; using stdio with the main Codex home")
+            else:
+                self._activate_isolated_fallback(error)
             fallback_executable = self._resolve_executable() or executable
             try:
                 await self._start_runtime(fallback_executable)

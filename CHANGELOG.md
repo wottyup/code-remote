@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.0.199] - 修复 standalone 缺失时网页与桌面未共用会话历史和索引
+
 ## [v0.0.198] - 修复 Windows 缺少 standalone 安装时无法切换兼容运行时
 
 ## [0.0.197] - WebSocket 引擎握手超时提示与断开清理

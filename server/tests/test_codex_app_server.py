@@ -438,6 +438,22 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             limit=1024 * 1024,
         )
 
+    async def test_missing_standalone_keeps_main_history_for_direct_runtime(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_shared_daemon = True
+        app_server._fallback_runtime_home = Path(tempfile.gettempdir()) / "unused-runtime"
+        app_server._start_runtime = AsyncMock(side_effect=[
+            CodexRuntimeError("managed standalone Codex install not found at C:/missing/codex.exe"),
+            None,
+        ])
+        app_server._resolve_executable = Mock(return_value="codex.exe")
+        await app_server._start_with_shared_fallback("codex.exe")
+        self.assertEqual(2, app_server._start_runtime.await_count)
+        self.assertFalse(app_server._use_shared_daemon)
+        self.assertEqual(app_server._history_home, app_server._runtime_home)
+        self.assertEqual("direct", app_server.status()["runtimeMode"])
+        self.assertEqual(["codex.exe", "app-server", "--listen", "stdio://"], app_server._app_server_arguments("codex.exe"))
+
     async def test_shared_windows_permission_failure_retries_with_an_isolated_runtime(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         fallback_home = Path(tempfile.mkdtemp())
