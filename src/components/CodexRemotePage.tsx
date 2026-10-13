@@ -757,6 +757,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 }, ref) {
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [imagesReady, setImagesReady] = useState(false)
   const [readingImages, setReadingImages] = useState(false)
@@ -1207,6 +1208,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
       confirmQueuedEdit()
@@ -1222,6 +1224,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocuments
     const previousAttachmentError = attachmentError
+    sendingRef.current = true
     setSending(true)
     updateDraft('')
     saveComposerDraft(draftScope, '')
@@ -1277,6 +1280,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         }
       }
     }
+    sendingRef.current = false
     setSending(false)
   }
 
@@ -1506,13 +1510,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>已排队 {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
               const isEditing = editingQueuedMessageId === message.id
+              const deliveryUnverified = Boolean(message.sendAttempt)
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
               const summary = message.text || (message.documents?.length
                 ? `附件文档：${message.documents.length} 个文件`
@@ -1520,11 +1525,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : sendingNow ? '已插入对话 · 正在确认送达' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
-                  <button className="composer-queue__edit" type="button" disabled={queueLocked} onClick={() => beginQueuedEdit(message)} title={isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
                     <Pencil size={11} /><span>{isEditing ? '编辑中' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow} onClick={() => void sendQueuedNow(message.id)} title="立即发送给当前 Codex 回复">
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : '立即发送给当前 Codex 回复'}>
                     {sendingNow ? <LoaderCircle className="spin" size={12} /> : <Send size={12} />}<span>立即发送</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
