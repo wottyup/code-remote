@@ -8,6 +8,7 @@ import os
 import shutil
 import sqlite3
 import subprocess
+import time
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
@@ -94,12 +95,16 @@ def snapshot_workspace(workspace: Path) -> WorkspaceSnapshot:
     text_files: dict[str, bytes] = {}
     total_bytes = 0
     complete = True
+    deadline = time.monotonic() + 0.5
 
     def mark_incomplete(_error: OSError) -> None:
         nonlocal complete
         complete = False
 
     for directory, directory_names, file_names in os.walk(root, topdown=True, followlinks=False, onerror=mark_incomplete):
+        if time.monotonic() >= deadline:
+            complete = False
+            break
         current_directory = Path(directory)
         directory_names[:] = sorted(
             name for name in directory_names
@@ -107,7 +112,7 @@ def snapshot_workspace(workspace: Path) -> WorkspaceSnapshot:
             and not (current_directory / name).is_symlink()
         )
         for name in sorted(file_names):
-            if len(paths) >= _WORKSPACE_DIFF_MAX_FILES:
+            if len(paths) >= _WORKSPACE_DIFF_MAX_FILES or time.monotonic() >= deadline:
                 complete = False
                 break
             path = current_directory / name
