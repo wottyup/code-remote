@@ -31,7 +31,7 @@ _SHARED_DAEMON_FALLBACK_MARKERS = (
 )
 _WINDOWS_ACCESS_DENIED_MARKERS = ("os error 5", "os error 10013", "access is denied", "permission denied", "拒绝访问")
 _SHARED_DAEMON_FALLBACK_MESSAGE = (
-    "Windows 当前进程无法访问桌面 Codex 的私有 app-server，已切换到兼容运行时；"
+    "Windows 共享 Codex app-server 不可用，已切换到兼容运行时；"
     "网页会话会尝试同步到本机 Codex 历史；若主索引不可写，桌面侧栏暂时不会显示这些会话。"
 )
 
@@ -858,7 +858,10 @@ class CodexAppServer:
         if not self._use_shared_daemon or self._fallback_runtime_home is None:
             return False
         detail = "\n".join((str(error), *self._recent_stderr)).casefold()
-        if "unrecognized subcommand 'daemon'" in detail:
+        if any(marker in detail for marker in (
+            "unrecognized subcommand 'daemon'",
+            "managed standalone codex install not found at",
+        )):
             return True
         has_private_runtime_path = any(
             marker.casefold() in detail
@@ -941,6 +944,7 @@ class CodexAppServer:
             return
         if not force and target.is_file() and self._database_has_threads(target):
             return
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         for suffix in ("", "-shm", "-wal"):
             target_path = Path(f"{target}{suffix}")
             try:

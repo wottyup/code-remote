@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.0.198] - 修复 Windows 缺少 standalone 安装时无法切换兼容运行时
+
 ## [0.0.197] - WebSocket 引擎握手超时提示与断开清理
 
 ## [0.0.196] - 共享 app-server 状态目录无权限时自动切换兼容运行时
