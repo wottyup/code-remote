@@ -13,6 +13,7 @@ import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -48,7 +49,8 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.85";
+    private static final String APP_VERSION = "0.0.86";
+    private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
@@ -67,6 +69,10 @@ public class MainActivity extends Activity {
     private Button connectButton;
     private TextView webViewStatus;
     private Button webViewRetryButton;
+    private Button webViewChangeEndpointButton;
+    private Runnable webViewReadyCheck;
+    private long webViewLoadStartedAt;
+    private boolean webViewLoadFailed;
     private String activeEndpoint;
     private boolean checking;
     private boolean handlingBack;
@@ -350,19 +356,9 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
-                if (view == webView) updateWebViewStatus("正在加载电脑网页…", false);
-            }
-
-            @Override
-            public void onPageFinished(WebView view, String url) {
                 if (view != webView) return;
-                view.postDelayed(() -> view.evaluateJavascript(
-                        "(function(){var root=document.getElementById('root');return document.readyState==='complete' && !!root && root.children.length>0;})()",
-                        result -> {
-                            if (view != webView) return;
-                            if ("true".equals(result)) hideWebViewStatus();
-                            else updateWebViewStatus("网页脚本没有正常启动。请确认电脑端网页服务已更新，然后重试。", true);
-                        }), 800);
+                updateWebViewStatus("正在加载电脑网页…", false);
+                startWebViewReadyCheck(view);
             }
 
             @Override
@@ -375,6 +371,7 @@ public class MainActivity extends Activity {
                 if (request.isForMainFrame()) {
                     runOnUiThread(() -> {
                         if (view != webView) return;
+                        webViewLoadFailed = true;
                         updateWebViewStatus("网页加载失败：" + error.getDescription() + "\n请确认电脑网页服务仍在运行。", true);
                     });
                 }
@@ -385,6 +382,7 @@ public class MainActivity extends Activity {
                 if (request.isForMainFrame()) {
                     runOnUiThread(() -> {
                         if (view != webView) return;
+                        webViewLoadFailed = true;
                         updateWebViewStatus("网页服务返回 HTTP " + errorResponse.getStatusCode() + "。\n请确认电脑端地址正确。", true);
                     });
                 }
@@ -398,7 +396,42 @@ public class MainActivity extends Activity {
                 1));
         addWebViewStatusOverlay(root, endpoint);
         // Keep the WebView from reusing an older index.html or module bundle.
+        startWebViewReadyCheck(webView);
         webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION) + "&cacheBust=" + System.currentTimeMillis());
+    }
+
+    private void startWebViewReadyCheck(WebView view) {
+        stopWebViewReadyCheck();
+        webViewLoadStartedAt = SystemClock.elapsedRealtime();
+        webViewLoadFailed = false;
+        Runnable check = new Runnable() {
+            @Override
+            public void run() {
+                if (view != webView || webViewReadyCheck != this || webViewStatus == null) return;
+                view.evaluateJavascript(
+                        "(function(){var root=document.getElementById('root');return !!root && root.children.length>0;})()",
+                        result -> {
+                            if (view != webView || webViewReadyCheck != this || webViewStatus == null) return;
+                            if ("true".equals(result)) {
+                                hideWebViewStatus();
+                                return;
+                            }
+                            if (!webViewLoadFailed
+                                    && SystemClock.elapsedRealtime() - webViewLoadStartedAt >= WEBVIEW_LOAD_TIMEOUT_MS) {
+                                webViewLoadFailed = true;
+                                updateWebViewStatus("电脑网页加载超时。可以重新加载，或修改电脑地址。", true);
+                            }
+                            view.postDelayed(this, 1000);
+                        });
+            }
+        };
+        webViewReadyCheck = check;
+        view.postDelayed(check, 500);
+    }
+
+    private void stopWebViewReadyCheck() {
+        if (webView != null && webViewReadyCheck != null) webView.removeCallbacks(webViewReadyCheck);
+        webViewReadyCheck = null;
     }
 
     private void addWebViewStatusOverlay(FrameLayout container, String endpoint) {
@@ -425,6 +458,18 @@ public class MainActivity extends Activity {
         retryParams.topMargin = dp(12);
         overlay.addView(webViewRetryButton, retryParams);
 
+        webViewChangeEndpointButton = new Button(this);
+        webViewChangeEndpointButton.setText("修改电脑地址");
+        webViewChangeEndpointButton.setTextSize(12);
+        webViewChangeEndpointButton.setTextColor(TEXT);
+        webViewChangeEndpointButton.setAllCaps(false);
+        webViewChangeEndpointButton.setBackgroundColor(PANEL);
+        webViewChangeEndpointButton.setVisibility(View.GONE);
+        webViewChangeEndpointButton.setOnClickListener(view -> showConnector(endpoint, null));
+        LinearLayout.LayoutParams changeEndpointParams = wrapParams();
+        changeEndpointParams.topMargin = dp(8);
+        overlay.addView(webViewChangeEndpointButton, changeEndpointParams);
+
         container.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
@@ -435,14 +480,17 @@ public class MainActivity extends Activity {
         webViewStatus.setText(message);
         webViewStatus.setTextColor(failed ? Color.rgb(226, 154, 158) : MUTED);
         if (webViewRetryButton != null) webViewRetryButton.setVisibility(failed ? View.VISIBLE : View.GONE);
+        if (webViewChangeEndpointButton != null) webViewChangeEndpointButton.setVisibility(failed ? View.VISIBLE : View.GONE);
     }
 
     private void hideWebViewStatus() {
         if (webViewStatus == null) return;
+        stopWebViewReadyCheck();
         View parent = (View) webViewStatus.getParent();
         if (parent != null) parent.setVisibility(View.GONE);
         webViewStatus = null;
         webViewRetryButton = null;
+        webViewChangeEndpointButton = null;
     }
 
     @Override
@@ -574,6 +622,7 @@ public class MainActivity extends Activity {
     }
 
     private void disposeWebView() {
+        stopWebViewReadyCheck();
         if (pendingFileChooser != null) {
             pendingFileChooser.onReceiveValue(null);
             pendingFileChooser = null;
@@ -585,6 +634,7 @@ public class MainActivity extends Activity {
         }
         webViewStatus = null;
         webViewRetryButton = null;
+        webViewChangeEndpointButton = null;
     }
 
     private void applySystemBarInsets(FrameLayout container) {

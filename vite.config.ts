@@ -17,6 +17,19 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 4173,
     strictPort: true,
+    watch: {
+      // These are not served by Vite. Android builds in particular create
+      // enough directories to exhaust the host's inotify watcher limit.
+      ignored: [
+        '**/android/**',
+        '**/artifacts/**',
+        '**/docs/**',
+        '**/dist/**',
+        '**/server/**',
+        '**/.venv/**',
+        '**/tests/**',
+      ],
+    },
     proxy: { '/api': engineProxy },
   },
   preview: {
