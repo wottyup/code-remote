@@ -832,7 +832,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     if (queuedMessages.length === 0) setQueuedMessagesExpanded(false)
-  }, [queuedMessages.length])
+    else if (mobileLayout) setQueuedMessagesExpanded(true)
+  }, [mobileLayout, queuedMessages.length])
 
   useLayoutEffect(() => {
     if (!compactLandscape || composerHeightWasResized.current) return
