@@ -2604,14 +2604,7 @@ function RemoteChatPane({
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-              <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
-              <span className="welcome-state__mark">C</span>
               <h1>与Codex Remote一起完成伟大项目</h1>
-              <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
-              <div className="prompt-suggestions">
-                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。') }}>了解这个项目</button>
-                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。') }}>检查代码问题</button>
-              </div>
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
