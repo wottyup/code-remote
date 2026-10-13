@@ -19,6 +19,7 @@ from codex_remote.codex_app_server import (
     merge_workspace_change,
     snapshot_workspace,
     workspace_change_entries,
+    workspace_snapshot_changes,
 )
 
 
@@ -155,7 +156,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_slow_review_does_not_block_completion_or_following_rpc(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._active_turn_ids["thread-id"] = "turn-id"
-        changes = asyncio.create_task(asyncio.sleep(0, result={}))
+        changes = asyncio.create_task(asyncio.sleep(0, result=WorkspaceSnapshot(frozenset(), {}, True)))
         old_watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True))
         app_server._workspace_change_watches["thread-id"] = old_watch
         entered = asyncio.Event()
@@ -224,7 +225,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_late_completion_cannot_take_a_newer_turns_watcher(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._active_turn_ids["thread-id"] = "new-turn"
-        changes = asyncio.create_task(asyncio.sleep(0, result={}))
+        changes = asyncio.create_task(asyncio.sleep(0, result=WorkspaceSnapshot(frozenset(), {}, True)))
         watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True))
         app_server._workspace_change_watches["thread-id"] = watch
         await app_server._handle_message({"method": "turn/completed", "params": {
@@ -238,9 +239,9 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_shutdown_closes_a_detached_watch_before_cleanup_task_starts(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
 
-        async def wait_for_stop() -> dict[str, str]:
+        async def wait_for_stop() -> WorkspaceSnapshot:
             await asyncio.Event().wait()
-            return {}
+            return WorkspaceSnapshot(frozenset(), {}, True)
 
         watch = WorkspaceChangeWatch(asyncio.Event(), asyncio.create_task(wait_for_stop()), WorkspaceSnapshot(frozenset(), {}, True))
         app_server._workspace_change_watches["thread-id"] = watch
@@ -356,6 +357,64 @@ class WorkspaceChangeMergeTests(unittest.TestCase):
 
 
 class WorkspaceDiffSnapshotTests(unittest.TestCase):
+    def test_snapshot_comparison_detects_net_edits_including_new_and_removed_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            (workspace / "removed").mkdir()
+            (workspace / "removed/old.txt").write_text("old\n")
+            (workspace / "updated.txt").write_text("before\n")
+            (workspace / "unchanged.txt").write_text("same\n")
+            (workspace / "binary.dat").write_bytes(b"before\0")
+            before = snapshot_workspace(workspace)
+            (workspace / "removed/old.txt").unlink()
+            (workspace / "removed").rmdir()
+            (workspace / "added/nested").mkdir(parents=True)
+            (workspace / "added/nested/new.txt").write_text("new\n")
+            (workspace / "updated.txt").write_text("after\n")
+            (workspace / "unchanged.txt").write_text("same\n")
+            (workspace / "binary.dat").write_bytes(b"after changed\0")
+            temporary = workspace / "ephemeral.txt"
+            temporary.write_text("temporary")
+            temporary.unlink()
+            after = snapshot_workspace(workspace)
+
+        self.assertEqual(workspace_snapshot_changes(before, after), {
+            "removed/old.txt": "delete", "added/nested/new.txt": "add", "updated.txt": "update", "binary.dat": "update",
+        })
+
+    def test_incomplete_snapshot_does_not_invent_additions_or_deletions(self) -> None:
+        before = WorkspaceSnapshot(frozenset({"first", "both"}), {"both": b"old"}, False)
+        after = WorkspaceSnapshot(frozenset({"last", "both"}), {"both": b"new"}, False)
+        self.assertEqual(workspace_snapshot_changes(before, after), {"both": "update"})
+
+    def test_completed_diff_uses_captured_content_even_if_next_turn_edits_again(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            workspace = Path(temporary_directory)
+            path = workspace / "edited.txt"
+            path.write_text("before\n")
+            before = snapshot_workspace(workspace)
+            path.write_text("first turn\n")
+            after = snapshot_workspace(workspace)
+            path.write_text("second turn\n")
+            entries = workspace_change_entries(workspace_snapshot_changes(before, after), workspace, before, after)
+        self.assertIn("+first turn", entries[0]["diff"])
+        self.assertNotIn("second turn", entries[0]["diff"])
+
+    def test_snapshot_does_not_follow_directory_or_file_symlinks(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            parent = Path(temporary_directory)
+            workspace = parent / "workspace"
+            workspace.mkdir()
+            outside = parent / "outside"
+            outside.mkdir()
+            (outside / "not-project.txt").write_text("outside")
+            try:
+                (workspace / "directory-link").symlink_to(outside, target_is_directory=True)
+                (workspace / "file-link.txt").symlink_to(outside / "not-project.txt")
+            except OSError:
+                self.skipTest("symlink creation not available")
+            self.assertEqual(snapshot_workspace(workspace).paths, frozenset())
+
     def test_snapshot_diff_reports_totals_for_added_modified_and_deleted_text_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:
             workspace = Path(temporary_directory)

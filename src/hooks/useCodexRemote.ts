@@ -3274,15 +3274,57 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (!thread) return false
     if (sharedQueueAuthoritative) {
+      const delivery: PendingTurnDelivery = {
+        threadId: thread.id,
+        turnId: null,
+        acknowledged: false,
+        completedTurnIds: new Set(),
+        previousMessageIds: new Set(messagesRef.current.map((message) => message.id)),
+      }
+      pendingTurnDeliveries.current.set(payload.id, delivery)
+      const optimistic = activeThreadId.current === thread.id && !isRunning && !activeTurnId.current
+        && !(serverQueuedMessagesByThreadRef.current[thread.id]?.length)
+      if (optimistic) {
+        historyRevision.current += 1
+        appendQueuedMessageToActiveThread(thread.id, payload)
+        setIsRunning(true)
+        setActivity({ label: '正在发送' })
+      }
+      const retractPendingMessage = () => {
+        if (!optimistic) return
+        removeQueuedMessageFromActiveThread(thread.id, payload.id)
+        if (activeThreadId.current === thread.id && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+      }
       try {
         const result = await codexRemoteClient.submitMessage(token, thread.id, payload)
-        applyServerQueueResponse(thread.id, result.queue)
+        applyServerQueueResponse(thread.id, delivery.acknowledged
+          ? result.queue.filter((message) => message.id !== payload.id)
+          : result.queue)
         setError(null)
-        if (result.sent && activeThreadId.current === thread.id) {
-          void loadThread(thread.id, ++historyRevision.current, true)
+        if (result.sent || delivery.acknowledged) {
+          appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
+          if (delivery.turnId) applyTurnDelivery(thread.id, payload.id, delivery.turnId)
+          // A receipt and streamed events are enough to show our own message.
+          // Only recover history when the receipt was lost, not on every send.
+          if (!delivery.turnId && activeThreadId.current === thread.id) {
+            void loadThread(thread.id, ++historyRevision.current, true)
+          }
+        } else {
+          retractPendingMessage()
         }
         return true
       } catch (reason) {
+        if (delivery.acknowledged) {
+          appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
+          applyTurnDelivery(thread.id, payload.id, delivery.turnId)
+          void refreshServerQueue(thread.id)
+          setError(null)
+          return true
+        }
+        retractPendingMessage()
         if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
         setError(reason instanceof RemoteApiError && reason.status === 404
           ? '电脑端服务尚未加载新的发送接口，请重启 Codex Remote 后端。'
@@ -3291,6 +3333,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             : reason instanceof Error ? reason.message : '消息发送失败')
         void refreshServerQueue(thread.id)
         return false
+      } finally {
+        pendingTurnDeliveries.current.delete(payload.id)
       }
     }
     const threadIsReplying = thread.id === activeThreadId.current && (isRunning || activeTurnId.current !== null)
@@ -3415,7 +3459,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
