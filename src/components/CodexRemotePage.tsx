@@ -10,6 +10,7 @@ import {
   ChevronRight,
   ChevronsUpDown,
   Copy,
+  Download,
   File,
   FileText,
   Folder,
@@ -21,7 +22,10 @@ import {
   MessagesSquare,
   Paperclip,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
+  Quote,
   RefreshCw,
   RotateCcw,
   Send,
@@ -31,12 +35,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { createThreadTranscript, threadTranscriptFilename, truncateThreadTranscriptForAttachment } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
 interface Props {
@@ -128,7 +133,29 @@ const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-prefer
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
 const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
+const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
+
+function readPinnedThreadIds() {
+  if (typeof window === 'undefined') return new Set<string>()
+  try {
+    const value = window.localStorage.getItem(pinnedThreadIdsStorageKey)
+    if (!value) return new Set<string>()
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) return new Set<string>()
+    return new Set(parsed.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 512))
+  } catch {
+    return new Set<string>()
+  }
+}
+
+function savePinnedThreadIds(ids: ReadonlySet<string>) {
+  try {
+    window.localStorage.setItem(pinnedThreadIdsStorageKey, JSON.stringify([...ids]))
+  } catch {
+    // Keep the selected order for this page if browser storage is unavailable.
+  }
+}
 
 function isSettingsHistoryEntry(state: unknown): boolean {
   return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
@@ -660,7 +687,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
-  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): void
+  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
@@ -936,8 +963,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
     addDocumentAttachment(document, focus = true) {
-      appendDocument(document)
+      const added = appendDocument(document)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      return added
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
       const targetScope = composerDraftScopeForThread(threadId)
@@ -1374,10 +1402,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       ? item.sourceFileId === document.sourceFileId
       : !item.sourceFileId && (isSelection
         ? sameWorkspaceSelectionDocument(item, document)
-        : item.name === document.name && item.content === document.content))) return
+        : item.name === document.name && item.content === document.content))) return false
     if (current.length >= maxDocumentsPerTurn) {
       setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
-      return
+      return false
     }
     const numberedCurrent = current.reduce<CodexDocumentAttachment[]>((documents, item) => {
       documents.push(isWorkspaceSelectionDocument(item) ? numberWorkspaceSelectionDocument(item, documents) : item)
@@ -1389,19 +1417,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       attachedDocumentsRef.current = next
       setAttachedDocuments(next)
       setAttachmentError(null)
-      return
+      return true
     }
     const total = numberedCurrent.reduce((count, item) => count + item.content.length, 0)
     const remaining = maxDocumentTextPerTurn - total
     if (remaining <= 0) {
       setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
-      return
+      return false
     }
     const content = truncateAttachmentText(nextDocument.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
     const next = [...numberedCurrent, { ...nextDocument, content }]
     attachedDocumentsRef.current = next
     setAttachedDocuments(next)
     setAttachmentError(nextDocument.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
+    return true
   }
 
   return (
@@ -2634,6 +2663,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
+  const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
   const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
   const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
@@ -2689,7 +2720,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadContextMenu({
       thread,
       x: Math.max(8, Math.min(x, window.innerWidth - 174)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 122)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 190)),
     })
   }
 
@@ -3032,6 +3063,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
   }, [])
 
+  useEffect(() => {
+    savePinnedThreadIds(pinnedThreadIds)
+  }, [pinnedThreadIds])
+
   function showPaneNotice(message: string) {
     setPaneNotice(message)
     if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
@@ -3039,6 +3074,75 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       paneNoticeTimer.current = undefined
       setPaneNotice(null)
     }, 2_400)
+  }
+
+  function toggleThreadPin(thread: CodexThread) {
+    setPinnedThreadIds((current) => {
+      const next = new Set(current)
+      if (next.has(thread.id)) next.delete(thread.id)
+      else next.add(thread.id)
+      return next
+    })
+    setThreadContextMenu(null)
+  }
+
+  async function readThreadTranscript(thread: CodexThread) {
+    const details = await codexRemoteClient.readThread(token, thread.id)
+    return createThreadTranscript({ ...thread, ...details }, messagesFromThread(details))
+  }
+
+  function downloadThreadTranscript(thread: CodexThread, content: string) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = threadTranscriptFilename(thread, '对话导出')
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+
+  async function exportThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'export' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      downloadThreadTranscript(thread, transcript)
+      setThreadContextMenu(null)
+      showPaneNotice('已导出完整对话 Markdown')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `导出失败：${reason.message}` : '导出失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
+  }
+
+  async function quoteThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'quote' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      const attachment = truncateThreadTranscriptForAttachment(transcript, maxDocumentTextLength)
+      const composer = composerHandle.current
+      if (!composer) throw new Error('当前输入框尚未准备好，请稍后重试。')
+      const added = composer.addDocumentAttachment({
+        name: threadTranscriptFilename(thread, '对话引用'),
+        content: attachment.content,
+      })
+      setThreadContextMenu(null)
+      setSidebarOpen(false)
+      if (!added) {
+        showPaneNotice('引用未加入：该对话已在输入框中，或附件数量/文字容量已达上限。')
+        return
+      }
+      showPaneNotice(attachment.truncated ? '对话引用已加入输入框（内容过长，已截断）' : '对话引用已加入输入框')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `引用失败：${reason.message}` : '引用失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
   }
 
   function paneIndexForThread(threadId: string) {
@@ -3348,6 +3452,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
+  const sidebarThreads = useMemo(() => [...remote0.threads].sort((left, right) => {
+    const leftPinned = pinnedThreadIds.has(left.id)
+    const rightPinned = pinnedThreadIds.has(right.id)
+    return Number(rightPinned) - Number(leftPinned)
+  }), [pinnedThreadIds, remote0.threads])
 
   return (
     <div
@@ -3379,9 +3488,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : '最近对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
-          {remote0.threads.map((thread) => {
+          {sidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
+            const isPinned = pinnedThreadIds.has(thread.id)
             return (
               <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
                 const pending = threadLongPress.current
@@ -3394,7 +3504,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 void selectThread(thread)
               }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
-                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
+                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
               </button>
             )
@@ -3414,8 +3524,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
+          <button type="button" role="menuitem" onClick={() => toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</button>
+          <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</button>
+          <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</button>
           <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>
-          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void selectThread(thread) }}><Check size={14} />切换到此对话</button>
         </div>
       ) : null}
 
