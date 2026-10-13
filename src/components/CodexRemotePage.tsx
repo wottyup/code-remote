@@ -3281,9 +3281,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (openPaneIndexes.includes(paneIndex)) setSelectedPaneIndex(paneIndex)
   }
 
+  function findCompletedThread() {
+    if (!completionToast) return undefined
+    return remote0.threads.find((item) => item.id === completionToast.threadId)
+      ?? remotes.find((remote) => remote.activeThread?.id === completionToast.threadId)?.activeThread
+  }
+
   function openCompletedThread() {
     if (!completionToast) return
-    const thread = remote0.threads.find((item) => item.id === completionToast.threadId) ?? { id: completionToast.threadId }
+    const thread = findCompletedThread() ?? { id: completionToast.threadId }
     void selectThread(thread)
     setCompletionToast(null)
   }
@@ -3527,6 +3533,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const rightPinned = pinnedThreadIds.has(right.id)
     return Number(rightPinned) - Number(leftPinned)
   }), [pinnedThreadIds, remote0.threads])
+  const completedThread = findCompletedThread()
 
   return (
     <div
@@ -3541,7 +3548,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
             <span className="thread-completion-toast__icon"><Check size={15} strokeWidth={2.8} /></span>
-            <span className="thread-completion-toast__copy"><strong>一条对话已完成回复</strong><small>点击查看这条对话</small></span>
+            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>点击查看这条对话</small></span>
           </button>
           <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={() => setCompletionToast(null)}><X size={15} /></button>
         </div>
