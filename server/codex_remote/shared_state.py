@@ -62,6 +62,9 @@ class SharedStateStore:
         # A process may have died after Codex accepted a turn but before it
         # received an acknowledgement. Never turn such an item into "pending".
         self.connection.execute("UPDATE queued_messages SET state = 'unverified' WHERE state = 'sending'")
+        # No Codex request is made until claim(), so an interrupted submission
+        # decision can safely return to the waiting queue after a restart.
+        self.connection.execute("UPDATE queued_messages SET state = 'pending' WHERE state = 'submitting'")
 
     def close(self) -> None:
         self.connection.close()
@@ -78,7 +81,8 @@ class SharedStateStore:
         result = []
         for row in rows:
             payload = json.loads(row["payload"])
-            if row["state"] != "pending":
+            payload["deliveryState"] = row["state"]
+            if row["state"] in {"sending", "unverified"}:
                 payload["sendAttempt"] = payload.get("sendAttempt") or {"at": row["attempt_at"] or _now()}
             payload["editing"] = bool(row["editing"])
             result.append(payload)
@@ -88,7 +92,7 @@ class SharedStateStore:
                 result[0]["blockedReason"] = block["reason"]
         return result
 
-    def enqueue(self, thread_id: str, payload: dict[str, Any]) -> bool:
+    def enqueue(self, thread_id: str, payload: dict[str, Any], *, submitting: bool = False) -> bool:
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         existing = self.connection.execute("SELECT thread_id, payload FROM queued_messages WHERE id = ?", (payload["id"],)).fetchone()
         if existing:
@@ -105,9 +109,15 @@ class SharedStateStore:
         attempt = payload.get("sendAttempt")
         self.connection.execute(
             "INSERT INTO queued_messages(id, thread_id, payload, state, attempt_at) VALUES (?, ?, ?, ?, ?)",
-            (payload["id"], thread_id, serialized, "unverified" if attempt else "pending", attempt.get("at") if attempt else None),
+            (payload["id"], thread_id, serialized, "unverified" if attempt else "submitting" if submitting else "pending", attempt.get("at") if attempt else None),
         )
         return True
+
+    def finish_submission(self, thread_id: str, message_id: str) -> None:
+        self.connection.execute(
+            "UPDATE queued_messages SET state = 'pending' WHERE thread_id = ? AND id = ? AND state = 'submitting'",
+            (thread_id, message_id),
+        )
 
     def update(self, thread_id: str, message_id: str, payload: dict[str, Any]) -> None:
         row = self.connection.execute(
@@ -172,7 +182,7 @@ class SharedStateStore:
     def claim(self, thread_id: str, message_id: str) -> dict[str, Any] | None:
         attempt_at = _now()
         changed = self.connection.execute(
-            "UPDATE queued_messages SET state = 'sending', attempt_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            "UPDATE queued_messages SET state = 'sending', attempt_at = ? WHERE thread_id = ? AND id = ? AND state IN ('pending', 'submitting') AND editing = 0",
             (attempt_at, thread_id, message_id),
         ).rowcount
         if not changed:
@@ -327,8 +337,14 @@ class SharedQueueService:
             queue = self.store.queue(thread_id)
             if not queue or queue[0].get("editing") or queue[0].get("sendAttempt") or self.codex.handed_off:
                 return
+            summary = await self.codex.read_thread(thread_id, include_turns=False)
             if await self.codex._active_turn_id(thread_id):
                 return
+            summary_status = summary.get("status")
+            if isinstance(summary_status, dict) and summary_status.get("type") in {"active", "inProgress", "running", "started"}:
+                return
+            # Recovery of an existing queue still checks the last turn and
+            # barrier; an explicit new submission may release a stopped turn.
             thread = await self.codex.read_thread(thread_id)
             turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
             latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
@@ -357,7 +373,8 @@ class SharedQueueService:
             await self._block(thread_id, None)
             # Resume before claiming. A failed resume cannot create a delivery
             # ambiguity and leaves the item safely pending.
-            await self.codex.resume_thread(thread_id)
+            if not isinstance(summary_status, dict) or summary_status.get("type") != "idle":
+                await self.codex.resume_thread(thread_id)
             payload = self.store.claim(thread_id, queue[0]["id"])
             if not payload:
                 return
@@ -385,31 +402,73 @@ class SharedQueueService:
 
     async def send_now(self, thread_id: str, message_id: str, *, allow_steer: bool = True, require_head: bool = False) -> bool:
         async with self._lock(thread_id):
-            if require_head:
-                queue = self.store.queue(thread_id)
-                if not queue or queue[0]["id"] != message_id:
-                    return self.store.was_delivered(thread_id, message_id)
-            active_turn = await self.codex._active_turn_id(thread_id)
-            if active_turn and not allow_steer:
+            return await self._send_now(thread_id, message_id, allow_steer=allow_steer, require_head=require_head)
+
+    async def submit(self, thread_id: str, payload: dict[str, Any]) -> bool:
+        # Enqueue and decide under the same lock: the background worker must
+        # not claim a new submission while this request is checking idle state.
+        async with self._lock(thread_id):
+            self.store.enqueue(thread_id, payload, submitting=True)
+            try:
+                if self.codex.handed_off:
+                    return False
+                return await self._send_now(thread_id, payload["id"], allow_steer=False, require_head=True)
+            except CodexRuntimeError:
+                await self._block(thread_id, "暂时无法确认 Codex 状态，连接恢复后自动发送")
                 return False
-            if not active_turn:
-                # A manual send can release an interrupted/failed barrier, but
-                # never race an active turn that history still shows running.
+            finally:
+                self.store.finish_submission(thread_id, payload["id"])
+                await self.changed(thread_id)
+
+    async def _send_now(self, thread_id: str, message_id: str, *, allow_steer: bool, require_head: bool) -> bool:
+        if self.store.was_delivered(thread_id, message_id):
+            return True
+        queue = self.store.queue(thread_id)
+        candidate = next((item for item in queue if item["id"] == message_id), None)
+        if require_head and (not queue or queue[0]["id"] != message_id):
+            return False
+        if not candidate or candidate.get("editing") or candidate.get("sendAttempt"):
+            if require_head:
+                return False
+            raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
+
+        # Do not load a whole long conversation just to ask whether it is busy.
+        # read_thread also reconciles a cached active ID against this snapshot.
+        thread = await self.codex.read_thread(thread_id, include_turns=False)
+        status = thread.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else None
+        active_turn = await self.codex._active_turn_id(thread_id)
+        busy = status_type in {"active", "inProgress", "running", "started"}
+        if not active_turn and status_type not in {"idle", "notLoaded"}:
+            # Older App Server versions may omit the summary status. Fall back
+            # conservatively rather than treating an unknown status as idle.
+            if not busy:
                 thread = await self.codex.read_thread(thread_id)
+                status = thread.get("status")
+                status_type = status.get("type") if isinstance(status, dict) else None
                 turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
                 latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
-                if latest and _turn_status(latest) in {"inprogress", "running", "started"}:
-                    if not allow_steer:
-                        return False
-                    raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
-                await self.codex.resume_thread(thread_id)
-            payload = self.store.claim(thread_id, message_id)
-            if not payload:
-                if self.store.was_delivered(thread_id, message_id):
-                    return True
-                raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
-            await self.changed(thread_id)
-            if not active_turn:
-                self.store.clear_barrier(thread_id)
-            self.store.set_block(thread_id, None)
-            return await self._send_claimed(thread_id, payload, new_turn=not bool(active_turn))
+                busy = status_type in {"active", "inProgress", "running", "started"} or bool(
+                    latest and _turn_status(latest) in {"inprogress", "running", "started"}
+                )
+                active_turn = await self.codex._active_turn_id(thread_id)
+                if not busy and not active_turn and (
+                    (latest is not None and _turn_status(latest) not in {"completed", "complete", "success", "interrupted", "failed"})
+                    or (latest is None and status_type not in {None, "idle", "notLoaded"})
+                ):
+                    await self._block(thread_id, "等待确认 Codex 的回复状态，暂不自动发送")
+                    return False
+        if (active_turn or busy) and not allow_steer:
+            return False
+        if busy and not active_turn:
+            raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
+        if not active_turn and status_type != "idle":
+            await self.codex.resume_thread(thread_id)
+        payload = self.store.claim(thread_id, message_id)
+        if not payload:
+            raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
+        await self.changed(thread_id)
+        if not active_turn:
+            self.store.clear_barrier(thread_id)
+        self.store.set_block(thread_id, None)
+        return await self._send_claimed(thread_id, payload, new_turn=not bool(active_turn))

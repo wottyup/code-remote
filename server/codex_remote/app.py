@@ -1005,22 +1005,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         if not body.requestText.strip() and not body.images and not body.documents:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="消息不能为空。")
         try:
-            inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
+            sent = await shared_queue.submit(thread_id, body.model_dump(exclude_none=True))
         except QueueConflictError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-        if inserted:
-            await shared_queue.changed(thread_id)
-        # The server, not a possibly stale browser tab, decides whether the
-        # thread is idle. The queue lock and receipt preserve FIFO and make a
-        # retry with the same message ID safe after a lost HTTP response.
-        sent = False
-        if not app_server.handed_off:
-            try:
-                sent = await shared_queue.send_now(thread_id, body.id, allow_steer=False, require_head=True)
-            except (CodexRuntimeError, QueueConflictError):
-                # The message is already durable. Let the background worker
-                # resume it later rather than making the client resend it.
-                pass
         return {"sent": sent, "queue": shared_state.queue(thread_id)}
 
     @app.post("/api/v1/codex/queue/{thread_id}/enqueue")

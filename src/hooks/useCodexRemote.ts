@@ -69,6 +69,7 @@ export interface QueuedTurnMessage {
   documents?: CodexDocumentAttachment[]
   createdAt: string
   editing?: boolean
+  deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
   sendAttempt?: {
     at: string

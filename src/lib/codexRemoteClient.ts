@@ -58,6 +58,7 @@ export interface CodexQueuedMessage {
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
   editing?: boolean
+  deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
   sendAttempt?: { at: string; afterTurnId?: string; afterMessageId?: string; inTurnId?: string }
 }

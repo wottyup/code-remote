@@ -208,8 +208,10 @@ class CodexAppServer:
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
+        self._last_completed_turn_ids: dict[str, str] = {}
         self._pending_turn_starts: dict[str, asyncio.Future[str | None]] = {}
         self._workspace_change_watches: dict[str, WorkspaceChangeWatch] = {}
+        self._workspace_completion_tasks: dict[asyncio.Task[None], WorkspaceChangeWatch] = {}
         # Command-based edits do not always produce a native FileChange item.
         # Keep their watcher fallback per completed turn so a later turn never
         # replaces a card that belongs to an earlier reply in the same thread.
@@ -299,12 +301,26 @@ class CodexAppServer:
         items = result.get("data", result.get("threads", []))
         return [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
 
-    async def read_thread(self, thread_id: str) -> dict[str, Any]:
-        result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+    async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
+        active_before = self._active_turn_ids.get(thread_id)
+        result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": include_turns})
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 没有返回该对话内容")
         turns = thread.get("turns")
+        status = thread.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else None
+        cached_turn_ended = isinstance(turns, list) and any(
+            isinstance(turn, dict) and turn.get("id") == active_before
+            and turn.get("status") in {"completed", "interrupted", "failed"}
+            for turn in turns
+        )
+        if (
+            active_before and self._active_turn_ids.get(thread_id) == active_before
+            and thread_id not in self._pending_turn_starts
+            and (status_type in {"idle", "notLoaded"} or cached_turn_ended)
+        ):
+            self._active_turn_ids.pop(thread_id, None)
         workspace_changes = self._workspace_change_results.get(thread_id, {})
         turn_ids = {
             turn.get("id")
@@ -397,6 +413,9 @@ class CodexAppServer:
         watch = self._workspace_change_watches.pop(thread_id, None)
         if watch is None:
             return None
+        return await self._collect_workspace_change_watch(watch, collect=collect)
+
+    async def _collect_workspace_change_watch(self, watch: WorkspaceChangeWatch, *, collect: bool) -> WorkspaceChangeCapture:
         if collect:
             # Let the small debounce window flush the final write before closing.
             await asyncio.sleep(0.1)
@@ -416,23 +435,47 @@ class CodexAppServer:
             logger.warning("Unable to stop Codex workspace change watch", exc_info=True)
         return WorkspaceChangeCapture(changes=changes, baseline=watch.baseline)
 
-    async def _complete_workspace_change_watch(self, thread_id: str, turn_id: str | None) -> None:
-        capture = await self._stop_workspace_change_watch(thread_id, collect=True)
-        if capture is None:
-            return
-        changes = await asyncio.to_thread(workspace_change_entries, capture.changes, self.workspace, capture.baseline)
-        # A watcher result without a turn ID cannot be placed beside a reply
-        # reliably, so do not expose it as a misleading global card.
-        if not changes or not turn_id:
-            return
-        self._workspace_change_results.setdefault(thread_id, {})[turn_id] = changes
-        await self._emit({
-            "type": "notification",
-            "method": "turn/workspaceChanges",
-            "params": {"threadId": thread_id, "turnId": turn_id, "changes": changes},
-        })
+    async def _complete_workspace_change_watch(self, thread_id: str, turn_id: str | None, watch: WorkspaceChangeWatch) -> None:
+        try:
+            capture = await self._collect_workspace_change_watch(watch, collect=True)
+            changes = await asyncio.to_thread(workspace_change_entries, capture.changes, self.workspace, capture.baseline)
+            # The detached watcher belongs only to this completed turn, even
+            # when the next turn has already installed its own watcher.
+            if not changes or not turn_id:
+                return
+            self._workspace_change_results.setdefault(thread_id, {})[turn_id] = changes
+            await self._emit({
+                "type": "notification",
+                "method": "turn/workspaceChanges",
+                "params": {"threadId": thread_id, "turnId": turn_id, "changes": changes},
+            })
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("Unable to collect completed workspace changes", exc_info=True)
+        finally:
+            watch.stop_event.set()
+            if not watch.task.done():
+                watch.task.cancel()
+                try:
+                    await watch.task
+                except asyncio.CancelledError:
+                    pass
 
     async def _clear_workspace_change_watches(self) -> None:
+        tasks = tuple(self._workspace_completion_tasks)
+        detached_watches = tuple(self._workspace_completion_tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self._workspace_completion_tasks.clear()
+        # A task canceled before its first instruction never runs its finally
+        # block; retain detached watchers until shutdown can close those too.
+        for watch in detached_watches:
+            watch.stop_event.set()
+            if not watch.task.done():
+                watch.task.cancel()
+        await asyncio.gather(*(watch.task for watch in detached_watches), return_exceptions=True)
         for thread_id in tuple(self._workspace_change_watches):
             await self._stop_workspace_change_watch(thread_id)
         self._workspace_change_results.clear()
@@ -465,19 +508,20 @@ class CodexAppServer:
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
-        await self._start_workspace_change_watch(thread_id)
         pending_start = asyncio.get_running_loop().create_future()
         self._pending_turn_starts[thread_id] = pending_start
         try:
+            await self._start_workspace_change_watch(thread_id)
             result = await self.request("turn/start", params)
             turn = result.get("turn")
             turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
-            if turn_id:
+            completed = isinstance(turn, dict) and turn.get("status") in {"completed", "interrupted", "failed"}
+            if turn_id and not completed and self._last_completed_turn_ids.get(thread_id) != turn_id:
                 self._active_turn_ids[thread_id] = turn_id
             if not pending_start.done():
                 pending_start.set_result(turn_id)
             return result
-        except Exception:
+        except (Exception, asyncio.CancelledError):
             await self._stop_workspace_change_watch(thread_id)
             if not pending_start.done():
                 pending_start.set_result(None)
@@ -496,6 +540,8 @@ class CodexAppServer:
         try:
             pending_turn_id = await asyncio.wait_for(asyncio.shield(pending_start), timeout=5)
         except TimeoutError:
+            pending_turn_id = None
+        if pending_turn_id and self._last_completed_turn_ids.get(thread_id) == pending_turn_id:
             pending_turn_id = None
         return self._active_turn_ids.get(thread_id) or pending_turn_id
 
@@ -764,10 +810,17 @@ class CodexAppServer:
             elif method == "turn/completed":
                 completed_thread_id = thread_id
                 if turn_id and thread_id:
+                    self._last_completed_turn_ids[thread_id] = turn_id
+                    active_id = self._active_turn_ids.get(thread_id)
+                    if active_id and active_id != turn_id:
+                        # A delayed completion must not detach a newer watch.
+                        completed_thread_id = None
                     if self._active_turn_ids.get(thread_id) == turn_id:
                         self._active_turn_ids.pop(thread_id, None)
                 elif thread_id:
                     completed_turn_id = self._active_turn_ids.pop(thread_id, None)
+                    if completed_turn_id:
+                        self._last_completed_turn_ids[thread_id] = completed_turn_id
                 elif turn_id:
                     for active_thread_id, active_turn_id in tuple(self._active_turn_ids.items()):
                         if active_turn_id == turn_id:
@@ -775,7 +828,13 @@ class CodexAppServer:
                             completed_thread_id = active_thread_id
                             break
             if method == "turn/completed" and completed_thread_id:
-                await self._complete_workspace_change_watch(completed_thread_id, completed_turn_id)
+                watch = self._workspace_change_watches.pop(completed_thread_id, None)
+                if watch is not None:
+                    # Never hold the JSON-RPC reader (or queue wake-up) behind
+                    # filesystem debounce and potentially expensive diffs.
+                    task = asyncio.create_task(self._complete_workspace_change_watch(completed_thread_id, completed_turn_id, watch))
+                    self._workspace_completion_tasks[task] = watch
+                    task.add_done_callback(lambda completed: self._workspace_completion_tasks.pop(completed, None))
             await self._emit({"type": "notification", "method": method, "params": params})
 
     async def _emit(self, event: dict[str, Any]) -> None:
@@ -812,6 +871,7 @@ class CodexAppServer:
         self._initialized = False
         self._server_requests.clear()
         self._active_turn_ids.clear()
+        self._last_completed_turn_ids.clear()
         self._finish_pending_turn_starts()
         await self._clear_workspace_change_watches()
         if process and process.returncode is None:
