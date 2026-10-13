@@ -2836,6 +2836,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   useEffect(() => {
+    if (!settingsOpen) return
+    const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      if (window.matchMedia(mobileLayoutMediaQuery).matches) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeSettingsPanel()
+    }
+    document.addEventListener('keydown', closeOnDesktopEscape, true)
+    return () => document.removeEventListener('keydown', closeOnDesktopEscape, true)
+  }, [closeSettingsPanel, settingsOpen])
+
+  useEffect(() => {
     if (!threadContextMenu) return
     const closeMenu = () => setThreadContextMenu(null)
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
