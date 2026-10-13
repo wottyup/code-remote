@@ -1001,7 +1001,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .chat-message__timing, .remote-shell--theme-custom .chat-message__sent-at { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .running-indicator__elapsed { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .chat-message--user .chat-message__body { background: var(--custom-theme-surface); box-shadow: none; }
-.remote-shell--theme-custom .message-composer { background: var(--custom-theme-surface); box-shadow: none; backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .message-composer { border: 1px solid var(--custom-theme-border); background: var(--custom-theme-control); box-shadow: none; backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .message-composer:focus-within { border-color: color-mix(in srgb, var(--custom-theme-text-color) 58%, transparent); }
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-file-change-summary { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .composer-file-change-summary > svg { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
