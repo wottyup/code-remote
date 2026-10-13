@@ -1,10 +1,11 @@
-export type MobilePanel = 'sidebar' | 'workspace'
+export type MobilePanel = 'sidebar' | 'workspace' | 'global'
 
 export interface MobilePanelGestureStart {
   panel: MobilePanel
   x: number
   y: number
   panelWasOpen: boolean
+  returnDirection?: 'left' | 'right'
 }
 
 export type MobilePanelGestureAction =
@@ -12,6 +13,9 @@ export type MobilePanelGestureAction =
   | 'close-sidebar'
   | 'open-workspace'
   | 'close-workspace'
+  | 'close-global'
+
+const mobileBackEdgeSize = 36
 
 export function beginMobilePanelGesture(
   x: number,
@@ -32,6 +36,25 @@ export function beginMobilePanelGesture(
   }
 }
 
+export function beginMobileGlobalBackGesture(
+  x: number,
+  y: number,
+  viewportWidth: number,
+  globalOpen: boolean,
+  edgeSize = mobileBackEdgeSize,
+): MobilePanelGestureStart | null {
+  if (!globalOpen || viewportWidth <= 0) return null
+  const edge = Math.max(0, edgeSize)
+  if (x > edge && x < viewportWidth - edge) return null
+  return {
+    panel: 'global',
+    x,
+    y,
+    panelWasOpen: true,
+    returnDirection: x <= edge ? 'right' : 'left',
+  }
+}
+
 export function resolveMobilePanelGesture(
   start: MobilePanelGestureStart,
   endX: number,
@@ -45,6 +68,12 @@ export function resolveMobilePanelGesture(
   if (start.panel === 'sidebar') {
     if (start.panelWasOpen) return deltaX < 0 ? 'close-sidebar' : null
     return deltaX > 0 ? 'open-sidebar' : null
+  }
+
+  if (start.panel === 'global') {
+    return start.returnDirection === 'right'
+      ? (deltaX > 0 ? 'close-global' : null)
+      : (deltaX < 0 ? 'close-global' : null)
   }
 
   if (start.panelWasOpen) return deltaX > 0 ? 'close-workspace' : null

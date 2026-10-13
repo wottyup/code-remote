@@ -38,7 +38,7 @@ import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOpe
 import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
-import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { createThreadTranscript, threadTranscriptFilename, truncateThreadTranscriptForAttachment } from '../lib/threadTranscript'
@@ -2837,12 +2837,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
-    if (!window.matchMedia('(max-width: 700px)').matches || event.touches.length !== 1) {
+    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) {
       sidebarTouchStart.current = null
       return
     }
     const touch = event.touches[0]
     if (!touch) return
+    const globalOverlayOpen = settingsOpen
+      || Boolean(threadRenameTarget)
+      || Boolean(threadContextMenu)
+      || workspacePreviewModeRef.current === 'mobile'
+    if (globalOverlayOpen) {
+      sidebarTouchStart.current = beginMobileGlobalBackGesture(touch.clientX, touch.clientY, window.innerWidth, true)
+      return
+    }
     const target = event.target
     const targetElement = target instanceof Element ? target : null
     const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
@@ -2868,7 +2876,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
     if (!action) return
     event.preventDefault()
-    if (action === 'open-sidebar') openSidebarPanel()
+    if (action === 'close-global') {
+      if (settingsOpen) closeSettingsPanel()
+      else if (threadRenameTarget) closeThreadRename()
+      else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
+      else if (threadContextMenu) setThreadContextMenu(null)
+    } else if (action === 'open-sidebar') openSidebarPanel()
     else if (action === 'close-sidebar') setSidebarOpen(false)
     else if (action === 'open-workspace') openWorkspacePanel()
     else if (action === 'close-workspace') setWorkspaceOpen(false)
