@@ -945,6 +945,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const historyRevision = useRef(0)
+  const historyReadSequence = useRef(0)
   const activityItemId = useRef<string | null>(null)
   const operationsByTurnRef = useRef<OperationsByTurn>({})
   const streamingAssistantMessageId = useRef<string | null>(null)
@@ -1328,9 +1329,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     preserveRunningTurnId: string | null = null,
   ) => {
     if (handedOffRef.current) return false
+    const readSequence = ++historyReadSequence.current
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
-      if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current || readSequence !== historyReadSequence.current) return false
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
@@ -2290,6 +2292,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       socketGeneration += 1
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
       if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
       if (streamingRenderTimer.current !== undefined) {
@@ -2304,6 +2307,27 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       window.removeEventListener('online', handleOnline)
     }
   }, [enabled, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+
+  useEffect(() => {
+    if (!enabled) return
+    let disposed = false
+    let timer: number | undefined
+    const reconcileHistory = async () => {
+      try {
+        const threadId = activeThreadId.current
+        if (threadId && !handedOffRef.current && document.visibilityState === 'visible') {
+          await loadThread(threadId, historyRevision.current, true)
+        }
+      } finally {
+        if (!disposed) timer = window.setTimeout(reconcileHistory, 4000)
+      }
+    }
+    timer = window.setTimeout(reconcileHistory, 4000)
+    return () => {
+      disposed = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [enabled, loadThread])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
