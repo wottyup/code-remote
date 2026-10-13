@@ -423,7 +423,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .file-change-card__path-desktop:hover { color: var(--file-change-control-hover-text); text-decoration: underline; text-underline-offset: 2px; }
 .file-change-card__insert { display: inline-flex; min-height: 26px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 4px; padding: 0 8px; border: 1px solid var(--file-change-control-border); border-radius: 7px; background: var(--file-change-control); color: var(--file-change-copy); cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); white-space: nowrap; }
 .file-change-card__insert:hover { border-color: var(--file-change-control-hover-border); background: var(--file-change-control-hover); color: var(--file-change-control-hover-text); }
-.file-change-card__file > pre { max-height: 300px; margin: 0 10px 10px; overflow: auto; padding: 7px 0; border: 1px solid var(--file-change-border); border-radius: 8px; background: var(--file-change-code); color: var(--file-change-code-text); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(11px + var(--mobile-font-offset)); white-space: pre; }
+.file-change-card__file > pre { max-height: 300px; margin: 0 10px 10px; overflow: auto; padding: 7px 0; border: 1px solid var(--file-change-border); border-radius: 8px; background: var(--file-change-code); color: var(--file-change-code-text); font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; font-family: inherit; font-size: calc(11px + var(--mobile-font-offset)); white-space: pre; }
 .file-change-card__diff-line { display: flex; width: max-content; min-width: 100%; box-sizing: border-box; padding: 0; }
 .file-change-card__line-number { display: inline-block; width: 5ch; flex: 0 0 5ch; padding-right: .8ch; color: var(--file-change-line-number); text-align: right; user-select: none; }
 .file-change-card__diff-code { display: inline-block; min-width: max-content; padding: 0 8px; white-space: pre; }
@@ -445,8 +445,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .file-change-card__path-desktop { font-size: calc(14.5px + var(--mobile-font-offset)); }
   .file-change-card__insert { min-height: 26px; font-size: calc(12px + var(--mobile-font-offset)); }
   .file-change-card__more { min-height: 32px; }
-  .file-change-card__file > pre { font-size: calc(13.5px + var(--mobile-font-offset)); }
+  .file-change-card__file > pre { font-size: calc(14px + var(--mobile-font-offset)); }
   .file-change-card__file > small, .file-change-card__more { font-size: calc(13px + var(--mobile-font-offset)); }
+}
+@media (max-width: 700px), (orientation: landscape) and (pointer: coarse) {
+  .file-change-card__file > pre { font-size: calc(13px + var(--mobile-font-offset)); }
 }
 .remote-error { grid-row: 4; display: flex; align-items: center; gap: 8px; width: min(calc(100% - 44px), 840px); margin: 0 auto 8px; padding: 8px 10px; border: 1px solid rgba(173, 86, 91, .36); border-radius: 8px; background: rgba(66, 30, 34, .27); color: #dda0a3; font-size: calc(12px + var(--mobile-font-offset)); }
 .remote-error span { flex: 1; }
@@ -786,6 +789,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .connection-label { border-color: #dedede; background: #f3f3f3; color: #666; }
 .remote-shell--theme-light .file-change-card { --file-change-surface: #ffffff; --file-change-row: #ffffff; --file-change-border: #e3e3e6; --file-change-divider: #ededee; --file-change-icon-surface: #f7f7f8; --file-change-icon: #69696f; --file-change-title: #303034; --file-change-copy: #58585e; --file-change-muted: #7d7d84; --file-change-control: #fafafb; --file-change-control-border: #e2e2e5; --file-change-control-hover: #f2f2f4; --file-change-control-hover-border: #d2d2d6; --file-change-control-hover-text: #29292d; --file-change-code: #fafafa; --file-change-code-text: #3e3e43; --file-change-line-number: #8b8b92; --file-change-more: #ffffff; --file-change-added: #338b43; --file-change-deleted: #d34f49; --file-change-added-background: rgba(64, 153, 81, .12); --file-change-added-marker: rgba(54, 146, 72, .72); --file-change-added-text: #235b31; --file-change-deleted-background: rgba(204, 72, 67, .1); --file-change-deleted-marker: rgba(204, 72, 67, .7); --file-change-deleted-text: #8f302d; box-shadow: 0 1px 2px rgba(30, 30, 35, .05); }
 .remote-shell--theme-light .file-change-card--inProgress { border-color: #c5cedd; box-shadow: 0 1px 2px rgba(30, 30, 35, .06), 0 0 0 1px rgba(117, 136, 178, .08); }
+.remote-shell--theme-light .file-change-card__diff-line--added { color: #235b31; }
+.remote-shell--theme-light .file-change-card__diff-line--deleted { color: #8f302d; }
+.remote-shell--theme-light .file-change-card__diff-line--hunk { color: #5c626d; }
 .remote-shell--theme-light .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .remote-shell--theme-light .operation-log { border-color: #e2e2e2; background: #fff; color: #383838; }
 .remote-shell--theme-light .operation-log > summary > svg { color: #777; }
