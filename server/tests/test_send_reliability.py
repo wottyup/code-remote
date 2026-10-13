@@ -25,6 +25,7 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
             patch("codex_remote.app.tempfile.mkdtemp", return_value=str(images)),
         ):
             self.app = create_app(workspace)
+        self.addCleanup(self.app.state.shared_state.close)
         self.server = self.app.state.codex
 
     def endpoint(self, path: str):

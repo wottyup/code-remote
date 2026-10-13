@@ -18,7 +18,18 @@ export default defineConfig({
     port: 4173,
     strictPort: true,
     watch: {
-      ignored: ['**/.codex-remote/**'],
+      // These are not served by Vite. Android builds in particular create
+      // enough directories to exhaust the host's inotify watcher limit.
+      ignored: [
+        '**/android/**',
+        '**/artifacts/**',
+        '**/.codex-remote/**',
+        '**/docs/**',
+        '**/dist/**',
+        '**/server/**',
+        '**/.venv/**',
+        '**/tests/**',
+      ],
     },
     proxy: { '/api': engineProxy },
   },

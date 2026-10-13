@@ -44,6 +44,9 @@ let engine = null
 let vite = null
 let ownsEngine = false
 let shuttingDown = false
+let viteRestartTimer = null
+let viteStableTimer = null
+let viteRestartAttempts = 0
 
 function sleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
@@ -105,9 +108,57 @@ async function waitForEngine() {
 async function shutdown(exitCode = 0) {
   if (shuttingDown) return
   shuttingDown = true
+  if (viteRestartTimer) clearTimeout(viteRestartTimer)
+  if (viteStableTimer) clearTimeout(viteStableTimer)
+  viteRestartTimer = null
+  viteStableTimer = null
   await stopProcess(vite)
   if (ownsEngine) await stopProcess(engine)
   process.exitCode = exitCode
+}
+
+function scheduleViteRestart(reason) {
+  if (shuttingDown || viteRestartTimer) return
+  const delay = Math.min(10_000, 1_000 * (2 ** Math.min(viteRestartAttempts, 4)))
+  viteRestartAttempts += 1
+  console.error(`${reason} 将在 ${Math.ceil(delay / 1000)} 秒后重启；Codex 后端继续运行。`)
+  viteRestartTimer = setTimeout(() => {
+    viteRestartTimer = null
+    startVite()
+  }, delay)
+}
+
+function startVite() {
+  if (shuttingDown) return
+
+  const child = spawn(process.execPath, [viteEntrypoint], {
+    cwd: projectRoot,
+    env: process.env,
+    stdio: 'inherit',
+    windowsHide: false,
+  })
+  vite = child
+
+  child.once('spawn', () => {
+    if (shuttingDown || vite !== child) return
+    if (viteStableTimer) clearTimeout(viteStableTimer)
+    viteStableTimer = setTimeout(() => {
+      if (vite === child) viteRestartAttempts = 0
+      viteStableTimer = null
+    }, 30_000)
+  })
+  child.once('error', (error) => {
+    if (vite === child) vite = null
+    scheduleViteRestart(`无法启动 Vite：${error.message}`)
+  })
+  child.once('exit', (code, signal) => {
+    if (vite === child) vite = null
+    if (viteStableTimer) clearTimeout(viteStableTimer)
+    viteStableTimer = null
+    if (!shuttingDown) {
+      scheduleViteRestart(`Vite 网页服务已退出（${signal ?? code ?? '未知原因'}）`)
+    }
+  })
 }
 
 async function main() {
@@ -146,19 +197,7 @@ async function main() {
     await waitForEngine()
   }
 
-  vite = spawn(process.execPath, [viteEntrypoint], {
-    cwd: projectRoot,
-    env: process.env,
-    stdio: 'inherit',
-    windowsHide: false,
-  })
-  vite.once('error', (error) => {
-    console.error(`无法启动 Vite：${error.message}`)
-    void shutdown(1)
-  })
-  vite.once('exit', (code, signal) => {
-    if (!shuttingDown) void shutdown(code ?? (signal ? 1 : 0))
-  })
+  startVite()
 }
 
 process.on('SIGINT', () => void shutdown(130))

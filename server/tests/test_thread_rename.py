@@ -24,6 +24,7 @@ class ThreadRenameApiTests(unittest.IsolatedAsyncioTestCase):
             patch("codex_remote.app.tempfile.mkdtemp", return_value=str(images)),
         ):
             self.app = create_app(workspace)
+        self.addCleanup(self.app.state.shared_state.close)
         self.server = self.app.state.codex
         self.rename = next(
             route.endpoint

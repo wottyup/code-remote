@@ -29,6 +29,7 @@ export interface CodexMessageDocument extends CodexDocumentAttachment {
 
 export interface CodexMessage {
   id: string
+  sourceItemId?: string
   role: 'user' | 'assistant'
   text: string
   createdAt: string
@@ -45,6 +46,22 @@ export interface CodexImageAttachment {
   name: string
   mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
   data: string
+}
+
+export interface CodexQueuedMessage {
+  id: string
+  text: string
+  requestText: string
+  images: CodexImageAttachment[]
+  documents?: CodexDocumentAttachment[]
+  createdAt: string
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  editing?: boolean
+  deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
+  blockedReason?: string
+  sendAttempt?: { at: string; afterTurnId?: string; afterMessageId?: string; inTurnId?: string }
 }
 
 export interface CodexModel {
@@ -95,6 +112,8 @@ export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
   type: string
+  threadId?: string
+  pinned?: boolean
   method?: string
   params?: Record<string, unknown>
   connected?: boolean
@@ -212,6 +231,26 @@ function originalPdfAttachmentsFromText(value: string) {
   return { text, documents }
 }
 
+function textDocumentAttachmentsFromText(value: string) {
+  const documents: CodexDocumentAttachment[] = []
+  const text = value.replace(
+    /\[附件文档：([^\r\n]+)\]\r?\n([\s\S]*?)\r?\n\[\/附件文档\]/g,
+    (_block, name: string, content: string) => {
+      documents.push({ name, content })
+      return ''
+    },
+  ).replace(/\n{3,}/g, '\n\n').trim()
+  return { text, documents }
+}
+
+function messageRequestText(message: CodexMessage) {
+  const documentText = message.documents
+    ?.filter((document) => !document.sourceFileId)
+    .map((document) => `\n\n[附件文档：${document.name}]\n${document.content}\n[/附件文档]`)
+    .join('') ?? ''
+  return `${message.text}${documentText}`.trim()
+}
+
 function imagesFromContent(value: unknown): CodexMessageImage[] {
   if (!Array.isArray(value)) return []
   return value.flatMap((part, index) => {
@@ -225,6 +264,38 @@ function imagesFromContent(value: unknown): CodexMessageImage[] {
     const name = typeof image.name === 'string' && image.name.length > 0 ? image.name : `image-${index + 1}`
     return [{ name, previewUrl: `data:${mediaType};base64,${image.data}` }]
   })
+}
+
+/** Build a provisional user bubble directly from the app-server item notification. */
+export function userMessageFromEventItem(value: unknown, turnId: string | null): CodexMessage | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  if (itemType !== 'usermessage' || typeof item.id !== 'string' || !item.id) return null
+
+  const itemId = item.id
+  const rawText = plainText(item.content) || (typeof item.text === 'string' ? item.text : '')
+  const originalPdfAttachments = originalPdfAttachmentsFromText(rawText)
+  const textDocumentAttachments = textDocumentAttachmentsFromText(originalPdfAttachments.text)
+  const text = textDocumentAttachments.text
+  const documents = [...originalPdfAttachments.documents, ...textDocumentAttachments.documents]
+  const images = imagesFromContent(item.content)
+  if (!text && images.length === 0 && documents.length === 0) return null
+
+  const sentAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at) ?? new Date().toISOString()
+  return {
+    id: `remote-user-${itemId}`,
+    sourceItemId: itemId,
+    role: 'user',
+    text,
+    createdAt: sentAt,
+    sentAt,
+    ...(turnId ? { turnId } : {}),
+    ...(images.length > 0 ? { images } : {}),
+    ...(documents.length > 0 ? {
+      documents: documents.map((document) => ({ ...document, charCount: document.content.length })),
+    } : {}),
+  }
 }
 
 function parsedTimestamp(value: unknown): string | null {
@@ -262,9 +333,13 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
       const originalPdfAttachments = itemType === 'usermessage' ? originalPdfAttachmentsFromText(rawText) : { text: rawText, documents: [] }
-      const text = originalPdfAttachments.text
+      const textDocumentAttachments = itemType === 'usermessage'
+        ? textDocumentAttachmentsFromText(originalPdfAttachments.text)
+        : { text: originalPdfAttachments.text, documents: [] }
+      const text = textDocumentAttachments.text
+      const documents = [...originalPdfAttachments.documents, ...textDocumentAttachments.documents]
       const images = itemType === 'usermessage' ? imagesFromContent(item.content) : []
-      if (!text && images.length === 0 && originalPdfAttachments.documents.length === 0) continue
+      if (!text && images.length === 0 && documents.length === 0) continue
       const itemCreatedAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at)
       const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
 
@@ -285,8 +360,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
-        ...(originalPdfAttachments.documents.length > 0 ? {
-          documents: originalPdfAttachments.documents.map((document) => ({ ...document, charCount: 0 })),
+        ...(documents.length > 0 ? {
+          documents: documents.map((document) => ({ ...document, charCount: document.content.length })),
         } : {}),
       })
       assistantMessage = itemType === 'agentmessage' ? messages.at(-1)! : null
@@ -316,7 +391,7 @@ export function threadContainsNewPayload(
   const expectedPdfIds = (payload.documents ?? []).flatMap((document) => document.sourceFileId ? [document.sourceFileId] : [])
   return recoveredMessages.slice(lastKnownMessageIndex + 1).some((message) => {
     if (message.role !== 'user') return false
-    if (payload.requestText && message.text !== payload.requestText) return false
+    if (payload.requestText && message.text !== payload.requestText && messageRequestText(message) !== payload.requestText) return false
     if (expectedPdfIds.length > 0) {
       const actualPdfIds = (message.documents ?? []).flatMap((document) => document.sourceFileId ? [document.sourceFileId] : [])
       return expectedPdfIds.length === actualPdfIds.length && expectedPdfIds.every((id, index) => id === actualPdfIds[index])
@@ -394,6 +469,51 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({ name }),
     })
+  },
+  queuedMessages(token: string, threadId: string) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
+  },
+  submitMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/submit`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  enqueueMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  queueAction(token: string, threadId: string, action: 'edit/begin' | 'edit/end' | 'remove' | 'send-now', messageId: string, ownerId?: string) {
+    return request<{ queue: CodexQueuedMessage[]; sent?: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/${action}`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
+    }, { networkRetries: 3 })
+  },
+  startQueuedIfIdle(token: string, threadId: string, messageId: string) {
+    return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/start-if-idle`, {
+      method: 'POST', body: JSON.stringify({ message_id: messageId }),
+    }, { networkRetries: 3 })
+  },
+  updateQueuedMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/update`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  pins(token: string) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/pins')
+  },
+  initializePins(token: string, threadIds: string[]) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/pins/initialize', {
+      method: 'POST', body: JSON.stringify({ thread_ids: threadIds }),
+    }, { networkRetries: 3 })
+  },
+  setThreadPin(token: string, threadId: string, pinned: boolean) {
+    return request<{ thread_ids: string[] }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/pin`, {
+      method: 'POST', body: JSON.stringify({ pinned }),
+    }, { networkRetries: 3 })
   },
   resumeThread(token: string, threadId: string, requestId: string) {
     return request<CodexThread>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/resume`, {

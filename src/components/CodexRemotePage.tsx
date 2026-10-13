@@ -6,9 +6,11 @@ import {
   BookOpen,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
   Copy,
+  Download,
   File,
   FileText,
   Folder,
@@ -20,7 +22,10 @@ import {
   MessagesSquare,
   Paperclip,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
+  Quote,
   RefreshCw,
   RotateCcw,
   Send,
@@ -30,10 +35,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
+import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { createThreadTranscript, threadTranscriptFilename, truncateThreadTranscriptForAttachment } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
 interface Props {
@@ -75,7 +83,6 @@ const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
-const maxThemeImageDataUrlLength = 1_450_000
 const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
@@ -126,7 +133,21 @@ const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-prefer
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
 const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
+const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
+
+function readPinnedThreadIds() {
+  if (typeof window === 'undefined') return new Set<string>()
+  try {
+    const value = window.localStorage.getItem(pinnedThreadIdsStorageKey)
+    if (!value) return new Set<string>()
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed)) return new Set<string>()
+    return new Set(parsed.filter((item): item is string => typeof item === 'string' && item.length > 0 && item.length <= 512))
+  } catch {
+    return new Set<string>()
+  }
+}
 
 function isSettingsHistoryEntry(state: unknown): boolean {
   return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
@@ -139,24 +160,6 @@ interface ComposerPreferences {
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
-
-type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
-
-export interface ThemePreferences {
-  theme: AppTheme
-  customBackgroundColor: string
-  customTextColor: string
-  customBackgroundTransparency: number
-  customBackgroundImage?: string
-}
-
-const themePreferencesStorageKey = 'codex-remote.theme-preferences'
-const defaultThemePreferences: ThemePreferences = {
-  theme: 'dark',
-  customBackgroundColor: '#4b5563',
-  customTextColor: '#f1f5f9',
-  customBackgroundTransparency: 0,
-}
 
 function workspacePanelsWidthLimit(previewOpen = false) {
   if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
@@ -326,76 +329,6 @@ function workspacePathsMissingFromDraft(draft: string, paths: string[]) {
     seen.add(path)
     return true
   })
-}
-
-function normalizeHexColor(value: unknown, fallback: string) {
-  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
-}
-
-function normalizeTransparency(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
-}
-
-function normalizeThemeBackgroundImage(value: unknown) {
-  if (typeof value !== 'string') return undefined
-  return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
-}
-
-function isCompactThemeBackgroundImage(value: string) {
-  return value.length <= maxThemeImageDataUrlLength && Boolean(normalizeThemeBackgroundImage(value))
-}
-
-export function readThemePreferences(): ThemePreferences {
-  if (typeof window === 'undefined') return defaultThemePreferences
-  try {
-    const value = window.localStorage.getItem(themePreferencesStorageKey)
-    if (!value) return defaultThemePreferences
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' ? parsed.theme : defaultThemePreferences.theme
-    const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
-    return {
-      theme,
-      customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
-      customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
-      customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
-      ...(customBackgroundImage ? { customBackgroundImage } : {}),
-    }
-  } catch {
-    return defaultThemePreferences
-  }
-}
-
-function rgbaFromHex(hex: string, alpha: number) {
-  const value = normalizeHexColor(hex, '#4b5563').slice(1)
-  const red = Number.parseInt(value.slice(0, 2), 16)
-  const green = Number.parseInt(value.slice(2, 4), 16)
-  const blue = Number.parseInt(value.slice(4, 6), 16)
-  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
-}
-
-export function saveThemePreferences(preferences: ThemePreferences) {
-  try {
-    window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(preferences))
-  } catch {
-    // Theme preferences still apply for the current session when storage is unavailable.
-  }
-}
-
-export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
-  const customBackgroundOpacity = (100 - preferences.customBackgroundTransparency) / 100
-  return {
-    '--custom-theme-background': preferences.customBackgroundColor,
-    '--custom-theme-background-opacity': customBackgroundOpacity,
-    '--custom-theme-background-image': preferences.customBackgroundImage
-      ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + preferences.customBackgroundImage + '")'
-      : 'none',
-    '--custom-theme-text-color': preferences.customTextColor,
-    '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
-    '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
-    '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
-    '--custom-theme-panel-blur': '8px',
-  } as CSSProperties
 }
 
 function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
@@ -746,7 +679,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
-  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): void
+  addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
 }
@@ -754,10 +687,12 @@ interface ComposerHandle {
 interface MessageComposerProps {
   draftScope: string
   onDraftChange: (draft: string) => void
+  composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
   connection: RemoteConnection
   isRunning: boolean
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
+  reserveFileChangeSummarySpace: boolean
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
@@ -773,11 +708,12 @@ interface MessageComposerProps {
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
+  reserveQueuedMessageSpace: boolean
   onSendQueuedNow: (messageId: string) => Promise<boolean>
-  onBeginQueuedEdit: (messageId: string) => boolean
-  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean
-  onEndQueuedEdit: (messageId: string) => void
-  onRemoveQueued: (messageId: string) => void
+  onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
+  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean | Promise<boolean>
+  onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
+  onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
   onRefresh: () => void
 }
@@ -785,10 +721,12 @@ interface MessageComposerProps {
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   draftScope,
   onDraftChange,
+  composerHeightMemory,
   connection,
   isRunning,
   fileChangeSummary,
   fileChangeSummaryKey,
+  reserveFileChangeSummarySpace,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
@@ -804,6 +742,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onUploadPdf,
   onSend,
   queuedMessages,
+  reserveQueuedMessageSpace,
   onSendQueuedNow,
   onBeginQueuedEdit,
   onUpdateQueuedMessage,
@@ -814,6 +753,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 }, ref) {
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [imagesReady, setImagesReady] = useState(false)
   const [readingImages, setReadingImages] = useState(false)
@@ -826,6 +766,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
+    if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
     if (typeof window === 'undefined') return defaultComposerHeight
     return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
   })
@@ -846,7 +787,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
-  const composerHeightWasResized = useRef(false)
+  const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
   const editingDraftSnapshot = useRef<{
     draft: string
@@ -854,6 +795,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     documents: CodexDocumentAttachment[]
     attachmentError: string | null
   } | null>(null)
+
+  useLayoutEffect(() => {
+    composerHeightMemory.current = { height: composerHeight, manuallyResized: composerHeightWasResized.current }
+  }, [composerHeight, composerHeightMemory])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
@@ -1022,8 +967,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
     },
     addDocumentAttachment(document, focus = true) {
-      appendDocument(document)
+      const added = appendDocument(document)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      return added
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
       const targetScope = composerDraftScopeForThread(threadId)
@@ -1263,9 +1209,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
-      confirmQueuedEdit()
+      void confirmQueuedEdit()
       return
     }
     const prompt = draft.trim()
@@ -1278,6 +1225,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocuments
     const previousAttachmentError = attachmentError
+    sendingRef.current = true
     setSending(true)
     updateDraft('')
     saveComposerDraft(draftScope, '')
@@ -1333,6 +1281,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         }
       }
     }
+    sendingRef.current = false
     setSending(false)
   }
 
@@ -1347,13 +1296,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(snapshot.attachmentError)
   }
 
-  function beginQueuedEdit(message: QueuedTurnMessage) {
+  async function beginQueuedEdit(message: QueuedTurnMessage) {
     if (editingQueuedMessageId || sending || sendingQueuedId) return
     if (!imagesReady) {
       setAttachmentError('图片草稿恢复完成后再编辑排队消息。')
       return
     }
-    if (!onBeginQueuedEdit(message.id)) {
+    if (!await onBeginQueuedEdit(message.id)) {
       setAttachmentError('这条排队消息正在处理中，请稍后再试。')
       return
     }
@@ -1373,36 +1322,47 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     window.requestAnimationFrame(() => composer.current?.focus())
   }
 
-  function finishQueuedEdit() {
+  async function finishQueuedEdit() {
     const messageId = editingQueuedMessageIdRef.current
-    if (messageId) onEndQueuedEdit(messageId)
+    if (messageId && await onEndQueuedEdit(messageId) === false) {
+      setAttachmentError('无法结束排队消息编辑，请检查连接后重试。')
+      return false
+    }
     editingQueuedMessageIdRef.current = null
     setEditingQueuedMessageId(null)
     restoreDraftAfterQueuedEdit()
+    return true
   }
 
-  function confirmQueuedEdit() {
+  async function confirmQueuedEdit() {
     const messageId = editingQueuedMessageIdRef.current
-    if (!messageId || sending) return
+    if (!messageId || sendingRef.current) return
     const prompt = draftRef.current.trim()
     if (!prompt && attachedImages.length === 0 && attachedDocuments.length === 0) {
       setAttachmentError('消息内容和附件不能同时为空。')
       return
     }
-    if (!onUpdateQueuedMessage(messageId, {
-      prompt,
-      images: attachedImages,
-      documents: attachedDocuments,
-    })) {
-      setAttachmentError('排队消息更新失败，请取消后重试。')
-      return
+    sendingRef.current = true
+    setSending(true)
+    try {
+      if (!await onUpdateQueuedMessage(messageId, {
+        prompt,
+        images: attachedImages,
+        documents: attachedDocuments,
+      })) {
+        setAttachmentError('排队消息更新失败，请检查连接后重试。')
+        return
+      }
+      await finishQueuedEdit()
+    } finally {
+      sendingRef.current = false
+      setSending(false)
     }
-    finishQueuedEdit()
   }
 
   function cancelQueuedEdit() {
     if (!editingQueuedMessageIdRef.current) return
-    finishQueuedEdit()
+    void finishQueuedEdit()
   }
 
   async function sendQueuedNow(messageId: string) {
@@ -1448,6 +1408,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault()
     composerHeightWasResized.current = true
+    composerHeightMemory.current = { height: composerHeight, manuallyResized: true }
     resizeState.current = { startY: event.clientY, startHeight: composerHeight }
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
@@ -1460,10 +1421,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       ? item.sourceFileId === document.sourceFileId
       : !item.sourceFileId && (isSelection
         ? sameWorkspaceSelectionDocument(item, document)
-        : item.name === document.name && item.content === document.content))) return
+        : item.name === document.name && item.content === document.content))) return false
     if (current.length >= maxDocumentsPerTurn) {
       setAttachmentError(`单条消息最多附加 ${maxDocumentsPerTurn} 个文档。`)
-      return
+      return false
     }
     const numberedCurrent = current.reduce<CodexDocumentAttachment[]>((documents, item) => {
       documents.push(isWorkspaceSelectionDocument(item) ? numberWorkspaceSelectionDocument(item, documents) : item)
@@ -1475,19 +1436,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       attachedDocumentsRef.current = next
       setAttachedDocuments(next)
       setAttachmentError(null)
-      return
+      return true
     }
     const total = numberedCurrent.reduce((count, item) => count + item.content.length, 0)
     const remaining = maxDocumentTextPerTurn - total
     if (remaining <= 0) {
       setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
-      return
+      return false
     }
     const content = truncateAttachmentText(nextDocument.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
     const next = [...numberedCurrent, { ...nextDocument, content }]
     attachedDocumentsRef.current = next
     setAttachedDocuments(next)
     setAttachmentError(nextDocument.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
+    return true
   }
 
   return (
@@ -1522,6 +1484,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
         </div>
       ) : null}
+      {reserveFileChangeSummarySpace && !mobileLayout && (!fileChangeSummary || fileChangeSummary.files.length === 0) ? (
+        <div className="composer-file-change-summary composer-file-change-summary--placeholder" aria-hidden="true">
+          <FileText size={12} />
+          <span>1 个文件已更改</span>
+          <span className="composer-file-change-summary__stats"><i>+1</i><em>-1</em></span>
+        </div>
+      ) : null}
       <form
         className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
         onSubmit={(event) => void send(event)}
@@ -1532,7 +1501,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-      {!imagesReady || readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{readingImages ? '正在读取图片…' : '正在恢复待发送图片…'}</p> : null}
+      {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取图片…</p> : null}
       {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
       {attachedDocuments.length > 0 ? (
         <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
@@ -1549,6 +1518,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ))}
         </div>
       ) : null}
+      {reserveQueuedMessageSpace && !mobileLayout && queuedMessages.length === 0 ? (
+        <div className="composer-queue composer-queue--collapsed composer-queue--placeholder" aria-hidden="true">
+          <span className="composer-queue__heading"><span>已排队 0 条</span><ChevronDown size={14} /></span>
+        </div>
+      ) : null}
       {queuedMessages.length > 0 ? (
         <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
           <button
@@ -1560,13 +1534,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>已排队 {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : isRunning ? '当前回复结束后会依次发送' : '点击立即发送可重试'}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
               const isEditing = editingQueuedMessageId === message.id
+              const deliveryUnverified = Boolean(message.sendAttempt)
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
               const summary = message.text || (message.documents?.length
                 ? `附件文档：${message.documents.length} 个文件`
@@ -1574,14 +1549,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : sendingNow ? '已插入对话 · 正在确认送达' : isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待手动发送'}</small></span>
-                  <button className="composer-queue__edit" type="button" disabled={queueLocked} onClick={() => beginQueuedEdit(message)} title={isEditing ? '正在编辑此消息' : '在输入框中编辑排队消息'}>
-                    <Pencil size={11} /><span>{isEditing ? '编辑中' : '编辑'}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待自动发送')}</small></span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
+                    <Pencil size={11} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow} onClick={() => void sendQueuedNow(message.id)} title="立即发送给当前 Codex 回复">
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : '立即发送给当前 Codex 回复'}>
                     {sendingNow ? <LoaderCircle className="spin" size={12} /> : <Send size={12} />}<span>立即发送</span>
                   </button>
-                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow} onClick={() => onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
                 </div>
               )
             })}
@@ -1615,11 +1590,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
           <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
           <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-          <span className="composer-hint"><ShieldCheck size={14} />{editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
+          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
-            <ImagePlus size={16} />
+          <span className={`attach-button attach-button--native attach-button--image${canAttachImages ? '' : ' attach-button--disabled'}`} title={!imagesReady ? '正在恢复待发送图片' : modelSupportsImages ? '附加图片' : '当前模型不支持图片输入'}>
+            {imagesReady ? <ImagePlus size={16} /> : <LoaderCircle className="spin" size={16} />}
             <input className="image-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple disabled={!canAttachImages} onChange={(event) => { void attachImages(Array.from(event.target.files ?? [])); event.currentTarget.value = '' }} aria-label="附加图片" />
           </span>
           <span className={`attach-button attach-button--native${canAttachDocuments ? '' : ' attach-button--disabled'}`} title={readingDocuments ? '正在读取文档' : '附加文档或源码文件'}>
@@ -1639,7 +1614,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               aria-label={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
               title={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
             >
-              {sending || (stopWithSendButton && isInterrupting)
+              {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
                 : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Square size={14} fill="currentColor" /> : <Send size={16} />}
               {editingQueuedMessageId ? <span>确定</span> : null}
@@ -2435,10 +2410,14 @@ function RemoteChatPane({
   const forceMessageStreamBottomFor = useRef<string | null>(null)
   const forceMessageStreamBottomVersion = useRef(0)
   const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
+  const olderMessageScrollAnchor = useRef<{ messageId: string; top: number } | null>(null)
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const activeThreadId = remote.activeThread?.id
+  const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
+  const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
+  const visibleMessages = remote.messages.slice(visibleStartIndex)
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -2487,17 +2466,42 @@ function RemoteChatPane({
     const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
     followMessageStream.current = atBottom
     setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
-  }, [activeThreadId])
+    if (atBottom) {
+      setMessageWindow((current) => current.threadId === activeThreadId && !current.anchoredToLatest
+        ? recentMessageWindow(activeThreadId ?? null, remote.messages.length)
+        : current)
+    }
+  }, [activeThreadId, remote.messages.length])
 
   const scrollToBottom = useCallback(() => {
     followMessageStream.current = true
     setShowScrollToBottom(false)
+    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
     positionMessageStreamAtBottom()
-  }, [positionMessageStreamAtBottom])
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.messages.length])
+
+  const loadEarlierMessages = useCallback(() => {
+    if (visibleStartIndex === 0) return
+    const firstMessage = messageContent.current?.querySelector<HTMLElement>('[data-message-id]')
+    olderMessageScrollAnchor.current = firstMessage?.dataset.messageId
+      ? { messageId: firstMessage.dataset.messageId, top: firstMessage.getBoundingClientRect().top }
+      : null
+    followMessageStream.current = false
+    forceMessageStreamBottomFor.current = null
+    forceMessageStreamBottomVersion.current += 1
+    if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
+    if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
+    forceMessageStreamBottomTimer.current = undefined
+    scrollAnimationFrame.current = undefined
+    setShowScrollToBottom(true)
+    setMessageWindow((current) => earlierMessageWindow(current, activeThreadId ?? null, remote.messages.length))
+  }, [activeThreadId, remote.messages.length, visibleStartIndex])
 
   useLayoutEffect(() => {
     if (!active) return
     forceMessageStreamToBottom(activeThreadId)
+    olderMessageScrollAnchor.current = null
+    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   }, [active, activeThreadId, forceMessageStreamToBottom])
 
   useLayoutEffect(() => {
@@ -2534,7 +2538,17 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom])
+  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
+
+  useLayoutEffect(() => {
+    const anchor = olderMessageScrollAnchor.current
+    if (!anchor) return
+    olderMessageScrollAnchor.current = null
+    const container = messageContainer.current
+    const message = [...(messageContent.current?.querySelectorAll<HTMLElement>('[data-message-id]') ?? [])]
+      .find((element) => element.dataset.messageId === anchor.messageId)
+    if (container && message) container.scrollTop += message.getBoundingClientRect().top - anchor.top
+  }, [visibleStartIndex])
 
   useLayoutEffect(() => {
     if (!active) return
@@ -2596,18 +2610,13 @@ function RemoteChatPane({
           {remote.runtime.runtimeMode === 'isolated-fallback' && remote.runtime.runtimeMessage ? <div className="runtime-notice" role="status"><strong>已启用 Windows 兼容运行时</strong><span>{remote.runtime.runtimeMessage}</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-              <span className="welcome-state__eyebrow">CODEX REMOTE · LOCAL AGENT</span>
-              <span className="welcome-state__mark">C</span>
-              <h1>你想在本机项目中完成什么？</h1>
-              <p>消息交给本机 Codex 处理，回复会实时显示在这里。</p>
-              <div className="prompt-suggestions">
-                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('先阅读这个项目，概括目录结构和主要技术栈。') }}>了解这个项目</button>
-                <button type="button" onClick={() => { onActivate(); composerHandle.current?.replaceDraft('检查当前代码中最值得优先处理的问题，并说明依据。') }}>检查代码问题</button>
-              </div>
+              <h1>与Codex Remote一起完成伟大项目</h1>
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {remote.messages.map((message, index) => {
+          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>查看更早消息（还有 {visibleStartIndex} 条）</button> : null}
+          {visibleMessages.map((message, visibleIndex) => {
+            const index = visibleStartIndex + visibleIndex
             const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId
             const changes = turnComplete && message.turnId && lastMessageIndexByTurn.get(message.turnId) === index
               ? remote.fileChangesByTurn[message.turnId]
@@ -2659,6 +2668,7 @@ function RemoteChatPane({
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
+  const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
@@ -2666,11 +2676,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const hasQueuedMessagesInOpenPanes = openPaneIndexes.some(
+    (paneIndex) => (remotes[paneIndex]?.queuedMessages.length ?? 0) > 0,
+  )
+  const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
+    const remote = remotes[paneIndex]
+    return remote?.isRunning && remote.runningTurnId
+      && remote.fileChangesByTurn[remote.runningTurnId]?.some((change) => change.changes.length > 0)
+  })
   const runningFileChangeSummary = useMemo(() => {
     if (!activeRemote.isRunning || !activeRemote.runningTurnId) return null
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
   const [workspaceFilePreviewWidth, setWorkspaceFilePreviewWidth] = useState(readWorkspaceFilePreviewWidth)
@@ -2684,6 +2703,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
+  const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
   const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
   const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
@@ -2739,7 +2760,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadContextMenu({
       thread,
       x: Math.max(8, Math.min(x, window.innerWidth - 174)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 122)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 190)),
     })
   }
 
@@ -2928,6 +2949,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   useEffect(() => {
+    if (!settingsOpen) return
+    const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      if (window.matchMedia(mobileLayoutMediaQuery).matches) return
+      event.preventDefault()
+      event.stopPropagation()
+      closeSettingsPanel()
+    }
+    document.addEventListener('keydown', closeOnDesktopEscape, true)
+    return () => document.removeEventListener('keydown', closeOnDesktopEscape, true)
+  }, [closeSettingsPanel, settingsOpen])
+
+  useEffect(() => {
     if (!threadContextMenu) return
     const closeMenu = () => setThreadContextMenu(null)
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -3069,6 +3103,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
   }, [])
 
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const legacy = readPinnedThreadIds()
+        const result = legacy.size > 0
+          ? await codexRemoteClient.initializePins(token, [...legacy])
+          : await codexRemoteClient.pins(token)
+        if (legacy.size > 0) window.localStorage.removeItem(pinnedThreadIdsStorageKey)
+        if (cancelled) return
+        setPinnedThreadIds(new Set(result.thread_ids))
+      } catch (reason) {
+        if (cancelled) return
+        setPaneNotice(reason instanceof Error ? `同步置顶失败：${reason.message}` : '同步置顶失败')
+      }
+    })()
+    return () => { cancelled = true }
+  }, [remote0.pinRevision, token])
+
   function showPaneNotice(message: string) {
     setPaneNotice(message)
     if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
@@ -3076,6 +3129,76 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       paneNoticeTimer.current = undefined
       setPaneNotice(null)
     }, 2_400)
+  }
+
+  async function toggleThreadPin(thread: CodexThread) {
+    const pinned = !pinnedThreadIds.has(thread.id)
+    setThreadContextMenu(null)
+    try {
+      const result = await codexRemoteClient.setThreadPin(token, thread.id, pinned)
+      setPinnedThreadIds(new Set(result.thread_ids))
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? reason.message : '置顶操作失败')
+    }
+  }
+
+  async function readThreadTranscript(thread: CodexThread) {
+    const details = await codexRemoteClient.readThread(token, thread.id)
+    return createThreadTranscript({ ...thread, ...details }, messagesFromThread(details))
+  }
+
+  function downloadThreadTranscript(thread: CodexThread, content: string) {
+    const blob = new Blob([content], { type: 'text/markdown;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = threadTranscriptFilename(thread, '对话导出')
+    link.style.display = 'none'
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1_000)
+  }
+
+  async function exportThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'export' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      downloadThreadTranscript(thread, transcript)
+      setThreadContextMenu(null)
+      showPaneNotice('已导出完整对话 Markdown')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `导出失败：${reason.message}` : '导出失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
+  }
+
+  async function quoteThread(thread: CodexThread) {
+    if (threadContextAction) return
+    setThreadContextAction({ threadId: thread.id, type: 'quote' })
+    try {
+      const transcript = await readThreadTranscript(thread)
+      const attachment = truncateThreadTranscriptForAttachment(transcript, maxDocumentTextLength)
+      const composer = composerHandle.current
+      if (!composer) throw new Error('当前输入框尚未准备好，请稍后重试。')
+      const added = composer.addDocumentAttachment({
+        name: threadTranscriptFilename(thread, '对话引用'),
+        content: attachment.content,
+      })
+      setThreadContextMenu(null)
+      setSidebarOpen(false)
+      if (!added) {
+        showPaneNotice('引用未加入：该对话已在输入框中，或附件数量/文字容量已达上限。')
+        return
+      }
+      showPaneNotice(attachment.truncated ? '对话引用已加入输入框（内容过长，已截断）' : '对话引用已加入输入框')
+    } catch (reason) {
+      showPaneNotice(reason instanceof Error ? `引用失败：${reason.message}` : '引用失败，请稍后重试。')
+    } finally {
+      setThreadContextAction(null)
+    }
   }
 
   function paneIndexForThread(threadId: string) {
@@ -3385,11 +3508,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
+  const sidebarThreads = useMemo(() => [...remote0.threads].sort((left, right) => {
+    const leftPinned = pinnedThreadIds.has(left.id)
+    const rightPinned = pinnedThreadIds.has(right.id)
+    return Number(rightPinned) - Number(leftPinned)
+  }), [pinnedThreadIds, remote0.threads])
 
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchEndCapture={handleSidebarTouchEnd}
@@ -3408,14 +3536,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       <aside className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '')} aria-label="Codex 对话记录">
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+            {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
+          </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
         <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
-        <div className="thread-list-heading"><span>最近对话</span><button className="icon-button" type="button" aria-label="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : '最近对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
-          {remote0.threads.map((thread) => {
+          {sidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
+            const isPinned = pinnedThreadIds.has(thread.id)
             return (
               <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
                 const pending = threadLongPress.current
@@ -3428,7 +3560,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 void selectThread(thread)
               }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
                 <MessagesSquare size={15} />
-                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
+                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
               </button>
             )
@@ -3437,10 +3569,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
-          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
+          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
-        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} /><span>{currentConnectionLabel}</span><button type="button" onClick={() => void onUnpair()}>退出</button></footer>
+        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
 
       {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
@@ -3448,8 +3580,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
+          <button type="button" role="menuitem" onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</button>
+          <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</button>
+          <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</button>
           <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>
-          <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void selectThread(thread) }}><Check size={14} />切换到此对话</button>
         </div>
       ) : null}
 
@@ -3507,10 +3641,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ref={composerHandle}
               draftScope={composerDraftScope}
               onDraftChange={syncWorkspaceDraft}
+              composerHeightMemory={composerHeightMemory}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
+              reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
@@ -3526,6 +3662,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
+              reserveQueuedMessageSpace={openPaneIndexes.length > 1 && hasQueuedMessagesInOpenPanes}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
@@ -4046,7 +4183,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
 
   return (
-    <article className={`chat-message chat-message--${message.role}`}>
+    <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">

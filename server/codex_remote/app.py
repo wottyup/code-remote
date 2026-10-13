@@ -35,6 +35,7 @@ from .codex_app_server import (
     CodexNoActiveTurnError,
     CodexRuntimeError,
 )
+from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -222,6 +223,44 @@ class SteerRequest(BaseModel):
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+class QueuedImage(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    mediaType: Literal["image/png", "image/jpeg", "image/webp", "image/gif"]
+    data: str = Field(min_length=4, max_length=12_000_000)
+
+
+class QueuedDocument(BaseModel):
+    name: str = Field(min_length=1, max_length=512)
+    content: str = Field(max_length=240_000)
+    sourceFileId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{24,64}$")
+
+
+class QueuedMessageRequest(BaseModel):
+    id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    text: str = Field(max_length=32_000)
+    requestText: str = Field(max_length=32_000)
+    images: list[QueuedImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
+    documents: list[QueuedDocument] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
+    createdAt: str = Field(min_length=1, max_length=128)
+    model: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=50)
+    approvalPolicy: ApprovalPolicy | None = None
+    sendAttempt: dict[str, Any] | None = None
+
+
+class QueueMessageIdRequest(BaseModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    owner_id: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class PinRequest(BaseModel):
+    pinned: bool
+
+
+class PinsInitializeRequest(BaseModel):
+    thread_ids: list[str] = Field(default_factory=list, max_length=200)
 
 
 async def read_limited_pdf_body(request: Request) -> bytes:
@@ -802,21 +841,43 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         configured_workspace,
     )
     auth = PairingAuth()
+    state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
+    shared_state = SharedStateStore(state_path)
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
+
+    async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
+        images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
+        pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
+        if steer:
+            result = await steer_turn(thread_id, SteerRequest(
+                prompt=payload["requestText"], images=images, pdf_attachments=pdf_ids, request_id=payload["id"],
+            ))
+        else:
+            result = await start_turn(thread_id, TurnRequest(
+                prompt=payload["requestText"], images=images, pdf_attachments=pdf_ids,
+                model=payload.get("model"), effort=payload.get("effort"),
+                approval_policy=payload.get("approvalPolicy"), request_id=payload["id"],
+            ))
+        return result.get("turn_id")
+
+    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        shared_queue.start()
         try:
             yield
         finally:
+            await shared_queue.close()
             history_watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await history_watcher
             await app_server.close()
+            shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
     app = FastAPI(title="Codex Remote", version="0.0.30", lifespan=lifespan)
@@ -824,6 +885,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
+    app.state.shared_state = shared_state
+    app.state.shared_queue = shared_queue
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -979,6 +1042,111 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return {"thread_id": thread_id, "name": name}
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.get("/api/v1/codex/queue/{thread_id}")
+    async def read_queued_messages(thread_id: str) -> dict[str, Any]:
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/submit")
+    async def submit_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if not body.requestText.strip() and not body.images and not body.documents:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="消息不能为空。")
+        try:
+            sent = await shared_queue.submit(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"sent": sent, "queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/enqueue")
+    async def enqueue_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if not body.requestText.strip() and not body.images and not body.documents:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        if inserted:
+            await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/edit/begin")
+    async def begin_queued_edit(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            shared_state.edit(thread_id, body.message_id, True, body.owner_id or "legacy")
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/edit/end")
+    async def end_queued_edit(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            shared_state.edit(thread_id, body.message_id, False, body.owner_id or "legacy")
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/edit/update")
+    async def update_queued_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if not body.requestText.strip() and not body.images and not body.documents:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            shared_state.update(thread_id, body.id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/remove")
+    async def remove_queued_message(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            shared_state.remove(thread_id, body.message_id)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/send-now")
+    async def send_queued_message_now(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            sent = await shared_queue.send_now(thread_id, body.message_id)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        return {"sent": sent, "queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/start-if-idle")
+    async def start_queued_message_if_idle(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            sent = await shared_queue.send_now(thread_id, body.message_id, allow_steer=False, require_head=True)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        return {"sent": sent, "queue": shared_state.queue(thread_id)}
+
+    @app.get("/api/v1/codex/pins")
+    async def read_pins() -> dict[str, list[str]]:
+        return {"thread_ids": shared_state.pins()}
+
+    @app.post("/api/v1/codex/pins/initialize")
+    async def initialize_pins(body: PinsInitializeRequest) -> dict[str, list[str]]:
+        ids = [item for item in body.thread_ids if item and len(item) <= 512]
+        previous = shared_state.pins()
+        pins = shared_state.initialize_pins(ids)
+        if pins != previous:
+            await app_server._emit({"type": "remote.pins.changed"})
+        return {"thread_ids": pins}
+
+    @app.post("/api/v1/codex/threads/{thread_id}/pin")
+    async def set_thread_pin(thread_id: str, body: PinRequest) -> dict[str, list[str]]:
+        if len(thread_id) > 512:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="对话编号过长。")
+        shared_state.set_pin(thread_id, body.pinned)
+        await app_server._emit({"type": "remote.pins.changed", "threadId": thread_id, "pinned": body.pinned})
+        return {"thread_ids": shared_state.pins()}
 
     @app.post("/api/v1/codex/pdf-attachments")
     async def upload_pdf_attachment(request: Request) -> dict[str, Any]:
