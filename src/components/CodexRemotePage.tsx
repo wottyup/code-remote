@@ -57,6 +57,7 @@ declare global {
     CodexRemoteAndroid?: {
       changeEndpoint?: () => void
       copyToClipboard?: (text: string) => boolean
+      getComposerBottomInsetDp?: () => number
       showKeyboard?: () => void
     }
     CodexRemoteHandleBack?: () => boolean

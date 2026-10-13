@@ -1,5 +1,6 @@
 :root {
   --app-viewport-height: 100vh;
+  --native-composer-bottom-inset: 0px;
   --mobile-font-offset: 0px;
   color: #e9ebef;
   background: #101114;
@@ -667,7 +668,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .approval-card { width: 100%; margin-inline: 0; }
   .welcome-state { padding-inline: 4px; }
   .remote-workspace > .composer-dock { width: auto; }
-  .composer-dock { width: auto; max-width: none; gap: 4px; margin-right: 16px; margin-bottom: max(8px, env(safe-area-inset-bottom)); margin-left: 16px; }
+  .composer-dock { width: auto; max-width: none; gap: 4px; margin-right: 16px; margin-bottom: max(8px, env(safe-area-inset-bottom), var(--native-composer-bottom-inset)); margin-left: 16px; }
   .message-composer { width: 100%; min-width: 0; max-width: none; margin: 0; padding: 11px 11px 8px; border-radius: 20px; }
   .composer-editor { min-height: 46px; }
   .composer-queue { margin-bottom: 8px; padding: 7px; }

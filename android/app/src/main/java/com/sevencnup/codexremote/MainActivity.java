@@ -49,7 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.87";
+    private static final String APP_VERSION = "0.0.88";
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
@@ -76,18 +76,16 @@ public class MainActivity extends Activity {
     private String activeEndpoint;
     private boolean checking;
     private boolean handlingBack;
+    private int navigationBarInsetPx;
+    private volatile int composerBottomInsetDp;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            getWindow().setDecorFitsSystemWindows(true);
-        }
+        configureSystemBars();
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
-        getWindow().setStatusBarColor(DARK);
-        getWindow().setNavigationBarColor(DARK);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         registerBackNavigationCallback();
         showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
@@ -123,7 +121,7 @@ public class MainActivity extends Activity {
         checking = false;
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
-        applySystemBarInsets(root);
+        applySystemBarInsets(root, false);
         setContentView(root);
 
         ScrollView scrollView = new ScrollView(this);
@@ -302,7 +300,7 @@ public class MainActivity extends Activity {
         disposeWebView();
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
-        applySystemBarInsets(root);
+        applySystemBarInsets(root, true);
         setContentView(root);
 
         LinearLayout shell = new LinearLayout(this);
@@ -523,6 +521,11 @@ public class MainActivity extends Activity {
 
     private final class AndroidBridge {
         @JavascriptInterface
+        public int getComposerBottomInsetDp() {
+            return composerBottomInsetDp;
+        }
+
+        @JavascriptInterface
         public boolean copyToClipboard(String value) {
             try {
                 ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
@@ -636,22 +639,67 @@ public class MainActivity extends Activity {
         webViewChangeEndpointButton = null;
     }
 
-    private void applySystemBarInsets(FrameLayout container) {
+    private void configureSystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(false);
+        } else {
+            getWindow().getDecorView().setSystemUiVisibility(
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+        }
+        getWindow().setStatusBarColor(DARK);
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
+    }
+
+    private void applySystemBarInsets(FrameLayout container, boolean extendWebViewBehindNavigationBar) {
         container.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
-            int bottom;
+            int navigationBottom;
+            int imeBottom = 0;
+            boolean imeVisible = false;
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                android.graphics.Insets bars = insets.getInsets(
-                        android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.navigationBars());
-                top = bars.top;
-                bottom = bars.bottom;
+                android.graphics.Insets statusBars = insets.getInsets(android.view.WindowInsets.Type.statusBars());
+                android.graphics.Insets navigationBars = insets.getInsets(android.view.WindowInsets.Type.navigationBars());
+                top = statusBars.top;
+                navigationBottom = navigationBars.bottom;
+                imeVisible = insets.isVisible(android.view.WindowInsets.Type.ime());
+                if (imeVisible) {
+                    imeBottom = insets.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+                }
             } else {
                 top = insets.getSystemWindowInsetTop();
-                bottom = insets.getSystemWindowInsetBottom();
+                int systemBottom = insets.getSystemWindowInsetBottom();
+                if (systemBottom > dp(80)) {
+                    imeVisible = true;
+                    imeBottom = systemBottom;
+                    navigationBottom = navigationBarInsetPx;
+                } else {
+                    navigationBottom = systemBottom;
+                }
             }
-            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), bottom);
+            if (!imeVisible) navigationBarInsetPx = navigationBottom;
+            int bottomInsetDp = imeVisible ? 0 : Math.round(navigationBottom / getResources().getDisplayMetrics().density);
+            updateComposerBottomInset(bottomInsetDp);
+            int contentBottom = extendWebViewBehindNavigationBar
+                    ? imeBottom
+                    : Math.max(navigationBottom, imeBottom);
+            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), contentBottom);
             return insets;
         });
         container.requestApplyInsets();
+    }
+
+    private void updateComposerBottomInset(int insetDp) {
+        composerBottomInsetDp = insetDp;
+        WebView currentWebView = webView;
+        if (currentWebView == null) return;
+        currentWebView.post(() -> {
+            if (currentWebView != webView) return;
+            currentWebView.evaluateJavascript(
+                    "document.documentElement.style.setProperty('--native-composer-bottom-inset', '" + insetDp + "px')",
+                    null);
+        });
     }
 }

@@ -23,6 +23,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
       const height = nativeViewportIsPanned ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
+      const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
+      if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
+        document.documentElement.style.setProperty('--native-composer-bottom-inset', `${composerBottomInset}px`)
+      }
       // Do not replace a working viewport value with the occasional zero-sized
       // value that some mobile browsers report while returning from background.
       if (height < 160) return
