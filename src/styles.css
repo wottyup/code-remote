@@ -446,7 +446,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-error button { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; min-height: 27px; padding: 0 8px; border: 1px solid rgba(197, 124, 128, .55); border-radius: 6px; background: rgba(83, 36, 40, .55); color: #efb2b5; cursor: pointer; font-size: 11px; }
 .remote-error button:hover:not(:disabled) { border-color: #e4a1a5; background: rgba(104, 45, 50, .7); }
 .remote-error button:disabled { cursor: not-allowed; opacity: .5; }
-.message-composer { container-name: message-composer; container-type: inline-size; position: relative; isolation: isolate; width: 100%; min-width: 0; margin: 0; padding: 11px 12px 9px; overflow: visible; border: 1px solid rgba(170, 186, 255, .2); border-radius: 18px; background: linear-gradient(145deg, rgba(40, 44, 54, .88), rgba(24, 26, 32, .94) 54%, rgba(18, 20, 25, .97)); box-shadow: 0 20px 54px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .1), inset 0 -1px 0 rgba(255, 255, 255, .025); backdrop-filter: blur(22px) saturate(135%); -webkit-backdrop-filter: blur(22px) saturate(135%); }
+.message-composer { container-name: message-composer; container-type: inline-size; position: relative; isolation: isolate; width: 100%; min-width: 0; margin: 0; padding: 11px 12px 9px; overflow: visible; border: 0; border-radius: 18px; background: linear-gradient(145deg, rgba(40, 44, 54, .88), rgba(24, 26, 32, .94) 54%, rgba(18, 20, 25, .97)); box-shadow: 0 20px 54px rgba(0, 0, 0, .34), inset 0 1px 0 rgba(255, 255, 255, .1), inset 0 -1px 0 rgba(255, 255, 255, .025); backdrop-filter: blur(22px) saturate(135%); -webkit-backdrop-filter: blur(22px) saturate(135%); }
 .message-composer::before { position: absolute; z-index: -1; inset: 0; border-radius: inherit; background: radial-gradient(ellipse at 12% 0%, rgba(198, 208, 235, .13), transparent 45%), linear-gradient(100deg, transparent 32%, rgba(255, 255, 255, .035), transparent 68%); content: ''; pointer-events: none; }
 .message-composer--running::after { position: absolute; z-index: -1; inset: -12px -3% -20px; border-radius: 26px; background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .12) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, .2), transparent 72%); content: ''; pointer-events: none; filter: blur(14px); opacity: .7; transform: translate3d(-3%, 2px, 0) scaleX(.88); animation: composer-under-glow 3.2s ease-in-out infinite; mix-blend-mode: screen; }
 @keyframes composer-under-glow { 0%, 100% { opacity: .5; transform: translate3d(-5%, 5px, 0) scaleX(.82); } 50% { opacity: .96; transform: translate3d(5%, -1px, 0) scaleX(1.06); } }
@@ -454,7 +454,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(143, 113, 86, .28) 0%, rgba(143, 113, 86, .11) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(143, 113, 86, .14), transparent 72%); opacity: .72; mix-blend-mode: multiply; }
 .remote-shell--theme-custom .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, color-mix(in srgb, var(--custom-theme-text-color) 34%, transparent) 0%, color-mix(in srgb, var(--custom-theme-text-color) 14%, transparent) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, color-mix(in srgb, var(--custom-theme-text-color) 16%, transparent), transparent 72%); opacity: .66; }
 @media (prefers-reduced-motion: reduce) { .message-composer--running::after { animation: none; } }
-.message-composer:focus-within { border-color: rgba(177, 190, 220, .55); box-shadow: 0 20px 58px rgba(0, 0, 0, .4), 0 0 0 3px rgba(123, 142, 184, .11), inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 -1px 0 rgba(255, 255, 255, .025); }
+.message-composer:focus-within { box-shadow: 0 20px 58px rgba(0, 0, 0, .4), inset 0 1px 0 rgba(255, 255, 255, .14), inset 0 -1px 0 rgba(255, 255, 255, .025); }
 .message-composer > * { position: relative; z-index: 1; }
 .image-input { position: absolute; inset: 0; display: block; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 7px; padding: 1px 1px 8px; }
@@ -780,7 +780,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .scroll-to-bottom:hover { border-color: #bdbdbd; background: #efefef; color: #292929; }
 .remote-shell--theme-light .chat-message--user .chat-message__body { background: linear-gradient(145deg, #f2f2f2, #e8e8e8); box-shadow: none; }
 .remote-shell--theme-light .chat-message--user .chat-message__content { color: #303030; }
-.remote-shell--theme-light .message-composer { border-color: #d8d8d8; background: #fff; box-shadow: 0 18px 45px rgba(40, 40, 40, .1), inset 0 1px 0 #fff; }
+.remote-shell--theme-light .message-composer { background: #fff; box-shadow: 0 18px 45px rgba(40, 40, 40, .1), inset 0 1px 0 #fff; }
 .remote-shell--theme-light .message-composer textarea { color: #303030; }
 .remote-shell--theme-light .composer-file-change-summary { color: #686868; }
 .remote-shell--theme-light .composer-file-change-summary > svg { color: #777; }
@@ -878,7 +878,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .scroll-to-bottom:hover { border-color: #c9aa88; background: #f2e5d5; color: #4c3b2e; }
 .remote-shell--theme-warm .chat-message--user .chat-message__body { background: linear-gradient(145deg, #f2e4d4, #ebdcc9); }
 .remote-shell--theme-warm .chat-message--user .chat-message__content { color: #4a392b; }
-.remote-shell--theme-warm .message-composer { border-color: #e1d1bd; background: linear-gradient(145deg, rgba(255, 250, 243, .96), rgba(246, 235, 221, .96)); box-shadow: 0 18px 45px rgba(98, 75, 52, .12), inset 0 1px 0 #fffdf9; }
+.remote-shell--theme-warm .message-composer { background: linear-gradient(145deg, rgba(255, 250, 243, .96), rgba(246, 235, 221, .96)); box-shadow: 0 18px 45px rgba(98, 75, 52, .12), inset 0 1px 0 #fffdf9; }
 .remote-shell--theme-warm .message-composer textarea { color: #4a392b; }
 .remote-shell--theme-warm .composer-file-change-summary { color: #827260; }
 .remote-shell--theme-warm .composer-file-change-summary > svg { color: #927e68; }
@@ -975,7 +975,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .chat-message__timing, .remote-shell--theme-custom .chat-message__sent-at { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .running-indicator__elapsed { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .chat-message--user .chat-message__body { background: var(--custom-theme-surface); box-shadow: none; }
-.remote-shell--theme-custom .message-composer { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: none; backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .message-composer { background: var(--custom-theme-surface); box-shadow: none; backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-file-change-summary { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .composer-file-change-summary > svg { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
