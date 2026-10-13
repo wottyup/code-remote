@@ -1833,11 +1833,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (handedOffRef.current && event.type !== 'connection') return
     if (event.type === 'threads.changed') {
       void refreshThreads()
-      if (writerConflictRef.current && activeThreadId.current) {
-        if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      if (activeThreadId.current && writerRefreshTimer.current === undefined) {
         writerRefreshTimer.current = window.setTimeout(() => {
           writerRefreshTimer.current = undefined
-          if (writerConflictRef.current && activeThreadId.current) void loadThread(activeThreadId.current)
+          if (activeThreadId.current) void loadThread(activeThreadId.current, historyRevision.current, true)
         }, 700)
       }
       return
