@@ -29,6 +29,7 @@ export interface CodexMessageDocument extends CodexDocumentAttachment {
 
 export interface CodexMessage {
   id: string
+  sourceItemId?: string
   role: 'user' | 'assistant'
   text: string
   createdAt: string
@@ -249,6 +250,38 @@ function imagesFromContent(value: unknown): CodexMessageImage[] {
     const name = typeof image.name === 'string' && image.name.length > 0 ? image.name : `image-${index + 1}`
     return [{ name, previewUrl: `data:${mediaType};base64,${image.data}` }]
   })
+}
+
+/** Build a provisional user bubble directly from the app-server item notification. */
+export function userMessageFromEventItem(value: unknown, turnId: string | null): CodexMessage | null {
+  if (!value || typeof value !== 'object') return null
+  const item = value as Record<string, unknown>
+  const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+  if (itemType !== 'usermessage' || typeof item.id !== 'string' || !item.id) return null
+
+  const itemId = item.id
+  const rawText = plainText(item.content) || (typeof item.text === 'string' ? item.text : '')
+  const originalPdfAttachments = originalPdfAttachmentsFromText(rawText)
+  const textDocumentAttachments = textDocumentAttachmentsFromText(originalPdfAttachments.text)
+  const text = textDocumentAttachments.text
+  const documents = [...originalPdfAttachments.documents, ...textDocumentAttachments.documents]
+  const images = imagesFromContent(item.content)
+  if (!text && images.length === 0 && documents.length === 0) return null
+
+  const sentAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at) ?? new Date().toISOString()
+  return {
+    id: `remote-user-${itemId}`,
+    sourceItemId: itemId,
+    role: 'user',
+    text,
+    createdAt: sentAt,
+    sentAt,
+    ...(turnId ? { turnId } : {}),
+    ...(images.length > 0 ? { images } : {}),
+    ...(documents.length > 0 ? {
+      documents: documents.map((document) => ({ ...document, charCount: document.content.length })),
+    } : {}),
+  }
 }
 
 function parsedTimestamp(value: unknown): string | null {

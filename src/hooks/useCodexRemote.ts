@@ -5,6 +5,7 @@ import {
   messagesFromThread,
   RemoteApiError,
   threadContainsNewPayload,
+  userMessageFromEventItem,
   type CodexDocumentAttachment,
   type CodexImageAttachment,
   type CodexMessage,
@@ -15,7 +16,7 @@ import {
   type CodexThreadDetails,
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
-import { deliveredQueuedMessageIdsFromHistory, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
+import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
 import { canUseCachedThreadHistory } from '../lib/threadHistoryPolicy'
 import { readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
@@ -577,6 +578,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
     const candidate = right[index]
     if (!candidate) return false
     return message.id === candidate.id
+      && message.sourceItemId === candidate.sourceItemId
       && message.role === candidate.role
       && message.text === candidate.text
       && message.turnId === candidate.turnId
@@ -1882,8 +1884,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!threadId || threadId !== activeThreadId.current) return
     if ([...pendingTurnDeliveries.current.values()].some((delivery) => delivery.threadId === threadId)) return
     const cachedMessages = threadHistoryCache.current.get(threadId)?.messages ?? []
-    if (messageItemId && (messagesRef.current.some((message) => message.id === messageItemId)
-      || cachedMessages.some((message) => message.id === messageItemId))) return
+    if (messageItemId && (messagesRef.current.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId)
+      || cachedMessages.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId))) return
     if (!messageItemId && turnId && messagesRef.current.some((message) => message.role === 'user' && message.turnId === turnId)) return
     const revision = ++historyRevision.current
     void loadThread(threadId, revision, true, turnId)
@@ -2841,7 +2843,27 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType === 'usermessage' && activeThreadId.current) {
-        refreshThreadForRemoteMessage(activeThreadId.current, turnId, typeof item?.id === 'string' ? item.id : undefined)
+        const itemId = typeof item?.id === 'string' ? item.id : undefined
+        const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
+          .some((delivery) => delivery.threadId === activeThreadId.current)
+        const remoteUserMessage = userMessageFromEventItem(item, turnId)
+        const alreadyVisible = itemId ? messagesRef.current.some((message) =>
+          message.id === itemId || message.sourceItemId === itemId,
+        ) : false
+        if (remoteUserMessage && !pendingLocalDelivery && !alreadyVisible) {
+          const continuesTurn = Boolean(turnId && messagesRef.current.some((message) =>
+            message.role === 'user' && message.turnId === turnId,
+          ))
+          if (continuesTurn && streamingAssistantTurnId.current === turnId) {
+            finalizeVisibleStreamingTurn(turnId)
+          }
+          setMessages((current) => {
+            const next = insertRemoteUserMessage(current, remoteUserMessage)
+            return sameMessages(current, next) ? current : next
+          })
+        } else if (!remoteUserMessage) {
+          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
+        }
       }
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem(item, 'running')

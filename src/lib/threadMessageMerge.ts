@@ -35,6 +35,25 @@ export function sameQueuedMessageHistoryContent(message: CodexMessage, localMess
     && sameMessageDocuments(message.documents, localMessage.documents)
 }
 
+/** Insert a user item received from the live socket without waiting for thread/read. */
+export function insertRemoteUserMessage(messages: CodexMessage[], incoming: CodexMessage) {
+  if (incoming.role !== 'user' || !incoming.sourceItemId) return messages
+  if (messages.some((message) => message.id === incoming.sourceItemId
+    || message.sourceItemId === incoming.sourceItemId)) return messages
+
+  const hasEarlierUserInTurn = Boolean(incoming.turnId && messages.some((message) =>
+    message.role === 'user' && message.turnId === incoming.turnId,
+  ))
+  if (!hasEarlierUserInTurn) {
+    const assistantIndex = messages.findIndex((message) => message.role === 'assistant'
+      && (incoming.turnId ? message.turnId === incoming.turnId : message.streaming))
+    if (assistantIndex >= 0) {
+      return [...messages.slice(0, assistantIndex), incoming, ...messages.slice(assistantIndex)]
+    }
+  }
+  return [...messages, incoming]
+}
+
 export function reconcileDeliveredLocalMessage(
   messages: CodexMessage[],
   localMessageId: string,
@@ -159,6 +178,8 @@ export function legacyDuplicateQueuedMessageId(
 
 function sameHistoryAnchor(message: CodexMessage, candidate: CodexMessage) {
   if (message.id === candidate.id) return true
+  if (message.sourceItemId && (message.sourceItemId === candidate.id || message.sourceItemId === candidate.sourceItemId)) return true
+  if (candidate.sourceItemId && (candidate.sourceItemId === message.id || candidate.sourceItemId === message.sourceItemId)) return true
   if (message.role !== candidate.role || message.turnId !== candidate.turnId) return false
   if (message.text === candidate.text) return true
   if (message.role === 'assistant' && message.text && candidate.text) {
@@ -170,8 +191,10 @@ function sameHistoryAnchor(message: CodexMessage, candidate: CodexMessage) {
 export function preserveLocalQueuedMessages(next: CodexMessage[], current: CodexMessage[]) {
   const preserved = [...next]
   for (const localMessage of current) {
-    if (localMessage.role !== 'user' || !localMessage.id.startsWith('queued-')) continue
+    if (localMessage.role !== 'user' || (!localMessage.id.startsWith('queued-') && !localMessage.sourceItemId)) continue
     if (preserved.some((message) => message.id === localMessage.id)) continue
+    if (localMessage.sourceItemId && preserved.some((message) => message.id === localMessage.sourceItemId
+      || message.sourceItemId === localMessage.sourceItemId)) continue
 
     const currentIndex = current.findIndex((message) => message.id === localMessage.id)
     let previousAnchor = -1
