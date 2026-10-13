@@ -819,14 +819,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .composer-file-change-summary > svg { color: #777; }
 .remote-shell--theme-light .composer-file-change-summary__file > span:first-child { color: #686868; }
 .remote-shell--theme-light .composer-queue { border-color: #d5d5d5; background: #f0f0f0; }
-.remote-shell--theme-light .composer-queue__heading { color: #4e4e4e; }
-.remote-shell--theme-light .composer-queue__heading small, .remote-shell--theme-light .composer-queue__copy small { color: #777; }
+.remote-shell--theme-light .composer-queue__heading { color: #202020; }
+.remote-shell--theme-light .composer-queue__heading small, .remote-shell--theme-light .composer-queue__copy small { color: #202020; }
 .remote-shell--theme-light .composer-queue__item { background: rgba(255, 255, 255, .68); }
-.remote-shell--theme-light .composer-queue__index { border-color: #bdbdbd; color: #555; }
-.remote-shell--theme-light .composer-queue__copy strong { color: #383838; }
-.remote-shell--theme-light .composer-queue__send, .remote-shell--theme-light .composer-queue__edit { border-color: #c9c9c9; background: #e5e5e5; color: #505050; }
-.remote-shell--theme-light .composer-queue__send:hover:not(:disabled) { border-color: #aaa; background: #d9d9d9; color: #333; }
-.remote-shell--theme-light .composer-queue__remove { color: #777; }
+.remote-shell--theme-light .composer-queue__index { border-color: #bdbdbd; color: #202020; }
+.remote-shell--theme-light .composer-queue__copy strong { color: #202020; }
+.remote-shell--theme-light .composer-queue__send, .remote-shell--theme-light .composer-queue__edit { border-color: #c9c9c9; background: #e5e5e5; color: #202020; }
+.remote-shell--theme-light .composer-queue__send:hover:not(:disabled) { border-color: #aaa; background: #d9d9d9; color: #202020; }
+.remote-shell--theme-light .composer-queue__remove { color: #202020; }
+.remote-shell--theme-light .composer-queue__send:disabled, .remote-shell--theme-light .composer-queue__edit:disabled, .remote-shell--theme-light .composer-queue__remove:disabled { opacity: 1; color: #202020; }
+.remote-shell--theme-light .composer-queue__send:disabled, .remote-shell--theme-light .composer-queue__edit:disabled { border-color: #dedede; background: #f7f7f7; }
 .remote-shell--theme-light .composer-menu__trigger, .remote-shell--theme-light .attach-button { border-color: #d8d8d8; background: #f4f4f4; color: #4b4b4b; }
 .remote-shell--theme-light .theme-settings-card { border-color: #e3e3e3; background: #fff; box-shadow: 0 16px 45px rgba(40, 40, 40, .08); }
 .remote-shell--theme-light .theme-settings-card__heading, .remote-shell--theme-light .theme-custom-controls { border-color: #e8e8e8; }
