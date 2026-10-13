@@ -450,7 +450,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-composer::before { position: absolute; z-index: -1; inset: 0; border-radius: inherit; background: radial-gradient(ellipse at 12% 0%, rgba(198, 208, 235, .13), transparent 45%), linear-gradient(100deg, transparent 32%, rgba(255, 255, 255, .035), transparent 68%); content: ''; pointer-events: none; }
 .message-composer--running::after { position: absolute; z-index: -1; inset: -12px -3% -20px; border-radius: 26px; background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(255, 255, 255, .3) 0%, rgba(255, 255, 255, .12) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(255, 255, 255, .2), transparent 72%); content: ''; pointer-events: none; filter: blur(14px); opacity: .7; transform: translate3d(-3%, 2px, 0) scaleX(.88); animation: composer-under-glow 3.2s ease-in-out infinite; mix-blend-mode: screen; }
 @keyframes composer-under-glow { 0%, 100% { opacity: .5; transform: translate3d(-5%, 5px, 0) scaleX(.82); } 50% { opacity: .96; transform: translate3d(5%, -1px, 0) scaleX(1.06); } }
-.remote-shell--theme-light .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(122, 151, 190, .34) 0%, rgba(122, 151, 190, .14) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(122, 151, 190, .16), transparent 72%); opacity: .72; mix-blend-mode: multiply; }
+.remote-shell--theme-light .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(128, 128, 128, .28) 0%, rgba(128, 128, 128, .12) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(128, 128, 128, .14), transparent 72%); opacity: .72; mix-blend-mode: multiply; }
 .remote-shell--theme-warm .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, rgba(143, 113, 86, .28) 0%, rgba(143, 113, 86, .11) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, rgba(143, 113, 86, .14), transparent 72%); opacity: .72; mix-blend-mode: multiply; }
 .remote-shell--theme-custom .message-composer--running::after { background: radial-gradient(ellipse 46% 66% at 50% 48%, color-mix(in srgb, var(--custom-theme-text-color) 34%, transparent) 0%, color-mix(in srgb, var(--custom-theme-text-color) 14%, transparent) 36%, transparent 76%), radial-gradient(ellipse at 50% 100%, color-mix(in srgb, var(--custom-theme-text-color) 16%, transparent), transparent 72%); opacity: .66; }
 @media (prefers-reduced-motion: reduce) { .message-composer--running::after { animation: none; } }
@@ -673,7 +673,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-preferences { display: grid; min-width: 0; grid-template-columns: minmax(0, 1.15fr) minmax(0, .7fr) minmax(0, 1.15fr); gap: 5px; }
   .composer-menu__trigger { width: 100%; min-width: 0; max-width: none; gap: 4px; padding-inline: 6px; -webkit-tap-highlight-color: transparent; }
   .composer-menu--open .composer-menu__trigger { background: rgba(20, 22, 28, .62); }
-  .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { background: #f4f6f8; }
+  .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { background: #f4f4f4; }
   .remote-shell--theme-warm .composer-menu--open .composer-menu__trigger { background: #fbf3e9; }
   .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { background: var(--custom-theme-control); }
   .composer-actions { min-width: 0; gap: 4px; }
@@ -747,95 +747,95 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 
 .remote-shell--theme-dark { --marquee-color: #f5f5f1; }
-.remote-shell--theme-light { color-scheme: light; --marquee-color: #171717; --line: #e4e8ed; --muted: #737b86; background: #f7f8fa; color: #20252d; }
-.remote-shell--theme-light .remote-sidebar { border-color: #e3e7ec; background: #f1f3f6; }
-.remote-shell--theme-light .remote-chat, .remote-shell--theme-light .remote-workspace, .remote-shell--theme-light .theme-settings-panel { background: #fbfcfd; }
-.remote-shell--theme-light .remote-chat__header, .remote-shell--theme-light .theme-settings-panel__header { border-color: #e6e9ed; background: rgba(255, 255, 255, .88); }
-.remote-shell--theme-light .remote-brand__copy strong, .remote-shell--theme-light .remote-chat__title strong, .remote-shell--theme-light .theme-settings-panel__header h1, .remote-shell--theme-light .welcome-state h1 { color: #20252d; }
-.remote-shell--theme-light .remote-brand__copy small, .remote-shell--theme-light .remote-chat__title span, .remote-shell--theme-light .welcome-state p, .remote-shell--theme-light .theme-settings-panel__header p { color: #737b86; }
-.remote-shell--theme-light .remote-brand__mark, .remote-shell--theme-light .welcome-state__mark { border-color: #cfd6df; background: linear-gradient(145deg, #ffffff, #e8ecf1); color: #20252d; }
-.remote-shell--theme-light .new-thread-button { border-color: #d2dae4; background: linear-gradient(135deg, #ffffff, #edf1f5); color: #29313a; box-shadow: inset 0 1px 0 #fff; }
-.remote-shell--theme-light .new-thread-button__icon { background: #e2e8f0; color: #536b8c; }
-.remote-shell--theme-light .thread-row { color: #65707c; }
-.remote-shell--theme-light .thread-row:hover, .remote-shell--theme-light .sidebar-settings:hover, .remote-shell--theme-light .sidebar-settings--active { border-color: #e1e5ea; background: #e9edf2; color: #20252d; }
-.remote-shell--theme-light .thread-row--active { --thread-row-surface: #e5ebf3; color: #20252d; }
-.remote-shell--theme-light .thread-rename-dialog { border-color: #d7dee6; background: rgba(255, 255, 255, .98); color: #20252d; box-shadow: 0 22px 70px rgba(35, 45, 58, .22); }
-.remote-shell--theme-light .thread-rename-dialog__heading h2 { color: #20252d; }
-.remote-shell--theme-light .thread-rename-dialog__heading p, .remote-shell--theme-light .thread-rename-dialog > label { color: #6b7784; }
-.remote-shell--theme-light .thread-rename-dialog > input { border-color: #d5dde6; background: #f7f9fb; color: #25303b; }
-.remote-shell--theme-light .thread-rename-dialog__actions button { border-color: #d5dde6; background: #f0f3f6; color: #52606d; }
-.remote-shell--theme-light .thread-rename-dialog__actions button:last-child { border-color: #62769c; background: #52698e; color: #fff; }
+.remote-shell--theme-light { color-scheme: light; --marquee-color: #171717; --line: #e4e4e4; --muted: #777; background: #f7f7f7; color: #202020; }
+.remote-shell--theme-light .remote-sidebar { border-color: #e4e4e4; background: #f1f1f1; }
+.remote-shell--theme-light .remote-chat, .remote-shell--theme-light .remote-workspace, .remote-shell--theme-light .theme-settings-panel { background: #fff; }
+.remote-shell--theme-light .remote-chat__header, .remote-shell--theme-light .theme-settings-panel__header { border-color: #e8e8e8; background: rgba(255, 255, 255, .9); }
+.remote-shell--theme-light .remote-brand__copy strong, .remote-shell--theme-light .remote-chat__title strong, .remote-shell--theme-light .theme-settings-panel__header h1, .remote-shell--theme-light .welcome-state h1 { color: #202020; }
+.remote-shell--theme-light .remote-brand__copy small, .remote-shell--theme-light .remote-chat__title span, .remote-shell--theme-light .welcome-state p, .remote-shell--theme-light .theme-settings-panel__header p { color: #737373; }
+.remote-shell--theme-light .remote-brand__mark, .remote-shell--theme-light .welcome-state__mark { border-color: #d2d2d2; background: linear-gradient(145deg, #ffffff, #ededed); color: #202020; }
+.remote-shell--theme-light .new-thread-button { border-color: #d8d8d8; background: linear-gradient(135deg, #ffffff, #f0f0f0); color: #303030; box-shadow: inset 0 1px 0 #fff; }
+.remote-shell--theme-light .new-thread-button__icon { background: #e8e8e8; color: #555; }
+.remote-shell--theme-light .thread-row { color: #666; }
+.remote-shell--theme-light .thread-row:hover, .remote-shell--theme-light .sidebar-settings:hover, .remote-shell--theme-light .sidebar-settings--active { border-color: #e1e1e1; background: #e9e9e9; color: #202020; }
+.remote-shell--theme-light .thread-row--active { --thread-row-surface: #e6e6e6; color: #202020; }
+.remote-shell--theme-light .thread-rename-dialog { border-color: #d8d8d8; background: rgba(255, 255, 255, .98); color: #202020; box-shadow: 0 22px 70px rgba(40, 40, 40, .18); }
+.remote-shell--theme-light .thread-rename-dialog__heading h2 { color: #202020; }
+.remote-shell--theme-light .thread-rename-dialog__heading p, .remote-shell--theme-light .thread-rename-dialog > label { color: #6b6b6b; }
+.remote-shell--theme-light .thread-rename-dialog > input { border-color: #d8d8d8; background: #f7f7f7; color: #303030; }
+.remote-shell--theme-light .thread-rename-dialog__actions button { border-color: #d8d8d8; background: #f0f0f0; color: #555; }
+.remote-shell--theme-light .thread-rename-dialog__actions button:last-child { border-color: #555; background: #555; color: #fff; }
 .remote-shell--theme-light .thread-completion-toast { border-color: #c8dfcd; background: rgba(247, 253, 248, .97); color: #275138; box-shadow: 0 18px 45px rgba(46, 74, 55, .16), 0 0 0 1px rgba(90, 174, 112, .08); }
 .remote-shell--theme-light .thread-completion-toast__open:hover, .remote-shell--theme-light .thread-completion-toast__close:hover { background: #e7f4e9; }
 .remote-shell--theme-light .thread-completion-toast__icon { border-color: #a9d9b3; background: #e2f2e5; color: #397d4d; }
 .remote-shell--theme-light .thread-completion-toast__copy small, .remote-shell--theme-light .thread-completion-toast__close { color: #64846d; }
-.remote-shell--theme-light .remote-sidebar__footer { color: #737b86; border-color: #e3e7ec; }
-.remote-shell--theme-light .connection-label { border-color: #d9e0e7; background: #f2f5f8; color: #65707c; }
+.remote-shell--theme-light .remote-sidebar__footer { color: #737373; border-color: #e4e4e4; }
+.remote-shell--theme-light .connection-label { border-color: #dedede; background: #f3f3f3; color: #666; }
 .remote-shell--theme-light .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
-.remote-shell--theme-light .chat-message__content, .remote-shell--theme-light .chat-message__meta { color: #35404c; }
-.remote-shell--theme-light .chat-message__timing, .remote-shell--theme-light .chat-message__sent-at { color: #6f7b89; }
-.remote-shell--theme-light .running-indicator__elapsed { color: #6f7b89; }
-.remote-shell--theme-light .scroll-to-bottom { border-color: #d2dbe5; background: rgba(255, 255, 255, .94); color: #4b5a69; box-shadow: 0 9px 22px rgba(35, 45, 58, .12); }
-.remote-shell--theme-light .scroll-to-bottom:hover { border-color: #aab9ca; background: #edf2f6; color: #26333f; }
-.remote-shell--theme-light .chat-message--user .chat-message__body { background: linear-gradient(145deg, #edf2f7, #e3eaf2); box-shadow: none; }
-.remote-shell--theme-light .chat-message--user .chat-message__content { color: #25303b; }
-.remote-shell--theme-light .message-composer { border-color: #d4dce6; background: linear-gradient(145deg, rgba(255, 255, 255, .96), rgba(242, 245, 248, .96)); box-shadow: 0 18px 45px rgba(35, 45, 58, .12), inset 0 1px 0 #fff; }
-.remote-shell--theme-light .message-composer textarea { color: #25303b; }
-.remote-shell--theme-light .composer-file-change-summary { color: #687585; }
-.remote-shell--theme-light .composer-file-change-summary > svg { color: #76859a; }
-.remote-shell--theme-light .composer-file-change-summary__file > span:first-child { color: #687585; }
-.remote-shell--theme-light .composer-queue { border-color: #c7d4ec; background: #eef3fb; }
-.remote-shell--theme-light .composer-queue__heading { color: #435c84; }
-.remote-shell--theme-light .composer-queue__heading small, .remote-shell--theme-light .composer-queue__copy small { color: #748298; }
+.remote-shell--theme-light .chat-message__content, .remote-shell--theme-light .chat-message__meta { color: #353535; }
+.remote-shell--theme-light .chat-message__timing, .remote-shell--theme-light .chat-message__sent-at { color: #707070; }
+.remote-shell--theme-light .running-indicator__elapsed { color: #707070; }
+.remote-shell--theme-light .scroll-to-bottom { border-color: #d8d8d8; background: rgba(255, 255, 255, .96); color: #555; box-shadow: 0 9px 22px rgba(40, 40, 40, .1); }
+.remote-shell--theme-light .scroll-to-bottom:hover { border-color: #bdbdbd; background: #efefef; color: #292929; }
+.remote-shell--theme-light .chat-message--user .chat-message__body { background: linear-gradient(145deg, #f2f2f2, #e8e8e8); box-shadow: none; }
+.remote-shell--theme-light .chat-message--user .chat-message__content { color: #303030; }
+.remote-shell--theme-light .message-composer { border-color: #d8d8d8; background: linear-gradient(145deg, rgba(255, 255, 255, .97), rgba(244, 244, 244, .97)); box-shadow: 0 18px 45px rgba(40, 40, 40, .1), inset 0 1px 0 #fff; }
+.remote-shell--theme-light .message-composer textarea { color: #303030; }
+.remote-shell--theme-light .composer-file-change-summary { color: #686868; }
+.remote-shell--theme-light .composer-file-change-summary > svg { color: #777; }
+.remote-shell--theme-light .composer-file-change-summary__file > span:first-child { color: #686868; }
+.remote-shell--theme-light .composer-queue { border-color: #d5d5d5; background: #f0f0f0; }
+.remote-shell--theme-light .composer-queue__heading { color: #4e4e4e; }
+.remote-shell--theme-light .composer-queue__heading small, .remote-shell--theme-light .composer-queue__copy small { color: #777; }
 .remote-shell--theme-light .composer-queue__item { background: rgba(255, 255, 255, .68); }
-.remote-shell--theme-light .composer-queue__index { border-color: #afc0dd; color: #536f9d; }
-.remote-shell--theme-light .composer-queue__copy strong { color: #344356; }
-.remote-shell--theme-light .composer-queue__send, .remote-shell--theme-light .composer-queue__edit { border-color: #b8c8e2; background: #e3ecf8; color: #42618e; }
-.remote-shell--theme-light .composer-queue__send:hover:not(:disabled) { border-color: #91a9cd; background: #d7e4f4; color: #2e4f7d; }
-.remote-shell--theme-light .composer-queue__remove { color: #768398; }
-.remote-shell--theme-light .composer-menu__trigger, .remote-shell--theme-light .attach-button { border-color: #d8e0e8; background: #f4f6f8; color: #46515d; }
-.remote-shell--theme-light .theme-settings-card { border-color: #e2e7ec; background: rgba(255, 255, 255, .88); box-shadow: 0 16px 45px rgba(35, 45, 58, .08); }
-.remote-shell--theme-light .theme-settings-card__heading, .remote-shell--theme-light .theme-custom-controls { border-color: #e7eaee; }
-.remote-shell--theme-light .theme-settings-card__heading h2, .remote-shell--theme-light .theme-control-row strong { color: #2a333d; }
-.remote-shell--theme-light .theme-settings-card__heading p, .remote-shell--theme-light .theme-control-row small, .remote-shell--theme-light .theme-settings-hint { color: #7d8792; }
-.remote-shell--theme-light .theme-option { border-color: #e0e5eb; background: #f8fafb; color: #4f5b67; }
-.remote-shell--theme-light .theme-option:hover, .remote-shell--theme-light .theme-option--active { border-color: #9eafc2; background: #edf2f6; }
-.remote-shell--theme-light .theme-option strong { color: #35404c; }
-.remote-shell--theme-light .theme-option small { color: #8a949e; }
-.remote-shell--theme-light .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { border-color: #aebdce; background: #e9eff5; }
-.remote-shell--theme-light .composer-menu__trigger > svg, .remote-shell--theme-light .composer-menu__label { color: #7b8794; }
-.remote-shell--theme-light .composer-menu__popover { border-color: #d9e0e7; background: rgba(255, 255, 255, .98); box-shadow: 0 16px 35px rgba(35, 45, 58, .16), inset 0 1px 0 #fff; }
-.remote-shell--theme-light .composer-menu__option { color: #4d5965; }
-.remote-shell--theme-light .composer-menu__option:hover, .remote-shell--theme-light .composer-menu__option--selected { background: #e9eff5; color: #25303b; }
-.remote-shell--theme-light .composer-menu__option > svg { color: #5d7697; }
-.remote-shell--theme-light .send-button:not(:disabled) { background: #394858; color: #fff; }
-.remote-shell--theme-light .stop-button, .remote-shell--theme-light .attach-button { border-color: #d8e0e8; background: #f4f6f8; color: #46515d; }
-.remote-shell--theme-light .send-button:disabled, .remote-shell--theme-light .attach-button:disabled, .remote-shell--theme-light .attach-button--disabled { background: #e7ebef; color: #a1aab3; }
-.remote-shell--theme-light .composer-menu__empty { color: #7d8792; }
-.remote-shell--theme-light .workspace-explorer, .remote-shell--theme-light .workspace-file-preview-panel { border-color: #e3e7ec; background: #f1f3f6; }
-.remote-shell--theme-light .workspace-explorer__header, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { border-color: #e0e5eb; }
-.remote-shell--theme-light .workspace-explorer__header strong { color: #2a333d; }
-.remote-shell--theme-light .workspace-explorer__eyebrow, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { color: #7b8794; }
-.remote-shell--theme-light .workspace-explorer__root-form input { border-color: #d2dae4; background: #f8fafc; color: #334155; }
-.remote-shell--theme-light .workspace-explorer__root-form input::placeholder { color: #8793a0; }
-.remote-shell--theme-light .workspace-explorer__root-open, .remote-shell--theme-light .workspace-explorer__root-actions button { border-color: #d2dae4; background: #f8fafc; color: #52606d; }
-.remote-shell--theme-light .workspace-explorer__entry { color: #52606d; }
-.remote-shell--theme-light .workspace-explorer__load-more { color: #687787; }
-.remote-shell--theme-light .workspace-explorer__load-more:hover:not(:disabled) { background: #e6ecf2; color: #25303b; }
-.remote-shell--theme-light .workspace-explorer__entry:hover { border-color: #d7dfe8; background: #e6ecf2; color: #25303b; }
-.remote-shell--theme-light .workspace-explorer__entry--selected { border-color: #a9bfd8; background: #dbe7f4; color: #25303b; }
-.remote-shell--theme-light .workspace-explorer__entry small { color: #8a949e; }
-.remote-shell--theme-light .workspace-explorer__entry svg { color: #6c86ad; }
+.remote-shell--theme-light .composer-queue__index { border-color: #bdbdbd; color: #555; }
+.remote-shell--theme-light .composer-queue__copy strong { color: #383838; }
+.remote-shell--theme-light .composer-queue__send, .remote-shell--theme-light .composer-queue__edit { border-color: #c9c9c9; background: #e5e5e5; color: #505050; }
+.remote-shell--theme-light .composer-queue__send:hover:not(:disabled) { border-color: #aaa; background: #d9d9d9; color: #333; }
+.remote-shell--theme-light .composer-queue__remove { color: #777; }
+.remote-shell--theme-light .composer-menu__trigger, .remote-shell--theme-light .attach-button { border-color: #d8d8d8; background: #f4f4f4; color: #4b4b4b; }
+.remote-shell--theme-light .theme-settings-card { border-color: #e3e3e3; background: rgba(255, 255, 255, .9); box-shadow: 0 16px 45px rgba(40, 40, 40, .08); }
+.remote-shell--theme-light .theme-settings-card__heading, .remote-shell--theme-light .theme-custom-controls { border-color: #e8e8e8; }
+.remote-shell--theme-light .theme-settings-card__heading h2, .remote-shell--theme-light .theme-control-row strong { color: #303030; }
+.remote-shell--theme-light .theme-settings-card__heading p, .remote-shell--theme-light .theme-control-row small, .remote-shell--theme-light .theme-settings-hint { color: #7d7d7d; }
+.remote-shell--theme-light .theme-option { border-color: #e2e2e2; background: #f9f9f9; color: #505050; }
+.remote-shell--theme-light .theme-option:hover, .remote-shell--theme-light .theme-option--active { border-color: #b5b5b5; background: #ededed; }
+.remote-shell--theme-light .theme-option strong { color: #353535; }
+.remote-shell--theme-light .theme-option small { color: #8a8a8a; }
+.remote-shell--theme-light .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-light .composer-menu--open .composer-menu__trigger { border-color: #bdbdbd; background: #eaeaea; }
+.remote-shell--theme-light .composer-menu__trigger > svg, .remote-shell--theme-light .composer-menu__label { color: #7b7b7b; }
+.remote-shell--theme-light .composer-menu__popover { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 16px 35px rgba(40, 40, 40, .12), inset 0 1px 0 #fff; }
+.remote-shell--theme-light .composer-menu__option { color: #505050; }
+.remote-shell--theme-light .composer-menu__option:hover, .remote-shell--theme-light .composer-menu__option--selected { background: #eaeaea; color: #303030; }
+.remote-shell--theme-light .composer-menu__option > svg { color: #666; }
+.remote-shell--theme-light .send-button:not(:disabled) { background: #444; color: #fff; }
+.remote-shell--theme-light .stop-button, .remote-shell--theme-light .attach-button { border-color: #d8d8d8; background: #f4f4f4; color: #4b4b4b; }
+.remote-shell--theme-light .send-button:disabled, .remote-shell--theme-light .attach-button:disabled, .remote-shell--theme-light .attach-button--disabled { background: #e9e9e9; color: #999; }
+.remote-shell--theme-light .composer-menu__empty { color: #7d7d7d; }
+.remote-shell--theme-light .workspace-explorer, .remote-shell--theme-light .workspace-file-preview-panel { border-color: #e4e4e4; background: #f1f1f1; }
+.remote-shell--theme-light .workspace-explorer__header, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { border-color: #e2e2e2; }
+.remote-shell--theme-light .workspace-explorer__header strong { color: #303030; }
+.remote-shell--theme-light .workspace-explorer__eyebrow, .remote-shell--theme-light .workspace-explorer__root, .remote-shell--theme-light .workspace-explorer__footer { color: #7b7b7b; }
+.remote-shell--theme-light .workspace-explorer__root-form input { border-color: #d8d8d8; background: #fafafa; color: #333; }
+.remote-shell--theme-light .workspace-explorer__root-form input::placeholder { color: #888; }
+.remote-shell--theme-light .workspace-explorer__root-open, .remote-shell--theme-light .workspace-explorer__root-actions button { border-color: #d8d8d8; background: #fafafa; color: #555; }
+.remote-shell--theme-light .workspace-explorer__entry { color: #555; }
+.remote-shell--theme-light .workspace-explorer__load-more { color: #686868; }
+.remote-shell--theme-light .workspace-explorer__load-more:hover:not(:disabled) { background: #e8e8e8; color: #303030; }
+.remote-shell--theme-light .workspace-explorer__entry:hover { border-color: #d8d8d8; background: #e8e8e8; color: #303030; }
+.remote-shell--theme-light .workspace-explorer__entry--selected { border-color: #bdbdbd; background: #dedede; color: #303030; }
+.remote-shell--theme-light .workspace-explorer__entry small { color: #8a8a8a; }
+.remote-shell--theme-light .workspace-explorer__entry svg { color: #707070; }
 .remote-shell--theme-light .workspace-explorer__entry--directory svg { color: #a78352; }
-.remote-shell--theme-light .workspace-explorer__loading, .remote-shell--theme-light .workspace-explorer__empty { color: #7d8792; }
-.remote-shell--theme-light .workspace-explorer__add { border-color: #cbd6e2; color: #6c86ad; }
-.remote-shell--theme-light .workspace-explorer__add:hover { border-color: #9eb5d1; background: #e6ecf2; color: #526f99; }
-.remote-shell--theme-light .workspace-file-preview__toolbar { border-color: #e0e5eb; }
-.remote-shell--theme-light .workspace-file-preview__toolbar > code { color: #52606d; }
-.remote-shell--theme-light .workspace-file-preview__copy { border-color: #d2dae4; background: #f8fafc; color: #52606d; }
-.remote-shell--theme-light .workspace-file-preview__code { background: #f8fafc; color: #263340; }
-.remote-shell--theme-light .workspace-file-preview__editor { background: #f8fafc; color: #263340; }
-.remote-shell--theme-light .workspace-file-preview__line-number { color: #8994a0; }
+.remote-shell--theme-light .workspace-explorer__loading, .remote-shell--theme-light .workspace-explorer__empty { color: #777; }
+.remote-shell--theme-light .workspace-explorer__add { border-color: #d0d0d0; color: #666; }
+.remote-shell--theme-light .workspace-explorer__add:hover { border-color: #b5b5b5; background: #e8e8e8; color: #505050; }
+.remote-shell--theme-light .workspace-file-preview__toolbar { border-color: #e2e2e2; }
+.remote-shell--theme-light .workspace-file-preview__toolbar > code { color: #555; }
+.remote-shell--theme-light .workspace-file-preview__copy { border-color: #d8d8d8; background: #fafafa; color: #555; }
+.remote-shell--theme-light .workspace-file-preview__code { background: #fafafa; color: #303030; }
+.remote-shell--theme-light .workspace-file-preview__editor { background: #fafafa; color: #303030; }
+.remote-shell--theme-light .workspace-file-preview__line-number { color: #898989; }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-comment, .hljs-quote, .hljs-doctag) { color: #6a737d; }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-meta-keyword) { color: #d73a49; }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-string, .hljs-regexp, .hljs-meta-string, .hljs-template-tag) { color: #032f62; }
