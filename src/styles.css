@@ -785,6 +785,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .file-change-card { --file-change-surface: #ffffff; --file-change-row: #ffffff; --file-change-border: #e3e3e6; --file-change-divider: #ededee; --file-change-icon-surface: #f7f7f8; --file-change-icon: #69696f; --file-change-title: #303034; --file-change-copy: #58585e; --file-change-muted: #7d7d84; --file-change-control: #fafafb; --file-change-control-border: #e2e2e5; --file-change-control-hover: #f2f2f4; --file-change-control-hover-border: #d2d2d6; --file-change-control-hover-text: #29292d; --file-change-code: #fafafa; --file-change-code-text: #3e3e43; --file-change-line-number: #8b8b92; --file-change-more: #ffffff; --file-change-added: #338b43; --file-change-deleted: #d34f49; --file-change-added-background: rgba(64, 153, 81, .12); --file-change-added-marker: rgba(54, 146, 72, .72); --file-change-added-text: #235b31; --file-change-deleted-background: rgba(204, 72, 67, .1); --file-change-deleted-marker: rgba(204, 72, 67, .7); --file-change-deleted-text: #8f302d; box-shadow: 0 1px 2px rgba(30, 30, 35, .05); }
 .remote-shell--theme-light .file-change-card--inProgress { border-color: #c5cedd; box-shadow: 0 1px 2px rgba(30, 30, 35, .06), 0 0 0 1px rgba(117, 136, 178, .08); }
 .remote-shell--theme-light .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.remote-shell--theme-light .operation-log { border-color: #e2e2e2; background: #fff; color: #383838; }
+.remote-shell--theme-light .operation-log > summary > svg { color: #777; }
+.remote-shell--theme-light .operation-log > summary > span { color: #303030; }
+.remote-shell--theme-light .operation-log > summary > small, .remote-shell--theme-light .operation-log__item > small { color: #777; }
+.remote-shell--theme-light .operation-log__item { border-color: #ededed; }
+.remote-shell--theme-light .operation-log__status { color: #777; }
+.remote-shell--theme-light .operation-log__item--running .operation-log__status { color: #6479a4; }
+.remote-shell--theme-light .operation-log__item--completed .operation-log__status { color: #438453; }
+.remote-shell--theme-light .operation-log__item--failed .operation-log__status { color: #b44b45; }
+.remote-shell--theme-light .operation-log__item--stopped .operation-log__status { color: #99754b; }
+.remote-shell--theme-light .operation-log__content strong { color: #383838; }
+.remote-shell--theme-light .operation-log__content code { color: #686868; }
 .remote-shell--theme-light .welcome-state::before, .remote-shell--theme-light .message-composer::before { background: none; }
 .remote-shell--theme-light .chat-message__content, .remote-shell--theme-light .chat-message__meta { color: #353535; }
 .remote-shell--theme-light .chat-message__timing, .remote-shell--theme-light .chat-message__sent-at { color: #707070; }
