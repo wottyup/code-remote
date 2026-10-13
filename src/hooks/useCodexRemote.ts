@@ -20,6 +20,7 @@ import { canUseCachedThreadHistory } from '../lib/threadHistoryPolicy'
 import { readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
+import { visibleQueuedMessages } from '../lib/sharedQueueVisibility'
 
 interface ApprovalRequest {
   requestId: string | number
@@ -1080,6 +1081,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [serverQueuedMessagesByThread, setServerQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const serverQueuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
   const serverQueueFetchVersion = useRef(new Map<string, number>())
+  const pendingServerQueueRemovals = useRef(new Map<string, Set<string>>())
   const [pinRevision, setPinRevision] = useState(0)
   // A restored queue may start only after a fresh thread/read confirms that
   // the matching Codex turn is idle. Cached UI alone is not authoritative.
@@ -1133,22 +1135,32 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const editingQueuedMessageThreadById = useRef(new Map<string, string>())
   const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
 
+  const publishServerQueue = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
+    serverQueuedMessagesByThreadRef.current = { ...serverQueuedMessagesByThreadRef.current, [threadId]: queue }
+    const pendingRemovals = pendingServerQueueRemovals.current.get(threadId)
+    const visibleQueue = visibleQueuedMessages(queue, pendingRemovals)
+    setServerQueuedMessagesByThread((current) => ({ ...current, [threadId]: visibleQueue }))
+  }, [])
+
+  const applyServerQueueResponse = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    publishServerQueue(threadId, queue)
+  }, [publishServerQueue])
+
   const refreshServerQueue = useCallback(async (threadId: string) => {
     const revision = (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1
     serverQueueFetchVersion.current.set(threadId, revision)
     try {
       const result = await codexRemoteClient.queuedMessages(token, threadId)
       if (serverQueueFetchVersion.current.get(threadId) !== revision) return
-      const next = { ...serverQueuedMessagesByThreadRef.current, [threadId]: result.queue }
-      serverQueuedMessagesByThreadRef.current = next
-      setServerQueuedMessagesByThread(next)
+      publishServerQueue(threadId, result.queue)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (reason instanceof RemoteApiError && reason.status === 404) {
         setError('电脑端服务尚未加载共享排队接口，请重启 Codex Remote 后端。')
       }
     }
-  }, [onUnauthorized, token])
+  }, [onUnauthorized, publishServerQueue, token])
 
   useEffect(() => {
     if (!enabled || !activeThread?.id) return
@@ -2312,7 +2324,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const sharedQueueAction = useCallback(async (threadId: string, action: 'edit/begin' | 'edit/end' | 'remove' | 'send-now', messageId: string) => {
     try {
       const result = await codexRemoteClient.queueAction(token, threadId, action, messageId, queueControllerId.current)
-      void refreshServerQueue(threadId)
+      applyServerQueueResponse(threadId, result.queue)
       if (action === 'send-now' && result.sent && activeThreadId.current === threadId) {
         void loadThread(threadId, ++historyRevision.current, true)
       }
@@ -2328,7 +2340,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       void refreshServerQueue(threadId)
       return false
     }
-  }, [loadThread, onUnauthorized, refreshServerQueue, token])
+  }, [applyServerQueueResponse, loadThread, onUnauthorized, refreshServerQueue, token])
 
   const sharedBeginQueuedEdit = useCallback(async (messageId: string) => {
     const threadId = activeThreadId.current
@@ -2345,7 +2357,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const text = input.prompt.trim()
     const documents = input.documents ?? []
     try {
-      await codexRemoteClient.updateQueuedMessage(token, threadId, {
+      const result = await codexRemoteClient.updateQueuedMessage(token, threadId, {
         ...previous,
         text,
         requestText: queuedRequestText(text, documents),
@@ -2354,7 +2366,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         sendAttempt: undefined,
         editing: undefined,
       })
-      void refreshServerQueue(threadId)
+      applyServerQueueResponse(threadId, result.queue)
       setError(null)
       return true
     } catch (reason) {
@@ -2363,7 +2375,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       void refreshServerQueue(threadId)
       return false
     }
-  }, [onUnauthorized, refreshServerQueue, token])
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
 
   const sharedEndQueuedEdit = useCallback(async (messageId: string) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId) ?? activeThreadId.current
@@ -2375,8 +2387,32 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const sharedRemoveQueuedMessage = useCallback(async (messageId: string) => {
     const threadId = activeThreadId.current
-    return threadId ? sharedQueueAction(threadId, 'remove', messageId) : false
-  }, [sharedQueueAction])
+    if (!threadId) return false
+    const pending = pendingServerQueueRemovals.current.get(threadId) ?? new Set<string>()
+    if (pending.has(messageId)) return false
+    pending.add(messageId)
+    pendingServerQueueRemovals.current.set(threadId, pending)
+    // Invalidate older reads before hiding the item so they cannot restore it
+    // while a slow mobile request is still in flight.
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    publishServerQueue(threadId, serverQueuedMessagesByThreadRef.current[threadId] ?? [])
+    try {
+      const result = await codexRemoteClient.queueAction(token, threadId, 'remove', messageId, queueControllerId.current)
+      pending.delete(messageId)
+      if (pending.size === 0) pendingServerQueueRemovals.current.delete(threadId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      pending.delete(messageId)
+      if (pending.size === 0) pendingServerQueueRemovals.current.delete(threadId)
+      publishServerQueue(threadId, serverQueuedMessagesByThreadRef.current[threadId] ?? [])
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '移除排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, publishServerQueue, refreshServerQueue, token])
 
   const sharedSendQueuedMessageNow = useCallback(async (messageId: string) => {
     const threadId = activeThreadId.current
@@ -3238,24 +3274,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!thread) return false
     if (sharedQueueAuthoritative) {
       try {
-        const result = await codexRemoteClient.enqueueMessage(token, thread.id, payload)
-        void refreshServerQueue(thread.id)
+        const result = await codexRemoteClient.submitMessage(token, thread.id, payload)
+        applyServerQueueResponse(thread.id, result.queue)
         setError(null)
-        if (!isRunning && activeTurnId.current === null && result.queue[0]?.id === payload.id && !result.queue[0].sendAttempt) {
-          void codexRemoteClient.startQueuedIfIdle(token, thread.id, payload.id).then((started) => {
-            void refreshServerQueue(thread.id)
-            if (started.sent && activeThreadId.current === thread.id) {
-              void loadThread(thread.id, ++historyRevision.current, true)
-            }
-          }).catch((reason) => {
-            if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-            void refreshServerQueue(thread.id)
-          })
+        if (result.sent && activeThreadId.current === thread.id) {
+          void loadThread(thread.id, ++historyRevision.current, true)
         }
         return true
       } catch (reason) {
         if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-        setError(reason instanceof Error ? reason.message : '无法保存排队消息')
+        setError(reason instanceof RemoteApiError && reason.status === 404
+          ? '电脑端服务尚未加载新的发送接口，请重启 Codex Remote 后端。'
+          : isAmbiguousNetworkFailure(reason)
+            ? '连接中断，发送结果尚未确认。请先核对聊天记录和排队消息，避免重复发送。'
+            : reason instanceof Error ? reason.message : '消息发送失败')
+        void refreshServerQueue(thread.id)
         return false
       }
     }
@@ -3381,7 +3414,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeThread, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from codex_remote.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
+from codex_remote.codex_app_server import CodexRuntimeError
 from codex_remote.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 
@@ -197,6 +198,61 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     def endpoint(self, path: str):
         return next(route.endpoint for route in self.app.routes if getattr(route, "path", None) == path)
+
+    async def test_idle_submit_starts_immediately_and_retry_does_not_send_twice(self) -> None:
+        submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
+        codex = self.app.state.codex
+        codex._active_turn_id = AsyncMock(return_value=None)
+        codex.read_thread = AsyncMock(return_value={"turns": [{"id": "previous", "status": "completed"}]})
+        codex.resume_thread = AsyncMock(return_value={"id": "thread"})
+        self.app.state.shared_queue.send = AsyncMock(return_value="new-turn")
+        body = QueuedMessageRequest(**message("queued-idle", "send directly"))
+
+        first = await submit("thread", body)
+        retry = await submit("thread", body)
+
+        self.assertEqual(first, {"sent": True, "queue": []})
+        self.assertEqual(retry, first)
+        self.app.state.shared_queue.send.assert_awaited_once()
+        self.assertFalse(self.app.state.shared_queue.send.await_args.args[2])
+
+    async def test_busy_submit_and_later_messages_preserve_fifo(self) -> None:
+        submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
+        codex = self.app.state.codex
+        codex._active_turn_id = AsyncMock(return_value="running-turn")
+        self.app.state.shared_queue.send = AsyncMock(return_value="new-turn")
+
+        first = await submit("thread", QueuedMessageRequest(**message("queued-first", "first")))
+        codex._active_turn_id.return_value = None
+        second = await submit("thread", QueuedMessageRequest(**message("queued-second", "second")))
+
+        self.assertFalse(first["sent"])
+        self.assertFalse(second["sent"])
+        self.assertEqual([item["id"] for item in second["queue"]], ["queued-first", "queued-second"])
+        self.app.state.shared_queue.send.assert_not_awaited()
+
+    async def test_submit_does_not_skip_an_edited_queue_head(self) -> None:
+        submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
+        store = self.app.state.shared_state
+        store.enqueue("thread", message("queued-first", "being edited"))
+        store.edit("thread", "queued-first", True, "owner-one")
+        self.app.state.shared_queue.send = AsyncMock(return_value="new-turn")
+
+        result = await submit("thread", QueuedMessageRequest(**message("queued-second", "later")))
+
+        self.assertFalse(result["sent"])
+        self.assertEqual([item["id"] for item in result["queue"]], ["queued-first", "queued-second"])
+        self.app.state.shared_queue.send.assert_not_awaited()
+
+    async def test_unavailable_codex_keeps_submitted_message_durable(self) -> None:
+        submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
+        self.app.state.codex._active_turn_id = AsyncMock(side_effect=CodexRuntimeError("temporarily offline"))
+        body = QueuedMessageRequest(**message("queued-offline", "wait safely"))
+
+        result = await submit("thread", body)
+
+        self.assertFalse(result["sent"])
+        self.assertEqual([item["id"] for item in result["queue"]], ["queued-offline"])
 
     async def test_queue_edit_and_pin_endpoints_share_persisted_state(self) -> None:
         enqueue = self.endpoint("/api/v1/codex/queue/{thread_id}/enqueue")
