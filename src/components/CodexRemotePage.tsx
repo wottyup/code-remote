@@ -34,6 +34,7 @@ import { codexRemoteClient, type CodexApprovalPolicy, type CodexDocumentAttachme
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
 interface Props {
@@ -75,7 +76,6 @@ const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
-const maxThemeImageDataUrlLength = 1_450_000
 const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
@@ -139,24 +139,6 @@ interface ComposerPreferences {
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
-
-type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
-
-export interface ThemePreferences {
-  theme: AppTheme
-  customBackgroundColor: string
-  customTextColor: string
-  customBackgroundTransparency: number
-  customBackgroundImage?: string
-}
-
-const themePreferencesStorageKey = 'codex-remote.theme-preferences'
-const defaultThemePreferences: ThemePreferences = {
-  theme: 'dark',
-  customBackgroundColor: '#4b5563',
-  customTextColor: '#f1f5f9',
-  customBackgroundTransparency: 0,
-}
 
 function workspacePanelsWidthLimit(previewOpen = false) {
   if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
@@ -326,76 +308,6 @@ function workspacePathsMissingFromDraft(draft: string, paths: string[]) {
     seen.add(path)
     return true
   })
-}
-
-function normalizeHexColor(value: unknown, fallback: string) {
-  return typeof value === 'string' && /^#[\da-f]{6}$/i.test(value) ? value.toUpperCase() : fallback
-}
-
-function normalizeTransparency(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
-}
-
-function normalizeThemeBackgroundImage(value: unknown) {
-  if (typeof value !== 'string') return undefined
-  return /^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+$/.test(value) ? value : undefined
-}
-
-function isCompactThemeBackgroundImage(value: string) {
-  return value.length <= maxThemeImageDataUrlLength && Boolean(normalizeThemeBackgroundImage(value))
-}
-
-export function readThemePreferences(): ThemePreferences {
-  if (typeof window === 'undefined') return defaultThemePreferences
-  try {
-    const value = window.localStorage.getItem(themePreferencesStorageKey)
-    if (!value) return defaultThemePreferences
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' ? parsed.theme : defaultThemePreferences.theme
-    const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
-    return {
-      theme,
-      customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
-      customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
-      customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
-      ...(customBackgroundImage ? { customBackgroundImage } : {}),
-    }
-  } catch {
-    return defaultThemePreferences
-  }
-}
-
-function rgbaFromHex(hex: string, alpha: number) {
-  const value = normalizeHexColor(hex, '#4b5563').slice(1)
-  const red = Number.parseInt(value.slice(0, 2), 16)
-  const green = Number.parseInt(value.slice(2, 4), 16)
-  const blue = Number.parseInt(value.slice(4, 6), 16)
-  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
-}
-
-export function saveThemePreferences(preferences: ThemePreferences) {
-  try {
-    window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(preferences))
-  } catch {
-    // Theme preferences still apply for the current session when storage is unavailable.
-  }
-}
-
-export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
-  const customBackgroundOpacity = (100 - preferences.customBackgroundTransparency) / 100
-  return {
-    '--custom-theme-background': preferences.customBackgroundColor,
-    '--custom-theme-background-opacity': customBackgroundOpacity,
-    '--custom-theme-background-image': preferences.customBackgroundImage
-      ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + preferences.customBackgroundImage + '")'
-      : 'none',
-    '--custom-theme-text-color': preferences.customTextColor,
-    '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
-    '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
-    '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
-    '--custom-theme-panel-blur': '8px',
-  } as CSSProperties
 }
 
 function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {

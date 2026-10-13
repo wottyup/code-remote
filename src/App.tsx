@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { CodexRemotePage, readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './components/CodexRemotePage'
+import { CodexRemotePage } from './components/CodexRemotePage'
 import { PairingPage } from './components/PairingPage'
 import { codexRemoteClient } from './lib/codexRemoteClient'
+import { readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './lib/themePreferences'
 
 const STORAGE_KEY = 'codex-remote-token'
 
