@@ -38,11 +38,11 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
-import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
-import { createThreadTranscript, threadTranscriptFilename, truncateThreadTranscriptForAttachment } from '../lib/threadTranscript'
+import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
 interface Props {
@@ -128,12 +128,6 @@ function formatTurnDuration(durationMs: number) {
   if (minutes > 0) return `${minutes}分${seconds}秒`
   return `${seconds}秒`
 }
-function truncateAttachmentText(value: string, limit: number, marker: string) {
-  if (value.length <= limit) return value
-  if (limit <= marker.length) return value.slice(0, limit)
-  return `${value.slice(0, limit - marker.length)}${marker}`
-}
-
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
@@ -1162,14 +1156,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }
           const result = await readDocumentAttachment(file)
           parsed.push({ name: result.name, content: result.content })
-          if (result.truncated) notices.push(`${file.name} 内容较长，已截取前 ${maxDocumentTextLength.toLocaleString()} 个字符。`)
+          if (result.truncated) notices.push(`${file.name} 内容较多，受文件解析范围限制，部分内容未提取。`)
         } catch (reason) {
           notices.push(`${file.name || '文件'}：${reason instanceof Error ? reason.message : '读取失败。'}`)
         }
       }
 
       let nextDocuments = [...attachedDocumentsRef.current]
-      let totalCharacters = nextDocuments.reduce((total, item) => total + item.content.length, 0)
       for (const item of parsed) {
         if (nextDocuments.some((current) => item.sourceFileId
           ? current.sourceFileId === item.sourceFileId
@@ -1182,18 +1175,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           nextDocuments.push(item)
           continue
         }
-        const remaining = maxDocumentTextPerTurn - totalCharacters
-        if (remaining <= 0) {
-          notices.push(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
-          break
-        }
-        const marker = '\n\n[已达到单条消息文档文字上限，后续内容未附加]'
-        const content = truncateAttachmentText(item.content, remaining, marker)
-        if (item.content.length > remaining) {
-          notices.push(`已达到单条消息 ${maxDocumentTextPerTurn.toLocaleString()} 字符上限，后续文件内容未附加。`)
-        }
-        nextDocuments.push({ ...item, content })
-        totalCharacters += content.length
+        nextDocuments.push(item)
       }
       if (nextDocuments !== attachedDocumentsRef.current) {
         attachedDocumentsRef.current = nextDocuments
@@ -1458,17 +1440,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError(null)
       return true
     }
-    const total = numberedCurrent.reduce((count, item) => count + item.content.length, 0)
-    const remaining = maxDocumentTextPerTurn - total
-    if (remaining <= 0) {
-      setAttachmentError(`单条消息提取的文档文字最多 ${maxDocumentTextPerTurn.toLocaleString()} 个字符。`)
-      return false
-    }
-    const content = truncateAttachmentText(nextDocument.content, remaining, '\n\n[已达到单条消息文档文字上限，后续内容未附加]')
-    const next = [...numberedCurrent, { ...nextDocument, content }]
+    const next = [...numberedCurrent, nextDocument]
     attachedDocumentsRef.current = next
     setAttachedDocuments(next)
-    setAttachmentError(nextDocument.content.length > remaining ? `单条消息最多附加 ${maxDocumentTextPerTurn.toLocaleString()} 个字符，文档内容已截取。` : null)
+    setAttachmentError(null)
     return true
   }
 
@@ -3323,20 +3298,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadContextAction({ threadId: thread.id, type: 'quote' })
     try {
       const transcript = await readThreadTranscript(thread)
-      const attachment = truncateThreadTranscriptForAttachment(transcript, maxDocumentTextLength)
       const composer = composerHandle.current
       if (!composer) throw new Error('当前输入框尚未准备好，请稍后重试。')
       const added = composer.addDocumentAttachment({
         name: threadTranscriptFilename(thread, '对话引用'),
-        content: attachment.content,
+        content: transcript,
       })
       setThreadContextMenu(null)
       setSidebarOpen(false)
       if (!added) {
-        showPaneNotice('引用未加入：该对话已在输入框中，或附件数量/文字容量已达上限。')
+        showPaneNotice('引用未加入：该对话已在输入框中，或文档数量已达上限。')
         return
       }
-      showPaneNotice(attachment.truncated ? '对话引用已加入输入框（内容过长，已截断）' : '对话引用已加入输入框')
+      showPaneNotice('对话引用已加入输入框')
     } catch (reason) {
       showPaneNotice(reason instanceof Error ? `引用失败：${reason.message}` : '引用失败，请稍后重试。')
     } finally {

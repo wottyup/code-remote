@@ -37,7 +37,6 @@ from .codex_app_server import (
     CodexThreadBusyError,
     CodexThreadNotFoundError,
 )
-from .limits import MAX_TURN_PROMPT_CHARACTERS
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 logger = logging.getLogger(__name__)
@@ -217,7 +216,7 @@ class TurnImage(BaseModel):
 
 
 class TurnRequest(BaseModel):
-    prompt: str = Field(default="", max_length=MAX_TURN_PROMPT_CHARACTERS)
+    prompt: str = Field(default="")
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
@@ -227,7 +226,7 @@ class TurnRequest(BaseModel):
 
 
 class SteerRequest(BaseModel):
-    prompt: str = Field(default="", max_length=MAX_TURN_PROMPT_CHARACTERS)
+    prompt: str = Field(default="")
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -241,14 +240,14 @@ class QueuedImage(BaseModel):
 
 class QueuedDocument(BaseModel):
     name: str = Field(min_length=1, max_length=512)
-    content: str = Field(max_length=240_000)
+    content: str
     sourceFileId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{24,64}$")
 
 
 class QueuedMessageRequest(BaseModel):
     id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     text: str = Field(max_length=32_000)
-    requestText: str = Field(max_length=MAX_TURN_PROMPT_CHARACTERS)
+    requestText: str
     images: list[QueuedImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     documents: list[QueuedDocument] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     createdAt: str = Field(min_length=1, max_length=128)
@@ -646,13 +645,7 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
         )
     if not blocks:
         return prompt
-    combined = "\n\n".join(([prompt.strip()] if prompt.strip() else []) + blocks)
-    if len(combined) > MAX_TURN_PROMPT_CHARACTERS:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"消息和 PDF 附件信息合计超过 {MAX_TURN_PROMPT_CHARACTERS:,} 个字符，请缩短消息后重试。",
-        )
-    return combined
+    return "\n\n".join(([prompt.strip()] if prompt.strip() else []) + blocks)
 
 
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
@@ -901,7 +894,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.2.0-dev.7", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.3.0-dev.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests

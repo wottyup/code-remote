@@ -1,7 +1,5 @@
 export const maxDocumentFileSize = 20 * 1024 * 1024
-export const maxDocumentTextLength = 40_000
 export const maxDocumentsPerTurn = 8
-export const maxDocumentTextPerTurn = 120_000
 
 const documentExtensions = new Set([
   'pdf', 'doc', 'docx', 'docm', 'dotx', 'dotm', 'xls', 'xlsx', 'xlsm', 'xlt', 'xltx', 'xltm', 'ppt', 'pptx', 'pptm', 'potx', 'potm',

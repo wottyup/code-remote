@@ -1,9 +1,8 @@
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
-import { documentExtensionOf, isPlainTextDocumentExtension, isSpecialTextDocumentName, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength } from './documentAttachmentRules'
+import { documentExtensionOf, isPlainTextDocumentExtension, isSpecialTextDocumentName, isSupportedDocumentFile, maxDocumentFileSize } from './documentAttachmentRules'
 
 const zipExpandedSizeLimit = 40 * 1024 * 1024
 const builderTruncationMarker = '\n\n[[CODEX_REMOTE_TRUNCATED]]'
-const userTruncationMarker = '\n\n[内容过长，已截断，仅发送前 40,000 个字符]'
 
 export interface ParsedDocumentAttachment {
   name: string
@@ -11,18 +10,12 @@ export interface ParsedDocumentAttachment {
   truncated: boolean
 }
 
-class LimitedTextBuilder {
+class DocumentTextBuilder {
   text = ''
   truncated = false
 
   append(value: string) {
     if (!value || this.truncated) return false
-    const remaining = maxDocumentTextLength - this.text.length
-    if (value.length > remaining) {
-      this.text += value.slice(0, remaining)
-      this.truncated = true
-      return false
-    }
     this.text += value
     return true
   }
@@ -34,13 +27,8 @@ class LimitedTextBuilder {
 
   finish() {
     if (!this.truncated) return this.text.trim()
-    return `${this.text.slice(0, Math.max(0, maxDocumentTextLength - builderTruncationMarker.length))}${builderTruncationMarker}`.trim()
+    return `${this.text}${builderTruncationMarker}`.trim()
   }
-}
-
-function addTruncationMarker(value: string, limit: number, marker: string) {
-  if (limit <= marker.length) return value.slice(0, limit)
-  return `${value.slice(0, Math.min(value.length, limit - marker.length))}${marker}`
 }
 
 function fileExtension(name: string) {
@@ -161,7 +149,7 @@ function parsePresentation(buffer: ArrayBuffer) {
     return leftIndex - rightIndex
   })
   if (!slides.length) throw new Error('PPTX 文件中找不到幻灯片文字。')
-  const output = new LimitedTextBuilder()
+  const output = new DocumentTextBuilder()
   for (const [path, xml] of slides) {
     if (!output.line(`[${path.split('/').at(-1)}]`)) break
     for (const paragraph of officeParagraphs(xml)) if (!output.line(paragraph)) break
@@ -174,7 +162,7 @@ function parseOpenDocumentXml(source: string, spreadsheet: boolean) {
   const document = parseXml(source)
   if (!spreadsheet) return Array.from(document.getElementsByTagNameNS('*', 'p'), (paragraph) => xmlText(paragraph).trim()).filter(Boolean).join('\n')
 
-  const output = new LimitedTextBuilder()
+  const output = new DocumentTextBuilder()
   const rows = Array.from(document.getElementsByTagNameNS('*', 'table-row'))
   for (const row of rows) {
     const cells = Array.from(row.children).filter((cell) => cell.localName === 'table-cell' || cell.localName === 'covered-table-cell')
@@ -239,7 +227,7 @@ async function parseSpreadsheet(buffer: ArrayBuffer) {
     throw new Error('无法读取 Excel 文件；文件可能已损坏或设有打开密码。')
   }
   if (!workbook.SheetNames.length) throw new Error('Excel 文件中没有工作表。')
-  const output = new LimitedTextBuilder()
+  const output = new DocumentTextBuilder()
   const includedSheets = workbook.SheetNames.slice(0, spreadsheetSheetLimit)
   for (const sheetName of includedSheets) {
     if (!output.line(`[工作表：${sheetName}]`)) break
@@ -273,7 +261,7 @@ async function parsePdf(buffer: ArrayBuffer) {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
     loading = pdfjs.getDocument({ data: new Uint8Array(buffer) })
     const document = await loading.promise
-    const output = new LimitedTextBuilder()
+    const output = new DocumentTextBuilder()
     const lastPage = Math.min(document.numPages, pdfPageLimit)
     for (let pageNumber = 1; pageNumber <= lastPage; pageNumber += 1) {
       const page = await document.getPage(pageNumber)
@@ -324,10 +312,9 @@ export async function readDocumentAttachment(file: File): Promise<ParsedDocument
   if (!content.trim()) throw new Error('没有提取到可读取的文字（扫描版 PDF 暂不支持 OCR）。')
   const parserTruncated = content.includes(builderTruncationMarker.trim())
   if (parserTruncated) content = content.replace(builderTruncationMarker.trim(), '')
-  const truncated = content.length > maxDocumentTextLength || parserTruncated
   return {
     name: file.name || 'document',
-    content: truncated ? addTruncationMarker(content, maxDocumentTextLength, userTruncationMarker) : content,
-    truncated,
+    content,
+    truncated: parserTruncated,
   }
 }

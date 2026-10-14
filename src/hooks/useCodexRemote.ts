@@ -136,10 +136,9 @@ const persistentThreadCacheWriteDelayMs = 600
 const persistentThreadCacheVersion = 1
 const threadMetadataFreshnessMs = 30_000
 const streamingRenderIntervalMs = 48
-const maxPersistedQueuedStorageCharacters = 3_500_000
+const maxPersistedQueuedImageCharacters = 12_000_000
 const maxPersistedQueuedThreads = 24
 const maxPersistedQueuedMessagesPerThread = 30
-const maxPersistedQueuedTextCharacters = 240_000
 
 interface PersistedActiveThread {
   threadId: string
@@ -390,7 +389,7 @@ function persistedQueuedImage(value: unknown): CodexImageAttachment | null {
   const mediaType = image.mediaType
   const data = image.data
   if (!name || (mediaType !== 'image/png' && mediaType !== 'image/jpeg' && mediaType !== 'image/webp' && mediaType !== 'image/gif')) return null
-  if (typeof data !== 'string' || data.length === 0 || data.length > maxPersistedQueuedStorageCharacters) return null
+  if (typeof data !== 'string' || data.length === 0 || data.length > maxPersistedQueuedImageCharacters) return null
   return { name, mediaType, data }
 }
 
@@ -402,7 +401,7 @@ function persistedQueuedDocument(value: unknown): CodexDocumentAttachment | unde
     if (!/^[A-Za-z0-9_-]{24,64}$/.test(document.sourceFileId) || !document.name || document.name.length > 512) return undefined
     return { name: document.name, content: '', sourceFileId: document.sourceFileId }
   }
-  if (!document.name || document.name.length > 512 || document.content.length > maxPersistedQueuedTextCharacters) return undefined
+  if (!document.name || document.name.length > 512) return undefined
   return { name: document.name, content: document.content }
 }
 
@@ -420,7 +419,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const id = typeof payload.id === 'string' ? payload.id : ''
   const text = typeof payload.text === 'string' ? payload.text : ''
   const createdAt = typeof payload.createdAt === 'string' ? payload.createdAt : ''
-  if (!id || id.length > 256 || text.length > maxPersistedQueuedTextCharacters || !createdAt || createdAt.length > 128) return null
+  if (!id || id.length > 256 || !createdAt || createdAt.length > 128) return null
   const images = Array.isArray(payload.images)
     ? payload.images.flatMap((image) => {
       const parsed = persistedQueuedImage(image)
@@ -463,7 +462,7 @@ function readPersistedQueuedMessages(): QueuedMessagesByThread {
   if (typeof window === 'undefined') return {}
   try {
     const value = window.localStorage.getItem(queuedMessagesStorageKey)
-    if (!value || value.length > maxPersistedQueuedStorageCharacters) return {}
+    if (!value) return {}
     const parsed = JSON.parse(value)
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
     const queues: QueuedMessagesByThread = {}
@@ -488,8 +487,8 @@ function persistQueuedMessages(queues: QueuedMessagesByThread) {
       window.localStorage.removeItem(queuedMessagesStorageKey)
       return
     }
-    const value = JSON.stringify(queues)
-    if (value.length > maxPersistedQueuedStorageCharacters) return
+    // Rebuild requestText during restoration so document bodies are stored only once.
+    const value = JSON.stringify(queues, (key, entry: unknown) => key === 'requestText' ? undefined : entry)
     window.localStorage.setItem(queuedMessagesStorageKey, value)
   } catch {
     // Queues remain usable in the current page if browser storage is blocked.
