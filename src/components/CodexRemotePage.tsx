@@ -2538,6 +2538,7 @@ interface RemoteChatPaneProps {
   token: string
   remote: CodexRemoteController
   active: boolean
+  showActiveFrame: boolean
   showPaneClose: boolean
   onActivate: () => void
   onClose: () => void
@@ -2555,6 +2556,7 @@ function RemoteChatPane({
   token,
   remote,
   active,
+  showActiveFrame,
   showPaneClose,
   onActivate,
   onClose,
@@ -2763,7 +2765,7 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -3928,6 +3930,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
+                    showActiveFrame={openPaneIndexes.length > 1}
                     showPaneClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
