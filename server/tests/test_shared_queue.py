@@ -99,6 +99,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.codex.read_thread.return_value = {"turns": [{"id": "original", "status": "inProgress"}]}
         self.send = AsyncMock(side_effect=["turn-one", "turn-two"])
         self.service = SharedQueueService(self.store, self.codex, self.send)
+        self.service._submit_can_steer = False
 
     async def test_phone_can_sleep_while_service_advances_fifo_after_completion(self) -> None:
         self.store.enqueue("thread", message("queued-first", "first"))
@@ -157,6 +158,17 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.service.send_now("thread", "queued-first", allow_steer=False, require_head=True))
         self.send.assert_awaited_once()
         self.assertFalse(self.send.await_args.args[2])
+
+    async def test_windows_submission_steers_an_active_turn_instead_of_queueing(self) -> None:
+        self.service._submit_can_steer = True
+        self.codex.read_thread.return_value = {"status": {"type": "inProgress"}}
+        self.codex._active_turn_id.return_value = "running-turn"
+
+        self.assertTrue(await self.service.submit("thread", message("steer-now", "add this now")))
+
+        self.assertEqual(self.store.queue("thread"), [])
+        self.send.assert_awaited_once()
+        self.assertTrue(self.send.await_args.args[2])
 
     async def test_idle_submission_is_never_published_as_waiting(self) -> None:
         deciding = asyncio.Event()
@@ -323,6 +335,7 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         }):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)
+        self.app.state.shared_queue._submit_can_steer = False
         self.app.state.codex.read_thread = AsyncMock(return_value={"status": {"type": "idle"}})
 
     def endpoint(self, path: str):
