@@ -38,7 +38,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
@@ -2676,6 +2676,8 @@ function RemoteChatPane({
       : connectionLabel[remote.connection]
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
+  const runningTimeline = remote.runningTurnId ? remote.activityTimelineByTurn[remote.runningTurnId] ?? [] : []
+  const runningOperationTimeline = runningTimeline.filter((entry) => entry.type === 'operation')
   const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
     const indexes = new Map<string, number>()
@@ -2744,9 +2746,12 @@ function RemoteChatPane({
               : []
             const showOperations = message.role === 'assistant'
               && (!message.turnId || lastAssistantMessageIndexByTurn.get(message.turnId) === index)
+            const activityTimeline = showOperations && message.turnId
+              ? remote.activityTimelineByTurn[message.turnId] ?? []
+              : []
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} operations={operations} showOperations={showOperations} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble message={message} operations={operations} activityTimeline={activityTimeline} showOperations={showOperations} copied={copiedMessageId === message.id} onCopy={onCopy} />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -2769,7 +2774,11 @@ function RemoteChatPane({
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
                 {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
               </div>
-              {!hasStreamingAssistant && runningOperations.length > 0 ? <OperationLog operations={runningOperations} initiallyOpen /> : null}
+              {!hasStreamingAssistant && runningOperations.length > 0 ? (
+                runningOperationTimeline.length > 0
+                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} initiallyOpen />
+                  : <OperationLog operations={runningOperations} initiallyOpen />
+              ) : null}
             </div>
           ) : null}
         </div>
@@ -4343,7 +4352,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   )
 })
 
-const OperationLog = memo(function OperationLog({ operations, initiallyOpen = false }: { operations: CodexOperation[]; initiallyOpen?: boolean }) {
+const OperationLog = memo(function OperationLog({ operations, initiallyOpen = false, title = '操作记录' }: { operations: CodexOperation[]; initiallyOpen?: boolean; title?: string }) {
   const [expanded, setExpanded] = useState(initiallyOpen)
   if (operations.length === 0) return null
   const runningCount = operations.filter((operation) => operation.status === 'running').length
@@ -4358,7 +4367,7 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
 
   return (
     <details className="operation-log" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ChevronDown size={13} /><span>操作记录</span><small>{statusText}</small></summary>
+      <summary><ChevronDown size={13} /><span>{title}</span><small>{statusText}</small></summary>
       <ul>
         {operations.map((operation) => (
           <li className={`operation-log__item operation-log__item--${operation.status}`} key={operation.id}>
@@ -4385,6 +4394,58 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
         ))}
       </ul>
     </details>
+  )
+})
+
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, initiallyOpen = false, showCodeCopy = true }: {
+  text: string
+  timeline: CodexActivityTimelineEntry[]
+  operations: CodexOperation[]
+  initiallyOpen?: boolean
+  showCodeCopy?: boolean
+}) {
+  const operationById = new Map(operations.map((operation) => [operation.id, operation]))
+  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] }> = []
+  let textOffset = 0
+  let messageCount = 0
+  let hasTextEntry = false
+
+  for (const entry of timeline) {
+    if (entry.type === 'message') {
+      if (entry.length <= 0) continue
+      hasTextEntry = true
+      if (messageCount > 0 && text.slice(textOffset, textOffset + 2) === '\n\n') textOffset += 2
+      const segment = text.slice(textOffset, textOffset + entry.length)
+      textOffset += segment.length
+      messageCount += 1
+      if (!segment) continue
+      blocks.push({ type: 'message', key: `message-${entry.itemId}`, text: segment })
+      continue
+    }
+
+    const operation = operationById.get(entry.operationId)
+    if (!operation) continue
+    const lastBlock = blocks.at(-1)
+    if (lastBlock?.type === 'operations') lastBlock.operations.push(operation)
+    else blocks.push({ type: 'operations', key: `operation-${operation.id}`, operations: [operation] })
+  }
+
+  if (text && !hasTextEntry) blocks.unshift({ type: 'message', key: 'message-fallback', text })
+  else if (textOffset < text.length) blocks.push({ type: 'message', key: 'message-trailing', text: text.slice(textOffset) })
+
+  if (blocks.length === 0) return null
+
+  return (
+    <div className="activity-timeline">
+      {blocks.map((block) => block.type === 'message'
+        ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators showCodeCopy={showCodeCopy} />
+        : <OperationLog
+          key={block.key}
+          operations={block.operations}
+          title={block.operations.length === 1 ? block.operations[0].label : `${block.operations.length} 个连续操作`}
+          initiallyOpen={initiallyOpen || block.operations.some((operation) => operation.status === 'running')}
+        />)}
+    </div>
   )
 })
 
@@ -4434,7 +4495,7 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, operations, showOperations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; showOperations: boolean; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const MessageBubble = memo(function MessageBubble({ message, operations, activityTimeline, showOperations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; activityTimeline: CodexActivityTimelineEntry[]; showOperations: boolean; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
@@ -4453,9 +4514,11 @@ const MessageBubble = memo(function MessageBubble({ message, operations, showOpe
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
-        {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+        {message.role === 'assistant' && activityTimeline.length > 0
+          ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} initiallyOpen={message.streaming} showCodeCopy={!message.streaming} />
+          : message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
-        {showOperations && operations.length > 0 ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
+        {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">
