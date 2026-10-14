@@ -855,6 +855,18 @@ function fileChangesFromThread(thread: { turns?: unknown[] }) {
   }, {})
 }
 
+function reconcileFileChangesFromThread(
+  current: FileChangesByTurn,
+  thread: { turns?: unknown[] },
+  preserveTurnId: string | null = null,
+) {
+  const historical = fileChangesFromThread(thread)
+  const liveChanges = preserveTurnId ? current[preserveTurnId] : undefined
+  return preserveTurnId && liveChanges?.length
+    ? mergeFileChangesByTurn(historical, { [preserveTurnId]: liveChanges })
+    : historical
+}
+
 function activityForItem(value: unknown): CodexActivity {
   if (!value || typeof value !== 'object') return { label: '正在处理' }
   const item = value as Record<string, unknown>
@@ -1640,9 +1652,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       cacheThreadSnapshot(loadedThread, loadedMessages, {
         ...latestTurnState(loadedThread),
         complete: true,
-        fileChangesByTurn: mergeFileChangesByTurn(
+        fileChangesByTurn: reconcileFileChangesFromThread(
           cachedThread?.fileChangesByTurn ?? {},
-          fileChangesFromThread(loadedThread),
+          loadedThread,
+          cachedThread?.running ? cachedThread.turnId : null,
         ),
         operationsByTurn: mergeOperationsByTurn(
           operationsFromThread(loadedThread),
@@ -1894,9 +1907,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (legacyDuplicateId) deliveredQueuedIds.add(legacyDuplicateId)
       const cachedMessages = preserveCurrentImages(loadedMessages, threadHistoryCache.current.get(thread.id)?.messages ?? [])
       const messagesWithLocalTiming = preserveCurrentImages(cachedMessages, messagesRef.current)
-      const historicalFileChangesByTurn = mergeFileChangesByTurn(
+      const snapshotTurnState = latestTurnState(thread)
+      const preservedFileChangeTurnId = preserveRunningTurnId
+        ?? (snapshotTurnState.running ? snapshotTurnState.turnId : null)
+      const historicalFileChangesByTurn = reconcileFileChangesFromThread(
         threadHistoryCache.current.get(thread.id)?.fileChangesByTurn ?? {},
-        fileChangesFromThread(thread),
+        thread,
+        preservedFileChangeTurnId,
       )
       const currentOperations = threadHistoryCache.current.get(thread.id)?.operationsByTurn ?? {}
       const historicalOperationsByTurn = mergeOperationsByTurn(
@@ -1904,7 +1921,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         thread.id === activeThreadId.current ? operationsByTurnRef.current : currentOperations,
       )
       if (persistActiveThread) persistActiveThreadCache(thread, messagesWithLocalTiming)
-      const historyTurnState = latestTurnState(thread)
+      const historyTurnState = snapshotTurnState
       const preserveStartedTurn = preserveRunningTurnId !== null && activeTurnId.current === preserveRunningTurnId
       const running = historyTurnState.running || (!historyTurnState.hasTurn && threadIsRunning(thread)) || preserveStartedTurn
       const latestTurnId = preserveStartedTurn

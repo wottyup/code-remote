@@ -2667,9 +2667,6 @@ function RemoteChatPane({
     })
     return indexes
   }, [remote.messages])
-  const unplacedFileChanges = useMemo(() => Object.entries(remote.fileChangesByTurn)
-    .filter(([turnId, changes]) => !lastMessageIndexByTurn.has(turnId) && turnId !== remote.runningTurnId && changes.length > 0), [lastMessageIndexByTurn, remote.fileChangesByTurn, remote.runningTurnId])
-
   return (
     <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
       <header className="remote-chat__header">
@@ -2711,7 +2708,6 @@ function RemoteChatPane({
               </Fragment>
             )
           })}
-          {unplacedFileChanges.map(([turnId, changes]) => <FileChangeCard key={`unplaced-file-changes-${turnId}`} changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} />)}
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
