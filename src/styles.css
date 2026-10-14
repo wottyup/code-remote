@@ -269,6 +269,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-delete-dialog__actions button:last-child { border-color: rgba(234, 114, 120, .5); background: #a53f46; color: #fff; }
 .workspace-file-context-menu { z-index: 100; min-width: 176px; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: calc(11px + var(--mobile-font-offset)); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-file-context-menu--light { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 15px 38px rgba(0, 0, 0, .16); }
+.workspace-file-context-menu--light .workspace-file-context-menu__name { color: #737373; }
+.workspace-file-context-menu--light button { color: #383838; }
+.workspace-file-context-menu--light button:hover:not(:disabled) { background: #ededed; color: #000; }
+.workspace-file-context-menu--light .workspace-selection-context-menu__note { border-color: #d4d4d4; background: #fff; color: #000; }
+.workspace-file-context-menu--light .workspace-selection-context-menu__note::placeholder { color: #888; }
 .workspace-selection-context-menu { width: min(300px, calc(100vw - 16px)); min-width: min(220px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; }
 .workspace-selection-context-menu .workspace-file-context-menu__name { max-width: 204px; }
 .workspace-selection-context-menu__note { width: 100%; min-height: 76px; max-height: min(160px, 30vh); box-sizing: border-box; padding: 8px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 7px; outline: 0; background: rgba(12, 15, 21, .8); color: #dfe5ef; font: 12px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(12px + var(--mobile-font-offset)); resize: vertical; }
