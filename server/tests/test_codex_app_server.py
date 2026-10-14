@@ -465,6 +465,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         child.stderr = asyncio.StreamReader()
         child.stderr.feed_eof()
         connected = asyncio.Event()
+        requests: list[tuple[str, dict[str, object]]] = []
 
         async def fake_connect(process: object) -> None:
             app_server._websocket = AsyncMock()
@@ -472,6 +473,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             connected.set()
 
         async def fake_request(method: str, params: dict[str, object], timeout: float) -> dict[str, object]:
+            requests.append((method, params))
             return {"ok": True}
 
         app_server._connect_windows_websocket = fake_connect  # type: ignore[method-assign]
@@ -485,6 +487,10 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             await app_server._start_runtime("codex.exe")
 
         self.assertTrue(connected.is_set())
+        initialize = next(params for method, params in requests if method == "initialize")
+        capabilities = initialize["capabilities"]
+        assert isinstance(capabilities, dict)
+        self.assertIs(capabilities["experimentalApi"], True)
         args = spawn.await_args.args
         kwargs = spawn.await_args.kwargs
         self.assertEqual(

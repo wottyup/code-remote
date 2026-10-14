@@ -1001,7 +1001,7 @@ class CodexAppServer:
                     "version": "0.2.0-dev.7",
                 },
                 "capabilities": {
-                    "experimentalApi": False,
+                    "experimentalApi": True,
                     "requestAttestation": False,
                 },
             }, timeout=20)
