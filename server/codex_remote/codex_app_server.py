@@ -16,6 +16,7 @@ from typing import Any, Literal
 
 from watchfiles import Change, DefaultFilter, awatch
 from .codex_history import CodexHistoryStore
+from .limits import MAX_TURN_PROMPT_CHARACTERS
 
 logger = logging.getLogger(__name__)
 
@@ -753,8 +754,8 @@ class CodexAppServer:
         approval_policy: ApprovalPolicy | None = None,
         cwd: Path | None = None,
     ) -> dict[str, Any]:
-        if len(prompt) > 32_000:
-            raise CodexRuntimeError("消息不能超过 32000 个字符")
+        if len(prompt) > MAX_TURN_PROMPT_CHARACTERS:
+            raise CodexRuntimeError(f"消息不能超过 {MAX_TURN_PROMPT_CHARACTERS:,} 个字符")
         images = image_paths or []
         if not prompt.strip() and not images:
             raise CodexRuntimeError("请填写消息或附加图片")
@@ -818,8 +819,8 @@ class CodexAppServer:
         image_paths: list[Path] | None = None,
     ) -> dict[str, Any]:
         """Append input to the current turn without starting a concurrent turn."""
-        if len(prompt) > 32_000:
-            raise CodexRuntimeError("消息不能超过 32000 个字符")
+        if len(prompt) > MAX_TURN_PROMPT_CHARACTERS:
+            raise CodexRuntimeError(f"消息不能超过 {MAX_TURN_PROMPT_CHARACTERS:,} 个字符")
         images = image_paths or []
         if not prompt.strip() and not images:
             raise CodexRuntimeError("请填写消息或附加图片")

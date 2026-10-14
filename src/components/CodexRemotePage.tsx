@@ -112,7 +112,6 @@ const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageEdge = 1_920
 const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
-const maxLongPasteChars = 24_000
 
 function formatMessageTimestamp(value: string | undefined) {
   if (!value) return null
@@ -1423,10 +1422,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const pastedText = event.clipboardData.getData('text/plain')
     if (pastedText.length < longPasteThreshold) return
     event.preventDefault()
-    if (pastedText.length > maxLongPasteChars) {
-      setAttachmentError(`粘贴内容过长，最多支持 ${maxLongPasteChars.toLocaleString()} 个字符。`)
-      return
-    }
     appendDocument({ name: 'pasted-content.md', content: pastedText })
   }
 
