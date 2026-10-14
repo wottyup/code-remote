@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   ArrowUp,
+  Bell,
+  BellOff,
   BookOpen,
   Check,
   ChevronDown,
@@ -45,6 +47,7 @@ import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile,
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
@@ -59,14 +62,9 @@ interface Props {
 
 declare global {
   interface Window {
-    CodexRemoteAndroid?: {
-      changeEndpoint?: () => void
-      copyToClipboard?: (text: string) => boolean
-      getComposerBottomInsetDp?: () => number
-      getStatusBarInsetDp?: () => number
-      setStatusBarDarkIcons?: (darkIcons: boolean) => void
-      showKeyboard?: () => void
-    }
+    CodexRemoteAndroid?: AndroidNotificationBridge
+    CodexRemoteOpenThread?: (threadId: string) => void
+    __codexRemotePendingThreadId?: string
     CodexRemoteHandleBack?: () => boolean
   }
 }
@@ -2881,6 +2879,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
+  const notifiedSystemEvents = useRef(new Set<string>())
+  const systemThreadOpener = useRef<(threadId: string) => void>(() => undefined)
   const paneGrid = useRef<HTMLDivElement>(null)
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
@@ -2889,6 +2889,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  const notifySystemOnce = useCallback((eventKey: string, title: string, body: string, threadId: string) => {
+    if (!themePreferences.systemNotificationsEnabled || notifiedSystemEvents.current.has(eventKey)) return false
+    if (!sendSystemNotification(title, body, threadId, eventKey)) return false
+    notifiedSystemEvents.current.add(eventKey)
+    if (notifiedSystemEvents.current.size > 256) {
+      const oldest = notifiedSystemEvents.current.values().next().value
+      if (typeof oldest === 'string') notifiedSystemEvents.current.delete(oldest)
+    }
+    return true
+  }, [themePreferences.systemNotificationsEnabled])
 
   function openThreadContextMenu(thread: CodexThread, x: number, y: number) {
     setThreadContextMenu({
@@ -3290,6 +3301,69 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => window.clearTimeout(timer)
   }, [remote0.latestThreadCompletion, remote1.latestThreadCompletion, remote2.latestThreadCompletion, remote3.latestThreadCompletion, remote4.latestThreadCompletion])
 
+  useEffect(() => {
+    const notifyWhileBackgrounded = () => {
+      if (!themePreferences.systemNotificationsEnabled) return
+      const android = window.CodexRemoteAndroid
+      const inBackground = android?.isAppInBackground?.() ?? document.visibilityState === 'hidden'
+      if (!inBackground) return
+
+      const now = Date.now()
+      for (const remote of remotes) {
+        const completion = remote.latestThreadCompletion
+        if (completion && now - completion.completedAt < 120_000) {
+          const thread = remote0.threads.find((item) => item.id === completion.threadId)
+            ?? remotes.find((item) => item.activeThread?.id === completion.threadId)?.activeThread
+          const title = thread ? titleOf(thread) : 'Codex Remote'
+          notifySystemOnce(
+            `completion:${completion.threadId}:${completion.completedAt}`,
+            `${title} 已完成回复`,
+            '点按通知查看对话。',
+            completion.threadId,
+          )
+        }
+
+        const approval = remote.approval
+        const thread = remote.activeThread
+        if (approval && thread) {
+          notifySystemOnce(
+            `approval:${thread.id}:${String(approval.requestId)}`,
+            `${titleOf(thread)} 需要批准`,
+            'Codex 正在等待你批准一项操作。',
+            thread.id,
+          )
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', notifyWhileBackgrounded)
+    window.addEventListener('codex-remote-app-background', notifyWhileBackgrounded)
+    notifyWhileBackgrounded()
+    return () => {
+      document.removeEventListener('visibilitychange', notifyWhileBackgrounded)
+      window.removeEventListener('codex-remote-app-background', notifyWhileBackgrounded)
+    }
+  }, [
+    notifySystemOnce,
+    remote0.latestThreadCompletion,
+    remote0.threads,
+    remote0.approval,
+    remote0.activeThread,
+    remote1.latestThreadCompletion,
+    remote1.approval,
+    remote1.activeThread,
+    remote2.latestThreadCompletion,
+    remote2.approval,
+    remote2.activeThread,
+    remote3.latestThreadCompletion,
+    remote3.approval,
+    remote3.activeThread,
+    remote4.latestThreadCompletion,
+    remote4.approval,
+    remote4.activeThread,
+    themePreferences.systemNotificationsEnabled,
+  ])
+
   useLayoutEffect(() => {
     const grid = paneGrid.current
     if (!grid) return
@@ -3450,6 +3524,30 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSelectedPaneIndex(targetIndex)
     await remotes[targetIndex].selectThread(thread)
   }
+
+  function openSystemNotificationThread(threadId: string) {
+    if (!threadId) return
+    if (settingsOpen) closeSettingsPanel()
+    setWorkspaceOpen(false)
+    const thread = remote0.threads.find((item) => item.id === threadId)
+      ?? remotes.find((remote) => remote.activeThread?.id === threadId)?.activeThread
+      ?? { id: threadId } as CodexThread
+    void selectThread(thread)
+  }
+
+  systemThreadOpener.current = openSystemNotificationThread
+
+  useEffect(() => {
+    const openRequestedThread = (threadId: string) => systemThreadOpener.current(threadId)
+    window.CodexRemoteOpenThread = openRequestedThread
+    const pendingThreadId = window.__codexRemotePendingThreadId
+      ?? window.CodexRemoteAndroid?.consumeNotificationThreadId?.()
+    delete window.__codexRemotePendingThreadId
+    if (pendingThreadId) openRequestedThread(pendingThreadId)
+    return () => {
+      if (window.CodexRemoteOpenThread === openRequestedThread) delete window.CodexRemoteOpenThread
+    }
+  }, [])
 
   async function openConcurrentThread(thread: CodexThread) {
     setThreadContextMenu(null)
@@ -3849,6 +3947,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
+  const [notificationError, setNotificationError] = useState<string | null>(null)
+  const [notificationRequestPending, setNotificationRequestPending] = useState(false)
   const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
@@ -3879,13 +3979,35 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     }
   }
 
+  async function updateSystemNotifications(enabled: boolean) {
+    setNotificationError(null)
+    if (!enabled) {
+      onChange({ ...preferences, systemNotificationsEnabled: false })
+      return
+    }
+    if (!canRequestSystemNotifications()) {
+      setNotificationError('系统通知需要安装 Android 应用，或通过 HTTPS 安全连接打开网页。')
+      return
+    }
+    setNotificationRequestPending(true)
+    try {
+      const granted = await requestSystemNotificationPermission()
+      if (granted) onChange({ ...preferences, systemNotificationsEnabled: true })
+      else setNotificationError('没有获得通知权限。请在系统设置中允许 Codex Remote 发送通知后重试。')
+    } catch {
+      setNotificationError('请求通知权限失败，请重试。')
+    } finally {
+      setNotificationRequestPending(false)
+    }
+  }
+
   return (
     <main className="theme-settings-panel" aria-label="主题设置">
       <header className="theme-settings-panel__header">
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>主题偏好只保存在当前浏览器，不会影响 Codex 会话。</p>
+          <p>界面和通知偏好保存在当前设备，不会影响 Codex 会话。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
@@ -3973,6 +4095,26 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
               <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label="全局字体大小" /><output>{fontSizeAdjustment === 0 ? '标准' : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
             </label>
+          </div>
+        </section>
+
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading"><div><h2>系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
+          <div className="theme-display-controls">
+            <div className="theme-control-row">
+              <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
+              <button
+                className={`theme-notification-toggle${preferences.systemNotificationsEnabled ? ' theme-notification-toggle--enabled' : ''}`}
+                type="button"
+                aria-pressed={preferences.systemNotificationsEnabled}
+                disabled={notificationRequestPending}
+                onClick={() => { void updateSystemNotifications(!preferences.systemNotificationsEnabled) }}
+              >
+                {notificationRequestPending ? <LoaderCircle className="spin" size={14} /> : preferences.systemNotificationsEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+                {notificationRequestPending ? '正在请求权限…' : preferences.systemNotificationsEnabled ? '已开启' : '开启通知'}
+              </button>
+            </div>
+            {notificationError ? <p className="theme-notification-error" role="alert">{notificationError}</p> : null}
           </div>
         </section>
       </div>

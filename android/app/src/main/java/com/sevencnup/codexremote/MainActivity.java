@@ -1,13 +1,19 @@
 package com.sevencnup.codexremote;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.ClipboardManager;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.net.ConnectivityManager;
@@ -35,6 +41,7 @@ import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
 import android.webkit.ConsoleMessage;
 import android.util.Log;
+import org.json.JSONObject;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.widget.Button;
@@ -56,8 +63,11 @@ public class MainActivity extends Activity {
     private static final String APP_VERSION = BuildConfig.VERSION_NAME;
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
+    private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 4102;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
+    private static final String NOTIFICATION_CHANNEL_ID = "codex_remote_updates";
+    private static final String EXTRA_NOTIFICATION_THREAD_ID = "notification_thread_id";
     private static final int DARK = Color.rgb(16, 17, 20);
     private static final int PANEL = Color.rgb(23, 25, 30);
     private static final int TEXT = Color.rgb(239, 241, 246);
@@ -84,7 +94,9 @@ public class MainActivity extends Activity {
     private Runnable webViewReadyCheck;
     private long webViewLoadStartedAt;
     private boolean webViewLoadFailed;
+    private boolean webViewPageFinished;
     private String activeEndpoint;
+    private volatile String pendingNotificationThreadId;
     private boolean checking;
     private boolean handlingBack;
     private int navigationBarInsetPx;
@@ -96,6 +108,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        captureNotificationNavigation(getIntent());
         configureSystemBars();
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -108,6 +121,20 @@ public class MainActivity extends Activity {
             autoRestoreSavedEndpoint = true;
             checkAndOpen(savedEndpoint, true);
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        captureNotificationNavigation(intent);
+        dispatchPendingNotificationNavigation();
+    }
+
+    private void captureNotificationNavigation(Intent intent) {
+        if (intent == null) return;
+        String threadId = intent.getStringExtra(EXTRA_NOTIFICATION_THREAD_ID);
+        if (threadId != null && !threadId.isBlank()) pendingNotificationThreadId = threadId;
     }
 
     private int dp(float value) {
@@ -387,8 +414,16 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != webView) return;
+                webViewPageFinished = false;
                 updateWebViewStatus("正在加载电脑网页…", false);
                 startWebViewReadyCheck(view);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (view != webView) return;
+                webViewPageFinished = true;
+                dispatchPendingNotificationNavigation();
             }
 
             @Override
@@ -551,6 +586,95 @@ public class MainActivity extends Activity {
         return uri == null ? null : new Uri[]{uri};
     }
 
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager != null && manager.areNotificationsEnabled();
+    }
+
+    private void dispatchNotificationPermissionResult(boolean granted) {
+        WebView current = webView;
+        if (current == null) return;
+        String script = "window.dispatchEvent(new CustomEvent('codex-remote-notification-permission',{detail:{granted:" + granted + "}}));";
+        current.post(() -> {
+            if (current == webView) current.evaluateJavascript(script, null);
+        });
+    }
+
+    private void dispatchPendingNotificationNavigation() {
+        String threadId = pendingNotificationThreadId;
+        WebView current = webView;
+        if (threadId == null || current == null || !webViewPageFinished) return;
+        String quotedThreadId = JSONObject.quote(threadId);
+        String script = "window.__codexRemotePendingThreadId=" + quotedThreadId + ";"
+                + "if(typeof window.CodexRemoteOpenThread==='function'){"
+                + "const threadId=window.__codexRemotePendingThreadId;"
+                + "delete window.__codexRemotePendingThreadId;"
+                + "window.CodexRemoteOpenThread(threadId);"
+                + "}true;";
+        current.evaluateJavascript(script, result -> {
+            if ("true".equals(result) && threadId.equals(pendingNotificationThreadId)) {
+                pendingNotificationThreadId = null;
+            }
+        });
+    }
+
+    private void postSystemNotification(String title, String body, String threadId, String eventKey) {
+        if (!hasNotificationPermission() || activityResumed) return;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        NotificationChannel channel = new NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Codex Remote",
+                NotificationManager.IMPORTANCE_DEFAULT);
+        channel.setDescription("Codex 回复完成和待批准提醒");
+        manager.createNotificationChannel(channel);
+
+        int notificationId = (threadId + ":" + eventKey).hashCode() & 0x7fffffff;
+        if (notificationId == 0) notificationId = 1;
+        Intent openApp = new Intent(this, MainActivity.class);
+        openApp.setAction(getPackageName() + ".NOTIFICATION." + eventKey);
+        openApp.putExtra(EXTRA_NOTIFICATION_THREAD_ID, threadId);
+        openApp.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                this,
+                notificationId,
+                openApp,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        String safeTitle = title == null || title.isBlank() ? "Codex Remote" : title.trim();
+        String safeBody = body == null || body.isBlank() ? "Codex 有一条更新。" : body.trim();
+        if (safeTitle.length() > 90) safeTitle = safeTitle.substring(0, 87) + "…";
+        if (safeBody.length() > 180) safeBody = safeBody.substring(0, 177) + "…";
+        Notification notification = new Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setColor(ACCENT)
+                .setContentTitle(safeTitle)
+                .setContentText(safeBody)
+                .setStyle(new Notification.BigTextStyle().bigText(safeBody))
+                .setContentIntent(contentIntent)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .build();
+        try {
+            manager.notify(notificationId, notification);
+        } catch (SecurityException error) {
+            Log.w("CodexRemoteNotifications", "Unable to post system notification", error);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST_CODE) return;
+        dispatchNotificationPermissionResult(hasNotificationPermission());
+    }
+
     private final class AndroidBridge {
         @JavascriptInterface
         public int getStatusBarInsetDp() {
@@ -560,6 +684,44 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public int getComposerBottomInsetDp() {
             return composerBottomInsetDp;
+        }
+
+        @JavascriptInterface
+        public boolean hasNotificationPermission() {
+            return MainActivity.this.hasNotificationPermission();
+        }
+
+        @JavascriptInterface
+        public boolean isAppInBackground() {
+            return !activityResumed;
+        }
+
+        @JavascriptInterface
+        public void requestNotificationPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                            NOTIFICATION_PERMISSION_REQUEST_CODE);
+                } else {
+                    dispatchNotificationPermissionResult(hasNotificationPermission());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean showSystemNotification(String title, String body, String threadId, String eventKey) {
+            if (activityResumed || !hasNotificationPermission()) return false;
+            runOnUiThread(() -> postSystemNotification(title, body, threadId, eventKey));
+            return true;
+        }
+
+        @JavascriptInterface
+        public String consumeNotificationThreadId() {
+            String threadId = pendingNotificationThreadId;
+            pendingNotificationThreadId = null;
+            return threadId;
         }
 
         @JavascriptInterface
@@ -719,7 +881,10 @@ public class MainActivity extends Activity {
         activityResumed = false;
         connectionHandler.removeCallbacks(connectionRecovery);
         stopWebViewReadyCheck();
-        if (webView != null) webView.onPause();
+        if (webView != null) {
+            webView.evaluateJavascript("window.dispatchEvent(new Event('codex-remote-app-background'));", null);
+            webView.onPause();
+        }
         super.onPause();
     }
 
@@ -753,6 +918,7 @@ public class MainActivity extends Activity {
             webView.destroy();
             webView = null;
         }
+        webViewPageFinished = false;
         webViewStatus = null;
         webViewRetryButton = null;
         webViewChangeEndpointButton = null;
