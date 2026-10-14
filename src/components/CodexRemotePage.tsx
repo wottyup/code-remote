@@ -45,6 +45,7 @@ import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
+import { ChatOverlayPanel } from './ChatOverlayPanel'
 
 interface Props {
   token: string
@@ -1854,6 +1855,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     pendingPreviewScopeReset.current = false
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
+    if (mobileDialog && mobileOpen) {
+      const workspaceButton = previewContainerRef.current?.querySelector<HTMLButtonElement>('.conversation-pane--selected .mobile-workspace-button')
+      const composer = document.querySelector<HTMLTextAreaElement>('.message-composer textarea')
+      const returnFocus = workspaceButton?.getClientRects().length ? workspaceButton : composer
+      if (returnFocus) previewReturnFocus.current = returnFocus
+      onCloseMobile()
+    }
     onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
     setPreviewCwd(requestedCwd)
@@ -1874,7 +1882,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     } finally {
       if (generation === previewRequestGeneration.current) setPreviewLoading(false)
     }
-  }, [closePreview, onPreviewStateChange, previewDirty, previewSaving, token])
+  }, [closePreview, mobileOpen, onCloseMobile, onPreviewStateChange, previewDirty, previewSaving, token])
 
   async function savePreviewEdits() {
     if (!previewFile || previewEditContent === null || !previewDirty || previewSaving) return
@@ -2268,9 +2276,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     })
     return () => window.cancelAnimationFrame(frame)
   }, [previewPath])
-  const previewPortalTarget = mobilePreviewDialog
-    ? previewContainerRef.current?.closest('.remote-shell') ?? null
-    : previewContainerRef.current
+  const previewPortalTarget = previewContainerRef.current
   return (
     <>
       <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} aria-label="工作区文件资源管理器">
@@ -2310,41 +2316,37 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
-        <>
-          <button
-            className={`workspace-file-preview-backdrop workspace-file-preview-backdrop--open${mobilePreviewDialog ? ' workspace-file-preview-backdrop--mobile-open' : ' workspace-file-preview-backdrop--chat-area'}`}
-            type="button"
-            aria-label="关闭文件预览"
-            tabIndex={-1}
-            onClick={closePreview}
-          />
-          <aside
-            className={`workspace-file-preview-panel workspace-file-preview-panel--open${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ' workspace-file-preview-panel--chat-area-open'}`}
-            role="dialog"
-            aria-modal={mobilePreviewDialog || undefined}
-            aria-label="工作区文件预览"
-            onKeyDown={(event) => {
-              if (!mobilePreviewDialog || event.key !== 'Tab') return
-              const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')
-              const first = controls.item(0)
-              const last = controls.item(controls.length - 1)
-              if (event.shiftKey && document.activeElement === first) {
-                event.preventDefault()
-                last?.focus()
-              } else if (!event.shiftKey && document.activeElement === last) {
-                event.preventDefault()
-                first?.focus()
-              }
-            }}
-          >
-            <header className="workspace-explorer__header workspace-file-preview-panel__header">
-            <div>
+        <ChatOverlayPanel
+          ariaLabel="工作区文件预览"
+          backdropLabel="关闭文件预览"
+          ariaModal={mobilePreviewDialog || undefined}
+          className="workspace-file-preview-panel"
+          closeButtonRef={previewCloseButton}
+          onClose={closePreview}
+          onKeyDown={(event) => {
+            if (!mobilePreviewDialog || event.key !== 'Tab') return
+            const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), [role="separator"][tabindex="0"]')
+            const first = controls.item(0)
+            const last = controls.item(controls.length - 1)
+            if (event.shiftKey && document.activeElement === first) {
+              event.preventDefault()
+              last?.focus()
+            } else if (!event.shiftKey && document.activeElement === last) {
+              event.preventDefault()
+              first?.focus()
+            }
+          }}
+          header={(
+            <div className="workspace-file-preview-panel__heading">
               <span className="workspace-explorer__eyebrow">{previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
               <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
             </div>
-            <button ref={previewCloseButton} className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
-            </header>
-            <section className="workspace-file-preview">
+          )}
+          footer={(
+            <span className="workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</span>
+          )}
+        >
+          <section className="workspace-file-preview">
             <div className="workspace-file-preview__toolbar">
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
@@ -2401,10 +2403,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                     : line || ' '}</span></span>
                 ))}</code></pre>
             ) : null}
-            </section>
-            <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</footer>
-          </aside>
-        </>,
+          </section>
+        </ChatOverlayPanel>,
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
@@ -2733,7 +2733,17 @@ function RemoteChatPane({
         </div>
       ) : null}
       {terminalOpen ? (
-        <Suspense fallback={<div className="terminal-dialog-backdrop terminal-dialog-backdrop--loading"><div><LoaderCircle className="spin" size={18} />正在加载终端…</div></div>}>
+        <Suspense fallback={(
+          <ChatOverlayPanel
+            ariaLabel="本机终端"
+            backdropLabel="关闭本机终端"
+            className="terminal-dialog"
+            onClose={() => setTerminalOpen(false)}
+            header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
+          >
+            <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
+          </ChatOverlayPanel>
+        )}>
           <TerminalDialog
             token={token}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
@@ -2980,7 +2990,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
       '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
       '.chat-message__code', '.workspace-file-preview__code', '.workspace-file-preview-panel',
-      '.workspace-file-preview-backdrop', '.theme-settings-panel', '.thread-context-menu',
+      '.chat-overlay-backdrop', '.theme-settings-panel', '.thread-context-menu',
       '.thread-rename-backdrop', '.message-composer',
     ].join(', ')))
     sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop && !startedInsideSidebar && !startedInsideWorkspaceTree

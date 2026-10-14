@@ -1,7 +1,8 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { Clipboard, LoaderCircle, Terminal as TerminalIcon, X } from 'lucide-react'
+import { Clipboard, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
 interface TerminalDialogProps {
@@ -175,50 +176,46 @@ export function TerminalDialog({ token, cwd, onClose, onInsertText }: TerminalDi
   }[status]
 
   return (
-    <div
-      className="terminal-dialog-backdrop"
-      onPointerDown={(event) => {
-        if (event.target === event.currentTarget) onClose()
-        else if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
+    <ChatOverlayPanel
+      ariaLabel="本机终端"
+      backdropLabel="关闭本机终端"
+      onClose={onClose}
+      className="terminal-dialog"
+      onPanelPointerDown={(event) => {
+        if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
-      onClick={(event) => event.stopPropagation()}
+      header={(
+        <div className="terminal-dialog__title">
+          <TerminalIcon size={16} aria-hidden="true" />
+          <strong>本机终端</strong>
+          <span className={`terminal-dialog__status terminal-dialog__status--${status}`}>
+            {status === 'connecting' ? <LoaderCircle className="spin" size={12} /> : <i />}
+            {statusLabel}
+          </span>
+          {workingDirectory ? <code title={workingDirectory}>{workingDirectory}</code> : null}
+        </div>
+      )}
     >
-      <section className="terminal-dialog" role="dialog" aria-label="本机终端">
-        <header className="terminal-dialog__header">
-          <div className="terminal-dialog__title">
-            <TerminalIcon size={16} aria-hidden="true" />
-            <strong>本机终端</strong>
-            <span className={`terminal-dialog__status terminal-dialog__status--${status}`}>
-              {status === 'connecting' ? <LoaderCircle className="spin" size={12} /> : <i />}
-              {statusLabel}
-            </span>
-            {workingDirectory ? <code title={workingDirectory}>{workingDirectory}</code> : null}
-          </div>
-          <button className="icon-button terminal-dialog__close" type="button" onClick={onClose} aria-label="关闭终端" title="关闭终端">
-            <X size={16} />
-          </button>
-        </header>
-        <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
-        {contextMenu ? (
-          <div
-            className="terminal-context-menu"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-            role="menu"
+      <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
+      {contextMenu ? (
+        <div
+          className="terminal-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          role="menu"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onInsertText(contextMenu.text)
+              setContextMenu(null)
+            }}
           >
-            <button
-              type="button"
-              role="menuitem"
-              onClick={() => {
-                onInsertText(contextMenu.text)
-                setContextMenu(null)
-              }}
-            >
-              <Clipboard size={14} />
-              粘贴到输入框
-            </button>
-          </div>
-        ) : null}
-      </section>
-    </div>
+            <Clipboard size={14} />
+            粘贴到输入框
+          </button>
+        </div>
+      ) : null}
+    </ChatOverlayPanel>
   )
 }
