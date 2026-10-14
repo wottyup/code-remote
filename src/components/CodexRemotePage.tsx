@@ -602,6 +602,7 @@ function ComposerMenu({
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
+  const composerFocusBeforeOpen = useRef<HTMLElement | null>(null)
   const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
   const selected = options.find((option) => option.value === value)
 
@@ -630,6 +631,15 @@ function ComposerMenu({
       if (!(event.target instanceof Node) || !popover.current?.contains(event.target)) updatePosition()
     }
     updatePosition()
+    const settleStartedAt = window.performance.now()
+    let settleFrame: number | undefined
+    const trackAnchorWhileViewportSettles = () => {
+      updatePosition()
+      if (window.performance.now() - settleStartedAt < 600) {
+        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+      }
+    }
+    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
     const observer = new ResizeObserver(updatePosition)
     if (root.current) observer.observe(root.current)
     if (popover.current) observer.observe(popover.current)
@@ -638,6 +648,7 @@ function ComposerMenu({
     window.visualViewport?.addEventListener('resize', updatePosition)
     window.visualViewport?.addEventListener('scroll', updatePosition)
     return () => {
+      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
       observer.disconnect()
       window.removeEventListener('resize', updatePosition)
       window.removeEventListener('scroll', handleScroll, true)
@@ -671,6 +682,15 @@ function ComposerMenu({
         aria-label={label}
         aria-haspopup="listbox"
         aria-expanded={open}
+        onPointerDown={(event) => {
+          const activeElement = document.activeElement
+          if (!(activeElement instanceof HTMLElement) || !activeElement.matches('.message-composer textarea')) {
+            composerFocusBeforeOpen.current = null
+            return
+          }
+          composerFocusBeforeOpen.current = activeElement
+          event.preventDefault()
+        }}
         onClick={() => onOpenChange(!open)}
       >
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
@@ -693,6 +713,11 @@ function ComposerMenu({
               onClick={() => {
                 onChange(option.value)
                 onOpenChange(false)
+                const focusTarget = composerFocusBeforeOpen.current
+                composerFocusBeforeOpen.current = null
+                if (focusTarget?.isConnected) {
+                  window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                }
               }}
             >
               <span className="composer-menu__option-copy">

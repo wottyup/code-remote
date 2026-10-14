@@ -609,7 +609,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-edit-cancel:disabled { cursor: wait; opacity: .55; }
 .send-button--confirm { width: 29px; min-width: 29px; padding: 0; }
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
-.composer-preferences { display: flex; min-width: 0; align-items: center; gap: 1px; }
+.composer-preferences { display: flex; min-width: 0; align-items: center; gap: 3px; }
 .composer-menu { position: relative; min-width: 0; }
 .composer-menu--open { z-index: 21; }
 .composer-menu__trigger { display: flex; align-items: center; gap: 6px; max-width: 205px; height: 29px; padding: 0 7px; border: 0; border-radius: 9px; background: transparent; color: #d8dbe1; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); }
@@ -646,7 +646,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @container remote-workspace (max-width: 680px) {
   .remote-workspace > .composer-dock { width: calc(100% - 24px); margin-inline: 12px; }
   .message-composer__footer { gap: 6px; }
-  .composer-preferences { display: flex; min-width: 0; flex: 1 1 auto; gap: 0; }
+  .composer-preferences { display: flex; min-width: 0; flex: 1 1 auto; gap: 3px; }
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: auto; min-width: 0; max-width: 145px; gap: 4px; padding-inline: 5px; }
   .composer-menu__label, .composer-hint { display: none; }
@@ -756,7 +756,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-queue__remove { width: 30px; }
   .message-composer textarea { padding-top: 9px; padding-bottom: 9px; font: 15px/1.55 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(15px + var(--mobile-font-offset)); }
   .message-composer__footer { display: grid; min-width: 0; min-height: 31px; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 6px; margin-top: 4px; }
-  .composer-preferences { display: flex; min-width: 0; gap: 0; }
+  .composer-preferences { display: flex; min-width: 0; gap: 3px; }
   .composer-menu__trigger { width: auto; min-width: 0; max-width: 145px; gap: 4px; padding-inline: 5px; -webkit-tap-highlight-color: transparent; }
   .composer-menu--open .composer-menu__trigger { background: transparent; }
   .remote-shell--theme-light .composer-menu--open .composer-menu__trigger,
@@ -814,7 +814,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .connection-label span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .remote-workspace > .composer-dock { width: calc(100% - 24px); margin-inline: 12px; }
   .message-composer__footer { gap: 6px; }
-  .composer-preferences { display: flex; min-width: 0; flex: 1 1 auto; gap: 0; }
+  .composer-preferences { display: flex; min-width: 0; flex: 1 1 auto; gap: 3px; }
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: auto; min-width: 0; max-width: 145px; gap: 4px; padding-inline: 5px; }
   .composer-menu__label, .composer-hint { display: none; }
