@@ -629,7 +629,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .workspace-resize-handle, .workspace-file-preview-panel { display: none; }
   .pane-close-button { display: none; }
   .remote-shell--android .remote-sidebar { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
-  .remote-sidebar { position: fixed; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); }
+  .remote-sidebar { position: fixed; z-index: 10; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); }
   .remote-sidebar--open { transform: translateX(0); }
   .remote-sidebar__close, .menu-button { display: grid; }
   .sidebar-backdrop { position: fixed; z-index: 1; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, .56); }
@@ -637,7 +637,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-pane-grid { display: block; width: 100%; height: 100%; background: transparent; }
   .remote-pane-slot { width: 100%; height: 100%; }
   .remote-pane-slot:not(:has(.conversation-pane--selected)) { display: none; }
-  .workspace-explorer { position: fixed; z-index: 2; inset: 0 0 0 auto; display: grid; width: min(67vw, 256px); height: var(--app-viewport-height); min-height: 0; grid-column: auto; grid-row: auto; padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(105%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: -14px 0 40px rgba(0, 0, 0, .4); }
+  .workspace-explorer { position: fixed; z-index: 10; inset: 0 0 0 auto; display: grid; width: min(67vw, 256px); height: var(--app-viewport-height); min-height: 0; grid-column: auto; grid-row: auto; padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(105%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: -14px 0 40px rgba(0, 0, 0, .4); }
   .remote-shell--android .workspace-explorer { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
   .workspace-file-preview__code, .workspace-file-preview__editor { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
   .workspace-explorer--mobile-open { transform: translateX(0); visibility: visible; transition: transform .2s ease; }
