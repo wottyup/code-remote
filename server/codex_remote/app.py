@@ -675,6 +675,7 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
     """Embed images created by this process so a refreshed thread can render them."""
     image_root = image_directory.resolve()
+    system_temp_root = Path(tempfile.gettempdir()).resolve()
     turns = thread.get("turns")
     if not isinstance(turns, list):
         return thread
@@ -691,14 +692,21 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
             if not isinstance(content, list):
                 continue
             for part in content:
-                if not isinstance(part, dict) or part.get("type") != "localImage":
+                if not isinstance(part, dict) or part.get("type") not in {"localImage", "local_image"}:
                     continue
                 raw_path = part.get("path")
                 if not isinstance(raw_path, str) or not raw_path:
                     continue
                 try:
                     image_path = Path(raw_path).expanduser().resolve()
-                    image_path.relative_to(image_root)
+                    in_remote_image_directory = image_path.is_relative_to(image_root)
+                    is_codex_clipboard_image = (
+                        image_path.parent == system_temp_root
+                        and image_path.stem.startswith("codex-clipboard-")
+                        and image_path.suffix.lower() in IMAGE_MEDIA_TYPES
+                    )
+                    if not in_remote_image_directory and not is_codex_clipboard_image:
+                        continue
                     if not image_path.is_file():
                         continue
                     if image_path.stat().st_size > MAX_IMAGE_BYTES:
@@ -715,6 +723,16 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
                 part["mediaType"] = media_type
                 part["data"] = data
     return thread
+
+
+def enrich_user_message_item(item: dict[str, Any], image_directory: Path) -> dict[str, Any]:
+    """Embed permitted local images in one live app-server user item."""
+    item_type = item.get("type")
+    if not isinstance(item_type, str) or item_type.replace("-", "").replace("_", "").lower() != "usermessage":
+        return item
+    wrapper = {"turns": [{"items": [{**item, "type": "userMessage"}]}]}
+    enrich_thread_images(wrapper, image_directory)
+    return wrapper["turns"][0]["items"][0]
 
 
 class PairingAuth:
@@ -954,7 +972,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.9.3-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.9.3-dev.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
@@ -1439,7 +1457,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
         async def send_events() -> None:
             while True:
-                await websocket.send_json(await queue.get())
+                event = await queue.get()
+                if isinstance(event, dict) and event.get("method") in {"item/started", "item/completed"}:
+                    params = event.get("params")
+                    item = params.get("item") if isinstance(params, dict) else None
+                    item_type = item.get("type") if isinstance(item, dict) else None
+                    if isinstance(item_type, str) and item_type.replace("-", "").replace("_", "").lower() == "usermessage":
+                        event = {
+                            **event,
+                            "params": {
+                                **params,
+                                "item": enrich_user_message_item(item, image_directory),
+                            },
+                        }
+                await websocket.send_json(event)
 
         writer = asyncio.create_task(send_events())
         try:
