@@ -23,7 +23,6 @@ import {
   LoaderCircle,
   Menu,
   MessagesSquare,
-  Paperclip,
   Pause,
   Pencil,
   Pin,
@@ -487,7 +486,7 @@ function isImageAttachmentFile(file: Pick<File, 'name' | 'type'>) {
 const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
   { value: 'on-request', label: '请求批准' },
   { value: 'untrusted', label: '帮我批准' },
-  { value: 'never', label: '完全访问权限' },
+  { value: 'never', label: '完全访问' },
 ]
 
 function readImage(file: File): Promise<CodexImageAttachment> {
@@ -674,7 +673,6 @@ function ComposerMenu({
         aria-expanded={open}
         onClick={() => onOpenChange(!open)}
       >
-        <span className="composer-menu__label">{label}</span>
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
         <ChevronDown size={13} aria-hidden="true" />
       </button>
@@ -1677,13 +1675,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
         <div className="composer-actions">
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
-            {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Paperclip size={16} />}
+            {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={mobileLayout ? mobileAttachmentAccept : documentAttachmentAccept} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
             : isRunning && !stopWithSendButton ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
-          {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending}>取消</button> : null}
+          {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
               className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}`}
@@ -1696,7 +1694,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
                 : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Pause size={15} /> : <Send size={16} />}
-              {editingQueuedMessageId ? <span>确定</span> : null}
             </button>
           ) : null}
         </div>
