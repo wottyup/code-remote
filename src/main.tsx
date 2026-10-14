@@ -8,6 +8,40 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     let frame: number | undefined
     let settleTimer: number | undefined
+    let checkingForUpdate = false
+    let lastUpdateCheckAt = 0
+    const assetSignature = (root: ParentNode, baseUrl: string) => Array.from(
+      root.querySelectorAll('link[rel="stylesheet"][href], script[type="module"][src]'),
+      (element) => {
+        const reference = element.getAttribute(element.tagName === 'LINK' ? 'href' : 'src')
+        return reference ? new URL(reference, baseUrl).href : ''
+      },
+    ).filter(Boolean).sort().join('\n')
+    const loadedAssetSignature = assetSignature(document, window.location.href)
+    const checkForUpdate = async () => {
+      if (!('CodexRemoteAndroid' in window) || document.hidden || checkingForUpdate) return
+      const now = Date.now()
+      if (now - lastUpdateCheckAt < 1_000) return
+      lastUpdateCheckAt = now
+      checkingForUpdate = true
+      try {
+        const response = await fetch(window.location.href, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'text/html' },
+        })
+        if (!response.ok) return
+        const html = new DOMParser().parseFromString(await response.text(), 'text/html')
+        const latestAssetSignature = assetSignature(html, response.url || window.location.href)
+        if (loadedAssetSignature && latestAssetSignature && latestAssetSignature !== loadedAssetSignature) {
+          window.location.reload()
+        }
+      } catch {
+        // A failed update check must not interfere with the existing chat.
+      } finally {
+        checkingForUpdate = false
+      }
+    }
     const syncViewportHeight = () => {
       const viewport = window.visualViewport
       const layoutHeight = Math.round(window.innerHeight)
@@ -50,13 +84,17 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       })
     }
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') scheduleViewportSync()
+      if (document.visibilityState !== 'visible') return
+      scheduleViewportSync()
+      void checkForUpdate()
     }
+    const handleAppResume = () => { void checkForUpdate() }
     const viewport = window.visualViewport
     scheduleViewportSync()
     window.addEventListener('resize', scheduleViewportSync)
     window.addEventListener('orientationchange', scheduleViewportSync)
     window.addEventListener('pageshow', scheduleViewportSync)
+    window.addEventListener('codex-remote:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     document.addEventListener('focusin', scheduleViewportSync)
     document.addEventListener('focusout', scheduleViewportSync)
@@ -68,6 +106,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       window.removeEventListener('resize', scheduleViewportSync)
       window.removeEventListener('orientationchange', scheduleViewportSync)
       window.removeEventListener('pageshow', scheduleViewportSync)
+      window.removeEventListener('codex-remote:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('focusin', scheduleViewportSync)
       document.removeEventListener('focusout', scheduleViewportSync)
