@@ -589,7 +589,10 @@ class CodexAppServer:
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise CodexRuntimeError("Codex 没有返回新对话编号")
-        return {**thread, "cwd": thread.get("cwd") if isinstance(thread.get("cwd"), str) else str(cwd or self.workspace)}
+        thread_cwd = thread.get("cwd")
+        if not isinstance(thread_cwd, str) or not thread_cwd.strip():
+            thread_cwd = str(cwd or self.workspace)
+        return {**thread, "cwd": thread_cwd}
 
     async def resume_thread(self, thread_id: str) -> dict[str, Any]:
         await self._prepare_runtime_thread(thread_id)
