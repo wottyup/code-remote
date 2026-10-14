@@ -36,11 +36,17 @@ export interface CodexActivity {
 
 export type CodexOperationStatus = 'running' | 'completed' | 'failed' | 'stopped'
 
+export interface CodexOperationStep {
+  label: string
+  detail?: string
+}
+
 export interface CodexOperation {
   id: string
   kind: 'command' | 'file' | 'search' | 'tool'
   label: string
   detail?: string
+  steps?: CodexOperationStep[]
   status: CodexOperationStatus
 }
 
@@ -944,6 +950,33 @@ function operationPaths(value: unknown, depth = 0): string[] {
   return [...new Set(paths)].slice(0, 8)
 }
 
+function commandActionSteps(value: unknown): CodexOperationStep[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap((entry): CodexOperationStep[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const action = entry as Record<string, unknown>
+    const type = typeof action.type === 'string' ? action.type.replace(/[-_]/g, '').toLowerCase() : ''
+    const name = typeof action.name === 'string' ? action.name.trim() : ''
+    const path = typeof action.path === 'string' ? action.path.trim() : ''
+    const query = typeof action.query === 'string' ? action.query.trim() : ''
+    const basename = (path: string) => path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? path
+
+    if (type === 'read') {
+      const detail = safeOperationDetail(name || basename(path))
+      return [{ label: '读取', ...(detail ? { detail } : {}) }]
+    }
+    if (type === 'listfiles') {
+      const detail = safeOperationDetail(path || name)
+      return [{ label: '列出文件', ...(detail ? { detail } : {}) }]
+    }
+    if (type === 'search') {
+      const detail = safeOperationDetail([query, path].filter(Boolean).join(' · '))
+      return [{ label: '搜索', ...(detail ? { detail } : {}) }]
+    }
+    return []
+  })
+}
+
 function operationForItem(value: unknown, statusOverride?: CodexOperationStatus): CodexOperation | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
@@ -954,6 +987,7 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
 
   if (itemType === 'commandexecution') {
     const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+    const steps = commandActionSteps(item.commandActions ?? item.command_actions)
     const knownCommand = command.match(/(?:^|[\s"'|;&])(?:\/[\w.\/-]+\/)?(rg|grep|find|fd|ag|ack|cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])/i)?.[1]?.toLowerCase() ?? ''
     const isSearch = /^(?:rg|grep|find|fd|ag|ack)$/.test(knownCommand)
     const isRead = /^(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)$/.test(knownCommand)
@@ -963,6 +997,7 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
       kind: isSearch ? 'search' : isRead ? 'file' : 'command',
       label: isSearch ? '搜索文件' : isRead ? '查看文件' : '执行命令',
       ...(detail ? { detail } : {}),
+      ...(steps.length > 0 ? { steps } : {}),
       status,
     }
   }
@@ -990,11 +1025,18 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     const toolType = tool.toLowerCase()
     const isSearch = /search|find|grep|query/.test(toolType)
     const isFile = /read|file|directory|folder|list/.test(toolType)
-    const label = isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
+    const skillName = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)
+      ? ['skill', 'skill_name', 'skillName'].map((key) => (parsedArgs as Record<string, unknown>)[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : undefined
+    const isSkill = /skill/.test(toolType)
+    const label = isSkill ? '读取技能' : isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
     const pathSummary = paths.length > 0
       ? `${paths.slice(0, 3).join('、')}${paths.length > 3 ? ` 等 ${paths.length} 个路径` : ''}`
       : ''
-    const detail = safeOperationDetail([tool, pathSummary].filter(Boolean).join(' · '))
+    const detail = safeOperationDetail(isSkill
+      ? skillName?.trim() || tool
+      : [tool, pathSummary].filter(Boolean).join(' · '))
     return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), status }
   }
 
@@ -1015,7 +1057,11 @@ function upsertTurnOperation(current: CodexOperation[], operation: CodexOperatio
   for (const item of operation) {
     const index = next.findIndex((entry) => entry.id === item.id)
     if (index < 0) next = [...next, item]
-    else if (next[index] !== item) next = next.map((entry, entryIndex) => entryIndex === index ? item : entry)
+    else if (next[index] !== item) {
+      const previous = next[index]
+      const merged = !item.steps?.length && previous.steps?.length ? { ...item, steps: previous.steps } : item
+      next = next.map((entry, entryIndex) => entryIndex === index ? merged : entry)
+    }
   }
   return next.length > maxOperationsPerTurn ? next.slice(-maxOperationsPerTurn) : next
 }
@@ -1033,7 +1079,15 @@ function withTurnOperation(current: OperationsByTurn, turnId: string, operation:
 function mergeOperationsByTurn(current: OperationsByTurn, incoming: OperationsByTurn): OperationsByTurn {
   let merged = incoming
   for (const [turnId, operations] of Object.entries(current)) {
-    const next = upsertTurnOperation(merged[turnId] ?? [], operations)
+    const historical = merged[turnId] ?? []
+    const cachedWithHistoricalSteps = operations.map((operation) => {
+      if (operation.steps?.length) return operation
+      const historicalOperation = historical.find((entry) => entry.id === operation.id)
+      return historicalOperation?.steps?.length
+        ? { ...operation, steps: historicalOperation.steps }
+        : operation
+    })
+    const next = upsertTurnOperation(historical, cachedWithHistoricalSteps)
     if (merged === incoming) merged = { ...incoming }
     merged[turnId] = next
   }

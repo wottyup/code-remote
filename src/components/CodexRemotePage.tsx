@@ -2684,6 +2684,13 @@ function RemoteChatPane({
     })
     return indexes
   }, [remote.messages])
+  const lastAssistantMessageIndexByTurn = useMemo(() => {
+    const indexes = new Map<string, number>()
+    remote.messages.forEach((message, index) => {
+      if (message.role === 'assistant' && message.turnId) indexes.set(message.turnId, index)
+    })
+    return indexes
+  }, [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
       <header className="remote-chat__header">
@@ -2735,9 +2742,11 @@ function RemoteChatPane({
             const operations = message.role === 'assistant' && message.turnId
               ? remote.operationsByTurn[message.turnId] ?? []
               : []
+            const showOperations = message.role === 'assistant'
+              && (!message.turnId || lastAssistantMessageIndexByTurn.get(message.turnId) === index)
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} operations={operations} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble message={message} operations={operations} showOperations={showOperations} copied={copiedMessageId === message.id} onCopy={onCopy} />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -2760,6 +2769,7 @@ function RemoteChatPane({
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
                 {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
               </div>
+              {!hasStreamingAssistant && runningOperations.length > 0 ? <OperationLog operations={runningOperations} initiallyOpen /> : null}
             </div>
           ) : null}
         </div>
@@ -4355,7 +4365,21 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
             <span className="operation-log__status" aria-label={operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '已完成'}>
               {operation.status === 'running' ? <LoaderCircle className="spin" size={12} /> : operation.status === 'completed' ? <Check size={12} /> : operation.status === 'failed' ? <AlertTriangle size={12} /> : <Square size={10} />}
             </span>
-            <span className="operation-log__content"><strong>{operation.label}</strong>{operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}</span>
+            <span className="operation-log__content">
+              <strong>{operation.label}</strong>
+              {operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}
+              {operation.steps?.length ? (
+                <span className="operation-log__steps">
+                  {operation.steps.map((step, index) => (
+                    <span className="operation-log__step" key={`${operation.id}-step-${index}`}>
+                      <i aria-hidden="true">└</i>
+                      <strong>{step.label}</strong>
+                      {step.detail ? <code title={step.detail}>{step.detail}</code> : null}
+                    </span>
+                  ))}
+                </span>
+              ) : null}
+            </span>
             <small>{operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '完成'}</small>
           </li>
         ))}
@@ -4410,7 +4434,7 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, operations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const MessageBubble = memo(function MessageBubble({ message, operations, showOperations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; showOperations: boolean; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
@@ -4431,7 +4455,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
-        {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
+        {showOperations && operations.length > 0 ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">

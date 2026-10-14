@@ -54,6 +54,32 @@ def browser_changes(changes: Any) -> Any:
     return changes
 
 
+def _browser_command_actions(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    actions: list[dict[str, str]] = []
+    for entry in value[:8]:
+        if not isinstance(entry, dict):
+            continue
+        action_type = entry.get("type")
+        if not isinstance(action_type, str) or not action_type:
+            continue
+        action = {"type": action_type[:40]}
+        normalized_type = action_type.replace("-", "").replace("_", "").lower()
+        if normalized_type == "read":
+            fields = ("name", "path")
+        elif normalized_type == "listfiles":
+            fields = ("path",)
+        elif normalized_type == "search":
+            fields = ("query", "path")
+        else:
+            fields = ()
+        action.update({key: entry[key][:220] for key in fields if isinstance(entry.get(key), str) and entry[key]})
+        if action:
+            actions.append(action)
+    return actions
+
+
 def browser_item(item: dict[str, Any]) -> dict[str, Any]:
     result = _pick(item, ("id", "type", "status", "createdAt", "created_at", "timestamp"))
     item_type = str(item.get("type", "")).replace("_", "").replace("-", "").lower()
@@ -70,6 +96,9 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
         result["changes"] = browser_changes(item.get("changes", []))
     elif item_type == "commandexecution":
         result.update(_pick(item, ("command",)))
+        command_actions = _browser_command_actions(item.get("commandActions") or item.get("command_actions"))
+        if command_actions:
+            result["commandActions"] = command_actions
     elif item_type in {"mcptoolcall", "dynamictoolcall", "collabagenttoolcall"}:
         result.update(_pick(item, ("server", "tool", "name", "namespace")))
         args = item.get("arguments", item.get("args", item.get("input")))
@@ -79,8 +108,16 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
             except (ValueError, RecursionError):
                 args = None
         paths = _operation_paths(args)
+        safe_arguments: dict[str, Any] = {}
         if paths:
-            result["arguments"] = {"paths": paths}
+            safe_arguments["paths"] = paths
+        if isinstance(args, dict):
+            skill = next((args.get(key) for key in ("skill", "skill_name", "skillName")
+                          if isinstance(args.get(key), str) and args[key].strip()), None)
+            if skill:
+                safe_arguments["skill"] = skill.strip()[:160]
+        if safe_arguments:
+            result["arguments"] = safe_arguments
     elif item_type == "websearch":
         result.update(_pick(item, ("query",)))
     return result
