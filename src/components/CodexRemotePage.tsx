@@ -79,7 +79,6 @@ const connectionLabel = {
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
-const terminalToolbarHiddenQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
@@ -2503,7 +2502,6 @@ function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
-  const [terminalToolbarHidden, setTerminalToolbarHidden] = useState(() => window.matchMedia(terminalToolbarHiddenQuery).matches)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
@@ -2514,14 +2512,6 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
-
-  useEffect(() => {
-    const query = window.matchMedia(terminalToolbarHiddenQuery)
-    const update = () => setTerminalToolbarHidden(query.matches)
-    update()
-    query.addEventListener('change', update)
-    return () => query.removeEventListener('change', update)
-  }, [])
 
   const activeThreadId = remote.activeThread?.id
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
@@ -2705,25 +2695,23 @@ function RemoteChatPane({
         </div>
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
-          {!(terminalOpen && terminalToolbarHidden) ? (
-            <button
-              className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
-              type="button"
-              aria-label={terminalOpen ? '关闭本机终端' : '打开本机终端'}
-              title={terminalOpen ? '关闭本机终端' : '本机终端'}
-              onClick={(event) => {
-                event.stopPropagation()
-                if (terminalOpen) {
-                  setTerminalOpen(false)
-                } else {
-                  onActivate()
-                  setTerminalOpen(true)
-                }
-              }}
-            >
-              {terminalOpen ? <X size={16} /> : <TerminalIcon size={16} />}
-            </button>
-          ) : null}
+          <button
+            className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
+            type="button"
+            aria-label={terminalOpen ? '关闭本机终端' : '打开本机终端'}
+            title={terminalOpen ? '关闭本机终端' : '本机终端'}
+            onClick={(event) => {
+              event.stopPropagation()
+              if (terminalOpen) {
+                setTerminalOpen(false)
+              } else {
+                onActivate()
+                setTerminalOpen(true)
+              }
+            }}
+          >
+            {terminalOpen ? <X size={16} /> : <TerminalIcon size={16} />}
+          </button>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
@@ -2792,7 +2780,7 @@ function RemoteChatPane({
             backdropLabel="关闭本机终端"
             className="terminal-dialog"
             onClose={() => setTerminalOpen(false)}
-            showCloseButton={terminalToolbarHidden}
+            showCloseButton={false}
             header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
           >
             <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
@@ -2802,7 +2790,6 @@ function RemoteChatPane({
             token={token}
             threadId={remote.activeThread?.id}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
-            showCloseButton={terminalToolbarHidden}
             onClose={() => setTerminalOpen(false)}
             onInsertText={(value) => {
               if (value.length >= longPasteThreshold) {
