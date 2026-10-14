@@ -2705,23 +2705,25 @@ function RemoteChatPane({
         </div>
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
-          <button
-            className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
-            type="button"
-            aria-label={terminalOpen ? '关闭本机终端' : '打开本机终端'}
-            title={terminalOpen ? '关闭本机终端' : '本机终端'}
-            onClick={(event) => {
-              event.stopPropagation()
-              if (terminalOpen) {
-                setTerminalOpen(false)
-              } else {
-                onActivate()
-                setTerminalOpen(true)
-              }
-            }}
-          >
-            {terminalOpen ? <X size={16} /> : <TerminalIcon size={16} />}
-          </button>
+          {!(terminalOpen && terminalToolbarHidden) ? (
+            <button
+              className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
+              type="button"
+              aria-label={terminalOpen ? '关闭本机终端' : '打开本机终端'}
+              title={terminalOpen ? '关闭本机终端' : '本机终端'}
+              onClick={(event) => {
+                event.stopPropagation()
+                if (terminalOpen) {
+                  setTerminalOpen(false)
+                } else {
+                  onActivate()
+                  setTerminalOpen(true)
+                }
+              }}
+            >
+              {terminalOpen ? <X size={16} /> : <TerminalIcon size={16} />}
+            </button>
+          ) : null}
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
