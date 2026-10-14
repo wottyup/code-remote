@@ -137,15 +137,10 @@ function truncateAttachmentText(value: string, limit: number, marker: string) {
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
-const workspaceFilePreviewWidthStorageKey = 'codex-remote.workspace-file-preview-width'
-const workspaceFilePreviewWidthRatioStorageKey = 'codex-remote.workspace-file-preview-width-ratio'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
-const workspaceFilePreviewDefaultWidth = 360
-const workspaceFilePreviewMinWidth = 160
-const workspaceFilePreviewMaxWidth = 1_600
 const workspaceChatMinWidth = 240
 const minComposerHeight = 45
 const maxComposerHeight = 260
@@ -186,14 +181,13 @@ interface ComposerPreferences {
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
 
-function workspacePanelsWidthLimit(previewOpen = false) {
+function workspacePanelsWidthLimit() {
   if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
   const sidebarWidth = Math.round(Math.max(180, Math.min(284, viewportWidth * 0.22)))
-  const separatorWidth = previewOpen ? 16 : 8
-  const availableWorkspaceWidth = viewportWidth - sidebarWidth - separatorWidth
+  const availableWorkspaceWidth = viewportWidth - sidebarWidth - 8
   const chatMinimumLimit = availableWorkspaceWidth - workspaceChatMinWidth
   return Math.max(0, Math.min(workspaceExplorerMaxWidth, chatMinimumLimit))
 }
@@ -203,70 +197,12 @@ function workspaceExplorerMinimumWidth() {
   return viewportWidth <= 900 ? 160 : workspaceExplorerMinWidth
 }
 
-function workspaceExplorerWidthLimit(previewOpen = false, previewWidth = 0) {
-  return Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerMaxWidth, workspacePanelsWidthLimit(previewOpen) - previewWidth))
+function workspaceExplorerWidthLimit() {
+  return Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerMaxWidth, workspacePanelsWidthLimit()))
 }
 
-function clampWorkspaceExplorerWidth(value: number, previewOpen = false, previewWidth = 0) {
-  return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(previewOpen, previewWidth), value)))
-}
-
-function workspaceFilePreviewWidthLimit(explorerWidth = workspaceExplorerMinimumWidth()) {
-  return Math.max(0, Math.min(workspaceFilePreviewMaxWidth, workspacePanelsWidthLimit(true) - explorerWidth))
-}
-
-function workspaceFilePreviewMinimumWidth() {
-  return Math.min(workspaceFilePreviewMinWidth, Math.max(0, workspacePanelsWidthLimit(true) - workspaceExplorerMinimumWidth()))
-}
-
-function fitWorkspacePreviewWidths(explorerWidth: number, previewWidth: number) {
-  const totalLimit = workspacePanelsWidthLimit(true)
-  const minimumExplorerWidth = workspaceExplorerMinimumWidth()
-  const minimumPreviewWidth = workspaceFilePreviewMinimumWidth()
-  const maximumExplorerWidth = Math.max(minimumExplorerWidth, Math.min(workspaceExplorerMaxWidth, totalLimit - minimumPreviewWidth))
-  const nextExplorerWidth = Math.round(Math.max(minimumExplorerWidth, Math.min(maximumExplorerWidth, explorerWidth)))
-  const maximumPreviewWidth = workspaceFilePreviewWidthLimit(nextExplorerWidth)
-  const nextMinimumPreviewWidth = Math.min(workspaceFilePreviewMinWidth, maximumPreviewWidth)
-  const nextPreviewWidth = Math.round(Math.max(nextMinimumPreviewWidth, Math.min(maximumPreviewWidth, previewWidth)))
-  return { explorerWidth: nextExplorerWidth, previewWidth: nextPreviewWidth }
-}
-
-function workspaceFileSplitExplorerWidthRange(explorerWidth: number, previewWidth: number) {
-  const combinedWidth = explorerWidth + previewWidth
-  const minimumExplorerWidth = Math.max(workspaceExplorerMinimumWidth(), combinedWidth - workspaceFilePreviewMaxWidth)
-  const maximumExplorerWidth = Math.min(
-    workspaceExplorerWidthLimit(true, workspaceFilePreviewMinimumWidth()),
-    combinedWidth - workspaceFilePreviewMinimumWidth(),
-  )
-  return { minimum: minimumExplorerWidth, maximum: Math.max(minimumExplorerWidth, maximumExplorerWidth) }
-}
-
-function readWorkspaceFilePreviewWidth() {
-  if (typeof window === 'undefined') return workspaceFilePreviewDefaultWidth
-  try {
-    const stored = Number(window.localStorage.getItem(workspaceFilePreviewWidthStorageKey))
-    return Math.round(Math.max(workspaceFilePreviewMinWidth, Math.min(workspaceFilePreviewMaxWidth, Number.isFinite(stored) && stored > 0 ? stored : workspaceFilePreviewDefaultWidth)))
-  } catch {
-    return workspaceFilePreviewDefaultWidth
-  }
-}
-
-function workspaceFilePreviewWidthRatio(width: number) {
-  const currentViewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
-  const viewportWidth = currentViewportWidth <= 700 ? 1_400 : currentViewportWidth
-  return Math.min(1, width / Math.max(1, viewportWidth))
-}
-
-function readWorkspaceFilePreviewWidthRatio() {
-  if (typeof window === 'undefined') return workspaceFilePreviewWidthRatio(workspaceFilePreviewDefaultWidth)
-  try {
-    const storedRatio = Number(window.localStorage.getItem(workspaceFilePreviewWidthRatioStorageKey))
-    if (Number.isFinite(storedRatio) && storedRatio > 0 && storedRatio <= 1) return storedRatio
-    const legacyWidth = Math.min(readWorkspaceFilePreviewWidth(), workspaceFilePreviewWidthLimit())
-    return workspaceFilePreviewWidthRatio(legacyWidth)
-  } catch {
-    return workspaceFilePreviewWidthRatio(workspaceFilePreviewDefaultWidth)
-  }
+function clampWorkspaceExplorerWidth(value: number) {
+  return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(), value)))
 }
 
 function readWorkspaceExplorerWidth() {
@@ -1846,6 +1782,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [previewCopied, setPreviewCopied] = useState(false)
   const previewCloseButton = useRef<HTMLButtonElement>(null)
   const previewEditor = useRef<HTMLTextAreaElement>(null)
+  const previewReturnFocus = useRef<HTMLElement | null>(null)
   const requestGeneration = useRef(0)
   const previewRequestGeneration = useRef(0)
   const handledPreviewRequest = useRef(0)
@@ -1870,6 +1807,23 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewEditContent(null)
     onPreviewStateChange(false)
   }, [onPreviewStateChange, previewDirty, previewSaving])
+
+  useEffect(() => {
+    if (!previewPath) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (contextMenu || selectionContextMenu) {
+        setContextMenu(null)
+        setSelectionContextMenu(null)
+        return
+      }
+      closePreview()
+    }
+    document.addEventListener('keydown', closeOnEscape, true)
+    return () => document.removeEventListener('keydown', closeOnEscape, true)
+  }, [closePreview, contextMenu, previewPath, selectionContextMenu])
 
   const loadDirectory = useCallback(async (path: string, offset = 0) => {
     if (!browsingRoot) return
@@ -1899,6 +1853,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string) => {
     if (previewSaving) return
     if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
+    if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
+      previewReturnFocus.current = document.activeElement
+    }
     pendingPreviewScopeReset.current = false
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
@@ -2288,10 +2245,20 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   }, [previewFile])
   const highlightedPreviewLines = highlightedPreview?.file === previewFile ? highlightedPreview.lines : []
   useEffect(() => {
-    if (!mobilePreviewDialog || !previewPath) return
+    if (!previewPath) return
     const frame = window.requestAnimationFrame(() => previewCloseButton.current?.focus())
     return () => window.cancelAnimationFrame(frame)
-  }, [mobilePreviewDialog, previewPath])
+  }, [previewPath])
+  useEffect(() => {
+    if (previewPath) return
+    const returnFocus = previewReturnFocus.current
+    previewReturnFocus.current = null
+    if (!returnFocus) return
+    const frame = window.requestAnimationFrame(() => {
+      if (returnFocus.isConnected) returnFocus.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [previewPath])
   return (
     <>
       <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} aria-label="工作区文件资源管理器">
@@ -2332,14 +2299,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       </aside>
       {previewPath ? (
         <>
-        {mobilePreviewDialog ? <button className="workspace-file-preview-backdrop workspace-file-preview-backdrop--open" type="button" aria-label="关闭文件预览" onClick={closePreview} /> : null}
+        <button className="workspace-file-preview-backdrop workspace-file-preview-backdrop--open" type="button" aria-label="关闭文件预览" tabIndex={-1} onClick={closePreview} />
         <aside
-          className={`workspace-file-preview-panel${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ''}`}
-          role={mobilePreviewDialog ? 'dialog' : undefined}
-          aria-modal={mobilePreviewDialog || undefined}
+          className={`workspace-file-preview-panel workspace-file-preview-panel--dialog-open${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ''}`}
+          role="dialog"
+          aria-modal="true"
           aria-label="工作区文件预览"
           onKeyDown={(event) => {
-            if (!mobilePreviewDialog || event.key !== 'Tab') return
+            if (event.key !== 'Tab') return
             const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')
             const first = controls.item(0)
             const last = controls.item(controls.length - 1)
@@ -2776,8 +2743,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
-  const [workspaceFilePreviewWidth, setWorkspaceFilePreviewWidth] = useState(readWorkspaceFilePreviewWidth)
-  const [workspaceFilePreviewOpen, setWorkspaceFilePreviewOpen] = useState(false)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string; diff?: string } | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
@@ -2827,15 +2792,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
-  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number; startPreviewWidth: number } | null>(null)
-  const workspaceFilePreviewWidthRef = useRef(workspaceFilePreviewWidth)
-  const workspaceFilePreviewPreferredWidthRatioRef = useRef(0)
-  if (workspaceFilePreviewPreferredWidthRatioRef.current === 0) {
-    workspaceFilePreviewPreferredWidthRatioRef.current = readWorkspaceFilePreviewWidthRatio()
-  }
-  const workspaceFilePreviewOpenRef = useRef(false)
-  const workspaceExplorerWidthBeforePreviewRef = useRef<number | null>(null)
-  const workspaceFilePreviewResizePointer = useRef<{ pointerId: number; startX: number; startExplorerWidth: number; startPreviewWidth: number } | null>(null)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
@@ -3002,8 +2959,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     ...themeRootStyle(themePreferences),
     '--marquee-color': marqueeColor,
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
-    '--workspace-file-preview-handle-width': workspaceFilePreviewOpen ? '8px' : '0px',
-    '--workspace-file-preview-width': workspaceFilePreviewOpen ? `${workspaceFilePreviewWidth}px` : '0px',
   } as CSSProperties
 
   useEffect(() => {
@@ -3132,7 +3087,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
       if (threadRenameTarget) return
-      if (workspacePreviewModeRef.current === 'mobile') {
+      if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
         return
@@ -3413,105 +3368,37 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     composerHandle.current?.addDocumentAttachment(document, focus)
   }, [])
 
-  function setWorkspaceExplorerWidthValue(value: number, persist = false, commit = false) {
-    const previewOpen = workspaceFilePreviewOpenRef.current
-    const currentWidth = workspaceExplorerWidthRef.current
-    let width: number
-    let previewWidth = workspaceFilePreviewWidthRef.current
-    if (previewOpen && value > currentWidth) {
-      // When the explorer divider is dragged wider, let the preview yield
-      // space instead of locking the explorer at the combined-width limit.
-      const fitted = fitWorkspacePreviewWidths(value, previewWidth)
-      width = fitted.explorerWidth
-      previewWidth = fitted.previewWidth
-      workspaceFilePreviewWidthRef.current = previewWidth
-      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${previewWidth}px`)
-    } else {
-      width = clampWorkspaceExplorerWidth(value, previewOpen, previewOpen ? previewWidth : 0)
-    }
+  function setWorkspaceExplorerWidthValue(value: number, persist = false) {
+    const width = clampWorkspaceExplorerWidth(value)
     workspaceExplorerWidthRef.current = width
     remoteShell.current?.style.setProperty('--workspace-explorer-width', `${width}px`)
-    if (!persist && !commit) return width
-    setWorkspaceExplorerWidth(width)
-    if (previewOpen) setWorkspaceFilePreviewWidth(previewWidth)
     if (!persist) return width
+    setWorkspaceExplorerWidth(width)
     try {
       window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(width))
-      if (previewOpen) {
-        const ratio = workspaceFilePreviewWidthRatio(previewWidth)
-        workspaceFilePreviewPreferredWidthRatioRef.current = ratio
-        window.localStorage.setItem(workspaceFilePreviewWidthStorageKey, String(previewWidth))
-        window.localStorage.setItem(workspaceFilePreviewWidthRatioStorageKey, String(ratio))
-      }
     } catch {
       // The current tab still keeps the chosen width when storage is unavailable.
     }
     return width
   }
 
-  function setWorkspaceFilePreviewSplitWidths(explorerWidth: number, previewWidth: number, persist = false) {
-    const fitted = fitWorkspacePreviewWidths(explorerWidth, previewWidth)
-    workspaceExplorerWidthRef.current = fitted.explorerWidth
-    workspaceFilePreviewWidthRef.current = fitted.previewWidth
-    remoteShell.current?.style.setProperty('--workspace-explorer-width', `${fitted.explorerWidth}px`)
-    remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
-    if (!persist) return fitted
-    setWorkspaceExplorerWidth(fitted.explorerWidth)
-    setWorkspaceFilePreviewWidth(fitted.previewWidth)
-    const ratio = workspaceFilePreviewWidthRatio(fitted.previewWidth)
-    workspaceFilePreviewPreferredWidthRatioRef.current = ratio
-    try {
-      window.localStorage.setItem(workspaceExplorerWidthStorageKey, String(fitted.explorerWidth))
-      window.localStorage.setItem(workspaceFilePreviewWidthStorageKey, String(fitted.previewWidth))
-      window.localStorage.setItem(workspaceFilePreviewWidthRatioStorageKey, String(ratio))
-    } catch {
-      // The current tab still keeps the chosen width when storage is unavailable.
-    }
-    return fitted
-  }
-
   const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
     if (open) {
-      const mode = workspacePreviewModeRef.current ?? (desktopWorkspacePreviewAvailable() ? 'desktop' : 'mobile')
-      workspacePreviewModeRef.current = mode
+      workspacePreviewModeRef.current = workspacePreviewModeRef.current ?? (desktopWorkspacePreviewAvailable() ? 'desktop' : 'mobile')
       workspacePreviewCloseRef.current = closePreview ?? null
-      if (mode === 'mobile' || workspaceFilePreviewOpenRef.current) return
-      const currentExplorerWidth = workspaceExplorerWidthRef.current
-      const desiredPreviewWidth = window.innerWidth * workspaceFilePreviewPreferredWidthRatioRef.current
-      const fitted = fitWorkspacePreviewWidths(currentExplorerWidth, desiredPreviewWidth)
-      if (fitted.explorerWidth < currentExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
-        workspaceExplorerWidthBeforePreviewRef.current = currentExplorerWidth
-      }
-      workspaceFilePreviewOpenRef.current = true
-      setWorkspaceFilePreviewOpen(true)
-      workspaceFilePreviewWidthRef.current = fitted.previewWidth
-      setWorkspaceFilePreviewWidth(fitted.previewWidth)
-      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
-      setWorkspaceExplorerWidthValue(fitted.explorerWidth, false, true)
       return
     }
-    const mode = workspacePreviewModeRef.current
     workspacePreviewModeRef.current = null
     workspacePreviewCloseRef.current = null
-    if (mode === 'mobile' || !workspaceFilePreviewOpenRef.current) return
-    workspaceFilePreviewOpenRef.current = false
-    setWorkspaceFilePreviewOpen(false)
-    remoteShell.current?.style.setProperty('--workspace-file-preview-handle-width', '0px')
-    remoteShell.current?.style.setProperty('--workspace-file-preview-width', '0px')
-    const previousExplorerWidth = workspaceExplorerWidthBeforePreviewRef.current
-    workspaceExplorerWidthBeforePreviewRef.current = null
-    if (previousExplorerWidth !== null) setWorkspaceExplorerWidthValue(previousExplorerWidth, false, true)
   }, [])
 
   function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     event.preventDefault()
-    workspaceExplorerWidthBeforePreviewRef.current = null
     workspaceResizePointer.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
       startWidth: workspaceExplorerWidthRef.current,
-      startPreviewWidth: workspaceFilePreviewWidthRef.current,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setWorkspaceResizing(true)
@@ -3521,19 +3408,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
     const requestedWidth = current.startWidth + current.startX - event.clientX
-    if (workspaceFilePreviewOpenRef.current) {
-      const fitted = requestedWidth > current.startWidth
-        ? fitWorkspacePreviewWidths(requestedWidth, current.startPreviewWidth)
-        : {
-          explorerWidth: clampWorkspaceExplorerWidth(requestedWidth, true, current.startPreviewWidth),
-          previewWidth: current.startPreviewWidth,
-        }
-      workspaceExplorerWidthRef.current = fitted.explorerWidth
-      workspaceFilePreviewWidthRef.current = fitted.previewWidth
-      remoteShell.current?.style.setProperty('--workspace-explorer-width', `${fitted.explorerWidth}px`)
-      remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
-      return
-    }
     setWorkspaceExplorerWidthValue(requestedWidth)
   }
 
@@ -3545,58 +3419,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setWorkspaceResizing(false)
   }
 
-  function startWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) return
-    event.preventDefault()
-    workspaceExplorerWidthBeforePreviewRef.current = null
-    workspaceFilePreviewResizePointer.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startExplorerWidth: workspaceExplorerWidthRef.current,
-      startPreviewWidth: workspaceFilePreviewWidthRef.current,
-    }
-    event.currentTarget.setPointerCapture(event.pointerId)
-    setWorkspaceResizing(true)
-  }
-
-  function moveWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
-    const current = workspaceFilePreviewResizePointer.current
-    if (!current || current.pointerId !== event.pointerId) return
-    const delta = event.clientX - current.startX
-    setWorkspaceFilePreviewSplitWidths(current.startExplorerWidth + delta, current.startPreviewWidth - delta)
-  }
-
-  function finishWorkspaceFilePreviewResize(event: ReactPointerEvent<HTMLDivElement>) {
-    const current = workspaceFilePreviewResizePointer.current
-    if (!current || current.pointerId !== event.pointerId) return
-    workspaceFilePreviewResizePointer.current = null
-    setWorkspaceFilePreviewSplitWidths(workspaceExplorerWidthRef.current, workspaceFilePreviewWidthRef.current, true)
-    setWorkspaceResizing(false)
-  }
-
   useEffect(() => {
     workspaceExplorerWidthRef.current = workspaceExplorerWidth
   }, [workspaceExplorerWidth])
 
   useEffect(() => {
-    workspaceFilePreviewWidthRef.current = workspaceFilePreviewWidth
-  }, [workspaceFilePreviewWidth])
-
-  useEffect(() => {
     const clampForViewport = () => {
-      if (workspaceFilePreviewOpenRef.current) {
-        const desiredExplorerWidth = workspaceExplorerWidthBeforePreviewRef.current ?? workspaceExplorerWidthRef.current
-        const desiredPreviewWidth = window.innerWidth * workspaceFilePreviewPreferredWidthRatioRef.current
-        const fitted = fitWorkspacePreviewWidths(desiredExplorerWidth, desiredPreviewWidth)
-        if (fitted.explorerWidth < desiredExplorerWidth && workspaceExplorerWidthBeforePreviewRef.current === null) {
-          workspaceExplorerWidthBeforePreviewRef.current = desiredExplorerWidth
-        }
-        workspaceFilePreviewWidthRef.current = fitted.previewWidth
-        setWorkspaceFilePreviewWidth(fitted.previewWidth)
-        remoteShell.current?.style.setProperty('--workspace-file-preview-width', `${fitted.previewWidth}px`)
-        setWorkspaceExplorerWidthValue(fitted.explorerWidth, false, true)
-        return
-      }
       const width = clampWorkspaceExplorerWidth(workspaceExplorerWidthRef.current)
       if (width !== workspaceExplorerWidthRef.current) setWorkspaceExplorerWidthValue(width, true)
     }
@@ -3787,7 +3615,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             aria-label="调整右侧文件区宽度"
             aria-orientation="vertical"
             aria-valuemin={workspaceExplorerMinimumWidth()}
-            aria-valuemax={workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewMinimumWidth() : 0)}
+            aria-valuemax={workspaceExplorerWidthLimit()}
             aria-valuenow={workspaceExplorerWidth}
             tabIndex={0}
             onPointerDown={startWorkspaceResize}
@@ -3797,7 +3625,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onLostPointerCapture={finishWorkspaceResize}
             onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
             onKeyDown={(event) => {
-              const limits = workspaceExplorerWidthLimit(workspaceFilePreviewOpen, workspaceFilePreviewOpen ? workspaceFilePreviewMinimumWidth() : 0)
+              const limits = workspaceExplorerWidthLimit()
               const nextWidth = event.key === 'ArrowLeft'
                 ? workspaceExplorerWidthRef.current + 24
                 : event.key === 'ArrowRight'
@@ -3812,48 +3640,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               setWorkspaceExplorerWidthValue(nextWidth, true)
             }}
           />
-          {workspaceFilePreviewOpen ? (
-            <div
-              className="workspace-file-preview-resize-handle"
-              role="separator"
-              aria-label="调整文件树与预览区域宽度"
-              aria-orientation="vertical"
-              aria-valuemin={workspaceFileSplitExplorerWidthRange(workspaceExplorerWidth, workspaceFilePreviewWidth).minimum}
-              aria-valuemax={workspaceFileSplitExplorerWidthRange(workspaceExplorerWidth, workspaceFilePreviewWidth).maximum}
-              aria-valuenow={workspaceExplorerWidth}
-              tabIndex={0}
-              onPointerDown={startWorkspaceFilePreviewResize}
-              onPointerMove={moveWorkspaceFilePreviewResize}
-              onPointerUp={finishWorkspaceFilePreviewResize}
-              onPointerCancel={finishWorkspaceFilePreviewResize}
-              onLostPointerCapture={finishWorkspaceFilePreviewResize}
-              onDoubleClick={() => {
-                workspaceExplorerWidthBeforePreviewRef.current = null
-                const combinedWidth = workspaceExplorerWidthRef.current + workspaceFilePreviewWidthRef.current
-                const resetPreviewWidth = Math.min(workspaceFilePreviewDefaultWidth, combinedWidth - workspaceExplorerMinimumWidth())
-                setWorkspaceFilePreviewSplitWidths(combinedWidth - resetPreviewWidth, resetPreviewWidth, true)
-              }}
-              onKeyDown={(event) => {
-                const explorerWidth = workspaceExplorerWidthRef.current
-                const previewWidth = workspaceFilePreviewWidthRef.current
-                const combinedWidth = explorerWidth + previewWidth
-                const limits = workspaceFileSplitExplorerWidthRange(explorerWidth, previewWidth)
-                const nextExplorerWidth = event.key === 'ArrowLeft'
-                  ? explorerWidth - 24
-                  : event.key === 'ArrowRight'
-                    ? explorerWidth + 24
-                    : event.key === 'Home'
-                      ? limits.minimum
-                      : event.key === 'End'
-                        ? limits.maximum
-                        : null
-                if (nextExplorerWidth === null) return
-                event.preventDefault()
-                workspaceExplorerWidthBeforePreviewRef.current = null
-                setWorkspaceFilePreviewSplitWidths(nextExplorerWidth, combinedWidth - nextExplorerWidth, true)
-              }}
-            />
-          ) : null}
           <WorkspaceExplorer
             token={token}
             cwd={activeWorkspaceCwd}
