@@ -574,9 +574,10 @@ class CodexAppServer:
         self,
         model: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        cwd: Path | None = None,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
-            "cwd": str(self.workspace),
+            "cwd": str(cwd or self.workspace),
             "serviceName": "codex_remote_web",
         }
         if model:
@@ -588,7 +589,7 @@ class CodexAppServer:
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise CodexRuntimeError("Codex 没有返回新对话编号")
-        return thread
+        return {**thread, "cwd": thread.get("cwd") if isinstance(thread.get("cwd"), str) else str(cwd or self.workspace)}
 
     async def resume_thread(self, thread_id: str) -> dict[str, Any]:
         await self._prepare_runtime_thread(thread_id)

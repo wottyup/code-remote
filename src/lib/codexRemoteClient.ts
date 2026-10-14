@@ -530,10 +530,10 @@ export const codexRemoteClient = {
   reclaimForRemote(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/reclaim', { method: 'POST' })
   },
-  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string) {
+  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string, cwd?: string) {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
-      body: JSON.stringify({ model, approval_policy: approvalPolicy, request_id: requestId }),
+      body: JSON.stringify({ model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
     }, { networkRetries: 3 })
   },
   uploadPdfAttachment(token: string, file: File) {

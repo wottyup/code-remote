@@ -3236,6 +3236,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     model?: string,
     approvalPolicy?: CodexApprovalPolicy,
     requestId = queuedMessageId(),
+    cwd?: string,
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3250,7 +3251,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     historyRevision.current += 1
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId)
+      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd)
       activeThreadId.current = thread.id
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setQueueRecoveryReadyThreadId(null)

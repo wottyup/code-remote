@@ -195,6 +195,7 @@ class PdfAttachmentStore:
 class ThreadStartRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     approval_policy: ApprovalPolicy | None = None
+    cwd: str | None = Field(default=None, max_length=4_096)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -1004,9 +1005,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads", status_code=status.HTTP_201_CREATED)
     async def create_thread(body: ThreadStartRequest) -> dict[str, Any]:
         async def create() -> dict[str, Any]:
+            cwd = workspace_base_for_cwd(app_server.workspace, body.cwd) if body.cwd else None
             return await app_server.start_thread(
                 body.model.strip() or None if body.model else None,
                 body.approval_policy,
+                cwd=cwd,
             )
 
         try:
