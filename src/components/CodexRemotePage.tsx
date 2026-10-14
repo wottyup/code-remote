@@ -705,7 +705,6 @@ interface MessageComposerProps {
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
-  reserveQueuedMessageSpace: boolean
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
   onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean | Promise<boolean>
@@ -740,7 +739,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onUploadPdf,
   onSend,
   queuedMessages,
-  reserveQueuedMessageSpace,
   onSendQueuedNow,
   onBeginQueuedEdit,
   onUpdateQueuedMessage,
@@ -1555,11 +1553,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               }} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
             </div>
           ))}
-        </div>
-      ) : null}
-      {reserveQueuedMessageSpace && !mobileLayout && queuedMessages.length === 0 ? (
-        <div className="composer-queue composer-queue--collapsed composer-queue--placeholder" aria-hidden="true">
-          <span className="composer-queue__heading"><span>已排队 0 条</span><ChevronDown size={14} /></span>
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
@@ -2618,7 +2611,6 @@ function RemoteChatPane({
   }, [active, activeThreadId, forceMessageStreamToBottom, remote.loadingHistory, remote.messages])
 
   useLayoutEffect(() => {
-    if (!active) return
     const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
     if (!forceToBottom && !followMessageStream.current) return
     positionMessageStreamAtBottom()
@@ -2648,7 +2640,6 @@ function RemoteChatPane({
   }, [visibleStartIndex])
 
   useLayoutEffect(() => {
-    if (!active) return
     const content = messageContent.current
     if (!content || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
@@ -2661,7 +2652,7 @@ function RemoteChatPane({
     })
     observer.observe(content)
     return () => observer.disconnect()
-  }, [active, activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
 
   useEffect(() => () => {
     if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
@@ -2833,9 +2824,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
-  const hasQueuedMessagesInOpenPanes = openPaneIndexes.some(
-    (paneIndex) => (remotes[paneIndex]?.queuedMessages.length ?? 0) > 0,
-  )
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
     return remote?.isRunning && remote.runningTurnId
@@ -3895,7 +3883,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
-              reserveQueuedMessageSpace={openPaneIndexes.length > 1 && hasQueuedMessagesInOpenPanes}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}

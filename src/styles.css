@@ -570,7 +570,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-document > button:hover { background: #303744; color: #e2e7f0; }
 .composer-queue { display: grid; gap: 5px; margin: 1px 1px 9px; padding: 7px 8px; border: 1px solid rgba(113, 136, 255, .35); border-radius: 10px; background: rgba(47, 55, 84, .48); }
 .composer-queue--collapsed { gap: 0; padding-block: 4px; }
-.composer-queue--placeholder { visibility: hidden; pointer-events: none; }
 .composer-queue__heading { display: flex; width: 100%; min-width: 0; align-items: center; justify-content: space-between; gap: 8px; padding: 0; border: 0; background: transparent; color: #cbd4ff; cursor: pointer; font: inherit; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 600; text-align: left; }
 .composer-queue__heading > span { flex: 0 0 auto; }
 .composer-queue__heading small { overflow: hidden; color: #929dbc; font-size: calc(10px + var(--mobile-font-offset)); font-weight: 400; text-overflow: ellipsis; white-space: nowrap; }
@@ -679,7 +678,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .pair-security svg { flex: 0 0 auto; color: #9aa2ae; }
 
 @media (max-width: 700px) {
-  .composer-queue--placeholder, .composer-file-change-summary--placeholder { display: none; }
+  .composer-file-change-summary--placeholder { display: none; }
   .remote-shell { display: block; position: relative; }
   .workspace-resize-handle { display: none; }
   .pane-close-button { display: none; }
