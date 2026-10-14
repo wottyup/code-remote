@@ -339,6 +339,15 @@ function threadIsRunning(thread: CodexThread) {
   return thread.status?.type === 'inProgress' || thread.status?.type === 'running'
 }
 
+function threadHistoryMetadataChanged(cached: CodexThread, latest: CodexThread) {
+  const cachedTimestamp = threadTimestamp(cached)
+  const latestTimestamp = threadTimestamp(latest)
+  if (latestTimestamp > cachedTimestamp) return true
+  return typeof cached.preview === 'string'
+    && typeof latest.preview === 'string'
+    && cached.preview !== latest.preview
+}
+
 function cachedHistoryMatchesThreadMetadata(entry: ThreadCacheEntry, latestThread: CodexThread | undefined, metadataLoaded: boolean, hasQueuedMessages: boolean) {
   return canUseCachedThreadHistory({
     complete: entry.complete,
@@ -1149,6 +1158,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const threadListLoadedRef = useRef(false)
   const threadListFetchedAtRef = useRef(0)
   const threadListRequest = useRef<Promise<CodexThread[] | null> | null>(null)
+  const pendingThreadHistoryRefresh = useRef(new Set<string>())
   const prefetchingThreadIds = useRef(new Set<string>())
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
@@ -2033,6 +2043,46 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     void loadThread(threadId, revision, true, turnId)
   }, [loadThread])
 
+  const applyActiveThreadMetadata = useCallback((latestThread: CodexThread) => {
+    if (!latestThread.id || latestThread.id !== activeThreadId.current) return
+    setActiveThread((current) => {
+      if (!current || current.id !== latestThread.id) return current
+      const merged = { ...current, ...latestThread }
+      const currentTimestamp = threadTimestamp(current)
+      const latestTimestamp = threadTimestamp(latestThread)
+      if (currentTimestamp > latestTimestamp && current.updatedAt !== undefined) {
+        merged.updatedAt = current.updatedAt
+      }
+      return sameActiveThread(current, merged) ? current : merged
+    })
+  }, [])
+
+  const refreshActiveThreadIfChanged = useCallback(async () => {
+    const threadId = activeThreadId.current
+    if (!threadId || handedOffRef.current) return
+    const nextThreads = await refreshThreads()
+    if (!nextThreads || activeThreadId.current !== threadId) return
+    const latestThread = nextThreads.find((thread) => thread.id === threadId)
+    if (!latestThread) return
+
+    const cached = threadHistoryCache.current.get(threadId)
+    if (isRunning || activeTurnId.current || cached?.running) return
+    if (threadIsRunning(latestThread)) {
+      pendingThreadHistoryRefresh.current.add(threadId)
+      return
+    }
+
+    const currentThread = cached?.thread ?? (activeThread?.id === threadId ? activeThread : null)
+    const needsHistoryRefresh = pendingThreadHistoryRefresh.current.delete(threadId)
+      || !currentThread
+      || threadHistoryMetadataChanged(currentThread, latestThread)
+    if (needsHistoryRefresh) {
+      void loadThread(threadId, ++historyRevision.current, true)
+    } else {
+      applyActiveThreadMetadata(latestThread)
+    }
+  }, [activeThread, applyActiveThreadMetadata, isRunning, loadThread, refreshThreads])
+
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
     // An unopened thread has no history to restore yet; keep its loading state truthful.
@@ -2691,13 +2741,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
     if (event.type === 'threads.changed') {
-      void refreshThreads()
-      if (activeThreadId.current && writerRefreshTimer.current === undefined) {
-        writerRefreshTimer.current = window.setTimeout(() => {
-          writerRefreshTimer.current = undefined
-          if (activeThreadId.current) void loadThread(activeThreadId.current, historyRevision.current, true)
-        }, 700)
-      }
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = window.setTimeout(() => {
+        writerRefreshTimer.current = undefined
+        void refreshActiveThreadIfChanged()
+      }, 1000)
       return
     }
     if (event.type === 'connection') {
@@ -2896,7 +2944,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       startTurnTimerForTurn(turnId, startedAt)
       setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
       activityItemId.current = null
-      if (turnThreadId) refreshThreadForRemoteMessage(turnThreadId, turnId)
       return
     }
     if (event.method === 'turn/completed') {
@@ -2969,8 +3016,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // the optimistic queued user message while its new turn is starting.
       if (queuedThreadId && canReleaseQueue && !needsHistoryCheck) void startNextQueuedMessage(queuedThreadId)
       if (refreshThreadId) {
-        void refreshThreads()
-        void loadThread(refreshThreadId, refreshRevision)
+        pendingThreadHistoryRefresh.current.delete(refreshThreadId)
+        void refreshThreads().then((nextThreads) => {
+          if (!nextThreads || activeThreadId.current !== refreshThreadId) return
+          const latestThread = nextThreads.find((thread) => thread.id === refreshThreadId)
+          if (latestThread) applyActiveThreadMetadata(latestThread)
+        })
+        if (needsHistoryCheck) void loadThread(refreshThreadId, refreshRevision, true)
       }
       return
     }
@@ -3095,7 +3147,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshActiveThreadIfChanged, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -3234,27 +3286,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       window.removeEventListener('online', handleOnline)
     }
   }, [enabled, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
-
-  useEffect(() => {
-    if (!enabled) return
-    let disposed = false
-    let timer: number | undefined
-    const reconcileHistory = async () => {
-      try {
-        const threadId = activeThreadId.current
-        if (threadId && !handedOffRef.current && document.visibilityState === 'visible') {
-          await loadThread(threadId, historyRevision.current, true)
-        }
-      } finally {
-        if (!disposed) timer = window.setTimeout(reconcileHistory, 4000)
-      }
-    }
-    timer = window.setTimeout(reconcileHistory, 4000)
-    return () => {
-      disposed = true
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [enabled, loadThread])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
