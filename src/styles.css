@@ -148,7 +148,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-overlay-panel__resize-handle:hover::before, .chat-overlay-panel__resize-handle:focus-visible::before { width: 48px; background: #aabaff; }
 .chat-overlay-panel__loading { display: flex; min-width: 0; min-height: 0; align-items: center; justify-content: center; gap: 9px; color: #e3e6ed; font-size: calc(13px + var(--mobile-font-offset)); }
 .terminal-dialog { background: #111317; }
-.terminal-dialog--toolbar-close .chat-overlay-panel__close { display: none; }
 .terminal-dialog__title { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .terminal-dialog__title > svg { flex: 0 0 auto; color: #aabaff; }
 .terminal-dialog__title > strong { flex: 0 0 auto; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 620; }
@@ -694,7 +693,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-chat__title { min-width: 0; max-width: 100%; }
   .remote-chat__controls { min-width: 0; max-width: none; gap: 7px; overflow: visible; }
   .chat-overlay-panel__header { min-height: 54px; gap: 6px; padding-inline: 9px 7px; }
-  .terminal-dialog--toolbar-close .chat-overlay-panel__close { display: grid; }
   .terminal-dialog__title { gap: 6px; }
   .terminal-dialog__screen { padding: 7px 6px 8px; }
   .thread-completion-toast { top: max(10px, calc(env(safe-area-inset-top) + 6px), calc(var(--native-status-bar-inset) + 6px)); width: min(calc(100vw - 24px), 410px); }

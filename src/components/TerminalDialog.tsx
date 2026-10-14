@@ -1,14 +1,18 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { Clipboard, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
+import { Clipboard, Copy, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { copyTextToClipboard } from '../lib/clipboard'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
+
+const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 
 interface TerminalDialogProps {
   token: string
   threadId?: string
   cwd?: string
+  showCloseButton: boolean
   onClose: () => void
   onInsertText: (value: string) => void
 }
@@ -21,7 +25,60 @@ interface ContextMenuState {
   text: string
 }
 
-export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: TerminalDialogProps) {
+function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clientX: number, clientY: number) {
+  const bounds = xtermScreen.getBoundingClientRect()
+  if (bounds.width <= 0 || bounds.height <= 0 || terminal.cols <= 0 || terminal.rows <= 0) return false
+
+  const column = Math.min(terminal.cols - 1, Math.max(0, Math.floor(((clientX - bounds.left) / bounds.width) * terminal.cols)))
+  const visibleRow = Math.min(terminal.rows - 1, Math.max(0, Math.floor(((clientY - bounds.top) / bounds.height) * terminal.rows)))
+  const row = terminal.buffer.active.viewportY + visibleRow
+  const line = terminal.buffer.active.getLine(row)
+  if (!line) return false
+
+  let startColumn = column
+  let cell = line.getCell(startColumn)
+  if (cell?.getWidth() === 0 && startColumn > 0) {
+    startColumn -= 1
+    cell = line.getCell(startColumn)
+  }
+  const characters = cell?.getChars() ?? ''
+  if (!characters) return false
+
+  if (/^\s+$/u.test(characters)) {
+    terminal.selectLines(row, row)
+    return terminal.hasSelection()
+  }
+
+  const separators = terminal.options.wordSeparator ?? ''
+  const isSeparator = (value: string) => !value || Array.from(value).some((character) => separators.includes(character))
+  if (isSeparator(characters)) {
+    terminal.select(startColumn, row, Math.max(1, cell?.getWidth() ?? 1))
+    return terminal.hasSelection()
+  }
+
+  let endColumn = startColumn + Math.max(1, cell?.getWidth() ?? 1)
+  while (startColumn > 0) {
+    let previousColumn = startColumn - 1
+    let previousCell = line.getCell(previousColumn)
+    if (previousCell?.getWidth() === 0 && previousColumn > 0) {
+      previousColumn -= 1
+      previousCell = line.getCell(previousColumn)
+    }
+    const previousCharacters = previousCell?.getChars() ?? ''
+    if (isSeparator(previousCharacters)) break
+    startColumn = previousColumn
+  }
+  while (endColumn < terminal.cols) {
+    const nextCell = line.getCell(endColumn)
+    const nextCharacters = nextCell?.getChars() ?? ''
+    if (isSeparator(nextCharacters)) break
+    endColumn += Math.max(1, nextCell?.getWidth() ?? 1)
+  }
+  terminal.select(startColumn, row, Math.max(1, endColumn - startColumn))
+  return terminal.hasSelection()
+}
+
+export function TerminalDialog({ token, threadId, cwd, showCloseButton, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
@@ -31,12 +88,14 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     const container = screen.current
     if (!container) return
 
+    const compactTerminal = window.matchMedia(compactTerminalQuery)
+
     const terminal = new Terminal({
       allowProposedApi: false,
       cursorBlink: true,
       convertEol: false,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: 13,
+      fontSize: compactTerminal.matches ? 12 : 13,
       lineHeight: 1.2,
       scrollback: 5_000,
       theme: {
@@ -88,6 +147,14 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         // The dialog can briefly have no measurable size while the pane is switching.
       }
     }
+    const updateFontSize = () => {
+      const fontSize = compactTerminal.matches ? 12 : 13
+      if (terminal.options.fontSize === fontSize) return
+      terminal.options.fontSize = fontSize
+      window.cancelAnimationFrame(fitFrame)
+      fitFrame = window.requestAnimationFrame(fitAndResize)
+    }
+    compactTerminal.addEventListener('change', updateFontSize)
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver(() => {
@@ -103,18 +170,73 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       }
       send({ type: 'input', data })
     })
-    const handleContextMenu = (event: MouseEvent) => {
+    const showContextMenu = (clientX: number, clientY: number) => {
       const selectedText = terminal.getSelection()
-      if (!selectedText) return
-      event.preventDefault()
-      const bounds = (container.parentElement ?? container).getBoundingClientRect()
+      if (!selectedText) return false
+      const menuHost = container.closest<HTMLElement>('.chat-overlay-panel') ?? container
+      const bounds = menuHost.getBoundingClientRect()
       setContextMenu({
-        x: Math.min(Math.max(8, event.clientX - bounds.left), Math.max(8, bounds.width - 190)),
-        y: Math.min(Math.max(8, event.clientY - bounds.top), Math.max(8, bounds.height - 52)),
+        x: Math.min(Math.max(8, clientX - bounds.left), Math.max(8, bounds.width - 200)),
+        y: Math.min(Math.max(8, clientY - bounds.top), Math.max(8, bounds.height - 92)),
         text: selectedText,
       })
+      return true
+    }
+    const handleContextMenu = (event: MouseEvent) => {
+      if (!terminal.hasSelection()) return
+      event.preventDefault()
+      showContextMenu(event.clientX, event.clientY)
     }
     container.addEventListener('contextmenu', handleContextMenu)
+
+    let longPressTimer = 0
+    let touchStart: { x: number; y: number } | null = null
+    let longPressPoint: { x: number; y: number } | null = null
+    const clearLongPress = () => {
+      if (longPressTimer) window.clearTimeout(longPressTimer)
+      longPressTimer = 0
+      touchStart = null
+    }
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) {
+        clearLongPress()
+        longPressPoint = null
+        return
+      }
+      clearLongPress()
+      setContextMenu(null)
+      longPressPoint = null
+      const touch = event.touches[0]
+      const point = { x: touch.clientX, y: touch.clientY }
+      touchStart = point
+      longPressTimer = window.setTimeout(() => {
+        longPressTimer = 0
+        const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
+        if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
+          longPressPoint = point
+        }
+      }, 500)
+    }
+    const handleTouchMove = (event: TouchEvent) => {
+      if (!touchStart || !longPressTimer) return
+      const touch = event.touches[0]
+      if (!touch || Math.hypot(touch.clientX - touchStart.x, touch.clientY - touchStart.y) > 12) clearLongPress()
+    }
+    const handleTouchEnd = () => {
+      if (longPressTimer) window.clearTimeout(longPressTimer)
+      longPressTimer = 0
+      touchStart = null
+      if (longPressPoint) showContextMenu(longPressPoint.x, longPressPoint.y)
+      longPressPoint = null
+    }
+    const handleTouchCancel = () => {
+      clearLongPress()
+      longPressPoint = null
+    }
+    container.addEventListener('touchstart', handleTouchStart, { passive: true })
+    container.addEventListener('touchmove', handleTouchMove, { passive: true })
+    container.addEventListener('touchend', handleTouchEnd, { passive: true })
+    container.addEventListener('touchcancel', handleTouchCancel, { passive: true })
 
     socket.addEventListener('open', () => {
       fitAndResize()
@@ -160,8 +282,14 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     return () => {
       disposed = true
       window.cancelAnimationFrame(fitFrame)
+      compactTerminal.removeEventListener('change', updateFontSize)
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      container.removeEventListener('touchstart', handleTouchStart)
+      container.removeEventListener('touchmove', handleTouchMove)
+      container.removeEventListener('touchend', handleTouchEnd)
+      container.removeEventListener('touchcancel', handleTouchCancel)
+      clearLongPress()
       dataSubscription.dispose()
       send({ type: 'close' })
       socket.close()
@@ -181,7 +309,8 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       ariaLabel="本机终端"
       backdropLabel="关闭本机终端"
       onClose={onClose}
-      className="terminal-dialog terminal-dialog--toolbar-close"
+      showCloseButton={showCloseButton}
+      className="terminal-dialog"
       onPanelPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
@@ -204,6 +333,18 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
         >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              void copyTextToClipboard(contextMenu.text).then((copied) => {
+                if (copied) setContextMenu(null)
+              })
+            }}
+          >
+            <Copy size={14} />
+            复制
+          </button>
           <button
             type="button"
             role="menuitem"

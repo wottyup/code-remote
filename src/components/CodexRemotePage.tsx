@@ -38,6 +38,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { copyTextToClipboard } from '../lib/clipboard'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
@@ -77,6 +78,7 @@ const connectionLabel = {
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
+const terminalToolbarHiddenQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
@@ -506,35 +508,6 @@ function optimizeThemeBackgroundImage(file: File): Promise<string> {
     }
     image.src = sourceUrl
   })
-}
-
-async function copyText(value: string) {
-  const androidBridge = window.CodexRemoteAndroid
-  if (typeof androidBridge?.copyToClipboard === 'function') {
-    try {
-      if (androidBridge.copyToClipboard(value)) return true
-    } catch {
-      // Keep the browser clipboard path available if the native bridge fails.
-    }
-  }
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(value)
-      return true
-    }
-  } catch {
-    // Fall through to the legacy clipboard path for LAN HTTP pages.
-  }
-  const helper = document.createElement('textarea')
-  helper.value = value
-  helper.style.position = 'fixed'
-  helper.style.opacity = '0'
-  document.body.appendChild(helper)
-  helper.focus()
-  helper.select()
-  const copied = document.execCommand('copy')
-  helper.remove()
-  return copied
 }
 
 function titleOf(thread: CodexThread) {
@@ -2029,7 +2002,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         const target = event.target
         if (target instanceof HTMLElement && target.closest('input, textarea, [contenteditable="true"]')) return
         event.preventDefault()
-        void copyText(selectionContextMenu.content).then(setPreviewCopied)
+        void copyTextToClipboard(selectionContextMenu.content).then(setPreviewCopied)
       }
     }
     document.addEventListener('pointerdown', closeMenu)
@@ -2159,7 +2132,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 
   async function copyPreview() {
     if (!previewFile) return
-    setPreviewCopied(await copyText(previewEditContent ?? previewFile.content))
+    setPreviewCopied(await copyTextToClipboard(previewEditContent ?? previewFile.content))
   }
 
   function entryAbsolutePath(entry: CodexWorkspaceEntry) {
@@ -2478,6 +2451,7 @@ function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalToolbarHidden, setTerminalToolbarHidden] = useState(() => window.matchMedia(terminalToolbarHiddenQuery).matches)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
@@ -2488,6 +2462,15 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+
+  useEffect(() => {
+    const query = window.matchMedia(terminalToolbarHiddenQuery)
+    const update = () => setTerminalToolbarHidden(query.matches)
+    update()
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [])
+
   const activeThreadId = remote.activeThread?.id
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
@@ -2753,8 +2736,9 @@ function RemoteChatPane({
           <ChatOverlayPanel
             ariaLabel="本机终端"
             backdropLabel="关闭本机终端"
-            className="terminal-dialog terminal-dialog--toolbar-close"
+            className="terminal-dialog"
             onClose={() => setTerminalOpen(false)}
+            showCloseButton={terminalToolbarHidden}
             header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
           >
             <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
@@ -2764,6 +2748,7 @@ function RemoteChatPane({
             token={token}
             threadId={remote.activeThread?.id}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+            showCloseButton={terminalToolbarHidden}
             onClose={() => setTerminalOpen(false)}
             onInsertText={(value) => {
               if (value.length >= longPasteThreshold) {
@@ -3470,7 +3455,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ? `\n\n[原始 PDF 附件：${document.name}]`
       : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
     const value = (message.text + documentText).trim()
-    if (!value || !(await copyText(value))) return
+    if (!value || !(await copyTextToClipboard(value))) return
     setCopiedMessageId(message.id)
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
@@ -3988,7 +3973,7 @@ function CodeBlock({ value, language, showCopy = true }: { value: string; langua
   }, [])
 
   async function copyCode() {
-    if (!(await copyText(value))) return
+    if (!(await copyTextToClipboard(value))) return
     setCopied(true)
     if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
     resetTimer.current = window.setTimeout(() => setCopied(false), 1600)

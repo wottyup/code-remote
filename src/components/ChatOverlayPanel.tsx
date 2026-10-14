@@ -11,6 +11,7 @@ interface ChatOverlayPanelProps {
   children: ReactNode
   footer?: ReactNode
   onClose: () => void
+  showCloseButton?: boolean
   closeButtonRef?: RefObject<HTMLButtonElement | null>
   ariaModal?: boolean
   className?: string
@@ -39,6 +40,7 @@ export function ChatOverlayPanel({
   children,
   footer,
   onClose,
+  showCloseButton = true,
   closeButtonRef,
   ariaModal,
   className = '',
@@ -153,9 +155,11 @@ export function ChatOverlayPanel({
       >
         <header className="chat-overlay-panel__header">
           <div className="chat-overlay-panel__heading">{header}</div>
-          <button ref={closeButtonRef} className="icon-button chat-overlay-panel__close" type="button" onClick={onClose} aria-label={`关闭${ariaLabel}`} title={`关闭${ariaLabel}`}>
-            <X size={16} />
-          </button>
+          {showCloseButton ? (
+            <button ref={closeButtonRef} className="icon-button chat-overlay-panel__close" type="button" onClick={onClose} aria-label={`关闭${ariaLabel}`} title={`关闭${ariaLabel}`}>
+              <X size={16} />
+            </button>
+          ) : null}
         </header>
         <div className="chat-overlay-panel__body">{children}</div>
         {footer !== undefined ? <footer className="chat-overlay-panel__footer">{footer}</footer> : null}
