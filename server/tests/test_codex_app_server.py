@@ -764,7 +764,15 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "cwd": str(Path.cwd()),
                     "serviceName": "codex_remote_web",
-                    "approvalPolicy": "never",
+                    "approvalPolicy": {
+                        "granular": {
+                            "sandbox_approval": False,
+                            "rules": False,
+                            "skill_approval": False,
+                            "request_permissions": False,
+                            "mcp_elicitations": True,
+                        },
+                    },
                     "sandbox": "danger-full-access",
                 },
             ),
@@ -776,7 +784,15 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "threadId": "thread-id",
                     "input": [{"type": "text", "text": "hello"}],
-                    "approvalPolicy": "never",
+                    "approvalPolicy": {
+                        "granular": {
+                            "sandbox_approval": False,
+                            "rules": False,
+                            "skill_approval": False,
+                            "request_permissions": False,
+                            "mcp_elicitations": True,
+                        },
+                    },
                     "sandboxPolicy": {"type": "dangerFullAccess"},
                 },
             ),

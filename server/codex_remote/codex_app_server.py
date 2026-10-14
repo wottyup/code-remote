@@ -50,6 +50,25 @@ class CodexNoActiveTurnError(CodexRuntimeError):
 
 
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
+_MCP_ELICITATION_ONLY_APPROVAL_POLICY = {
+    "granular": {
+        "sandbox_approval": False,
+        "rules": False,
+        "skill_approval": False,
+        "request_permissions": False,
+        "mcp_elicitations": True,
+    },
+}
+
+
+def _app_server_approval_policy(policy: ApprovalPolicy) -> str | dict[str, dict[str, bool]]:
+    # Match HAPI: string `never` suppresses MCP elicitation requests before
+    # the browser can answer them. Granular never keeps them available while
+    # disabling command/sandbox/rule/skill approvals. This does not elevate
+    # the Windows process token; `danger-full-access` controls Codex sandboxing.
+    if policy == "never":
+        return _MCP_ELICITATION_ONLY_APPROVAL_POLICY
+    return policy
 
 
 @dataclass
@@ -595,7 +614,7 @@ class CodexAppServer:
         if model:
             params["model"] = model
         if approval_policy:
-            params["approvalPolicy"] = approval_policy
+            params["approvalPolicy"] = _app_server_approval_policy(approval_policy)
             params["sandbox"] = "danger-full-access" if approval_policy == "never" else "workspace-write"
         result = await self.request("thread/start", params)
         thread = result.get("thread")
@@ -721,7 +740,7 @@ class CodexAppServer:
         if effort:
             params["effort"] = effort
         if approval_policy:
-            params["approvalPolicy"] = approval_policy
+            params["approvalPolicy"] = _app_server_approval_policy(approval_policy)
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
