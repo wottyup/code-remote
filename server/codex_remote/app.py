@@ -38,6 +38,7 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
+from .terminal import TerminalSession
 
 logger = logging.getLogger(__name__)
 
@@ -847,6 +848,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
+    terminal_sessions: set[TerminalSession] = set()
 
     async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
         images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
@@ -887,6 +889,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             yield
         finally:
             await shared_queue.close()
+            for terminal_session in tuple(terminal_sessions):
+                await terminal_session.close()
             history_watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await history_watcher
@@ -894,7 +898,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.3.0-dev.2", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.4.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
@@ -1399,5 +1403,105 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError, Exception):
                 await writer
             app_server.unsubscribe(queue)
+
+    @app.websocket("/api/v1/codex/terminal")
+    async def terminal_websocket(websocket: WebSocket) -> None:
+        await websocket.accept()
+        try:
+            hello = await asyncio.wait_for(websocket.receive_json(), timeout=8)
+        except WebSocketDisconnect:
+            return
+        except (TimeoutError, ValueError):
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="terminal hello required")
+            return
+        if (
+            not isinstance(hello, dict)
+            or hello.get("type") != "terminal.connect"
+            or not isinstance(hello.get("token"), str)
+            or not auth.accepts(hello.get("token"))
+        ):
+            with suppress(WebSocketDisconnect):
+                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
+            return
+
+        raw_cwd = hello.get("cwd")
+        if raw_cwd is not None and not isinstance(raw_cwd, str):
+            await websocket.send_json({"type": "error", "message": "终端工作目录无效。"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        try:
+            cwd = workspace_base_for_cwd(app_server.workspace, raw_cwd)
+            terminal_session = await TerminalSession.create(
+                cwd,
+                hello.get("columns", 100),
+                hello.get("rows", 30),
+            )
+        except HTTPException as error:
+            await websocket.send_json({"type": "error", "message": str(error.detail)})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+        except Exception as error:
+            logger.warning("Could not start local terminal: %s", error)
+            with suppress(WebSocketDisconnect, RuntimeError):
+                await websocket.send_json({"type": "error", "message": str(error) or "无法启动本机终端。"})
+                await websocket.close(code=status.WS_1011_INTERNAL_ERROR)
+            return
+
+        terminal_sessions.add(terminal_session)
+        send_lock = asyncio.Lock()
+
+        async def send_json(payload: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(payload)
+
+        async def send_output() -> None:
+            await send_json({"type": "ready", "cwd": str(cwd), "shell": terminal_session.shell_name})
+            while True:
+                output = await terminal_session.read()
+                if not output:
+                    break
+                async with send_lock:
+                    await websocket.send_bytes(output)
+            await send_json({"type": "exit"})
+
+        async def receive_input() -> None:
+            while True:
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    return
+                text = message.get("text")
+                if not isinstance(text, str):
+                    continue
+                try:
+                    payload = json.loads(text)
+                except ValueError:
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") == "input" and isinstance(payload.get("data"), str):
+                    await terminal_session.write(payload["data"])
+                elif payload.get("type") == "resize":
+                    await terminal_session.resize(payload.get("columns"), payload.get("rows"))
+                elif payload.get("type") == "close":
+                    return
+
+        output_task = asyncio.create_task(send_output())
+        input_task = asyncio.create_task(receive_input())
+        tasks = (output_task, input_task)
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            for task in tasks:
+                with suppress(Exception, asyncio.CancelledError):
+                    task.result()
+            terminal_sessions.discard(terminal_session)
+            await terminal_session.close()
+            with suppress(Exception):
+                await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
 
     return app

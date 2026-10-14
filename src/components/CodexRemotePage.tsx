@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
@@ -32,6 +32,7 @@ import {
   Settings2,
   ShieldCheck,
   Square,
+  Terminal as TerminalIcon,
   Trash2,
   X,
 } from 'lucide-react'
@@ -73,6 +74,8 @@ const connectionLabel = {
   disconnected: '连接已断开',
   unavailable: 'Codex 不可用',
 }
+
+const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
@@ -649,6 +652,7 @@ interface ComposerSendInput {
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
+  insertDraftAtCursor(value: string, focus?: boolean): void
   addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
@@ -936,6 +940,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const separator = current && !/\s$/.test(current) ? '\n' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+    },
+    insertDraftAtCursor(value, focus = true) {
+      const textarea = composer.current
+      const current = draftRef.current
+      const start = textarea?.selectionStart ?? current.length
+      const end = textarea?.selectionEnd ?? start
+      const next = `${current.slice(0, start)}${value}${current.slice(end)}`
+      updateDraft(next)
+      if (focus) {
+        window.requestAnimationFrame(() => {
+          const activeTextarea = composer.current
+          if (!activeTextarea) return
+          activeTextarea.focus()
+          const cursor = start + value.length
+          activeTextarea.setSelectionRange(cursor, cursor)
+        })
+      }
     },
     addDocumentAttachment(document, focus = true) {
       const added = appendDocument(document)
@@ -2422,6 +2443,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 })
 
 interface RemoteChatPaneProps {
+  token: string
   remote: CodexRemoteController
   marqueeColor: string
   active: boolean
@@ -2439,6 +2461,7 @@ interface RemoteChatPaneProps {
 }
 
 function RemoteChatPane({
+  token,
   remote,
   marqueeColor,
   active,
@@ -2454,6 +2477,7 @@ function RemoteChatPane({
   copiedMessageId,
   onCopy,
 }: RemoteChatPaneProps) {
+  const [terminalOpen, setTerminalOpen] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
@@ -2646,6 +2670,7 @@ function RemoteChatPane({
         </div>
         <div className="remote-chat__controls">
           <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
+          <button className="icon-button terminal-open-button" type="button" aria-label="打开本机终端" title="本机终端" onClick={(event) => { event.stopPropagation(); onActivate(); setTerminalOpen(true) }}><TerminalIcon size={16} /></button>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
@@ -2706,6 +2731,16 @@ function RemoteChatPane({
           <AlertTriangle size={15} /><span>{remote.error}</span>
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
+      ) : null}
+      {terminalOpen ? (
+        <Suspense fallback={<div className="terminal-dialog-backdrop terminal-dialog-backdrop--loading"><div><LoaderCircle className="spin" size={18} />正在加载终端…</div></div>}>
+          <TerminalDialog
+            token={token}
+            cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+            onClose={() => setTerminalOpen(false)}
+            onInsertText={(value) => composerHandle.current?.insertDraftAtCursor(value, true)}
+          />
+        </Suspense>
       ) : null}
     </main>
   )
@@ -3630,6 +3665,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               {openPaneIndexes.map((paneIndex) => (
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
                   <RemoteChatPane
+                    token={token}
                     remote={remotes[paneIndex]}
                     marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}

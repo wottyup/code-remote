@@ -131,6 +131,32 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .pane-close-button { width: 27px; height: 27px; flex: 0 0 auto; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #858d9a; cursor: pointer; }
 .pane-close-button:hover { border-color: rgba(180, 193, 230, .28); background: rgba(75, 82, 103, .42); color: #eef1f8; }
+.terminal-open-button { width: 30px; height: 30px; border: 1px solid rgba(146, 157, 184, .15); background: rgba(27, 30, 37, .48); color: #aeb8d7; }
+.terminal-open-button:hover { border-color: rgba(170, 186, 255, .35); background: rgba(67, 77, 110, .48); color: #e4e9ff; }
+.terminal-dialog-backdrop { position: absolute; z-index: 40; inset: 0; display: grid; place-items: stretch; padding: clamp(0px, 1vw, 14px); background: rgba(0, 0, 0, .58); }
+.terminal-dialog-backdrop--loading { place-items: center; }
+.terminal-dialog-backdrop--loading > div { display: flex; align-items: center; gap: 9px; padding: 13px 16px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 10px; background: #191c23; color: #e3e6ed; font-size: calc(13px + var(--mobile-font-offset)); }
+.terminal-dialog { position: relative; display: grid; width: min(100%, 1440px); height: 100%; min-width: 0; min-height: 0; grid-template-rows: 45px minmax(0, 1fr); overflow: hidden; border: 1px solid rgba(146, 157, 184, .25); border-radius: 12px; background: #111317; box-shadow: 0 20px 60px rgba(0, 0, 0, .48); }
+.terminal-dialog__header { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 10px; padding: 0 10px 0 14px; border-bottom: 1px solid rgba(146, 157, 184, .18); background: #191c23; color: #e3e6ed; }
+.terminal-dialog__title { display: flex; min-width: 0; align-items: center; gap: 8px; }
+.terminal-dialog__title > svg { flex: 0 0 auto; color: #aabaff; }
+.terminal-dialog__title > strong { flex: 0 0 auto; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 620; }
+.terminal-dialog__title > code { min-width: 0; overflow: hidden; margin-left: 3px; color: #8f98aa; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-dialog__status { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; color: #9da5b4; font-size: calc(11px + var(--mobile-font-offset)); }
+.terminal-dialog__status > i { width: 6px; height: 6px; border-radius: 50%; background: #c19b56; }
+.terminal-dialog__status--connected { color: #94c5a0; }
+.terminal-dialog__status--connected > i { background: #72c28b; }
+.terminal-dialog__status--disconnected, .terminal-dialog__status--exited { color: #d28f93; }
+.terminal-dialog__status--disconnected > i, .terminal-dialog__status--exited > i { background: #ce757a; }
+.terminal-dialog__status > svg { color: #c19b56; }
+.terminal-dialog__close { width: 28px; height: 28px; flex: 0 0 auto; }
+.terminal-dialog__screen { min-width: 0; min-height: 0; overflow: hidden; padding: 8px 10px 10px; background: #111317; color: #e3e6ed; }
+.terminal-dialog__screen .xterm { height: 100%; }
+.terminal-dialog__screen .xterm-helper-textarea:focus-visible { outline: 0; }
+.terminal-dialog__screen .xterm-viewport { overscroll-behavior: contain; }
+.terminal-context-menu { position: absolute; z-index: 2; min-width: 156px; padding: 4px; border: 1px solid rgba(146, 157, 184, .26); border-radius: 8px; background: rgba(28, 31, 38, .98); box-shadow: 0 12px 30px rgba(0, 0, 0, .36); }
+.terminal-context-menu button { display: flex; width: 100%; min-height: 34px; align-items: center; gap: 8px; padding: 0 9px; border: 0; border-radius: 5px; background: transparent; color: #e3e6ed; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; white-space: nowrap; }
+.terminal-context-menu button:hover { background: rgba(123, 140, 199, .18); }
 .composer-dock { display: grid; min-width: 0; gap: 5px; width: min(calc(100% - 50px), 900px); margin: 0 auto 22px; }
 .remote-workspace > .composer-dock { grid-row: auto; width: min(calc(100% - 50px), 900px); }
 .workspace-resize-handle { position: relative; z-index: 5; grid-column: 3; grid-row: 1; min-width: 8px; cursor: col-resize; touch-action: none; outline: 0; }
@@ -611,6 +637,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-chat__title span:not(.remote-chat__eyebrow) { display: none; }
   .connection-label { padding: 4px 5px; }
   .connection-label span { display: none; }
+  .terminal-dialog__title > code { display: none; }
 }
 .spin { animation: spin .85s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -1159,10 +1186,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 /* Keep neutral interface text at full contrast in the monochrome themes. */
 .remote-shell--theme-light { color: #000; }
 .remote-shell--theme-dark { color: #fff; }
-.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *) { color: #000; }
-.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *) { color: #fff; }
-.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *)::placeholder { color: #000; opacity: 1; }
-.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *)::placeholder { color: #fff; opacity: 1; }
+.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *) { color: #000; }
+.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *) { color: #fff; }
+.remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *)::placeholder { color: #000; opacity: 1; }
+.remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *)::placeholder { color: #fff; opacity: 1; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-activity__text { background-image: none; color: #000; animation: none; -webkit-text-fill-color: #000; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-activity__text { background-image: none; color: #fff; animation: none; -webkit-text-fill-color: #fff; }
 .remote-shell--theme-light :is(.remote-shell *) .file-change-card__diff-line--added { color: var(--file-change-added-text); }
@@ -1233,3 +1260,31 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light :is(.remote-shell *) .send-button:not(:disabled) { color: #000; }
 .remote-shell--theme-dark .send-button:not(:disabled) { border: 1px solid #555; background: #3a3a3a; color: #fff; }
 .remote-shell--theme-dark .send-button--queue:not(:disabled) { border-color: #59648e; background: #414b70; color: #fff; }
+.remote-shell--theme-light .terminal-dialog { border-color: #d7d7d7; background: #111317; }
+.remote-shell--theme-light .terminal-dialog__header { border-color: #dedede; background: #f4f4f4; color: #000; }
+.remote-shell--theme-light .terminal-dialog__title > svg { color: #4c5f9a; }
+.remote-shell--theme-light .terminal-dialog__title > code { color: #666; }
+.remote-shell--theme-light .terminal-context-menu { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 12px 30px rgba(0, 0, 0, .18); }
+.remote-shell--theme-light .terminal-context-menu button:hover { background: #ededed; }
+.remote-shell--theme-light .terminal-open-button { border-color: #dedede; background: #f5f5f5; color: #4a4a4a; }
+.remote-shell--theme-light .terminal-open-button:hover { border-color: #c9c9c9; background: #ededed; color: #000; }
+.remote-shell--theme-light .terminal-dialog-backdrop--loading > div { border-color: #dedede; background: #f4f4f4; color: #000; }
+.remote-shell--theme-warm .terminal-dialog { border-color: #e8ded2; }
+.remote-shell--theme-warm .terminal-dialog__header { border-color: #e8ded2; background: #f8f1e8; color: #4a392b; }
+.remote-shell--theme-warm .terminal-dialog__title > svg { color: #735237; }
+.remote-shell--theme-warm .terminal-dialog__title > code { color: #76604c; }
+.remote-shell--theme-warm .terminal-open-button { border-color: #e8ded2; background: #fbf3e9; color: #735237; }
+.remote-shell--theme-custom .terminal-dialog { border-color: var(--custom-theme-border); }
+.remote-shell--theme-custom .terminal-dialog__header { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .terminal-dialog__title > svg, .remote-shell--theme-custom .terminal-dialog__title > code { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .terminal-context-menu { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .terminal-context-menu button { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .terminal-open-button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+
+@media (max-width: 700px) {
+  .terminal-dialog-backdrop { padding: 0; }
+  .terminal-dialog { border-radius: 0; }
+  .terminal-dialog__header { gap: 6px; padding-inline: 9px 7px; }
+  .terminal-dialog__title { gap: 6px; }
+  .terminal-dialog__screen { padding: 7px 6px 8px; }
+}
