@@ -1155,6 +1155,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--added { color: var(--file-change-added-text); }
 .remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--deleted { color: var(--file-change-deleted-text); }
 .remote-shell--theme-dark :is(.remote-shell *) .file-change-card__diff-line--hunk { color: var(--file-change-hunk-text); }
+.remote-shell--theme-light :is(.remote-shell *) :is(.file-change-card__stats, .file-change-card__file-stats) i,
+.remote-shell--theme-dark :is(.remote-shell *) :is(.file-change-card__stats, .file-change-card__file-stats) i { color: var(--file-change-added); }
+.remote-shell--theme-light :is(.remote-shell *) :is(.file-change-card__stats, .file-change-card__file-stats) em,
+.remote-shell--theme-dark :is(.remote-shell *) :is(.file-change-card__stats, .file-change-card__file-stats) em { color: var(--file-change-deleted); }
 .remote-shell--theme-light :is(.remote-shell *) .send-button:not(:disabled), .remote-shell--theme-light :is(.remote-shell *) .thread-rename-dialog__actions button:last-child { color: #fff; }
 .remote-shell--theme-light .workspace-file-preview__line-content { color: #000; }
 .remote-shell--theme-dark .workspace-file-preview__line-content { color: #fff; }
