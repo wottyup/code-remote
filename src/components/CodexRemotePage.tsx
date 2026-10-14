@@ -4060,7 +4060,7 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   }
 
   return (
-    <article className={`file-change-card${reviewing ? ' file-change-card--reviewing' : ''}${inProgress ? ' file-change-card--inProgress' : ''}`}>
+    <article className={`file-change-card${showAll ? ' file-change-card--expanded' : ''}${reviewing ? ' file-change-card--reviewing' : ''}${inProgress ? ' file-change-card--inProgress' : ''}`}>
       <header className="file-change-card__heading">
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
