@@ -54,6 +54,7 @@ class SharedStateStore:
             CREATE TABLE IF NOT EXISTS queue_barriers (thread_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS queue_blocks (thread_id TEXT PRIMARY KEY, reason TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS pinned_threads (thread_id TEXT PRIMARY KEY);
+            CREATE TABLE IF NOT EXISTS thread_workspaces (thread_id TEXT PRIMARY KEY, cwd TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS state_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """)
         columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queued_messages)")}
@@ -257,6 +258,23 @@ class SharedStateStore:
                 self.connection.execute("INSERT OR IGNORE INTO pinned_threads(thread_id) VALUES (?)", (thread_id,))
             else:
                 self.connection.execute("DELETE FROM pinned_threads WHERE thread_id = ?", (thread_id,))
+
+    def thread_workspace(self, thread_id: str) -> str | None:
+        row = self.connection.execute("SELECT cwd FROM thread_workspaces WHERE thread_id = ?", (thread_id,)).fetchone()
+        return row["cwd"] if row else None
+
+    def thread_workspaces(self) -> dict[str, str]:
+        return {
+            row["thread_id"]: row["cwd"]
+            for row in self.connection.execute("SELECT thread_id, cwd FROM thread_workspaces")
+        }
+
+    def set_thread_workspace(self, thread_id: str, cwd: str) -> None:
+        self.connection.execute(
+            "INSERT INTO thread_workspaces(thread_id, cwd) VALUES (?, ?) "
+            "ON CONFLICT(thread_id) DO UPDATE SET cwd = excluded.cwd",
+            (thread_id, cwd),
+        )
 
 
 def _turn_status(turn: dict[str, Any]) -> str:

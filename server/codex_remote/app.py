@@ -199,6 +199,10 @@ class ThreadStartRequest(BaseModel):
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ThreadWorkspaceRequest(BaseModel):
+    cwd: str = Field(min_length=1, max_length=4_096)
+
+
 class ThreadNameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
 
@@ -865,6 +869,19 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn)
 
+    async def thread_workspace_for_turn(thread_id: str) -> Path:
+        bound_cwd = shared_state.thread_workspace(thread_id)
+        if bound_cwd:
+            try:
+                return workspace_base_for_cwd(app_server.workspace, bound_cwd)
+            except HTTPException as error:
+                raise CodexRuntimeError(f"聊天绑定的工作目录不可用：{error.detail}") from error
+        thread = await app_server.read_thread(thread_id, include_turns=False)
+        try:
+            return workspace_base_for_cwd(app_server.workspace, thread.get("cwd"))
+        except HTTPException as error:
+            raise CodexRuntimeError(f"聊天工作目录不可用：{error.detail}") from error
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
@@ -974,7 +991,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
         try:
-            return await app_server.list_threads()
+            threads = await app_server.list_threads()
+            workspaces = shared_state.thread_workspaces()
+            result = []
+            for thread in threads:
+                thread_id = thread.get("id")
+                result.append({**thread, "cwd": workspaces[thread_id]} if isinstance(thread_id, str) and thread_id in workspaces else thread)
+            return result
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -1027,9 +1050,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def read_thread(thread_id: str) -> dict[str, Any]:
         try:
             thread = await app_server.read_thread(thread_id)
+            bound_cwd = shared_state.thread_workspace(thread_id)
+            if bound_cwd:
+                thread = {**thread, "cwd": bound_cwd}
             return enrich_thread_images(thread, image_directory)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads/{thread_id}/workspace")
+    async def bind_thread_workspace(thread_id: str, body: ThreadWorkspaceRequest) -> dict[str, str]:
+        try:
+            await app_server.read_thread(thread_id, include_turns=False)
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        cwd = workspace_base_for_cwd(app_server.workspace, body.cwd)
+        shared_state.set_thread_workspace(thread_id, str(cwd))
+        await app_server.notify_threads_changed()
+        return {"thread_id": thread_id, "cwd": str(cwd)}
 
     @app.post("/api/v1/codex/threads/{thread_id}/name")
     async def rename_thread(thread_id: str, body: ThreadNameRequest) -> dict[str, str]:
@@ -1180,7 +1217,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads/{thread_id}/resume")
     async def resume_thread(thread_id: str, body: ResumeRequest | None = None) -> dict[str, Any]:
         async def resume() -> dict[str, Any]:
-            thread = await app_server.resume_thread(thread_id)
+            bound_cwd = shared_state.thread_workspace(thread_id)
+            cwd = workspace_base_for_cwd(app_server.workspace, bound_cwd) if bound_cwd else None
+            thread = await app_server.resume_thread(thread_id, cwd=cwd)
+            if cwd is not None:
+                thread = {**thread, "cwd": str(cwd)}
             # Sending needs the resume acknowledgement, not another copy of
             # the entire history. Keep legacy clients' full response intact.
             if body is not None and not body.include_history:
@@ -1210,6 +1251,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             image_paths = save_turn_images(body.images, image_directory)
             try:
                 turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
+                cwd = await thread_workspace_for_turn(thread_id)
                 result = await app_server.start_turn(
                     thread_id,
                     turn_prompt,
@@ -1217,6 +1259,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     body.model.strip() or None if body.model else None,
                     body.effort.strip() or None if body.effort else None,
                     body.approval_policy,
+                    cwd,
                 )
                 turn = result.get("turn", {})
                 turn_id = turn.get("id") if isinstance(turn, dict) else None

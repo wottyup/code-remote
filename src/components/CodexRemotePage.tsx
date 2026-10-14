@@ -1651,8 +1651,8 @@ interface WorkspaceExplorerProps {
   token: string
   cwd?: string
   threadId?: string
-  canCreateThread: boolean
-  onEnterDirectory: (cwd: string) => Promise<boolean>
+  canBindThreadWorkspace: boolean
+  onBindDirectory: (cwd: string) => Promise<boolean>
   previewRequest: { id: number; cwd?: string; path: string; diff?: string } | null
   previewContainerRef: RefObject<HTMLDivElement | null>
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
@@ -1761,7 +1761,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, canCreateThread, onEnterDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2073,8 +2073,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
-    const menuWidth = 176
-    const menuHeight = entry.kind === 'directory' ? 106 : 72
+    const menuWidth = entry.kind === 'directory' ? 236 : 176
+    const menuHeight = entry.kind === 'directory' ? 116 : 72
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = (selectedPaths.includes(entry.path) ? selectedPaths : [entry.path])
@@ -2085,11 +2085,18 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setContextMenu({ entry, paths, x, y })
   }
 
-  async function enterDirectoryFromContextMenu() {
+  async function bindDirectoryToCurrentThread() {
     if (!contextMenu || contextMenu.entry.kind !== 'directory') return
     const nextCwd = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path)
     setContextMenu(null)
-    if (await onEnterDirectory(nextCwd)) followChatDirectory(nextCwd)
+    try {
+      if (await onBindDirectory(nextCwd)) {
+        followChatDirectory(nextCwd)
+        setError(null)
+      }
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法绑定当前聊天到该目录')
+    }
   }
 
   function openSelectionContextMenu(event: ReactMouseEvent<HTMLPreElement | HTMLTextAreaElement>) {
@@ -2296,7 +2303,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
           </form>
           <div className="workspace-explorer__root-actions">
             <button type="button" onClick={goToParentDirectory} disabled={!browsingRoot || workspaceParentPath(browsingRoot) === browsingRoot} title="浏览上级目录"><ArrowUp size={12} />上级</button>
-            <button type="button" onClick={followChatDirectory} disabled={!manualRoot} title="恢复跟随当前聊天的工作目录"><RotateCcw size={12} />跟随聊天</button>
+            <button type="button" onClick={() => followChatDirectory()} disabled={!manualRoot} title="恢复跟随当前聊天的工作目录"><RotateCcw size={12} />跟随聊天</button>
           </div>
         </div>
         <div className="workspace-explorer__body">
@@ -2411,7 +2418,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
-          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" disabled={!canCreateThread} onClick={() => void enterDirectoryFromContextMenu()}><FolderOpen size={14} />进入该路径</button> : null}
+          {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
           {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
         </div>,
         document.body,
@@ -3665,8 +3672,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             token={token}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
-            canCreateThread={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff}
-            onEnterDirectory={async (cwd) => Boolean(await createThreadForPane(selectedPaneIndex, cwd))}
+            canBindThreadWorkspace={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
+            onBindDirectory={async (cwd) => {
+              const threadId = activeRemote.activeThread?.id
+              if (!threadId) return false
+              await activeRemote.bindThreadWorkspace(threadId, cwd)
+              showPaneNotice('当前聊天已绑定；下一轮使用此目录')
+              return true
+            }}
             previewRequest={workspacePreviewRequest}
             previewContainerRef={paneGrid}
             onPreviewStateChange={handleWorkspacePreviewStateChange}

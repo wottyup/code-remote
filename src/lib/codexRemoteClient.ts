@@ -470,6 +470,12 @@ export const codexRemoteClient = {
       body: JSON.stringify({ name }),
     })
   },
+  bindThreadWorkspace(token: string, threadId: string, cwd: string) {
+    return request<{ thread_id: string; cwd: string }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/workspace`, {
+      method: 'POST',
+      body: JSON.stringify({ cwd }),
+    })
+  },
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },

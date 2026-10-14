@@ -1716,6 +1716,26 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [cacheThreadSnapshot, persistActiveThread])
 
+  const applyThreadWorkspace = useCallback((threadId: string, cwd: string) => {
+    const updateWorkspace = (thread: CodexThread) => thread.id === threadId ? { ...thread, cwd } : thread
+    setThreads((current) => current.map(updateWorkspace))
+    setActiveThread((current) => current ? updateWorkspace(current) : current)
+
+    const cached = threadHistoryCache.current.get(threadId)
+    if (cached) {
+      cacheThreadSnapshot(updateWorkspace(cached.thread), cached.messages, {
+        running: cached.running,
+        turnId: cached.turnId,
+        fileChangesByTurn: cached.fileChangesByTurn,
+        operationsByTurn: cached.operationsByTurn,
+      })
+    }
+    if (persistActiveThread) {
+      const persisted = readPersistedActiveThreadCache(threadId)
+      if (persisted) persistActiveThreadCache(updateWorkspace(persisted.thread), persisted.messages)
+    }
+  }, [cacheThreadSnapshot, persistActiveThread])
+
   const renameThread = useCallback(async (threadId: string, name: string) => {
     try {
       const result = await codexRemoteClient.renameThread(token, threadId, name)
@@ -1728,6 +1748,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       throw reason
     }
   }, [applyThreadName, onUnauthorized, token])
+
+  const bindThreadWorkspace = useCallback(async (threadId: string, cwd: string) => {
+    try {
+      const result = await codexRemoteClient.bindThreadWorkspace(token, threadId, cwd)
+      applyThreadWorkspace(threadId, result.cwd)
+      return result
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      throw reason
+    }
+  }, [applyThreadWorkspace, onUnauthorized, token])
 
   const refreshModels = useCallback(async () => {
     if (!loadModels || handedOffRef.current) return null
@@ -3604,6 +3635,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     latestThreadCompletion,
     refreshThreads,
     renameThread,
+    bindThreadWorkspace,
     refreshModels,
     selectThread,
     createThread,

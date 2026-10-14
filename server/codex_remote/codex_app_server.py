@@ -56,6 +56,7 @@ class WorkspaceChangeWatch:
     stop_event: asyncio.Event
     task: asyncio.Task[WorkspaceSnapshot]
     baseline: WorkspaceSnapshot
+    workspace: Path
 
 
 _IGNORED_WORKSPACE_PARTS = frozenset({
@@ -594,33 +595,39 @@ class CodexAppServer:
             thread_cwd = str(cwd or self.workspace)
         return {**thread, "cwd": thread_cwd}
 
-    async def resume_thread(self, thread_id: str) -> dict[str, Any]:
+    async def resume_thread(self, thread_id: str, cwd: Path | None = None) -> dict[str, Any]:
         await self._prepare_runtime_thread(thread_id)
         if self._runtime_home != self._history_home and not self._database_has_thread(
             self._runtime_home / "thread_history_1.sqlite", thread_id,
         ):
             raise CodexRuntimeError("本机 Codex 历史数据库没有该对话，无法在隔离运行时中恢复。")
-        result = await self.request("thread/resume", {"threadId": thread_id})
+        params: dict[str, Any] = {"threadId": thread_id}
+        if cwd is not None:
+            params["cwd"] = str(cwd)
+        result = await self.request("thread/resume", params)
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 无法恢复该对话")
-        return thread
+        return {**thread, "cwd": str(cwd)} if cwd is not None else thread
 
     async def set_thread_name(self, thread_id: str, name: str) -> None:
         await self.request("thread/name/set", {"threadId": thread_id, "name": name})
 
-    async def _watch_workspace_changes(self, stop_event: asyncio.Event) -> WorkspaceSnapshot:
+    async def _watch_workspace_changes(self, stop_event: asyncio.Event, workspace: Path) -> WorkspaceSnapshot:
         # Native file-change events already supply live progress. This fallback
         # is used only after completion, so no recursive OS watcher is needed.
         await stop_event.wait()
-        return await asyncio.to_thread(snapshot_workspace, self.workspace)
+        return await asyncio.to_thread(snapshot_workspace, workspace)
 
-    async def _start_workspace_change_watch(self, thread_id: str) -> None:
+    async def _start_workspace_change_watch(self, thread_id: str, workspace: Path | None = None) -> None:
         await self._stop_workspace_change_watch(thread_id)
-        baseline = await asyncio.to_thread(snapshot_workspace, self.workspace)
+        watch_workspace = (workspace or self.workspace).expanduser().resolve()
+        baseline = await asyncio.to_thread(snapshot_workspace, watch_workspace)
         stop_event = asyncio.Event()
-        task = asyncio.create_task(self._watch_workspace_changes(stop_event))
-        self._workspace_change_watches[thread_id] = WorkspaceChangeWatch(stop_event=stop_event, task=task, baseline=baseline)
+        task = asyncio.create_task(self._watch_workspace_changes(stop_event, watch_workspace))
+        self._workspace_change_watches[thread_id] = WorkspaceChangeWatch(
+            stop_event=stop_event, task=task, baseline=baseline, workspace=watch_workspace,
+        )
 
     async def _stop_workspace_change_watch(self, thread_id: str, *, collect: bool = False) -> WorkspaceChangeCapture | None:
         watch = self._workspace_change_watches.pop(thread_id, None)
@@ -648,7 +655,7 @@ class CodexAppServer:
     async def _complete_workspace_change_watch(self, thread_id: str, turn_id: str | None, watch: WorkspaceChangeWatch) -> None:
         try:
             capture = await self._collect_workspace_change_watch(watch, collect=True)
-            changes = await asyncio.to_thread(workspace_change_entries, capture.changes, self.workspace, capture.baseline, capture.after)
+            changes = await asyncio.to_thread(workspace_change_entries, capture.changes, watch.workspace, capture.baseline, capture.after)
             # The detached watcher belongs only to this completed turn, even
             # when the next turn has already installed its own watcher.
             if not changes or not turn_id:
@@ -698,6 +705,7 @@ class CodexAppServer:
         model: str | None = None,
         effort: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
+        cwd: Path | None = None,
     ) -> dict[str, Any]:
         if len(prompt) > 32_000:
             raise CodexRuntimeError("消息不能超过 32000 个字符")
@@ -721,7 +729,9 @@ class CodexAppServer:
         pending_start = asyncio.get_running_loop().create_future()
         self._pending_turn_starts[thread_id] = pending_start
         try:
-            await self._start_workspace_change_watch(thread_id)
+            if cwd is not None:
+                await self.resume_thread(thread_id, cwd)
+            await self._start_workspace_change_watch(thread_id, cwd)
             result = await self.request("turn/start", params)
             turn = result.get("turn")
             turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
