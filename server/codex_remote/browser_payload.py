@@ -34,7 +34,10 @@ def _operation_paths(value: Any, depth: int = 0) -> list[dict[str, str]]:
     paths: list[dict[str, str]] = []
     entries = value.items() if isinstance(value, dict) else enumerate(value)
     for key, entry in entries:
-        if str(key).lower() in {"path", "filepath", "file_path", "filename", "target_path", "source_path"}:
+        if str(key).lower() in {
+            "path", "filepath", "file_path", "filename", "target_path", "source_path",
+            "imagepath", "image_path", "imagefile", "image_file",
+        }:
             if isinstance(entry, str) and entry.strip():
                 paths.append({"path": entry.strip()})
         elif isinstance(entry, (dict, list)):
@@ -94,6 +97,10 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
         result.update(_pick(item, ("text",)))
     elif item_type == "filechange":
         result["changes"] = browser_changes(item.get("changes", []))
+    elif item_type == "imageview":
+        paths = _operation_paths(item)
+        if paths:
+            result["paths"] = paths
     elif item_type == "commandexecution":
         result.update(_pick(item, ("command",)))
         command_actions = _browser_command_actions(item.get("commandActions") or item.get("command_actions"))

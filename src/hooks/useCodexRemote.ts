@@ -39,6 +39,7 @@ export type CodexOperationStatus = 'running' | 'completed' | 'failed' | 'stopped
 export interface CodexOperationStep {
   label: string
   detail?: string
+  path?: string
 }
 
 export interface CodexOperation {
@@ -47,6 +48,8 @@ export interface CodexOperation {
   label: string
   detail?: string
   steps?: CodexOperationStep[]
+  paths?: string[]
+  imagePath?: string
   status: CodexOperationStatus
 }
 
@@ -177,6 +180,8 @@ interface PersistedThreadCacheSnapshot {
 export interface UseCodexRemoteOptions {
   /** Keep the existing single-pane conversation in localStorage. */
   persistActiveThread?: boolean
+  /** Restore a pane-specific conversation without replacing the primary thread. */
+  initialThreadId?: string | null
   /** Keep the socket and background requests closed while a pane is hidden. */
   enabled?: boolean
   /** Keep list/model/history warm-up work in the primary controller only. */
@@ -963,7 +968,7 @@ function operationPaths(value: unknown, depth = 0): string[] {
   if (depth > 4 || !value || typeof value !== 'object') return []
   const paths: string[] = []
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(?:path|filepath|file_path|filename|target_path|source_path)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
+    if (/^(?:path|filepath|file_path|filename|target_path|source_path|imagepath|image_path|imagefile|image_file)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
       paths.push(entry.trim())
     } else if (entry && typeof entry === 'object') {
       paths.push(...operationPaths(entry, depth + 1))
@@ -985,7 +990,7 @@ function commandActionSteps(value: unknown): CodexOperationStep[] {
 
     if (type === 'read') {
       const detail = safeOperationDetail(name || basename(path))
-      return [{ label: '读取', ...(detail ? { detail } : {}) }]
+      return [{ label: '读取', ...(detail ? { detail } : {}), ...(path ? { path } : {}) }]
     }
     if (type === 'listfiles') {
       const detail = safeOperationDetail(path || name)
@@ -997,6 +1002,11 @@ function commandActionSteps(value: unknown): CodexOperationStep[] {
     }
     return []
   })
+}
+
+function commandPathTargets(command: string) {
+  const paths = [...command.matchAll(/(?:^|[\s"'`])((?:\.\.?\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+\.[A-Za-z0-9_-]{1,16})(?=$|[\s"'`|;&)])/g)]
+  return [...new Set(paths.map((match) => match[1]))].slice(0, 8)
 }
 
 function operationForItem(value: unknown, statusOverride?: CodexOperationStatus): CodexOperation | null {
@@ -1014,11 +1024,13 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     const isSearch = /^(?:rg|grep|find|fd|ag|ack)$/.test(knownCommand)
     const isRead = /^(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)$/.test(knownCommand)
     const detail = safeOperationDetail(command)
+    const paths = isSearch || isRead ? commandPathTargets(command) : []
     return {
       id,
       kind: isSearch ? 'search' : isRead ? 'file' : 'command',
       label: isSearch ? '搜索文件' : isRead ? '查看文件' : '执行命令',
       ...(detail ? { detail } : {}),
+      ...(paths.length > 0 ? { paths } : {}),
       ...(steps.length > 0 ? { steps } : {}),
       status,
     }
@@ -1059,7 +1071,7 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     const detail = safeOperationDetail(isSkill
       ? skillName?.trim() || tool
       : [tool, pathSummary].filter(Boolean).join(' · '))
-    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), status }
+    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), ...(paths.length > 0 ? { paths } : {}), status }
   }
 
   if (itemType === 'websearch') {
@@ -1068,7 +1080,11 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     return { id, kind: 'search', label: '搜索资料', ...(detail ? { detail } : {}), status }
   }
 
-  if (itemType === 'imageview') return { id, kind: 'tool', label: '查看图片', status }
+  if (itemType === 'imageview') {
+    const imagePath = operationPaths(item)[0]
+    const detail = safeOperationDetail(imagePath ?? '')
+    return { id, kind: 'tool', label: '查看图片', ...(imagePath ? { imagePath } : {}), ...(detail ? { detail } : {}), status }
+  }
   if (itemType === 'imagegeneration') return { id, kind: 'tool', label: '生成图片', status }
   if (itemType === 'subagentactivity') return { id, kind: 'tool', label: '运行子任务', status }
   return null
@@ -1237,7 +1253,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const loadThreads = options.loadThreads ?? true
   const loadModels = options.loadModels ?? true
   const prefetchHistory = options.prefetchHistory ?? false
-  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : null)
+  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : options.initialThreadId?.trim() || null)
   const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)

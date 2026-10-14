@@ -126,6 +126,13 @@ export interface CodexWorkspaceFile {
   hasBom?: boolean
 }
 
+export interface CodexWorkspaceImage {
+  path: string
+  mediaType: CodexImageAttachment['mediaType']
+  data: string
+  size: number
+}
+
 export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
@@ -594,6 +601,11 @@ export const codexRemoteClient = {
     const query = new URLSearchParams({ path })
     if (cwd) query.set('cwd', cwd)
     return request<CodexWorkspaceFile>(token, `/api/v1/codex/workspace/file?${query.toString()}`)
+  },
+  workspaceImage(token: string, cwd: string | undefined, path: string) {
+    const query = new URLSearchParams({ path })
+    if (cwd) query.set('cwd', cwd)
+    return request<CodexWorkspaceImage>(token, `/api/v1/codex/workspace/image?${query.toString()}`)
   },
   saveWorkspaceFile(token: string, cwd: string | undefined, path: string, content: string, revision: string) {
     return request<CodexWorkspaceFile>(token, '/api/v1/codex/workspace/file', {

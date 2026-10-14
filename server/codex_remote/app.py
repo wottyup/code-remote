@@ -564,6 +564,59 @@ def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | in
     }
 
 
+def workspace_image_preview(base: Path, relative_path: str, managed_image_root: Path | None = None) -> dict[str, str | int]:
+    if not relative_path or len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效或过长")
+    is_absolute = relative_path.startswith(("/", "\\")) or (len(relative_path) > 1 and relative_path[1] == ":")
+    if is_absolute:
+        try:
+            candidate = Path(relative_path).expanduser().resolve()
+            allowed_root = managed_image_root.resolve() if managed_image_root is not None else None
+            if allowed_root is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
+            candidate.relative_to(allowed_root)
+        except HTTPException:
+            raise
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的图片") from error
+    else:
+        normalized_parts = relative_path.replace("\\", "/").split("/")
+        if any(part in {"", ".", ".."} for part in normalized_parts):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效")
+        candidate = workspace_path(base, relative_path)
+    media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
+    try:
+        if not candidate.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
+        size = candidate.stat().st_size
+        if size > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
+        with candidate.open("rb") as file:
+            content = file.read(MAX_IMAGE_BYTES + 1)
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该图片") from error
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
+    signatures = {
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+        "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
+    }
+    if not signatures.get(media_type, False):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件内容不是有效的受支持图片")
+    return {
+        "path": candidate.relative_to(base).as_posix() if candidate.is_relative_to(base) else candidate.name,
+        "mediaType": media_type,
+        "data": base64.b64encode(content).decode("ascii"),
+        "size": len(content),
+    }
+
+
 def workspace_file_save(base: Path, relative_path: str, content: str, expected_revision: str) -> dict[str, str | int | bool]:
     current = workspace_file_preview(base, relative_path)
     current_revision = current["revision"]
@@ -1029,6 +1082,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int | bool]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_file_preview(base, path)
+
+    @app.get("/api/v1/codex/workspace/image")
+    async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return workspace_image_preview(base, path, image_directory)
 
     @app.post("/api/v1/codex/workspace/file")
     async def save_workspace_file(request: WorkspaceFileSaveRequest) -> dict[str, str | int | bool]:

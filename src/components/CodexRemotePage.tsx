@@ -13,6 +13,7 @@ import {
   ChevronsUpDown,
   Copy,
   Download,
+  Eye,
   File,
   FileText,
   Folder,
@@ -23,6 +24,7 @@ import {
   Menu,
   MessagesSquare,
   Paperclip,
+  Pause,
   Pencil,
   Pin,
   PinOff,
@@ -39,7 +41,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
@@ -135,6 +137,7 @@ function formatTurnDuration(durationMs: number) {
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
+const paneLayoutStorageKey = 'codex-remote.pane-layout'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
@@ -153,6 +156,54 @@ const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
+
+interface PersistedPaneLayout {
+  openPaneIndexes: number[]
+  selectedPaneIndex: number
+  threadIdsByPane: Record<string, string>
+}
+
+function readPersistedPaneLayout(): PersistedPaneLayout {
+  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {} }
+  if (typeof window === 'undefined') return fallback
+  try {
+    const value = window.localStorage.getItem(paneLayoutStorageKey)
+    if (!value) return fallback
+    const parsed = JSON.parse(value) as Record<string, unknown>
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback
+    const paneLimit = concurrentPaneLimit()
+    const openPaneIndexes = Array.isArray(parsed.openPaneIndexes)
+      ? [...new Set(parsed.openPaneIndexes.filter((index): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < paneLimit))]
+      : []
+    if (openPaneIndexes.length === 0) openPaneIndexes.push(0)
+    const requestedSelection = parsed.selectedPaneIndex
+    const selectedPaneIndex = typeof requestedSelection === 'number'
+      && Number.isInteger(requestedSelection)
+      && openPaneIndexes.includes(requestedSelection)
+      ? requestedSelection
+      : openPaneIndexes[0]
+    const savedThreads = parsed.threadIdsByPane && typeof parsed.threadIdsByPane === 'object' && !Array.isArray(parsed.threadIdsByPane)
+      ? parsed.threadIdsByPane as Record<string, unknown>
+      : {}
+    const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((index) => {
+      const threadId = savedThreads[String(index)]
+      return typeof threadId === 'string' && threadId.trim().length > 0 && threadId.length <= 512
+        ? [[String(index), threadId.trim()]]
+        : []
+    }))
+    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane }
+  } catch {
+    return fallback
+  }
+}
+
+function savePersistedPaneLayout(layout: PersistedPaneLayout) {
+  try {
+    window.localStorage.setItem(paneLayoutStorageKey, JSON.stringify(layout))
+  } catch {
+    // Open panes still work for the current page when storage is unavailable.
+  }
+}
 
 function readPinnedThreadIds() {
   if (typeof window === 'undefined') return new Set<string>()
@@ -1101,7 +1152,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
-  const stopWithSendButton = mobileLayout && isRunning && !writerConflict && !editingQueuedMessageId
+  const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
   )
@@ -1644,7 +1695,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
-                : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Square size={14} fill="currentColor" /> : <Send size={16} />}
+                : editingQueuedMessageId ? <Check size={13} /> : stopWithSendButton ? <Pause size={15} /> : <Send size={16} />}
               {editingQueuedMessageId ? <span>确定</span> : null}
             </button>
           ) : null}
@@ -1661,7 +1712,7 @@ interface WorkspaceExplorerProps {
   threadId?: string
   canBindThreadWorkspace: boolean
   onBindDirectory: (cwd: string) => Promise<boolean>
-  previewRequest: { id: number; cwd?: string; path: string; diff?: string } | null
+  previewRequest: WorkspacePreviewRequest | null
   previewContainerRef: RefObject<HTMLDivElement | null>
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
@@ -1669,6 +1720,14 @@ interface WorkspaceExplorerProps {
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   onCloseMobile: () => void
+}
+
+interface WorkspacePreviewRequest {
+  id: number
+  cwd?: string
+  path: string
+  diff?: string
+  kind?: 'text' | 'image'
 }
 
 interface WorkspaceSelectionContextMenu {
@@ -1783,8 +1842,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
+  const [previewKind, setPreviewKind] = useState<'text' | 'image'>('text')
   const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
   const [previewFile, setPreviewFile] = useState<CodexWorkspaceFile | null>(null)
+  const [previewImage, setPreviewImage] = useState<CodexWorkspaceImage | null>(null)
   const [previewEditContent, setPreviewEditContent] = useState<string | null>(null)
   const [previewSaving, setPreviewSaving] = useState(false)
   const [highlightedPreview, setHighlightedPreview] = useState<{ file: CodexWorkspaceFile; lines: Array<Array<{ text: string; className: string }>> } | null>(null)
@@ -1811,7 +1872,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewPath(null)
     setPreviewCwd(undefined)
     setPreviewDiff(null)
+    setPreviewKind('text')
     setMobilePreviewDialog(false)
+    setPreviewFile(null)
+    setPreviewImage(null)
     setPreviewLoading(false)
     setPreviewError(null)
     setPreviewCopied(false)
@@ -1861,7 +1925,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     }
   }, [browsingRoot, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string) => {
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text') => {
     if (previewSaving) return
     if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
     if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
@@ -1880,17 +1944,25 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
     setPreviewCwd(requestedCwd)
-    setPreviewDiff(diff ?? null)
+    setPreviewDiff(kind === 'text' ? diff ?? null : null)
+    setPreviewKind(kind)
     setMobilePreviewDialog(mobileDialog)
     setPreviewFile(null)
+    setPreviewImage(null)
     setPreviewEditContent(null)
     setPreviewError(null)
     setPreviewCopied(false)
     setPreviewLoading(true)
     try {
-      const file = await codexRemoteClient.workspaceFile(token, requestedCwd, path)
-      if (generation !== previewRequestGeneration.current) return
-      setPreviewFile(file)
+      if (kind === 'image') {
+        const image = await codexRemoteClient.workspaceImage(token, requestedCwd, path)
+        if (generation !== previewRequestGeneration.current) return
+        setPreviewImage(image)
+      } else {
+        const file = await codexRemoteClient.workspaceFile(token, requestedCwd, path)
+        if (generation !== previewRequestGeneration.current) return
+        setPreviewFile(file)
+      }
     } catch (reason) {
       if (generation !== previewRequestGeneration.current) return
       if (!diff) setPreviewError(reason instanceof Error ? reason.message : '无法读取文件')
@@ -2007,8 +2079,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     setPreviewPath(null)
     setPreviewCwd(undefined)
     setPreviewDiff(null)
+    setPreviewKind('text')
     setMobilePreviewDialog(false)
     setPreviewFile(null)
+    setPreviewImage(null)
     setPreviewEditContent(null)
     setPreviewLoading(false)
     setPreviewError(null)
@@ -2025,7 +2099,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
     if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
     handledPreviewRequest.current = previewRequest.id
-    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff)
+    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind)
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
@@ -2332,7 +2406,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
-          ariaLabel="工作区文件预览"
+          ariaLabel={previewKind === 'image' ? '工作区图片预览' : '工作区文件预览'}
           backdropLabel="关闭文件预览"
           ariaModal={mobilePreviewDialog || undefined}
           className="workspace-file-preview-panel"
@@ -2353,33 +2427,35 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
           }}
           header={(
             <div className="workspace-file-preview-panel__heading">
-              <span className="workspace-explorer__eyebrow">{previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
-              <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
+              <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
             </div>
           )}
           footer={(
-            <span className="workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</span>
+            <span className="workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewImage ? `${sizeLabel(previewImage.size)} · ${previewImage.mediaType}` : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : previewKind === 'image' ? '图片预览' : 'UTF-8 文本'}</span>
           )}
         >
           <section className="workspace-file-preview">
             <div className="workspace-file-preview__toolbar">
-              <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
+              <code title={previewImage?.path ?? previewFile?.path ?? previewPath}>{previewImage?.path ?? previewFile?.path ?? previewPath}</code>
               <div>
-                {previewEditContent === null ? (
+                {previewKind !== 'image' && previewEditContent === null ? (
                   <button className="workspace-file-preview__copy" type="button" onClick={beginPreviewEditing} disabled={!previewFile || previewLoading || previewSaving} title="编辑并保存文件"><Pencil size={13} />编辑</button>
-                ) : (
+                ) : previewKind !== 'image' ? (
                   <>
                     <button className="workspace-file-preview__copy" type="button" onClick={() => void savePreviewEdits()} disabled={!previewDirty || previewSaving} title="保存到本机工作区">{previewSaving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}保存</button>
                     <button className="workspace-file-preview__copy" type="button" onClick={cancelPreviewEditing} disabled={previewSaving} title="取消编辑">取消</button>
                   </>
-                )}
-                <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button>
-                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined)} disabled={previewLoading || previewSaving} aria-label="重新读取文件" title="重新读取文件"><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
+                ) : null}
+                {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button> : null}
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
               </div>
             </div>
-            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件内容…</div> : null}
+            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? '读取图片…' : '读取文件内容…'}</div> : null}
             {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
-            {previewEditContent !== null && previewFile ? (
+            {previewImage ? (
+              <div className="workspace-image-preview"><img src={`data:${previewImage.mediaType};base64,${previewImage.data}`} alt={previewImage.path} /></div>
+            ) : previewEditContent !== null && previewFile ? (
               <textarea
                 ref={previewEditor}
                 className="workspace-file-preview__editor"
@@ -2460,9 +2536,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
 interface RemoteChatPaneProps {
   token: string
   remote: CodexRemoteController
-  marqueeColor: string
   active: boolean
-  showActiveFrame: boolean
   showPaneClose: boolean
   onActivate: () => void
   onClose: () => void
@@ -2470,6 +2544,7 @@ interface RemoteChatPaneProps {
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
+  onOpenWorkspaceImage: (path: string, cwd?: string) => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -2478,9 +2553,7 @@ interface RemoteChatPaneProps {
 function RemoteChatPane({
   token,
   remote,
-  marqueeColor,
   active,
-  showActiveFrame,
   showPaneClose,
   onActivate,
   onClose,
@@ -2488,6 +2561,7 @@ function RemoteChatPane({
   onOpenSidebar,
   onOpenWorkspace,
   onOpenWorkspaceFile,
+  onOpenWorkspaceImage,
   composerHandle,
   copiedMessageId,
   onCopy,
@@ -2518,6 +2592,11 @@ function RemoteChatPane({
     onActivate()
     onOpenWorkspaceFile(workspaceRelativePath(cwd, path), cwd, diff)
   }, [onActivate, onOpenWorkspaceFile, remote.activeThread?.cwd, remote.runtime.workspace])
+  const openViewedImagePreview = useCallback((path: string) => {
+    const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
+    onActivate()
+    onOpenWorkspaceImage(workspaceRelativePath(cwd, path), cwd)
+  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
@@ -2660,12 +2739,10 @@ function RemoteChatPane({
   }, [])
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
-  const currentConnectionLabel = remote.handedOff
-    ? '已交还给本机'
-    : remote.runtime.runtimeMode === 'isolated-fallback' && remote.connection === 'connected'
-      ? 'Codex 已连接（兼容运行时）'
-      : connectionLabel[remote.connection]
-  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
+  const hasStreamingAssistant = Boolean(streamingAssistant)
+  const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
+  const activeTurnStartedAt = remote.turnStartedAt ?? (Number.isFinite(streamingStartedAt) ? streamingStartedAt : null)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
   const runningTimeline = remote.runningTurnId ? remote.activityTimelineByTurn[remote.runningTurnId] ?? [] : []
   const runningOperationTimeline = runningTimeline.filter((entry) => entry.type === 'operation')
@@ -2685,14 +2762,13 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} style={{ '--marquee-color': marqueeColor, '--pane-marquee-color': marqueeColor } as CSSProperties} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}`} onPointerDown={onActivate}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
           <div className="remote-chat__title"><span className="remote-chat__eyebrow">当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
         <div className="remote-chat__controls">
-          <div className={`connection-label connection-label--${remote.handedOff ? 'handoff' : remote.connection}`}><i className={`status-dot status-dot--${remote.handedOff ? 'handoff' : remote.connection}`} /><span>{currentConnectionLabel}</span></div>
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
             type="button"
@@ -2735,6 +2811,9 @@ function RemoteChatPane({
             const operations = message.role === 'assistant' && message.turnId
               ? remote.operationsByTurn[message.turnId] ?? []
               : []
+            const operationFileChanges = message.turnId
+              ? remote.fileChangesByTurn[message.turnId] ?? []
+              : []
             const showOperations = message.role === 'assistant'
               && (!message.turnId || lastAssistantMessageIndexByTurn.get(message.turnId) === index)
             const activityTimeline = showOperations && message.turnId
@@ -2742,7 +2821,17 @@ function RemoteChatPane({
               : []
             return (
               <Fragment key={message.id}>
-                <MessageBubble message={message} operations={operations} activityTimeline={activityTimeline} showOperations={showOperations} copied={copiedMessageId === message.id} onCopy={onCopy} />
+                <MessageBubble
+                  message={message}
+                  operations={operations}
+                  fileChanges={operationFileChanges}
+                  activityTimeline={activityTimeline}
+                  showOperations={showOperations}
+                  copied={copiedMessageId === message.id}
+                  onCopy={onCopy}
+                  onOpenFile={openChangedFilePreview}
+                  onOpenImage={openViewedImagePreview}
+                />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
               </Fragment>
             )
@@ -2759,16 +2848,16 @@ function RemoteChatPane({
               </div>
             </div>
           ) : null}
-          {remote.isRunning || remote.runningTurnId !== null ? (
+          {remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
                 <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
-                {remote.turnStartedAt !== null ? <TurnElapsed startedAt={remote.turnStartedAt} /> : null}
+                {activeTurnStartedAt !== null ? <TurnElapsed startedAt={activeTurnStartedAt} /> : null}
               </div>
               {!hasStreamingAssistant && runningOperations.length > 0 ? (
                 runningOperationTimeline.length > 0
-                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} initiallyOpen />
-                  : <OperationLog operations={runningOperations} initiallyOpen />
+                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? [] : []} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
+                  : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? [] : []} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
               ) : null}
             </div>
           ) : null}
@@ -2814,16 +2903,26 @@ function RemoteChatPane({
 }
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
-  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>([0])
-  const [selectedPaneIndex, setSelectedPaneIndex] = useState(0)
+  const [initialPaneLayout] = useState(readPersistedPaneLayout)
+  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
+  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
   const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+
+  useEffect(() => {
+    const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
+      const threadId = remotes[paneIndex]?.activeThread?.id
+      return threadId ? [[String(paneIndex), threadId]] : []
+    }))
+    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane })
+  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id])
+
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
     return remote?.isRunning && remote.runningTurnId
@@ -2838,7 +2937,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
-  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<{ id: number; cwd?: string; path: string; diff?: string } | null>(null)
+  const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -3105,17 +3204,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [remote0.models, remote1.models, remote2.models, remote3.models, remote4.models])
   const chosenModel = availableModels.find((model) => modelIdOf(model) === selectedModel)
   const effortOptions = useMemo(() => chosenModel?.supportedReasoningEfforts ?? [], [chosenModel])
-  const marqueeColor = themePreferences.theme === 'dark'
-    ? '#ffffff'
-    : themePreferences.theme === 'light'
-      ? '#171717'
-      : themePreferences.theme === 'warm'
-        ? '#5a3b27'
-        : themePreferences.customTextColor
   const darkStatusBarIcons = shouldUseDarkStatusBarIcons(themePreferences)
   const themeStyle = {
     ...themeRootStyle(themePreferences),
-    '--marquee-color': marqueeColor,
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
   } as CSSProperties
 
@@ -3835,9 +3926,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   <RemoteChatPane
                     token={token}
                     remote={remotes[paneIndex]}
-                    marqueeColor={marqueeColor}
                     active={paneIndex === selectedPaneIndex}
-                    showActiveFrame={openPaneIndexes.length > 1}
                     showPaneClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
@@ -3848,6 +3937,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
                       setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
+                    }}
+                    onOpenWorkspaceImage={(path, cwd) => {
+                      activatePane(paneIndex)
+                      workspacePreviewSequence.current += 1
+                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image' })
                     }}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
@@ -4339,8 +4433,20 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
   )
 })
 
-const OperationLog = memo(function OperationLog({ operations, initiallyOpen = false, title = '操作记录' }: { operations: CodexOperation[]; initiallyOpen?: boolean; title?: string }) {
-  const [expanded, setExpanded] = useState(initiallyOpen)
+const OperationLog = memo(function OperationLog({
+  operations,
+  fileChanges = [],
+  onOpenFile,
+  onOpenImage,
+  title = '操作记录',
+}: {
+  operations: CodexOperation[]
+  fileChanges?: CodexFileChange[]
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
+  title?: string
+}) {
+  const [expanded, setExpanded] = useState(false)
   if (operations.length === 0) return null
   const runningCount = operations.filter((operation) => operation.status === 'running').length
   const failedCount = operations.filter((operation) => operation.status === 'failed').length
@@ -4356,7 +4462,14 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
     <details className="operation-log" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
       <summary><ChevronDown size={13} /><span>{title}</span><small>{statusText}</small></summary>
       <ul>
-        {operations.map((operation) => (
+        {operations.map((operation) => {
+          const fileChange = fileChanges.find((change) => change.id === operation.id)
+          const linkedPaths = new Set([
+            ...(fileChange?.changes.map((change) => change.path) ?? []),
+            ...(operation.steps?.flatMap((step) => step.path ? [step.path] : []) ?? []),
+          ])
+          const additionalPaths = operation.paths?.filter((path) => !linkedPaths.has(path)) ?? []
+          return (
           <li className={`operation-log__item operation-log__item--${operation.status}`} key={operation.id}>
             <span className="operation-log__status" aria-label={operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '已完成'}>
               {operation.status === 'running' ? <LoaderCircle className="spin" size={12} /> : operation.status === 'completed' ? <Check size={12} /> : operation.status === 'failed' ? <AlertTriangle size={12} /> : <Square size={10} />}
@@ -4364,13 +4477,29 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
             <span className="operation-log__content">
               <strong>{operation.label}</strong>
               {operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}
+              {operation.imagePath ? (
+                <span className="operation-log__actions">
+                  <button type="button" onClick={() => onOpenImage(operation.imagePath!)} title={operation.imagePath}><Eye size={12} />打开图片</button>
+                </span>
+              ) : null}
+              {fileChange?.changes.map((change) => (
+                <span className="operation-log__actions" key={`${operation.id}:${change.path}`}>
+                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><FileText size={12} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
+                </span>
+              ))}
+              {additionalPaths.map((path) => (
+                <span className="operation-log__actions" key={`${operation.id}:path:${path}`}>
+                  <button type="button" onClick={() => onOpenFile(path)} title={path}><FileText size={12} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
+                </span>
+              ))}
               {operation.steps?.length ? (
                 <span className="operation-log__steps">
                   {operation.steps.map((step, index) => (
                     <span className="operation-log__step" key={`${operation.id}-step-${index}`}>
                       <i aria-hidden="true">└</i>
-                      <strong>{step.label}</strong>
-                      {step.detail ? <code title={step.detail}>{step.detail}</code> : null}
+                      {step.path
+                        ? <button className="operation-log__step-action" type="button" onClick={() => onOpenFile(step.path!)} title={step.path}><Eye size={11} />{step.label} · {step.detail ?? step.path}</button>
+                        : <><strong>{step.label}</strong>{step.detail ? <code title={step.detail}>{step.detail}</code> : null}</>}
                     </span>
                   ))}
                 </span>
@@ -4378,17 +4507,20 @@ const OperationLog = memo(function OperationLog({ operations, initiallyOpen = fa
             </span>
             <small>{operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '完成'}</small>
           </li>
-        ))}
+          )
+        })}
       </ul>
     </details>
   )
 })
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, initiallyOpen = false, showCodeCopy = true }: {
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
-  initiallyOpen?: boolean
+  fileChanges?: CodexFileChange[]
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
   showCodeCopy?: boolean
 }) {
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
@@ -4429,8 +4561,10 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
         : <OperationLog
           key={block.key}
           operations={block.operations}
+          fileChanges={fileChanges}
+          onOpenFile={onOpenFile}
+          onOpenImage={onOpenImage}
           title={block.operations.length === 1 ? block.operations[0].label : `${block.operations.length} 个连续操作`}
-          initiallyOpen={initiallyOpen || block.operations.some((operation) => operation.status === 'running')}
         />)}
     </div>
   )
@@ -4482,7 +4616,17 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, operations, activityTimeline, showOperations, copied, onCopy }: { message: CodexMessage; operations: CodexOperation[]; activityTimeline: CodexActivityTimelineEntry[]; showOperations: boolean; copied: boolean; onCopy: (message: CodexMessage) => void | Promise<void> }) {
+const MessageBubble = memo(function MessageBubble({ message, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
+  message: CodexMessage
+  operations: CodexOperation[]
+  fileChanges: CodexFileChange[]
+  activityTimeline: CodexActivityTimelineEntry[]
+  showOperations: boolean
+  copied: boolean
+  onCopy: (message: CodexMessage) => void | Promise<void>
+  onOpenFile: (path: string, diff?: string) => void
+  onOpenImage: (path: string) => void
+}) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
@@ -4502,10 +4646,10 @@ const MessageBubble = memo(function MessageBubble({ message, operations, activit
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} initiallyOpen={message.streaming} showCodeCopy={!message.streaming} />
+          ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
           : message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
-        {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} initiallyOpen={message.streaming} /> : null}
+        {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">
