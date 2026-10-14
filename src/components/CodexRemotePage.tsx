@@ -41,7 +41,7 @@ import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposer
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentTextLength, maxDocumentTextPerTurn, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
-import { isCompactThemeBackgroundImage, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { createThreadTranscript, threadTranscriptFilename, truncateThreadTranscriptForAttachment } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 
@@ -2799,6 +2799,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         : {}
       window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
     }
+    setWorkspacePreviewRequest(null)
     setSettingsOpen(true)
     setSidebarOpen(false)
     setWorkspaceOpen(false)
@@ -3478,6 +3479,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
     if (open) {
+      setWorkspacePreviewRequest(null)
       workspacePreviewModeRef.current = workspacePreviewModeRef.current ?? (desktopWorkspacePreviewAvailable() ? 'desktop' : 'mobile')
       workspacePreviewCloseRef.current = closePreview ?? null
       return
@@ -3782,6 +3784,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
+  const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
@@ -3896,6 +3899,16 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
               {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
+        </section>
+
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading"><div><h2>显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-display-controls">
+            <label className="theme-control-row theme-control-row--stacked">
+              <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
+              <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label="全局字体大小" /><output>{fontSizeAdjustment === 0 ? '标准' : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
+            </label>
+          </div>
         </section>
       </div>
     </main>

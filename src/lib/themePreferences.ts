@@ -7,6 +7,7 @@ export interface ThemePreferences {
   customBackgroundColor: string
   customTextColor: string
   customBackgroundTransparency: number
+  fontSizeAdjustment: number
   customBackgroundImage?: string
 }
 
@@ -18,6 +19,7 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundColor: '#4b5563',
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
+  fontSizeAdjustment: 0,
 }
 
 export function normalizeHexColor(value: unknown, fallback: string) {
@@ -26,6 +28,10 @@ export function normalizeHexColor(value: unknown, fallback: string) {
 
 export function normalizeTransparency(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
+}
+
+export function normalizeFontSizeAdjustment(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(6, Math.max(-3, Math.round(value))) : 0
 }
 
 function normalizeThemeBackgroundImage(value: unknown) {
@@ -52,6 +58,7 @@ export function readThemePreferences(): ThemePreferences {
       customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
       customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
       customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
+      fontSizeAdjustment: normalizeFontSizeAdjustment(parsed.fontSizeAdjustment),
       ...(customBackgroundImage ? { customBackgroundImage } : {}),
     }
   } catch {
@@ -89,5 +96,6 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
     '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
+    '--user-font-offset': `${normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)}px`,
   } as CSSProperties
 }
