@@ -4303,8 +4303,8 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
-        {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
         {message.role === 'assistant' ? copyAction : null}
+        {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">
