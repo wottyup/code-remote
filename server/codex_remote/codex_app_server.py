@@ -544,8 +544,30 @@ class CodexAppServer:
             raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
         status = summary.get("status")
         status_type = status.get("type") if isinstance(status, dict) else None
-        if await self._active_turn_id(thread_id) or status_type in {"active", "inProgress", "running", "started"}:
-            raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。")
+        active_turn_id = await self._active_turn_id(thread_id)
+        if active_turn_id or status_type in {"active", "inProgress", "running", "started"}:
+            if not active_turn_id:
+                raise CodexThreadBusyError("Codex 尚未确认当前回复的编号，请先等待状态同步后再删除。")
+            try:
+                await self.interrupt(thread_id, active_turn_id)
+            except CodexRuntimeError as error:
+                detail = str(error).casefold()
+                if not any(marker in detail for marker in ("not active", "no active turn", "already completed", "no turn", "没有可中断", "没有正在运行")):
+                    raise CodexThreadBusyError("无法停止当前回复，聊天未删除。请稍后再试。") from error
+
+            for attempt in range(15):
+                try:
+                    summary = await self.read_thread(thread_id, include_turns=False)
+                except CodexRuntimeError as error:
+                    raise CodexThreadBusyError("未能确认回复已停止，聊天未删除。请稍后再试。") from error
+                status = summary.get("status")
+                status_type = status.get("type") if isinstance(status, dict) else None
+                if not await self._active_turn_id(thread_id) and status_type not in {"active", "inProgress", "running", "started"}:
+                    break
+                if attempt < 14:
+                    await asyncio.sleep(0.2)
+            else:
+                raise CodexThreadBusyError("回复仍在停止中，聊天未删除。请稍后再试。")
 
         await self._prepare_runtime_thread(thread_id)
         try:
