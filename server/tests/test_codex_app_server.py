@@ -811,6 +811,24 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_first_turn_does_not_resume_a_thread_started_in_the_same_workspace(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(side_effect=[
+            {"thread": {"id": "thread-id", "cwd": str(Path.cwd())}},
+            {"turn": {"id": "turn-id"}},
+        ])
+        app_server.resume_thread = AsyncMock()  # type: ignore[method-assign]
+        app_server._start_workspace_change_watch = AsyncMock()  # type: ignore[method-assign]
+
+        thread = await app_server.start_thread(cwd=Path.cwd())
+        await app_server.start_turn(thread["id"], "hello", cwd=Path.cwd())
+
+        app_server.resume_thread.assert_not_awaited()
+        self.assertEqual(
+            [call.args[0] for call in app_server.request.await_args_list],
+            ["thread/start", "turn/start"],
+        )
+
     async def test_interrupt_prefers_the_server_active_turn_over_a_stale_client_turn(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._active_turn_ids["thread-id"] = "current-turn-id"
