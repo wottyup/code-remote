@@ -708,8 +708,6 @@ class CodexAppServer:
         effort: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
     ) -> dict[str, Any]:
-        if len(prompt) > 32_000:
-            raise CodexRuntimeError("消息不能超过 32000 个字符")
         images = image_paths or []
         if not prompt.strip() and not images:
             raise CodexRuntimeError("请填写消息或附加图片")
@@ -771,8 +769,6 @@ class CodexAppServer:
         image_paths: list[Path] | None = None,
     ) -> dict[str, Any]:
         """Append input to the current turn without starting a concurrent turn."""
-        if len(prompt) > 32_000:
-            raise CodexRuntimeError("消息不能超过 32000 个字符")
         images = image_paths or []
         if not prompt.strip() and not images:
             raise CodexRuntimeError("请填写消息或附加图片")
