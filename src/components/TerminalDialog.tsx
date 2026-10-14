@@ -181,7 +181,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       ariaLabel="本机终端"
       backdropLabel="关闭本机终端"
       onClose={onClose}
-      className="terminal-dialog"
+      className="terminal-dialog terminal-dialog--toolbar-close"
       onPanelPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}

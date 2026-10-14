@@ -133,6 +133,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .pane-close-button:hover { border-color: rgba(180, 193, 230, .28); background: rgba(75, 82, 103, .42); color: #eef1f8; }
 .terminal-open-button { width: 30px; height: 30px; border: 1px solid rgba(146, 157, 184, .15); background: rgba(27, 30, 37, .48); color: #aeb8d7; }
 .terminal-open-button:hover { border-color: rgba(170, 186, 255, .35); background: rgba(67, 77, 110, .48); color: #e4e9ff; }
+.terminal-open-button--active { position: relative; z-index: 32; }
 .chat-overlay-backdrop { position: absolute; z-index: 31; inset: 0; overflow: hidden; background: rgba(0, 0, 0, .52); }
 .chat-overlay-backdrop__dismiss { position: absolute; z-index: 0; inset: 0; width: 100%; height: 100%; padding: 0; border: 0; background: transparent; cursor: default; }
 .chat-overlay-backdrop--resizing, .chat-overlay-backdrop--resizing * { cursor: ns-resize !important; user-select: none !important; }
@@ -147,6 +148,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-overlay-panel__resize-handle:hover::before, .chat-overlay-panel__resize-handle:focus-visible::before { width: 48px; background: #aabaff; }
 .chat-overlay-panel__loading { display: flex; min-width: 0; min-height: 0; align-items: center; justify-content: center; gap: 9px; color: #e3e6ed; font-size: calc(13px + var(--mobile-font-offset)); }
 .terminal-dialog { background: #111317; }
+.terminal-dialog--toolbar-close .chat-overlay-panel__close { display: none; }
 .terminal-dialog__title { display: flex; min-width: 0; align-items: center; gap: 8px; }
 .terminal-dialog__title > svg { flex: 0 0 auto; color: #aabaff; }
 .terminal-dialog__title > strong { flex: 0 0 auto; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 620; }
@@ -692,6 +694,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-chat__title { min-width: 0; max-width: 100%; }
   .remote-chat__controls { min-width: 0; max-width: none; gap: 7px; overflow: visible; }
   .chat-overlay-panel__header { min-height: 54px; gap: 6px; padding-inline: 9px 7px; }
+  .terminal-dialog--toolbar-close .chat-overlay-panel__close { display: grid; }
   .terminal-dialog__title { gap: 6px; }
   .terminal-dialog__screen { padding: 7px 6px 8px; }
   .thread-completion-toast { top: max(10px, calc(env(safe-area-inset-top) + 6px), calc(var(--native-status-bar-inset) + 6px)); width: min(calc(100vw - 24px), 410px); }
