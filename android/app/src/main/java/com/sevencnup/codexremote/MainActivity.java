@@ -10,9 +10,13 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
@@ -49,7 +53,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.89";
+    private static final String APP_VERSION = BuildConfig.VERSION_NAME;
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
@@ -61,6 +65,13 @@ public class MainActivity extends Activity {
     private static final int ACCENT = Color.rgb(170, 186, 255);
 
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private final Handler connectionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable connectionRecovery = this::recoverWebConnection;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private boolean activityResumed;
+    private boolean autoRestoreSavedEndpoint;
+    private int connectionCheckGeneration;
     private SharedPreferences preferences;
     private FrameLayout root;
     private WebView webView;
@@ -92,7 +103,9 @@ public class MainActivity extends Activity {
         showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
 
         String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
+        registerNetworkRecovery();
         if (savedEndpoint != null && !savedEndpoint.isBlank()) {
+            autoRestoreSavedEndpoint = true;
             checkAndOpen(savedEndpoint, true);
         }
     }
@@ -120,6 +133,7 @@ public class MainActivity extends Activity {
     private void showConnector(String initialEndpoint, String errorMessage) {
         disposeWebView();
         checking = false;
+        autoRestoreSavedEndpoint = false;
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
         applySystemBarInsets(root, false, false);
@@ -188,7 +202,10 @@ public class MainActivity extends Activity {
         connectButton.setTextColor(Color.rgb(25, 26, 30));
         connectButton.setAllCaps(false);
         connectButton.setBackgroundColor(Color.rgb(228, 229, 232));
-        connectButton.setOnClickListener(view -> checkAndOpen(endpointInput.getText().toString(), false));
+        connectButton.setOnClickListener(view -> {
+            autoRestoreSavedEndpoint = false;
+            checkAndOpen(endpointInput.getText().toString(), false);
+        });
         LinearLayout.LayoutParams buttonParams = widthParams(dp(48));
         buttonParams.bottomMargin = dp(12);
         page.addView(connectButton, buttonParams);
@@ -197,7 +214,7 @@ public class MainActivity extends Activity {
         endpointStatus.setLineSpacing(0, 1.3f);
         page.addView(endpointStatus, widthParams(dp(44)));
 
-        TextView hint = text("电脑和手机需要在同一个局域网。启动网页服务后，终端会显示匹配码。", 10, Color.rgb(126, 132, 144));
+        TextView hint = text("手机需要能通过局域网或远程隧道访问电脑。启动网页服务后，终端会显示匹配码。", 10, Color.rgb(126, 132, 144));
         hint.setLineSpacing(0, 1.3f);
         LinearLayout.LayoutParams hintParams = widthParams(dp(42));
         hintParams.topMargin = dp(24);
@@ -235,6 +252,7 @@ public class MainActivity extends Activity {
         }
 
         checking = true;
+        final int checkGeneration = ++connectionCheckGeneration;
         if (connectButton != null) {
             connectButton.setEnabled(false);
             connectButton.setText("检测中…");
@@ -246,13 +264,27 @@ public class MainActivity extends Activity {
 
         networkExecutor.execute(() -> {
             String failure = null;
-            try {
-                checkEndpoint(endpoint);
-            } catch (IOException | IllegalArgumentException error) {
-                failure = error.getMessage() == null ? "无法连接到电脑网页服务。" : error.getMessage();
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                try {
+                    checkEndpoint(endpoint);
+                    failure = null;
+                    break;
+                } catch (IOException | IllegalArgumentException error) {
+                    failure = error.getMessage() == null ? "无法连接到电脑网页服务。" : error.getMessage();
+                    if (attempt < 2) {
+                        try {
+                            Thread.sleep(750L * (attempt + 1));
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
             }
             String resultFailure = failure;
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || checkGeneration != connectionCheckGeneration) return;
                 checking = false;
                 if (resultFailure == null) {
                     activeEndpoint = endpoint;
@@ -265,7 +297,7 @@ public class MainActivity extends Activity {
                     connectButton.setText("检测并连接");
                 }
                 if (endpointStatus != null) {
-                    endpointStatus.setText(resultFailure + "\n请确认电脑服务已启动、端口为 4173，且手机和电脑在同一局域网。 ");
+                    endpointStatus.setText(resultFailure + "\n请确认地址和端口正确，且手机的局域网或远程隧道已连接。 ");
                     endpointStatus.setTextColor(Color.rgb(226, 154, 158));
                 }
             });
@@ -279,8 +311,8 @@ public class MainActivity extends Activity {
         // Some tunnels close that short response early and report a misleading
         // "unexpected end of stream" even though the server is healthy.
         connection.setRequestMethod("HEAD");
-        connection.setConnectTimeout(4500);
-        connection.setReadTimeout(4500);
+        connection.setConnectTimeout(6000);
+        connection.setReadTimeout(6000);
         connection.setInstanceFollowRedirects(true);
         connection.setUseCaches(false);
         connection.setRequestProperty("User-Agent", "CodexRemoteAndroid/" + APP_VERSION);
@@ -319,9 +351,9 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setLoadsImagesAutomatically(true);
-        // The UI is served by the computer's Vite server. Never reuse an old
-        // cached CSS/JS bundle after the web project has been rebuilt.
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        // HTML revalidates and production assets carry content hashes. Honor
+        // their HTTP cache headers so a weak connection can reuse the assets.
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         webView.setBackgroundColor(DARK);
         webView.addJavascriptInterface(new AndroidBridge(), "CodexRemoteAndroid");
@@ -393,9 +425,8 @@ public class MainActivity extends Activity {
                 0,
                 1));
         addWebViewStatusOverlay(root, endpoint);
-        // Keep the WebView from reusing an older index.html or module bundle.
         startWebViewReadyCheck(webView);
-        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION) + "&cacheBust=" + System.currentTimeMillis());
+        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
     }
 
     private void startWebViewReadyCheck(WebView view) {
@@ -626,8 +657,84 @@ public class MainActivity extends Activity {
         handleBackNavigation();
     }
 
+    private void registerNetworkRecovery() {
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                connectionHandler.post(MainActivity.this::scheduleConnectionRecovery);
+            }
+
+            @Override
+            public void onLost(Network network) {
+                connectionHandler.post(MainActivity.this::scheduleConnectionRecovery);
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (RuntimeException error) {
+            networkCallback = null;
+        }
+    }
+
+    private void scheduleConnectionRecovery() {
+        if (!activityResumed || isFinishing() || isDestroyed()) return;
+        connectionHandler.removeCallbacks(connectionRecovery);
+        connectionHandler.postDelayed(connectionRecovery, 500);
+    }
+
+    private void recoverWebConnection() {
+        if (!activityResumed || isFinishing() || isDestroyed()) return;
+        if (webView != null) {
+            if (webViewStatus != null && webViewLoadFailed) {
+                // Retry only a page that never finished loading. An existing
+                // chat keeps its draft, scroll position and local caches.
+                webView.reload();
+            } else {
+                webView.evaluateJavascript("window.dispatchEvent(new Event('codex-remote:resume'));", null);
+            }
+            return;
+        }
+        String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
+        if (autoRestoreSavedEndpoint && !checking && savedEndpoint != null && !savedEndpoint.isBlank()
+                && endpointInput != null && savedEndpoint.equals(endpointInput.getText().toString().trim())) {
+            checkAndOpen(savedEndpoint, true);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+        if (webView != null) {
+            webView.onResume();
+            if (webViewStatus != null && !webViewLoadFailed) startWebViewReadyCheck(webView);
+        }
+        scheduleConnectionRecovery();
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        connectionHandler.removeCallbacks(connectionRecovery);
+        stopWebViewReadyCheck();
+        if (webView != null) webView.onPause();
+        super.onPause();
+    }
+
     @Override
     protected void onDestroy() {
+        activityResumed = false;
+        connectionHandler.removeCallbacksAndMessages(null);
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {
+                // The OS may already have released the callback.
+            }
+            networkCallback = null;
+        }
         unregisterBackNavigationCallback();
         disposeWebView();
         networkExecutor.shutdownNow();
@@ -635,6 +742,7 @@ public class MainActivity extends Activity {
     }
 
     private void disposeWebView() {
+        connectionCheckGeneration++;
         stopWebViewReadyCheck();
         if (pendingFileChooser != null) {
             pendingFileChooser.onReceiveValue(null);

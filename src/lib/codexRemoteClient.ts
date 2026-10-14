@@ -131,6 +131,8 @@ export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 export interface RemoteEvent {
   type: string
   threadSubscriptions?: boolean
+  heartbeats?: boolean
+  id?: string
   threadId?: string
   pinned?: boolean
   method?: string
@@ -156,11 +158,14 @@ export class RemoteApiError extends Error {
 
 const networkRetryDelaysMs = [300, 900, 1_800]
 const webSocketConnectionTimeoutMs = 60_000
+const webSocketOpenTimeoutMs = 15_000
+const heartbeatIntervalMs = 25_000
+const heartbeatTimeoutMs = 12_000
 
 export function isAmbiguousNetworkFailure(reason: unknown) {
   if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
   if (!(reason instanceof Error)) return false
-  return reason instanceof TypeError
+  return reason instanceof TypeError || reason.name === 'TimeoutError'
     || /failed to fetch|network|load failed/i.test(reason.message)
     || (reason instanceof SyntaxError && /unexpected end|unterminated/i.test(reason.message))
 }
@@ -169,26 +174,29 @@ function wait(milliseconds: number) {
   return new Promise<void>((resolve) => window.setTimeout(resolve, milliseconds))
 }
 
-function timeoutSignal(milliseconds: number) {
-  if (typeof AbortSignal.timeout === 'function') return AbortSignal.timeout(milliseconds)
-  const controller = new AbortController()
-  window.setTimeout(() => controller.abort(), milliseconds)
-  return controller.signal
-}
-
 async function request<T>(
   token: string,
   path: string,
   init?: RequestInit,
-  options: { networkRetries?: number } = {},
+  options: { networkRetries?: number; timeoutMs?: number } = {},
 ): Promise<T> {
   const method = (init?.method ?? 'GET').toUpperCase()
   const networkRetries = options.networkRetries ?? (method === 'GET' ? 3 : 0)
   let attempt = 0
   while (true) {
+    const controller = new AbortController()
+    let timedOut = false
+    const abort = () => controller.abort(init?.signal?.reason)
+    if (init?.signal?.aborted) abort()
+    else init?.signal?.addEventListener('abort', abort, { once: true })
+    const timer = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, options.timeoutMs ?? (method === 'GET' ? 30_000 : 120_000))
     try {
       const response = await fetch(path, {
         ...init,
+        signal: controller.signal,
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
@@ -214,10 +222,21 @@ async function request<T>(
       // Await it here so those failures use the same safe retry path.
       return await response.json() as T
     } catch (reason) {
-      if (!isAmbiguousNetworkFailure(reason) || attempt >= networkRetries) throw reason
+      if (init?.signal?.aborted) throw reason
+      if (timedOut) {
+        const timeoutError = new Error('连接服务器超时，请检查手机网络或远程连接后重试。')
+        timeoutError.name = 'TimeoutError'
+        reason = timeoutError
+      }
+      // A timed-out body may already have transferred many bytes. Allow one
+      // recovery attempt instead of downloading it repeatedly on a slow link.
+      if (!isAmbiguousNetworkFailure(reason) || attempt >= networkRetries || (timedOut && attempt >= 1)) throw reason
       const delay = networkRetryDelaysMs[Math.min(attempt, networkRetryDelaysMs.length - 1)]
       attempt += 1
       await wait(delay)
+    } finally {
+      window.clearTimeout(timer)
+      init?.signal?.removeEventListener('abort', abort)
     }
   }
 }
@@ -506,11 +525,12 @@ function mergeThreadSync(response: ThreadSyncResponse, cached?: ThreadTransportS
 async function readThreadWithChanges(token: string, threadId: string, key: string) {
   const cached = threadTransportSnapshots.get(key)
   const path = `/api/v1/codex/threads/${encodeURIComponent(threadId)}`
-  let response = await request<ThreadSyncResponse>(token, `${path}${cached ? `?since=${encodeURIComponent(cached.revision)}` : ''}`)
+  const options = { timeoutMs: 120_000 }
+  let response = await request<ThreadSyncResponse>(token, `${path}${cached ? `?since=${encodeURIComponent(cached.revision)}` : ''}`, undefined, options)
   let thread = mergeThreadSync(response, cached)
   if (!thread) {
     threadTransportSnapshots.delete(key)
-    response = await request<ThreadSyncResponse>(token, path)
+    response = await request<ThreadSyncResponse>(token, path, undefined, options)
     thread = mergeThreadSync(response)
     if (!thread) throw new Error('聊天增量同步的历史版本不完整，请刷新聊天后重试。')
   }
@@ -550,8 +570,7 @@ export const codexRemoteClient = {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
       method: 'POST',
       body: JSON.stringify({ code }),
-      signal: timeoutSignal(10_000),
-    }).catch((reason) => {
+    }, { timeoutMs: 10_000 }).catch((reason) => {
       if (reason instanceof Error && (reason.name === 'TimeoutError' || reason.name === 'AbortError')) {
         throw new Error('连接超时，请确认 Codex Remote 服务正在运行后重试。')
       }
@@ -562,7 +581,7 @@ export const codexRemoteClient = {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
   },
   status(token: string) {
-    return request<CodexRuntime>(token, '/api/v1/codex/status')
+    return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
@@ -745,60 +764,172 @@ export const codexRemoteClient = {
     url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(url)
     onState('connecting')
+    let stopped = false
     let receivedConnection = false
     let subscribedThreadId = threadId
     let supportsSubscriptions = false
-    const subscribeThread = (nextThreadId: string | null) => {
-      subscribedThreadId = nextThreadId
-      if (supportsSubscriptions && socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify({ type: 'thread.subscribe', thread_id: nextThreadId }))
+    let supportsHeartbeats = false
+    let lastReceivedAt = Date.now()
+    let connectionTimeout: number | undefined
+    let heartbeatTimer: number | undefined
+    let heartbeatDeadline: number | undefined
+    let pingSequence = 0
+    let pendingPing: { id: string; sentAt: number; promise: Promise<boolean>; resolve: (healthy: boolean) => void } | null = null
+
+    const finishPing = (healthy: boolean) => {
+      if (heartbeatDeadline !== undefined) window.clearTimeout(heartbeatDeadline)
+      heartbeatDeadline = undefined
+      const ping = pendingPing
+      pendingPing = null
+      ping?.resolve(healthy)
+    }
+    const clearTimers = () => {
+      if (connectionTimeout !== undefined) window.clearTimeout(connectionTimeout)
+      if (heartbeatTimer !== undefined) window.clearTimeout(heartbeatTimer)
+      connectionTimeout = undefined
+      heartbeatTimer = undefined
+      finishPing(false)
+    }
+    const fail = (message?: string, nextState: 'disconnected' | 'unavailable' = 'disconnected') => {
+      if (stopped) return
+      stopped = true
+      clearTimers()
+      socket.close()
+      if (message) onEvent({ type: 'error', message })
+      onState(nextState)
+    }
+    const send = (payload: Record<string, unknown>) => {
+      if (stopped || socket.readyState !== WebSocket.OPEN) return false
+      try {
+        socket.send(JSON.stringify(payload))
+        return true
+      } catch {
+        fail()
+        return false
       }
     }
-    const connectionTimeout = window.setTimeout(() => {
-      if (receivedConnection || socket.readyState === 3) return
-      socket.close()
-      onEvent({ type: 'connection', connected: false, available: false, error: 'Codex 引擎连接超时，请检查本机 Codex app-server 是否已就绪。' })
-      onState('unavailable')
-    }, webSocketConnectionTimeoutMs)
-    const clearConnectionTimeout = () => window.clearTimeout(connectionTimeout)
+    const scheduleHeartbeat = () => {
+      if (heartbeatTimer !== undefined) window.clearTimeout(heartbeatTimer)
+      if (stopped || !supportsHeartbeats) return
+      heartbeatTimer = window.setTimeout(() => {
+        heartbeatTimer = undefined
+        if (document.visibilityState === 'hidden' || Date.now() - lastReceivedAt < heartbeatIntervalMs) {
+          scheduleHeartbeat()
+        } else {
+          void checkConnection()
+        }
+      }, heartbeatIntervalMs)
+    }
+    const transmitPing = () => {
+      const ping = pendingPing
+      if (!ping) return
+      ping.sentAt = Date.now()
+      if (!send({ type: 'ping', id: ping.id })) {
+        fail()
+        return
+      }
+      heartbeatDeadline = window.setTimeout(() => {
+        if (pendingPing !== ping || stopped) return
+        if (document.visibilityState === 'hidden') {
+          finishPing(false)
+          scheduleHeartbeat()
+        } else if (Date.now() - ping.sentAt > heartbeatTimeoutMs + 5_000) {
+          // A frozen mobile timer can run immediately after waking. Give the
+          // restored network a fresh probe instead of timing out its sleep.
+          transmitPing()
+        } else {
+          fail('聊天连接暂时没有响应，正在重新连接…')
+        }
+      }, heartbeatTimeoutMs)
+    }
+    const checkConnection = (): Promise<boolean> => {
+      if (stopped || !receivedConnection) return Promise.resolve(false)
+      if (socket.readyState !== WebSocket.OPEN) {
+        fail()
+        return Promise.resolve(false)
+      }
+      // Older servers reject unknown messages. Reconnect a stale connection
+      // only when asked on foreground/network recovery until they are updated.
+      if (!supportsHeartbeats) return Promise.resolve(Date.now() - lastReceivedAt < heartbeatIntervalMs)
+      if (pendingPing) {
+        const ping = pendingPing
+        if (Date.now() - ping.sentAt > 1_000) {
+          if (heartbeatDeadline !== undefined) window.clearTimeout(heartbeatDeadline)
+          transmitPing()
+        }
+        return ping.promise
+      }
+      if (heartbeatTimer !== undefined) window.clearTimeout(heartbeatTimer)
+      heartbeatTimer = undefined
+      let resolve!: (healthy: boolean) => void
+      const promise = new Promise<boolean>((done) => { resolve = done })
+      pendingPing = { id: String(++pingSequence), sentAt: Date.now(), promise, resolve }
+      transmitPing()
+      return promise
+    }
+    const armConnectionTimeout = (milliseconds: number) => {
+      if (connectionTimeout !== undefined) window.clearTimeout(connectionTimeout)
+      connectionTimeout = window.setTimeout(() => {
+        if (!receivedConnection) fail('连接服务器超时，正在重试…', 'unavailable')
+      }, milliseconds)
+    }
+    const subscribeThread = (nextThreadId: string | null) => {
+      subscribedThreadId = nextThreadId
+      if (supportsSubscriptions) send({ type: 'thread.subscribe', thread_id: nextThreadId })
+    }
+    armConnectionTimeout(webSocketOpenTimeoutMs)
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'codex.client.hello', protocol_version: 1, token, thread_id: subscribedThreadId }))
+      if (!send({ type: 'codex.client.hello', protocol_version: 1, token, thread_id: subscribedThreadId })) return
+      armConnectionTimeout(webSocketConnectionTimeoutMs)
     })
     socket.addEventListener('message', (message) => {
+      if (stopped) return
       try {
         const event = JSON.parse(String(message.data)) as RemoteEvent
         if (!event.type) return
+        lastReceivedAt = Date.now()
+        if (event.type === 'pong') {
+          if (pendingPing?.id === event.id) {
+            finishPing(true)
+            scheduleHeartbeat()
+          }
+          return
+        }
         if (event.type === 'connection') {
           if (event.threadSubscriptions && !supportsSubscriptions) {
             supportsSubscriptions = true
             subscribeThread(subscribedThreadId)
           }
+          supportsHeartbeats ||= event.heartbeats === true
           receivedConnection = true
-          clearConnectionTimeout()
+          if (connectionTimeout !== undefined) window.clearTimeout(connectionTimeout)
+          connectionTimeout = undefined
+          scheduleHeartbeat()
           onState(event.connected ? 'connected' : event.available ? 'disconnected' : 'unavailable')
         }
         onEvent(event)
       } catch {
-        clearConnectionTimeout()
-        onState('unavailable')
+        fail('聊天连接返回异常，正在重新连接…')
       }
     })
-    socket.addEventListener('error', () => {
-      clearConnectionTimeout()
-      onState('unavailable')
-    })
+    socket.addEventListener('error', () => fail())
     socket.addEventListener('close', () => {
-      clearConnectionTimeout()
+      if (stopped) return
+      stopped = true
+      clearTimers()
       onState('disconnected')
     })
     return {
+      checkConnection,
       subscribeThread,
       respondToApproval(requestId: string | number, decision: 'accept' | 'decline' | 'cancel') {
-        if (socket.readyState !== WebSocket.OPEN) return false
-        socket.send(JSON.stringify({ type: 'approval.response', request_id: requestId, decision }))
-        return true
+        return send({ type: 'approval.response', request_id: requestId, decision })
       },
-      close: () => socket.close(),
+      close() {
+        stopped = true
+        clearTimers()
+        socket.close()
+      },
     }
   },
 }

@@ -943,7 +943,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.8.0-dev.5", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.8.0-dev.6", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
@@ -1431,27 +1431,28 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         filter_thread = "thread_id" in hello
         subscribed_thread_id = hello.get("thread_id") if isinstance(hello.get("thread_id"), str) else None
         queue = await app_server.subscribe()
-        try:
-            runtime_status = await app_server.connect()
-        except CodexRuntimeError as error:
-            runtime_status = app_server.status()
-            runtime_status["error"] = str(error)
-        try:
-            await websocket.send_json({"type": "connection", **runtime_status, "threadSubscriptions": True})
-        except WebSocketDisconnect:
-            app_server.unsubscribe(queue)
-            return
+        send_lock = asyncio.Lock()
+        tasks: list[asyncio.Task[None]] = []
+
+        async def send_event(event: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(event)
 
         async def send_events() -> None:
             while True:
                 event = browser_event(await queue.get(), thread_id=subscribed_thread_id, filter_thread=filter_thread)
                 if event is not None:
-                    await websocket.send_json(event)
+                    await send_event(event)
 
-        writer = asyncio.create_task(send_events())
-        try:
+        async def receive_events() -> None:
+            nonlocal subscribed_thread_id, filter_thread
             while True:
                 payload = await websocket.receive_json()
+                if isinstance(payload, dict) and payload.get("type") == "ping":
+                    ping_id = payload.get("id")
+                    if isinstance(ping_id, str) and 0 < len(ping_id) <= 64:
+                        await send_event({"type": "pong", "id": ping_id})
+                    continue
                 if isinstance(payload, dict) and payload.get("type") == "thread.subscribe":
                     requested_thread_id = payload.get("thread_id")
                     if requested_thread_id is None or (isinstance(requested_thread_id, str) and len(requested_thread_id) <= 512):
@@ -1471,14 +1472,30 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 try:
                     await app_server.answer_server_request(request_id, decision)
                 except CodexRuntimeError as error:
-                    await websocket.send_json({"type": "error", "message": str(error)})
-        except WebSocketDisconnect:
+                    await send_event({"type": "error", "message": str(error)})
+
+        try:
+            try:
+                runtime_status = await app_server.connect()
+            except CodexRuntimeError as error:
+                runtime_status = app_server.status()
+                runtime_status["error"] = str(error)
+            await send_event({"type": "connection", **runtime_status, "threadSubscriptions": True, "heartbeats": True})
+            tasks = [asyncio.create_task(send_events()), asyncio.create_task(receive_events())]
+            # A failed writer must also release its reader and subscription.
+            # Otherwise a dead browser can keep accumulating queued events.
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                await task
+        except (WebSocketDisconnect, OSError, RuntimeError, ValueError):
             pass
         finally:
-            writer.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await writer
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             app_server.unsubscribe(queue)
+            with suppress(WebSocketDisconnect, RuntimeError, OSError):
+                await websocket.close()
 
     @app.websocket("/api/v1/codex/terminal")
     async def terminal_websocket(websocket: WebSocket) -> None:

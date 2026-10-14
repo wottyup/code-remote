@@ -3174,6 +3174,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     let disposed = false
     let retryTimer: number | undefined
+    let stableTimer: number | undefined
     let retryDelay = 500
     let socketGeneration = 0
 
@@ -3194,10 +3195,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           setConnectionState('disconnected')
           return
         }
+        const wasConnected = connectionRef.current === 'connected'
         setConnectionState(nextState)
-        if (nextState !== 'connected') resumedThreadId.current = null
+        if (nextState !== 'connected') {
+          resumedThreadId.current = null
+          if (stableTimer !== undefined) window.clearTimeout(stableTimer)
+          stableTimer = undefined
+        }
         if (nextState === 'connected') {
-          retryDelay = 500
+          if (wasConnected) return
+          stableTimer = window.setTimeout(() => { retryDelay = 500 }, 30_000)
           void restoreActiveThread()
           if (loadThreads) void refreshThreads()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
@@ -3205,7 +3212,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           retryTimer = window.setTimeout(() => {
             retryTimer = undefined
             connect()
-          }, retryDelay)
+          }, Math.round(retryDelay * (0.8 + Math.random() * 0.4)))
           retryDelay = Math.min(10_000, retryDelay * 2)
         }
       }, activeThreadId.current)
@@ -3214,6 +3221,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
     let wasHidden = document.visibilityState === 'hidden'
     let lastBackgroundReconnectAt = 0
+    let lastRecoveryAt = 0
+    let recoveryInFlight = false
     const resumeFromBackground = (force = false) => {
       if (disposed || handedOffRef.current) return
       // Mobile browsers can fire visibilitychange and pageshow back-to-back.
@@ -3226,6 +3235,33 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       retryDelay = 500
       connect(force)
     }
+    const recoverConnection = async () => {
+      if (disposed || handedOffRef.current || document.hidden || recoveryInFlight) return
+      const now = Date.now()
+      if (now - lastRecoveryAt < 800) return
+      lastRecoveryAt = now
+      const socket = socketRef.current
+      if (!socket || connectionRef.current !== 'connected') {
+        resumeFromBackground(true)
+        return
+      }
+      recoveryInFlight = true
+      const generation = socketGeneration
+      try {
+        const healthy = await socket.checkConnection()
+        if (disposed || generation !== socketGeneration || socketRef.current !== socket || document.visibilityState === 'hidden') return
+        if (!healthy) {
+          resumeFromBackground(true)
+          return
+        }
+        const threadId = activeThreadId.current
+        const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
+        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current) void restoreActiveThread()
+        else void refreshActiveThreadIfChanged()
+      } finally {
+        recoveryInFlight = false
+      }
+    }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         wasHidden = true
@@ -3233,25 +3269,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       if (!wasHidden) return
       wasHidden = false
-      const threadId = activeThreadId.current
-      const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
-      // Android WebViews can leave a socket marked "connected" after the app
-      // was backgrounded. Recover a waiting queue or running turn in case its
-      // completion was missed; idle views need only a metadata comparison.
-      if (connectionRef.current === 'connected') {
-        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current) void restoreActiveThread()
-        else void refreshActiveThreadIfChanged()
-        return
-      }
-      resumeFromBackground()
+      void recoverConnection()
     }
     const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) resumeFromBackground(true)
+      if (event.persisted) void recoverConnection()
     }
-    const handleOnline = () => resumeFromBackground(true)
+    const handleOnline = () => { void recoverConnection() }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('online', handleOnline)
+    window.addEventListener('codex-remote:resume', handleOnline)
 
     void (async () => {
       try {
@@ -3285,6 +3312,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       disposed = true
       socketGeneration += 1
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      if (stableTimer !== undefined) window.clearTimeout(stableTimer)
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       writerRefreshTimer.current = undefined
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
@@ -3299,6 +3327,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('online', handleOnline)
+      window.removeEventListener('codex-remote:resume', handleOnline)
     }
   }, [enabled, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
