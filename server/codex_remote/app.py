@@ -645,7 +645,10 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
         blocks.append(
             f"[[CODEX_REMOTE_FILE_BEGIN id={attachment.attachment_id} name={encoded_name}]]\n"
             f'用户附加的原始{kind}文件名："{attachment.name}"\n'
-            f"原始文件在运行 Codex 的本机路径：`{path}`\n"
+            f"网页上传后生成的临时读取副本路径：`{path}`\n"
+            "这个临时路径只用于读取附件，不是用户文件的原始目录，也不能作为输出目录或‘放回原路径’的目标。"
+            "需要保存结果时，优先使用用户消息中明确给出的目录；例如用户写了 `D:\\111codex`，就保存到该目录。"
+            "如果用户只说‘原路径’却没有给出具体目录，必须先询问保存目录，禁止写入上述临时附件目录。"
             f"请使用本机可用工具直接读取这个{kind}原件，并根据实际读取到的内容回答；不要使用或假设网页端已经提取了完整内容。"
             "如果无法访问或解析这个文件，请明确说明，不要猜测内容。\n"
             f"[[CODEX_REMOTE_FILE_END id={attachment.attachment_id}]]"

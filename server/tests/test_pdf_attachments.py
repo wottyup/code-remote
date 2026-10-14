@@ -140,6 +140,10 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"turn_id": "turn-one"})
         self.assertIn(str(attachment.path), prompt)
         self.assertIn("使用本机可用工具直接读取这个PDF原件", prompt)
+        self.assertIn("临时读取副本路径", prompt)
+        self.assertIn("不是用户文件的原始目录", prompt)
+        self.assertIn(r"D:\111codex", prompt)
+        self.assertIn("禁止写入上述临时附件目录", prompt)
         self.assertIn("CODEX_REMOTE_FILE_BEGIN", prompt)
         self.assertNotIn("PRIVATE_PDF_TEXT", prompt)
 
