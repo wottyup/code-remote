@@ -574,11 +574,42 @@ class CodexAppServer:
             await self.request("thread/delete", {"threadId": thread_id})
         except CodexRuntimeError as error:
             detail = str(error).casefold()
-            if any(marker in detail for marker in ("active", "running", "in progress", "busy", "正在运行", "回复中")):
-                raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。") from error
+            busy_markers = ("active", "running", "in progress", "busy", "正在运行", "回复中")
+            if any(marker in detail for marker in busy_markers):
+                # Codex can reject deletion from a stale busy index even when
+                # the conversation has no active turn. Confirm against a fresh
+                # full read before making exactly one safe retry.
+                try:
+                    result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+                except CodexRuntimeError:
+                    raise CodexThreadBusyError("Codex 未能确认聊天已空闲，聊天未删除。请稍后重试。") from error
+                current = result.get("thread")
+                current = current if isinstance(current, dict) else {}
+                current_status = current.get("status")
+                current_status_type = current_status.get("type") if isinstance(current_status, dict) else None
+                current_turns = current.get("turns")
+                current_turns = current_turns if isinstance(current_turns, list) else []
+                active_turn_statuses = {"active", "inProgress", "running", "started"}
+                has_active_turn = any(
+                    isinstance(turn, dict) and turn.get("status") in active_turn_statuses
+                    for turn in current_turns
+                )
+                confirmed_idle_statuses = {"idle", "completed", "failed", "interrupted", "notLoaded"}
+                if current_status_type not in confirmed_idle_statuses or has_active_turn:
+                    raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。") from error
+                try:
+                    await self.request("thread/delete", {"threadId": thread_id})
+                except CodexRuntimeError as retry_error:
+                    retry_detail = str(retry_error).casefold()
+                    if any(marker in retry_detail for marker in busy_markers):
+                        raise CodexThreadBusyError("Codex 仍拒绝删除该聊天，请稍后重试。") from retry_error
+                    if any(marker in retry_detail for marker in ("not found", "unknown thread", "找不到")):
+                        raise CodexThreadNotFoundError("找不到要删除的聊天。") from retry_error
+                    raise
             if any(marker in detail for marker in ("not found", "unknown thread", "找不到")):
                 raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
-            raise
+            if not any(marker in detail for marker in busy_markers):
+                raise
 
         # An explicitly isolated runtime owns a synchronized copy. The native
         # request removes that copy; remove the verified source record as well

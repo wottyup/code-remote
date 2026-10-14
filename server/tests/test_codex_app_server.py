@@ -1104,6 +1104,65 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             ["thread/read", "thread/delete"],
         )
 
+    async def test_delete_retries_when_codex_reports_busy_but_full_read_is_idle(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._prepare_runtime_thread = AsyncMock()  # type: ignore[method-assign]
+        delete_attempts = 0
+
+        async def request(method: str, params: dict[str, object], **_kwargs: object) -> dict[str, object]:
+            nonlocal delete_attempts
+            if method == "thread/read" and params.get("includeTurns") is False:
+                return {"thread": {"id": "thread-id", "status": {"type": "idle"}}}
+            if method == "thread/delete":
+                delete_attempts += 1
+                if delete_attempts == 1:
+                    raise CodexRuntimeError("thread is busy: active turn")
+                return {"deleted": True}
+            if method == "thread/read" and params.get("includeTurns") is True:
+                return {"thread": {
+                    "id": "thread-id",
+                    "status": {"type": "notLoaded"},
+                    "turns": [],
+                }}
+            raise AssertionError(f"Unexpected method: {method}")
+
+        app_server.request = AsyncMock(side_effect=request)
+
+        await app_server.delete_thread("thread-id")
+
+        self.assertEqual(2, delete_attempts)
+        self.assertEqual(
+            [call.args[0] for call in app_server.request.await_args_list],
+            ["thread/read", "thread/delete", "thread/read", "thread/delete"],
+        )
+
+    async def test_delete_does_not_retry_busy_error_when_full_read_has_active_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._prepare_runtime_thread = AsyncMock()  # type: ignore[method-assign]
+
+        async def request(method: str, params: dict[str, object], **_kwargs: object) -> dict[str, object]:
+            if method == "thread/read" and params.get("includeTurns") is False:
+                return {"thread": {"id": "thread-id", "status": {"type": "idle"}}}
+            if method == "thread/delete":
+                raise CodexRuntimeError("thread is busy: active turn")
+            if method == "thread/read" and params.get("includeTurns") is True:
+                return {"thread": {
+                    "id": "thread-id",
+                    "status": {"type": "active"},
+                    "turns": [{"id": "turn-id", "status": "inProgress"}],
+                }}
+            raise AssertionError(f"Unexpected method: {method}")
+
+        app_server.request = AsyncMock(side_effect=request)
+
+        with self.assertRaises(CodexThreadBusyError):
+            await app_server.delete_thread("thread-id")
+
+        self.assertEqual(
+            [call.args[0] for call in app_server.request.await_args_list],
+            ["thread/read", "thread/delete", "thread/read"],
+        )
+
     async def test_handoff_closes_an_idle_remote_runtime_and_blocks_background_requests(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.close = AsyncMock()
