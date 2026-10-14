@@ -41,6 +41,21 @@ export function insertRemoteUserMessage(messages: CodexMessage[], incoming: Code
   if (messages.some((message) => message.id === incoming.sourceItemId
     || message.sourceItemId === incoming.sourceItemId)) return messages
 
+  // A Windows turn/steer receipt can reach the browser before the matching
+  // user item notification. Replace that optimistic bubble with the canonical
+  // item instead of briefly rendering both copies until thread/read catches up.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message.id.startsWith('queued-') || !sameQueuedMessageHistoryContent(incoming, message)) continue
+    const next = [...messages]
+    next[index] = {
+      ...incoming,
+      ...(!incoming.sentAt && message.sentAt ? { sentAt: message.sentAt } : {}),
+      ...(!incoming.createdAt && message.createdAt ? { createdAt: message.createdAt } : {}),
+    }
+    return next
+  }
+
   const hasEarlierUserInTurn = Boolean(incoming.turnId && messages.some((message) =>
     message.role === 'user' && message.turnId === incoming.turnId,
   ))
