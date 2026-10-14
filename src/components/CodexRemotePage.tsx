@@ -2746,6 +2746,7 @@ function RemoteChatPane({
         )}>
           <TerminalDialog
             token={token}
+            threadId={remote.activeThread?.id}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
             onClose={() => setTerminalOpen(false)}
             onInsertText={(value) => {

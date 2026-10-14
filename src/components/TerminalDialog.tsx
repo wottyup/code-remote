@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css'
 
 interface TerminalDialogProps {
   token: string
+  threadId?: string
   cwd?: string
   onClose: () => void
   onInsertText: (value: string) => void
@@ -20,7 +21,7 @@ interface ContextMenuState {
   text: string
 }
 
-export function TerminalDialog({ token, cwd, onClose, onInsertText }: TerminalDialogProps) {
+export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
@@ -117,7 +118,7 @@ export function TerminalDialog({ token, cwd, onClose, onInsertText }: TerminalDi
 
     socket.addEventListener('open', () => {
       fitAndResize()
-      send({ type: 'terminal.connect', token, cwd, columns: terminal.cols, rows: terminal.rows })
+      send({ type: 'terminal.connect', token, threadId, cwd, columns: terminal.cols, rows: terminal.rows })
     })
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') {
@@ -166,7 +167,7 @@ export function TerminalDialog({ token, cwd, onClose, onInsertText }: TerminalDi
       socket.close()
       terminal.dispose()
     }
-  }, [cwd, token])
+  }, [cwd, threadId, token])
 
   const statusLabel = {
     connecting: '正在启动',

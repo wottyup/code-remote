@@ -38,7 +38,7 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
-from .terminal import TerminalSession
+from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -850,6 +850,21 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
 
+    async def reap_tmux_terminal_sessions() -> None:
+        while True:
+            try:
+                protected_sessions = {
+                    session.tmux_session_name
+                    for session in terminal_sessions
+                    if session.tmux_session_name is not None
+                }
+                await cleanup_tmux_sessions(protected_sessions)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Could not clean idle tmux terminal sessions")
+            await asyncio.sleep(TMUX_CLEANUP_INTERVAL_SECONDS)
+
     async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
         images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
@@ -884,10 +899,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
         shared_queue.start()
         try:
             yield
         finally:
+            terminal_reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await terminal_reaper
             await shared_queue.close()
             for terminal_session in tuple(terminal_sessions):
                 await terminal_session.close()
@@ -898,7 +917,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.5.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.7.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
@@ -1425,6 +1444,16 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
             return
 
+        thread_id = hello.get("threadId")
+        if thread_id is not None and (
+            not isinstance(thread_id, str)
+            or not thread_id
+            or len(thread_id) > 512
+        ):
+            await websocket.send_json({"type": "error", "message": "终端聊天标识无效。"})
+            await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+            return
+
         raw_cwd = hello.get("cwd")
         if raw_cwd is not None and not isinstance(raw_cwd, str):
             await websocket.send_json({"type": "error", "message": "终端工作目录无效。"})
@@ -1436,6 +1465,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 cwd,
                 hello.get("columns", 100),
                 hello.get("rows", 30),
+                thread_id=thread_id,
             )
         except HTTPException as error:
             await websocket.send_json({"type": "error", "message": str(error.detail)})
@@ -1456,7 +1486,12 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await websocket.send_json(payload)
 
         async def send_output() -> None:
-            await send_json({"type": "ready", "cwd": str(cwd), "shell": terminal_session.shell_name})
+            await send_json({
+                "type": "ready",
+                "cwd": str(cwd),
+                "shell": terminal_session.shell_name,
+                "persistent": terminal_session.persistent,
+            })
             while True:
                 output = await terminal_session.read()
                 if not output:

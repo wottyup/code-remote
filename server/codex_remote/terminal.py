@@ -2,23 +2,136 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import hashlib
+import logging
 import os
 import shutil
 import signal
 import struct
+import time
 from contextlib import suppress
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+TMUX_SOCKET_NAME = "codex-remote"
+TMUX_SESSION_PREFIX = "codex-remote-"
+TMUX_KEEPER_SESSION_NAME = "codex-remote-keeper"
+TMUX_LAST_USED_OPTION = "@codex_remote_last_used"
+TMUX_HISTORY_LIMIT = 5_000
+TMUX_IDLE_TIMEOUT_SECONDS = 30 * 60
+TMUX_MAX_DETACHED_SESSIONS = 10
+TMUX_CLEANUP_INTERVAL_SECONDS = 60
+
+
+def tmux_session_name_for_thread(thread_id: str) -> str:
+    digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:32]
+    return f"{TMUX_SESSION_PREFIX}{digest}"
+
+
+async def _run_tmux(*arguments: str, check: bool = True) -> str:
+    executable = shutil.which("tmux")
+    if not executable:
+        raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Codex Remote。")
+    environment = os.environ.copy()
+    environment.pop("TMUX", None)
+    process = await asyncio.create_subprocess_exec(
+        executable,
+        "-L",
+        TMUX_SOCKET_NAME,
+        *arguments,
+        env=environment,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
+    except TimeoutError:
+        process.kill()
+        await process.wait()
+        raise RuntimeError("tmux 命令超时。")
+    output = stdout.decode("utf-8", errors="replace")
+    if check and process.returncode != 0:
+        detail = stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(detail or "tmux 命令执行失败。")
+    return output
+
+
+async def _set_tmux_last_used(session_name: str, timestamp: int | None = None) -> None:
+    await _run_tmux(
+        "set-option",
+        "-t",
+        session_name,
+        TMUX_LAST_USED_OPTION,
+        str(timestamp if timestamp is not None else int(time.time())),
+    )
+
+
+async def cleanup_tmux_sessions(protected_session_names: set[str] | None = None) -> None:
+    if not shutil.which("tmux"):
+        return
+    protected = protected_session_names or set()
+    now = int(time.time())
+    try:
+        listing = await _run_tmux(
+            "list-sessions",
+            "-F",
+            f"#{{session_name}}|#{{session_attached}}|#{{{TMUX_LAST_USED_OPTION}}}",
+            check=False,
+        )
+    except (OSError, RuntimeError) as error:
+        logger.warning("Could not inspect tmux terminal sessions: %s", error)
+        return
+
+    detached: list[tuple[int, str]] = []
+    for row in listing.splitlines():
+        fields = row.split("|", 2)
+        if len(fields) != 3:
+            continue
+        session_name, attached_text, last_used_text = fields
+        if not session_name.startswith(TMUX_SESSION_PREFIX) or session_name == TMUX_KEEPER_SESSION_NAME:
+            continue
+        try:
+            attached = int(attached_text)
+        except ValueError:
+            attached = 0
+        if attached > 0 or session_name in protected:
+            with suppress(OSError, RuntimeError):
+                await _set_tmux_last_used(session_name, now)
+            continue
+
+        try:
+            last_used = int(last_used_text)
+        except ValueError:
+            last_used = now
+            with suppress(OSError, RuntimeError):
+                await _set_tmux_last_used(session_name, last_used)
+        if now - last_used >= TMUX_IDLE_TIMEOUT_SECONDS:
+            with suppress(OSError, RuntimeError):
+                await _run_tmux("kill-session", "-t", session_name)
+            continue
+        detached.append((last_used, session_name))
+
+    detached.sort()
+    for _, session_name in detached[:-TMUX_MAX_DETACHED_SESSIONS]:
+        with suppress(OSError, RuntimeError):
+            await _run_tmux("kill-session", "-t", session_name)
 
 
 class TerminalSession:
     """One interactive shell attached to a browser terminal websocket."""
 
-    def __init__(self, cwd: Path, columns: int, rows: int) -> None:
+    def __init__(self, cwd: Path, columns: int, rows: int, thread_id: str | None = None) -> None:
         self.cwd = cwd
         self.columns = self._bounded_dimension(columns, 100, 20, 300)
         self.rows = self._bounded_dimension(rows, 30, 5, 120)
         self.argv = self._shell_argv()
         self.shell_name = Path(self.argv[0]).name
+        self.tmux_session_name = (
+            tmux_session_name_for_thread(thread_id)
+            if thread_id and os.name != "nt"
+            else None
+        )
         self._master_fd: int | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._windows_process: object | None = None
@@ -47,13 +160,27 @@ class TerminalSession:
         return [shell, "-i"]
 
     @classmethod
-    async def create(cls, cwd: Path, columns: int = 100, rows: int = 30) -> TerminalSession:
-        session = cls(cwd, columns, rows)
-        if os.name == "nt":
-            await session._start_windows()
-        else:
-            await session._start_posix()
+    async def create(
+        cls,
+        cwd: Path,
+        columns: int = 100,
+        rows: int = 30,
+        thread_id: str | None = None,
+    ) -> TerminalSession:
+        session = cls(cwd, columns, rows, thread_id)
+        try:
+            if os.name == "nt":
+                await session._start_windows()
+            else:
+                await session._start_posix()
+        except Exception:
+            await session.close()
+            raise
         return session
+
+    @property
+    def persistent(self) -> bool:
+        return self.tmux_session_name is not None
 
     def _environment(self) -> dict[str, str]:
         environment = os.environ.copy()
@@ -70,15 +197,51 @@ class TerminalSession:
         self._master_fd = master_fd
         try:
             fcntl.ioctl(slave_fd, termios.TIOCSWINSZ, struct.pack("HHHH", self.rows, self.columns, 0, 0))
+            environment = self._environment()
+            if self.tmux_session_name:
+                executable = shutil.which("tmux")
+                if not executable:
+                    raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Codex Remote。")
+                environment.pop("TMUX", None)
+                argv = [
+                    executable,
+                    "-L",
+                    TMUX_SOCKET_NAME,
+                    "-u",
+                    "new-session",
+                    "-A",
+                    "-s",
+                    self.tmux_session_name,
+                    "-c",
+                    str(self.cwd),
+                    "-x",
+                    str(self.columns),
+                    "-y",
+                    str(self.rows),
+                ]
+                with suppress(OSError, RuntimeError):
+                    await _set_tmux_last_used(self.tmux_session_name)
+            else:
+                argv = self.argv
             self._process = await asyncio.create_subprocess_exec(
-                *self.argv,
+                *argv,
                 cwd=str(self.cwd),
-                env=self._environment(),
+                env=environment,
                 stdin=slave_fd,
                 stdout=slave_fd,
                 stderr=slave_fd,
                 start_new_session=True,
             )
+            if self.tmux_session_name:
+                await _run_tmux(
+                    "set-window-option",
+                    "-t",
+                    self.tmux_session_name,
+                    "history-limit",
+                    str(TMUX_HISTORY_LIMIT),
+                )
+                await _run_tmux("set-option", "-t", self.tmux_session_name, "mouse", "on")
+                await _set_tmux_last_used(self.tmux_session_name)
         except Exception:
             if self._process is not None and self._process.returncode is None:
                 self._process.kill()
@@ -173,7 +336,10 @@ class TerminalSession:
         process = self._process
         if process is not None and process.returncode is None:
             try:
-                os.killpg(process.pid, signal.SIGTERM)
+                if self.tmux_session_name:
+                    process.terminate()
+                else:
+                    os.killpg(process.pid, signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
                 with suppress(ProcessLookupError, PermissionError, OSError):
                     process.terminate()
@@ -181,12 +347,19 @@ class TerminalSession:
                 await asyncio.wait_for(process.wait(), timeout=1.5)
             except TimeoutError:
                 try:
-                    os.killpg(process.pid, signal.SIGKILL)
+                    if self.tmux_session_name:
+                        process.kill()
+                    else:
+                        os.killpg(process.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError, OSError):
                     with suppress(ProcessLookupError, PermissionError, OSError):
                         process.kill()
                 await process.wait()
         self._process = None
+
+        if self.tmux_session_name:
+            with suppress(OSError, RuntimeError):
+                await _set_tmux_last_used(self.tmux_session_name)
 
         if self._master_fd is not None:
             try:

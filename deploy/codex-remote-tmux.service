@@ -1,0 +1,17 @@
+[Unit]
+Description=Codex Remote tmux session server
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+Environment=HOME=/root
+RemainAfterExit=yes
+ExecStart=/usr/bin/tmux -L codex-remote new-session -d -s codex-remote-keeper /usr/bin/sleep infinity
+ExecStop=-/usr/bin/tmux -L codex-remote kill-server
+TimeoutStartSec=10
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target

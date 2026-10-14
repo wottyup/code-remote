@@ -1,6 +1,8 @@
 [Unit]
 Description=Codex Remote development service
 After=network-online.target
+After=codex-remote-tmux.service
+Requires=codex-remote-tmux.service
 Wants=network-online.target
 
 [Service]

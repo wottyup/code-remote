@@ -37,8 +37,9 @@ pnpm --filter codex-remote dev
 
 ```bash
 sudo install -m 0644 /code/codex-remote/deploy/codex-remote.service /etc/systemd/system/codex-remote.service
+sudo install -m 0644 /code/codex-remote/deploy/codex-remote-tmux.service /etc/systemd/system/codex-remote-tmux.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now codex-remote.service
+sudo systemctl enable --now codex-remote-tmux.service codex-remote.service
 ```
 
 常驻服务的配对码和运行日志通过下面的命令查看：
@@ -56,6 +57,8 @@ $env:CODEX_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.
 $env:CODEX_REMOTE_WORKSPACE = "C:\path\to\your\project"
 pnpm --filter codex-remote dev
 ```
+
+Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `codex-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
 
 后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
 
