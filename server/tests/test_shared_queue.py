@@ -225,7 +225,10 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.send.assert_not_awaited()
 
     async def test_not_loaded_thread_is_resumed_before_claiming(self) -> None:
-        self.codex.read_thread.return_value = {"status": {"type": "notLoaded"}}
+        self.codex.read_thread.side_effect = [
+            {"status": {"type": "notLoaded"}},
+            {"status": {"type": "idle"}},
+        ]
 
         async def resume(_thread_id: str) -> dict[str, object]:
             self.assertEqual(self.store.queue("thread")[0]["deliveryState"], "submitting")
@@ -234,7 +237,22 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.codex.resume_thread.side_effect = resume
         self.assertTrue(await self.service.submit("thread", message("direct", "new message")))
         self.codex.resume_thread.assert_awaited_once_with("thread")
-        self.send.assert_awaited_once()
+        self.codex.read_thread.assert_has_awaits([
+            unittest.mock.call("thread", include_turns=False),
+            unittest.mock.call("thread", include_turns=False),
+        ])
+
+    async def test_not_loaded_thread_that_resumes_as_busy_stays_queued(self) -> None:
+        self.codex.read_thread.side_effect = [
+            {"status": {"type": "notLoaded"}},
+            {"status": {"type": "inProgress"}},
+        ]
+        self.codex._active_turn_id.side_effect = [None, "live-turn"]
+
+        self.assertFalse(await self.service.submit("thread", message("wait", "wait for current reply")))
+
+        self.assertEqual(self.store.queue("thread")[0]["deliveryState"], "pending")
+        self.service.send.assert_not_awaited()
 
     async def test_concurrent_submit_retry_and_worker_do_not_duplicate(self) -> None:
         self.codex.read_thread.return_value = {"status": {"type": "idle"}}

@@ -446,7 +446,18 @@ class CodexAppServer:
         runtime_turn_id = self._active_turn_ids.get(thread_id)
         thread: dict[str, Any] | None = None
         read_error: CodexRuntimeError | None = None
-        if runtime_turn_id is None and isinstance(history_thread, dict):
+        if not include_turns and self.connected:
+            # Busy/idle decisions must come from the live App Server. The
+            # rollout parser can see a stale inProgress tail after a completed
+            # Windows turn and incorrectly keep every later message queued.
+            try:
+                result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": False})
+                candidate = result.get("thread")
+                if isinstance(candidate, dict):
+                    thread = candidate
+            except CodexRuntimeError as error:
+                read_error = error
+        elif runtime_turn_id is None and isinstance(history_thread, dict):
             thread = history_thread
         else:
             try:
@@ -457,7 +468,7 @@ class CodexAppServer:
             except CodexRuntimeError as error:
                 read_error = error
 
-        if isinstance(history_thread, dict):
+        if include_turns and isinstance(history_thread, dict):
             server_turns = thread.get("turns") if thread is not None else None
             history_turns = history_thread.get("turns")
             if thread is None or (

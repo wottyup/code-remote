@@ -685,6 +685,22 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(live_thread, await app_server.read_thread("disk-1"))
         app_server.request.assert_awaited_once()
 
+    async def test_status_only_read_uses_live_idle_status_over_stale_history(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        app_server._history.read_thread = Mock(return_value={
+            "id": "disk-1",
+            "status": {"type": "inProgress"},
+            "turns": [{"id": "old", "status": "inProgress"}],
+        })
+        app_server.request = AsyncMock(return_value={"thread": {"id": "disk-1", "status": {"type": "notLoaded"}}})
+
+        result = await app_server.read_thread("disk-1", include_turns=False)
+
+        self.assertEqual({"type": "notLoaded"}, result["status"])
+        app_server.request.assert_awaited_once_with("thread/read", {"threadId": "disk-1", "includeTurns": False})
+
     def test_configured_models_follow_codex_catalog_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)

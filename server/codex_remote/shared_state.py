@@ -437,6 +437,13 @@ class SharedQueueService:
         thread = await self.codex.read_thread(thread_id, include_turns=False)
         status = thread.get("status")
         status_type = status.get("type") if isinstance(status, dict) else None
+        if status_type == "notLoaded":
+            # A notLoaded summary is not an idle verdict. Resume once to ask
+            # the local App Server for the real turn state before queueing.
+            await self.codex.resume_thread(thread_id)
+            thread = await self.codex.read_thread(thread_id, include_turns=False)
+            status = thread.get("status")
+            status_type = status.get("type") if isinstance(status, dict) else None
         active_turn = await self.codex._active_turn_id(thread_id)
         busy = status_type in {"active", "inProgress", "running", "started"}
         if not active_turn and status_type not in {"idle", "notLoaded"}:
