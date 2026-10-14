@@ -138,7 +138,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--resizing, .remote-shell--resizing * { cursor: col-resize !important; user-select: none !important; }
 .workspace-explorer { position: relative; display: grid; grid-column: 4; grid-row: 1; min-width: 0; min-height: 0; grid-template-rows: 58px auto minmax(0, 1fr) 36px; overflow: hidden; border-left: 1px solid var(--line); background: linear-gradient(180deg, #15171c 0%, #121316 100%); }
 .workspace-file-preview-panel { display: grid; min-width: 0; min-height: 0; grid-template-rows: 58px minmax(0, 1fr) 36px; overflow: hidden; background: linear-gradient(180deg, #15171c 0%, #121316 100%); }
-.workspace-file-preview-panel.workspace-file-preview-panel--chat-area-open { position: absolute; z-index: 31; top: 50%; left: 50%; display: grid; width: min(1000px, calc(100% - 48px)); height: min(900px, calc(100% - 48px)); transform: translate(-50%, -50%); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 24px 72px rgba(0, 0, 0, .5); }
+.workspace-file-preview-panel.workspace-file-preview-panel--chat-area-open { position: absolute; z-index: 31; inset: 0; display: grid; width: auto; height: auto; transform: none; border: 1px solid var(--line); border-radius: 0; box-shadow: none; }
 .workspace-file-preview-backdrop { display: none; }
 .workspace-file-preview-backdrop--open { display: block; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 0; cursor: default; }
 .workspace-file-preview-backdrop--chat-area { position: absolute; z-index: 30; inset: 0; background: rgba(0, 0, 0, .5); }
