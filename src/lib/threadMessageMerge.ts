@@ -27,6 +27,38 @@ export function sameMessageDocuments(left: CodexMessage['documents'], right: Cod
   )
 }
 
+const delayedUserEchoWindowMs = 120_000
+
+function sameUserMessagePayload(left: CodexMessage, right: CodexMessage) {
+  if (left.role !== 'user' || right.role !== 'user') return false
+  const leftRequestText = queuedRequestText(left.text, left.documents)
+  const rightRequestText = queuedRequestText(right.text, right.documents)
+  if (left.text !== right.text && left.text !== rightRequestText && right.text !== leftRequestText) return false
+  const leftImages = left.images ?? []
+  const rightImages = right.images ?? []
+  if (leftImages.length !== rightImages.length || !leftImages.every((image, index) =>
+    image.previewUrl === rightImages[index]?.previewUrl,
+  )) return false
+  const leftDocuments = left.documents ?? []
+  const rightDocuments = right.documents ?? []
+  return leftDocuments.length === rightDocuments.length && leftDocuments.every((document, index) =>
+    document.name === rightDocuments[index]?.name
+      && document.content === rightDocuments[index]?.content
+      && document.sourceFileId === rightDocuments[index]?.sourceFileId,
+  )
+}
+
+function delayedUserEchoDistance(incoming: CodexMessage, localMessage: CodexMessage) {
+  if (!localMessage.id.startsWith('queued-') || localMessage.sourceItemId) return null
+  if (incoming.turnId && localMessage.turnId && incoming.turnId !== localMessage.turnId) return null
+  if (!sameUserMessagePayload(incoming, localMessage)) return null
+  const incomingAt = Date.parse(incoming.sentAt ?? incoming.createdAt)
+  const localAt = Date.parse(localMessage.sentAt ?? localMessage.createdAt)
+  if (!Number.isFinite(incomingAt) || !Number.isFinite(localAt)) return null
+  const distance = Math.abs(incomingAt - localAt)
+  return distance <= delayedUserEchoWindowMs ? distance : null
+}
+
 export function sameQueuedMessageHistoryContent(message: CodexMessage, localMessage: CodexMessage) {
   if (message.role !== 'user' || message.turnId !== localMessage.turnId) return false
   const expectedText = queuedRequestText(localMessage.text, localMessage.documents)
@@ -40,6 +72,24 @@ export function insertRemoteUserMessage(messages: CodexMessage[], incoming: Code
   if (incoming.role !== 'user' || !incoming.sourceItemId) return messages
   if (messages.some((message) => message.id === incoming.sourceItemId
     || message.sourceItemId === incoming.sourceItemId)) return messages
+
+  let localEchoIndex = -1
+  let localEchoDistance = Number.POSITIVE_INFINITY
+  messages.forEach((message, index) => {
+    const distance = delayedUserEchoDistance(incoming, message)
+    if (distance === null || distance >= localEchoDistance) return
+    localEchoIndex = index
+    localEchoDistance = distance
+  })
+  if (localEchoIndex >= 0) {
+    return messages.map((message, index) => index === localEchoIndex
+      ? {
+        ...message,
+        sourceItemId: incoming.sourceItemId,
+        ...(message.turnId || !incoming.turnId ? {} : { turnId: incoming.turnId }),
+      }
+      : message)
+  }
 
   const hasEarlierUserInTurn = Boolean(incoming.turnId && messages.some((message) =>
     message.role === 'user' && message.turnId === incoming.turnId,
@@ -207,11 +257,10 @@ export function preserveLocalQueuedMessages(next: CodexMessage[], current: Codex
       }
     }
 
-    if (localMessage.turnId) {
-      const duplicateIndex = preserved.findIndex((message, index) => index > previousAnchor
-        && sameQueuedMessageHistoryContent(message, localMessage))
-      if (duplicateIndex >= 0) continue
-    }
+    const duplicateIndex = preserved.findIndex((message, index) => index > previousAnchor
+      && ((localMessage.turnId && sameQueuedMessageHistoryContent(message, localMessage))
+        || delayedUserEchoDistance(message, localMessage) !== null))
+    if (duplicateIndex >= 0) continue
 
     let insertionIndex = -1
     for (let index = currentIndex + 1; index < current.length; index += 1) {
