@@ -747,6 +747,37 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             {"threadId": "thread-id", "name": "Project notes"},
         )
 
+    async def test_update_thread_approval_policy_waits_for_codex_confirmation(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        expected = {
+            "approvalPolicy": {
+                "granular": {
+                    "sandbox_approval": False,
+                    "rules": False,
+                    "skill_approval": False,
+                    "request_permissions": False,
+                    "mcp_elicitations": True,
+                },
+            },
+            "sandboxPolicy": {"type": "dangerFullAccess"},
+        }
+
+        async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            self.assertEqual(method, "thread/settings/update")
+            self.assertEqual(params, {"threadId": "thread-id", **expected})
+            await app_server._handle_message({
+                "method": "thread/settings/updated",
+                "params": {"threadId": "thread-id", "threadSettings": expected},
+            })
+            return {}
+
+        app_server.request = AsyncMock(side_effect=request)
+
+        result = await app_server.update_thread_approval_policy("thread-id", "never")
+
+        self.assertEqual(result, expected)
+        self.assertEqual(app_server._thread_approval_policies["thread-id"], "never")
+
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[

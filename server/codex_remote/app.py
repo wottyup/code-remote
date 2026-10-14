@@ -211,6 +211,10 @@ class ThreadStartRequest(BaseModel):
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
+class ThreadSettingsUpdateRequest(BaseModel):
+    approval_policy: ApprovalPolicy
+
+
 class ThreadNameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
 
@@ -1053,6 +1057,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         try:
             await app_server.set_thread_name(thread_id, name)
             return {"thread_id": thread_id, "name": name}
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads/{thread_id}/settings")
+    async def update_thread_settings(thread_id: str, body: ThreadSettingsUpdateRequest) -> dict[str, Any]:
+        try:
+            return await app_server.update_thread_approval_policy(thread_id, body.approval_policy)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

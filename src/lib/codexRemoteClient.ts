@@ -474,6 +474,12 @@ export const codexRemoteClient = {
       body: JSON.stringify({ name }),
     })
   },
+  updateThreadApprovalPolicy(token: string, threadId: string, approvalPolicy: CodexApprovalPolicy) {
+    return request<Record<string, unknown>>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/settings`, {
+      method: 'POST',
+      body: JSON.stringify({ approval_policy: approvalPolicy }),
+    })
+  },
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },

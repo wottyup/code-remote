@@ -1075,6 +1075,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
   const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
   const [writerConflict, setWriterConflict] = useState(false)
+  const [updatingApprovalPolicy, setUpdatingApprovalPolicy] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
@@ -3592,6 +3593,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (activeThreadId.current) void loadThread(activeThreadId.current)
   }, [loadThread])
 
+  const updateApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
+    const threadId = activeThreadId.current
+    if (!threadId || handedOffRef.current) return false
+    setUpdatingApprovalPolicy(true)
+    setError(null)
+    try {
+      await codexRemoteClient.updateThreadApprovalPolicy(token, threadId, approvalPolicy)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '更新会话权限失败')
+      return false
+    } finally {
+      setUpdatingApprovalPolicy(false)
+    }
+  }, [onUnauthorized, token])
+
   const uploadPdfAttachment = useCallback(async (file: File) => {
     try {
       return await codexRemoteClient.uploadPdfAttachment(token, file)
@@ -3622,6 +3640,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     handoffInProgress,
     loadingHistory,
     error,
+    updatingApprovalPolicy,
     approval,
     completedThreadIds,
     latestThreadCompletion,
@@ -3643,6 +3662,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     respondToApproval,
     clearThreadCompletion,
     refreshActiveThread,
+    updateApprovalPolicy,
   }
 }
 
