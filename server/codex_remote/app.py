@@ -111,6 +111,14 @@ MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_PDF_ATTACHMENTS_PER_TURN = 8
 PDF_ATTACHMENT_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{24,64}$")
+ORIGINAL_DOCUMENT_EXTENSIONS = {".pdf", ".xls", ".xlsx", ".xlsm"}
+ORIGINAL_DOCUMENT_MEDIA_TYPES = {
+    "application/pdf",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel.sheet.macroenabled.12",
+    "application/octet-stream",
+}
 
 
 @dataclass
@@ -123,7 +131,7 @@ class StoredPdfAttachment:
 
 
 class PdfAttachmentStore:
-    """Keeps original PDFs in a private, bounded, process-lifetime directory."""
+    """Keeps original PDF and Excel files in a private, bounded directory."""
 
     def __init__(self, directory: Path) -> None:
         self.directory = directory
@@ -134,8 +142,8 @@ class PdfAttachmentStore:
     def safe_name(name: str) -> str:
         leaf = name.replace("\\", "/").rsplit("/", 1)[-1]
         normalized = "".join(character for character in leaf if character.isprintable()).strip().strip(".")
-        if not normalized or len(normalized) > 255 or not normalized.lower().endswith(".pdf"):
-            raise ValueError("请附加有效的 PDF 文件。")
+        if not normalized or len(normalized) > 255 or Path(normalized).suffix.lower() not in ORIGINAL_DOCUMENT_EXTENSIONS:
+            raise ValueError("请附加有效的 PDF 或 Excel 文件。")
         return normalized
 
     def _prune_expired(self, now: float) -> None:
@@ -154,17 +162,22 @@ class PdfAttachmentStore:
         self._prune_expired(now)
         safe_name = self.safe_name(name)
         if not content:
-            raise ValueError("PDF 文件是空的。")
+            raise ValueError("文件是空的。")
         if len(content) > MAX_PDF_BYTES:
-            raise ValueError("单个 PDF 不能超过 20 MB。")
-        if b"%PDF-" not in content[:1024]:
+            raise ValueError("单个原始文件不能超过 20 MB。")
+        extension = Path(safe_name).suffix.lower()
+        if extension == ".pdf" and b"%PDF-" not in content[:1024]:
             raise ValueError("文件内容不是有效的 PDF。")
+        if extension in {".xlsx", ".xlsm"} and not content.startswith(b"PK"):
+            raise ValueError("文件内容不是有效的 Excel 工作簿。")
+        if extension == ".xls" and not content.startswith(bytes.fromhex("D0CF11E0A1B11AE1")):
+            raise ValueError("文件内容不是有效的 Excel 工作簿。")
         current_size = sum(attachment.size for attachment in self.attachments.values())
         if current_size + len(content) > MAX_STAGED_PDF_BYTES:
-            raise OverflowError("临时 PDF 附件空间已满，请稍后重试。")
+            raise OverflowError("临时原始附件空间已满，请稍后重试。")
 
         attachment_id = secrets.token_urlsafe(24)
-        path = self.directory / f"{attachment_id}.pdf"
+        path = self.directory / f"{attachment_id}{extension}"
         descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(descriptor, "wb") as output:
             output.write(content)
@@ -628,13 +641,14 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
             )
         encoded_name = quote(attachment.name, safe="")
         path = str(attachment.path.resolve())
+        kind = "PDF" if attachment.path.suffix.lower() == ".pdf" else "Excel 工作簿"
         blocks.append(
-            f"[[CODEX_REMOTE_PDF_BEGIN id={attachment.attachment_id} name={encoded_name}]]\n"
-            f'用户附加的原始 PDF 文件名："{attachment.name}"\n'
+            f"[[CODEX_REMOTE_FILE_BEGIN id={attachment.attachment_id} name={encoded_name}]]\n"
+            f'用户附加的原始{kind}文件名："{attachment.name}"\n'
             f"原始文件在运行 Codex 的本机路径：`{path}`\n"
-            "请使用本机可用工具直接读取这个 PDF 原件，并根据实际读取到的内容回答；不要使用或假设网页端已经提取了文字。"
+            f"请使用本机可用工具直接读取这个{kind}原件，并根据实际读取到的内容回答；不要使用或假设网页端已经提取了完整内容。"
             "如果无法访问或解析这个文件，请明确说明，不要猜测内容。\n"
-            f"[[CODEX_REMOTE_PDF_END id={attachment.attachment_id}]]"
+            f"[[CODEX_REMOTE_FILE_END id={attachment.attachment_id}]]"
         )
     if not blocks:
         return prompt
@@ -1146,8 +1160,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/pdf-attachments")
     async def upload_pdf_attachment(request: Request) -> dict[str, Any]:
         media_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-        if media_type != "application/pdf":
-            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="只支持上传 PDF 原件。")
+        if media_type not in ORIGINAL_DOCUMENT_MEDIA_TYPES:
+            raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="只支持上传 PDF 或 Excel 原件。")
         name = request.query_params.get("name", "")
         try:
             PdfAttachmentStore.safe_name(name)

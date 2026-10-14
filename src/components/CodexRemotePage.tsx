@@ -1155,7 +1155,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         try {
           if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
           if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
-          if (documentExtensionOf(file.name) === 'pdf' || file.type === 'application/pdf') {
+          if (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf') {
             const uploaded = await onUploadPdf(file)
             parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
             continue
@@ -1508,7 +1508,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {attachedDocuments.map((document, index) => (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 将读取文件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 将读取原件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
               <button type="button" disabled={readingDocuments} onClick={() => {
                 const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
                 attachedDocumentsRef.current = next
@@ -4192,7 +4192,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
-        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
+        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}
         {message.role === 'assistant' ? copyAction : null}
