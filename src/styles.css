@@ -1353,3 +1353,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .terminal-context-menu { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .terminal-context-menu button { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .terminal-open-button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+
+.message-composer__footer :is(.composer-menu__trigger, .send-button, .stop-button, .attach-button) {
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.message-composer__footer :is(.composer-menu__trigger, .send-button, .stop-button):is(:hover, :active) { background: transparent; }
+.message-composer__footer .image-input { -webkit-appearance: none; appearance: none; -webkit-tap-highlight-color: transparent; }
