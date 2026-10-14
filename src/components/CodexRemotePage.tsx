@@ -1652,6 +1652,7 @@ interface WorkspaceExplorerProps {
   cwd?: string
   threadId?: string
   previewRequest: { id: number; cwd?: string; path: string; diff?: string } | null
+  previewContainerRef: RefObject<HTMLDivElement | null>
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
@@ -1758,7 +1759,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2259,6 +2260,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
     })
     return () => window.cancelAnimationFrame(frame)
   }, [previewPath])
+  const previewPortalTarget = mobilePreviewDialog
+    ? previewContainerRef.current?.closest('.remote-shell') ?? null
+    : previewContainerRef.current
   return (
     <>
       <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} aria-label="工作区文件资源管理器">
@@ -2297,36 +2301,42 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
         </div>
         <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
       </aside>
-      {previewPath ? (
+      {previewPath && previewPortalTarget ? createPortal(
         <>
-        <button className="workspace-file-preview-backdrop workspace-file-preview-backdrop--open" type="button" aria-label="关闭文件预览" tabIndex={-1} onClick={closePreview} />
-        <aside
-          className={`workspace-file-preview-panel workspace-file-preview-panel--dialog-open${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ''}`}
-          role="dialog"
-          aria-modal="true"
-          aria-label="工作区文件预览"
-          onKeyDown={(event) => {
-            if (event.key !== 'Tab') return
-            const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')
-            const first = controls.item(0)
-            const last = controls.item(controls.length - 1)
-            if (event.shiftKey && document.activeElement === first) {
-              event.preventDefault()
-              last?.focus()
-            } else if (!event.shiftKey && document.activeElement === last) {
-              event.preventDefault()
-              first?.focus()
-            }
-          }}
-        >
-          <header className="workspace-explorer__header workspace-file-preview-panel__header">
+          <button
+            className={`workspace-file-preview-backdrop workspace-file-preview-backdrop--open${mobilePreviewDialog ? ' workspace-file-preview-backdrop--mobile-open' : ' workspace-file-preview-backdrop--chat-area'}`}
+            type="button"
+            aria-label="关闭文件预览"
+            tabIndex={-1}
+            onClick={closePreview}
+          />
+          <aside
+            className={`workspace-file-preview-panel workspace-file-preview-panel--open${mobilePreviewDialog ? ' workspace-file-preview-panel--mobile-open' : ' workspace-file-preview-panel--chat-area-open'}`}
+            role="dialog"
+            aria-modal={mobilePreviewDialog || undefined}
+            aria-label="工作区文件预览"
+            onKeyDown={(event) => {
+              if (!mobilePreviewDialog || event.key !== 'Tab') return
+              const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled)')
+              const first = controls.item(0)
+              const last = controls.item(controls.length - 1)
+              if (event.shiftKey && document.activeElement === first) {
+                event.preventDefault()
+                last?.focus()
+              } else if (!event.shiftKey && document.activeElement === last) {
+                event.preventDefault()
+                first?.focus()
+              }
+            }}
+          >
+            <header className="workspace-explorer__header workspace-file-preview-panel__header">
             <div>
               <span className="workspace-explorer__eyebrow">{previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
               <strong title={previewFile?.path ?? previewPath}>{(previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
             </div>
             <button ref={previewCloseButton} className="icon-button" type="button" onClick={closePreview} aria-label="关闭文件预览" title="关闭文件预览"><X size={15} /></button>
-          </header>
-          <section className="workspace-file-preview">
+            </header>
+            <section className="workspace-file-preview">
             <div className="workspace-file-preview__toolbar">
               <code title={previewFile?.path ?? previewPath}>{previewFile?.path ?? previewPath}</code>
               <div>
@@ -2383,10 +2393,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, cwd, threadId
                     : line || ' '}</span></span>
                 ))}</code></pre>
             ) : null}
-          </section>
-          <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</footer>
-        </aside>
-        </>
+            </section>
+            <footer className="workspace-explorer__footer workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : 'UTF-8 文本'}</footer>
+          </aside>
+        </>,
+        previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div className="thread-context-menu workspace-file-context-menu" style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
@@ -3645,6 +3656,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
             previewRequest={workspacePreviewRequest}
+            previewContainerRef={paneGrid}
             onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
