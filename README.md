@@ -24,14 +24,16 @@ pip install -r server/requirements.txt
 
 ## 启动
 
-在电脑终端运行一次即可同时启动本机 Codex 引擎和局域网页面：
+日常远程使用时，在电脑终端运行以下命令，先构建网页，再同时启动本机 Codex 引擎和局域网页面：
 
 ```bash
 cd /code
-pnpm --filter codex-remote dev
+pnpm --filter codex-remote start
 ```
 
-启动完成后，终端会显示首次授权新浏览器所需的配对码。手机浏览器打开 `http://电脑的局域网 IP:4173`；当前电脑可使用 `http://192.168.15.22:4173`。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。
+构建后的网页资源支持压缩与缓存，适合手机长时间访问。仅在编辑前端、需要热更新时使用 `pnpm --filter codex-remote dev`；开发服务器会加载较大的调试资源。
+
+启动完成后，终端会显示首次授权新浏览器所需的配对码。手机浏览器打开 `http://电脑的局域网 IP:4173`。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。
 
 需要后台常驻时，可安装仓库中的 systemd unit：
 
@@ -42,20 +44,22 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now codex-remote-tmux.service codex-remote.service
 ```
 
+此 unit 在启动时构建网页并使用构建资源。更新已安装的 unit 后需要执行 `systemctl daemon-reload`；已有服务需要在聊天任务结束后重启才能加载新版后端。该服务同时管理 Codex 子进程，重启会中断它仍在执行的任务。
+
 常驻服务的配对码和运行日志通过下面的命令查看：
 
 ```bash
 journalctl -u codex-remote.service -f
 ```
 
-网页开发服务器把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
+网页服务把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
 
-Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter codex-remote dev`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
+Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter codex-remote start`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
 
 ```powershell
 $env:CODEX_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.cmd"
 $env:CODEX_REMOTE_WORKSPACE = "C:\path\to\your\project"
-pnpm --filter codex-remote dev
+pnpm --filter codex-remote start
 ```
 
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `codex-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
@@ -89,4 +93,4 @@ cd /code
 pnpm --filter codex-remote build
 ```
 
-构建产物位于 `codex-remote/dist`。本项目通过 Vite 提供网页，并由 `scripts/dev.mjs` 同时启动 Python 引擎；使用 systemd 时由 `codex-remote.service` 在后台持续管理。
+构建产物位于 `codex-remote/dist`。`pnpm start` 自动构建并通过 Vite preview 提供网页，由 `scripts/dev.mjs --production` 同时启动 Python 引擎；使用 systemd 时由 `codex-remote.service` 在后台持续管理。

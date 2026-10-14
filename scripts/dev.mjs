@@ -4,6 +4,9 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+// Existing installed services invoke this file without flags. Keep their
+// next restart on the compact build too; hot reload is explicitly opt-in.
+const production = !process.argv.includes('--development')
 const serverRoot = join(projectRoot, 'server')
 const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const isWindows = process.platform === 'win32'
@@ -131,7 +134,7 @@ function scheduleViteRestart(reason) {
 function startVite() {
   if (shuttingDown) return
 
-  const child = spawn(process.execPath, [viteEntrypoint], {
+  const child = spawn(process.execPath, [viteEntrypoint, ...(production ? ['preview'] : [])], {
     cwd: projectRoot,
     env: process.env,
     stdio: 'inherit',
@@ -167,6 +170,9 @@ async function main() {
   }
   if (!existsSync(viteEntrypoint)) {
     throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)
+  }
+  if (production && !existsSync(join(projectRoot, 'dist', 'index.html'))) {
+    throw new Error('没有找到网页构建产物，请先执行 pnpm build，或使用 pnpm start 自动构建后启动。')
   }
 
   if (!configuredCodex && windowsCodexCandidates.some((candidate) => existsSync(candidate))) {

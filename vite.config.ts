@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import { existsSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 const engineProxy = {
   target: 'http://127.0.0.1:18766',
@@ -8,7 +10,19 @@ const engineProxy = {
 }
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), {
+    name: 'remote-preview-cache',
+    configurePreviewServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const path = request.url?.split('?')[0] ?? ''
+        if (/^\/assets\/[\w.-]+-[\w-]+\.[\w]+$/.test(path)
+          && existsSync(resolve(server.config.root, server.config.build.outDir, path.slice(1)))) {
+          response.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+        }
+        next()
+      })
+    },
+  }],
   publicDir: 'punlic',
   optimizeDeps: {
     exclude: ['pdfjs-dist'],

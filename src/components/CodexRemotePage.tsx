@@ -39,6 +39,7 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
+import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
@@ -553,12 +554,55 @@ function ComposerMenu({
   onChange: (value: string) => void
 }) {
   const root = useRef<HTMLDivElement>(null)
+  const popover = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
   const selected = options.find((option) => option.value === value)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      if (!root.current || !popover.current) return
+      const viewport = window.visualViewport
+      const rect = popover.current.getBoundingClientRect()
+      const next = composerMenuPosition(root.current.getBoundingClientRect(), {
+        width: rect.width,
+        height: Math.min(340, popover.current.scrollHeight + 2),
+      }, {
+        left: viewport?.offsetLeft ?? 0,
+        top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? window.innerWidth,
+        height: viewport?.height ?? window.innerHeight,
+      })
+      setPosition((current) => current && current.left === next.left && current.top === next.top
+        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
+    }
+    const handleScroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !popover.current?.contains(event.target)) updatePosition()
+    }
+    updatePosition()
+    const observer = new ResizeObserver(updatePosition)
+    if (root.current) observer.observe(root.current)
+    if (popover.current) observer.observe(popover.current)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', handleScroll, true)
+    window.visualViewport?.addEventListener('resize', updatePosition)
+    window.visualViewport?.addEventListener('scroll', updatePosition)
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.visualViewport?.removeEventListener('resize', updatePosition)
+      window.visualViewport?.removeEventListener('scroll', updatePosition)
+    }
+  }, [open])
 
   useEffect(() => {
     if (!open) return
     const closeOnOutside = (event: globalThis.PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) onOpenChange(false)
+      if (!root.current?.contains(event.target as Node) && !popover.current?.contains(event.target as Node)) onOpenChange(false)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') onOpenChange(false)
@@ -586,8 +630,14 @@ function ComposerMenu({
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
         <ChevronDown size={13} aria-hidden="true" />
       </button>
-      {open ? (
-        <div className="composer-menu__popover" role="listbox" aria-label={label}>
+      {open ? createPortal(
+        <div
+          ref={popover}
+          className="composer-menu__popover composer-menu__popover--floating"
+          style={position ?? { visibility: 'hidden' }}
+          role="listbox"
+          aria-label={label}
+        >
           {options.length > 0 ? options.map((option) => (
             <button
               className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
@@ -606,7 +656,8 @@ function ComposerMenu({
               {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
             </button>
           )) : <span className="composer-menu__empty">{emptyLabel}</span>}
-        </div>
+        </div>,
+        root.current?.closest('.remote-shell') ?? document.body,
       ) : null}
     </div>
   )

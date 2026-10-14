@@ -470,6 +470,9 @@ class CodexAppServer:
             raise app_server_error
         return []
 
+    def thread_history_revision(self, thread_id: str) -> str | None:
+        return self._history.thread_revision(thread_id)
+
     async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
         active_before = self._active_turn_ids.get(thread_id)
         history_thread = self._history.read_thread(thread_id)

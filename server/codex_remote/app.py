@@ -24,10 +24,13 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from watchfiles import awatch
 
+from .browser_history_sync import BrowserHistorySync
+from .browser_payload import browser_event, browser_thread, browser_thread_summary
 from .codex_app_server import (
     ApprovalPolicy,
     CodexAppServer,
@@ -940,13 +943,15 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.8.0-dev.4", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.8.0-dev.5", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
+    browser_history_sync = BrowserHistorySync()
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -1038,7 +1043,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             result = []
             for thread in threads:
                 thread_id = thread.get("id")
-                result.append({**thread, "cwd": workspaces[thread_id]} if isinstance(thread_id, str) and thread_id in workspaces else thread)
+                summary = browser_thread_summary(thread)
+                if isinstance(thread_id, str):
+                    revision = app_server.thread_history_revision(thread_id)
+                    if revision is not None:
+                        summary["historyRevision"] = revision
+                    if thread_id in workspaces:
+                        summary["cwd"] = workspaces[thread_id]
+                result.append(summary)
             return result
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -1089,13 +1101,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.get("/api/v1/codex/threads/{thread_id}")
-    async def read_thread(thread_id: str) -> dict[str, Any]:
+    async def read_thread(thread_id: str, since: str | None = None) -> dict[str, Any]:
         try:
-            thread = await app_server.read_thread(thread_id)
+            # Capture before reading: a concurrent append must leave this
+            # response stale, rather than claiming to contain the new data.
+            revision = app_server.thread_history_revision(thread_id)
+            thread = browser_thread(await app_server.read_thread(thread_id))
+            if revision is not None:
+                thread["historyRevision"] = revision
             bound_cwd = shared_state.thread_workspace(thread_id)
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
-            return enrich_thread_images(thread, image_directory)
+            return enrich_thread_images(browser_history_sync.response(thread, since), image_directory)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -1411,6 +1428,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
             return
 
+        filter_thread = "thread_id" in hello
+        subscribed_thread_id = hello.get("thread_id") if isinstance(hello.get("thread_id"), str) else None
         queue = await app_server.subscribe()
         try:
             runtime_status = await app_server.connect()
@@ -1418,19 +1437,27 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             runtime_status = app_server.status()
             runtime_status["error"] = str(error)
         try:
-            await websocket.send_json({"type": "connection", **runtime_status})
+            await websocket.send_json({"type": "connection", **runtime_status, "threadSubscriptions": True})
         except WebSocketDisconnect:
             app_server.unsubscribe(queue)
             return
 
         async def send_events() -> None:
             while True:
-                await websocket.send_json(await queue.get())
+                event = browser_event(await queue.get(), thread_id=subscribed_thread_id, filter_thread=filter_thread)
+                if event is not None:
+                    await websocket.send_json(event)
 
         writer = asyncio.create_task(send_events())
         try:
             while True:
                 payload = await websocket.receive_json()
+                if isinstance(payload, dict) and payload.get("type") == "thread.subscribe":
+                    requested_thread_id = payload.get("thread_id")
+                    if requested_thread_id is None or (isinstance(requested_thread_id, str) and len(requested_thread_id) <= 512):
+                        subscribed_thread_id = requested_thread_id
+                        filter_thread = True
+                    continue
                 if not isinstance(payload, dict) or payload.get("type") != "approval.response":
                     with suppress(WebSocketDisconnect):
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")

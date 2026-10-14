@@ -4,12 +4,30 @@ export interface CodexThread {
   preview?: string
   cwd?: string
   updatedAt?: number | string
+  historyRevision?: string
   createdAt?: number | string
   status?: { type?: string }
 }
 
 export interface CodexThreadDetails extends CodexThread {
   turns?: unknown[]
+  codexRemoteWorkspaceChanges?: Record<string, unknown>
+}
+
+interface ThreadSyncResponse extends CodexThreadDetails {
+  historySync?: {
+    revision: string
+    baseRevision?: string
+    turnIds?: string[]
+    itemIds?: Record<string, string[]>
+    workspaceTurnIds?: string[]
+  }
+}
+
+interface ThreadTransportSnapshot {
+  thread: CodexThreadDetails
+  revision: string
+  characters: number
 }
 
 export interface CodexMessageImage {
@@ -112,6 +130,7 @@ export type CodexApprovalPolicy = 'on-request' | 'untrusted' | 'never'
 
 export interface RemoteEvent {
   type: string
+  threadSubscriptions?: boolean
   threadId?: string
   pinned?: boolean
   method?: string
@@ -423,6 +442,109 @@ function uniqueThreads(threads: CodexThread[]) {
   return [...latestById.values()]
 }
 
+const threadListRequests = new Map<string, Promise<CodexThread[]>>()
+const threadReadRequests = new Map<string, Promise<CodexThreadDetails>>()
+const threadTransportSnapshots = new Map<string, ThreadTransportSnapshot>()
+
+function recordsById(values: unknown[]) {
+  const result = new Map<string, Record<string, unknown>>()
+  for (const value of values) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const record = value as Record<string, unknown>
+    if (typeof record.id !== 'string' || !record.id || result.has(record.id)) return null
+    result.set(record.id, record)
+  }
+  return result
+}
+
+function uniqueIds(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((id) => typeof id === 'string' && id.length > 0)
+    && new Set(value).size === value.length
+}
+
+function mergeThreadSync(response: ThreadSyncResponse, cached?: ThreadTransportSnapshot): CodexThreadDetails | null {
+  const { historySync: sync, ...thread } = response
+  if (!sync) return thread
+  if (typeof sync.revision !== 'string' || !sync.revision) return null
+  if (sync.baseRevision === undefined) return thread
+  if (!cached || sync.baseRevision !== cached.revision || cached.thread.id !== thread.id
+    || !uniqueIds(sync.turnIds) || !uniqueIds(sync.workspaceTurnIds)
+    || !sync.itemIds || typeof sync.itemIds !== 'object' || Array.isArray(sync.itemIds)
+    || !Array.isArray(thread.turns) || !Array.isArray(cached.thread.turns)) return null
+  const turns = recordsById(cached.thread.turns ?? [])
+  const changedTurns = recordsById(thread.turns)
+  if (!turns || !changedTurns || Object.keys(sync.itemIds).length !== changedTurns.size) return null
+  const turnIds = new Set(sync.turnIds)
+  for (const [turnId, turn] of changedTurns) {
+    if (!Array.isArray(turn.items) || !turnIds.has(turnId) || !Object.hasOwn(sync.itemIds, turnId)) return null
+    const order = sync.itemIds[turnId]
+    if (!uniqueIds(order)) return null
+    const itemIds = new Set(order)
+    const previous = turns.get(turnId)
+    const items = recordsById(Array.isArray(previous?.items) ? previous.items : [])
+    const changedItems = recordsById(turn.items)
+    if (!items || !changedItems) return null
+    for (const [id, item] of changedItems) {
+      if (!itemIds.has(id)) return null
+      items.set(id, item)
+    }
+    if (order.some((id) => !items.has(id))) return null
+    turns.set(turnId, { ...turn, items: order.map((id) => items.get(id)) })
+  }
+  if (sync.turnIds.some((id) => !turns.has(id))) return null
+  if (thread.codexRemoteWorkspaceChanges !== undefined && (!thread.codexRemoteWorkspaceChanges
+    || typeof thread.codexRemoteWorkspaceChanges !== 'object' || Array.isArray(thread.codexRemoteWorkspaceChanges))) return null
+  const workspace = { ...cached.thread.codexRemoteWorkspaceChanges, ...thread.codexRemoteWorkspaceChanges }
+  if (sync.workspaceTurnIds.some((id) => !Object.hasOwn(workspace, id))) return null
+  return {
+    ...thread,
+    turns: sync.turnIds.map((id) => turns.get(id)),
+    codexRemoteWorkspaceChanges: Object.fromEntries(sync.workspaceTurnIds.map((id) => [id, workspace[id]])),
+  }
+}
+
+async function readThreadWithChanges(token: string, threadId: string, key: string) {
+  const cached = threadTransportSnapshots.get(key)
+  const path = `/api/v1/codex/threads/${encodeURIComponent(threadId)}`
+  let response = await request<ThreadSyncResponse>(token, `${path}${cached ? `?since=${encodeURIComponent(cached.revision)}` : ''}`)
+  let thread = mergeThreadSync(response, cached)
+  if (!thread) {
+    threadTransportSnapshots.delete(key)
+    response = await request<ThreadSyncResponse>(token, path)
+    thread = mergeThreadSync(response)
+    if (!thread) throw new Error('聊天增量同步的历史版本不完整，请刷新聊天后重试。')
+  }
+  if (thread.id !== threadId) throw new Error('聊天同步返回了不匹配的对话，请刷新后重试。')
+  threadTransportSnapshots.delete(key)
+  const revision = response.historySync?.revision
+  if (typeof revision === 'string' && revision) {
+    // The parsed UI/IndexedDB cache is separate. Bound the transport base so
+    // incremental sync cannot retain an unbounded second copy of histories.
+    const characters = JSON.stringify(thread).length
+    if (characters <= 8 * 1024 * 1024) {
+      threadTransportSnapshots.set(key, { thread, revision, characters })
+      let total = [...threadTransportSnapshots.values()].reduce((sum, entry) => sum + entry.characters, 0)
+      while (threadTransportSnapshots.size > 5 || total > 8 * 1024 * 1024) {
+        const oldest = threadTransportSnapshots.entries().next().value
+        if (!oldest) break
+        total -= oldest[1].characters
+        threadTransportSnapshots.delete(oldest[0])
+      }
+    }
+  }
+  return thread
+}
+
+function shareRequest<T>(requests: Map<string, Promise<T>>, key: string, read: () => Promise<T>) {
+  const existing = requests.get(key)
+  if (existing) return existing
+  const pending = read().finally(() => {
+    if (requests.get(key) === pending) requests.delete(key)
+  })
+  requests.set(key, pending)
+  return pending
+}
+
 export const codexRemoteClient = {
   pair(code: string) {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
@@ -461,12 +583,13 @@ export const codexRemoteClient = {
     })
   },
   threads(token: string) {
-    return request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>
+    return shareRequest(threadListRequests, token, () => request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>
       uniqueThreads(threads).sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left)),
-    )
+    ))
   },
   readThread(token: string, threadId: string) {
-    return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`)
+    const key = JSON.stringify([token, threadId])
+    return shareRequest(threadReadRequests, key, () => readThreadWithChanges(token, threadId, key))
   },
   deleteThread(token: string, threadId: string) {
     return request<{ thread_id: string; deleted: true; thread_ids: string[] }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`, {
@@ -617,12 +740,20 @@ export const codexRemoteClient = {
       body: JSON.stringify({ turn_id: turnId }),
     })
   },
-  connect(token: string, onEvent: (event: RemoteEvent) => void, onState: (state: 'connecting' | 'connected' | 'disconnected' | 'unavailable') => void) {
+  connect(token: string, onEvent: (event: RemoteEvent) => void, onState: (state: 'connecting' | 'connected' | 'disconnected' | 'unavailable') => void, threadId: string | null = null) {
     const url = new URL('/api/v1/codex/ws', window.location.origin)
     url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(url)
     onState('connecting')
     let receivedConnection = false
+    let subscribedThreadId = threadId
+    let supportsSubscriptions = false
+    const subscribeThread = (nextThreadId: string | null) => {
+      subscribedThreadId = nextThreadId
+      if (supportsSubscriptions && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'thread.subscribe', thread_id: nextThreadId }))
+      }
+    }
     const connectionTimeout = window.setTimeout(() => {
       if (receivedConnection || socket.readyState === 3) return
       socket.close()
@@ -631,13 +762,17 @@ export const codexRemoteClient = {
     }, webSocketConnectionTimeoutMs)
     const clearConnectionTimeout = () => window.clearTimeout(connectionTimeout)
     socket.addEventListener('open', () => {
-      socket.send(JSON.stringify({ type: 'codex.client.hello', protocol_version: 1, token }))
+      socket.send(JSON.stringify({ type: 'codex.client.hello', protocol_version: 1, token, thread_id: subscribedThreadId }))
     })
     socket.addEventListener('message', (message) => {
       try {
         const event = JSON.parse(String(message.data)) as RemoteEvent
         if (!event.type) return
         if (event.type === 'connection') {
+          if (event.threadSubscriptions && !supportsSubscriptions) {
+            supportsSubscriptions = true
+            subscribeThread(subscribedThreadId)
+          }
           receivedConnection = true
           clearConnectionTimeout()
           onState(event.connected ? 'connected' : event.available ? 'disconnected' : 'unavailable')
@@ -657,6 +792,7 @@ export const codexRemoteClient = {
       onState('disconnected')
     })
     return {
+      subscribeThread,
       respondToApproval(requestId: string | number, decision: 'accept' | 'decline' | 'cancel') {
         if (socket.readyState !== WebSocket.OPEN) return false
         socket.send(JSON.stringify({ type: 'approval.response', request_id: requestId, decision }))
