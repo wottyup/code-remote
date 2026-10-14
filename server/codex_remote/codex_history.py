@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -10,6 +11,7 @@ from typing import Any
 
 MAX_PREVIEW_LENGTH = 4_000
 SUMMARY_SCAN_LINES = 120
+logger = logging.getLogger(__name__)
 
 
 def _short_text(value: str, limit: int = MAX_PREVIEW_LENGTH) -> str:
@@ -153,6 +155,50 @@ class CodexHistoryStore:
     def invalidate(self) -> None:
         self._path_index = None
         self._index_entries = None
+
+    def delete_thread(self, thread_id: str) -> bool:
+        path = self._load_path_index().get(thread_id)
+        if path is None:
+            return False
+        try:
+            resolved = path.resolve(strict=True)
+            if not any(resolved.is_relative_to(root.resolve()) for root in (self.sessions, self.archived_sessions)):
+                raise OSError("聊天记录路径超出 Codex 历史目录")
+            path.unlink()
+        except OSError as error:
+            raise OSError(f"无法删除 Codex 聊天记录：{error}") from error
+
+        self.invalidate()
+        self._delete_thread_database_rows(self.state_index, thread_id, {
+            "thread_spawn_edges": "parent_thread_id = ? OR child_thread_id = ?",
+            "threads": "id = ?",
+        })
+        self._delete_thread_database_rows(self.codex_home / "thread_history_1.sqlite", thread_id, {
+            "thread_items": "thread_id = ?",
+            "thread_realtime_items": "thread_id = ?",
+            "thread_turns": "thread_id = ?",
+            "thread_history_projection_state": "thread_id = ?",
+        })
+        return True
+
+    @staticmethod
+    def _delete_thread_database_rows(path: Path, thread_id: str, filters: dict[str, str]) -> None:
+        if not path.is_file():
+            return
+        try:
+            with closing(sqlite3.connect(path, timeout=30)) as connection:
+                with connection:
+                    connection.execute("PRAGMA foreign_keys = ON")
+                    tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+                    for table, condition in filters.items():
+                        if table not in tables:
+                            continue
+                        parameters = (thread_id, thread_id) if condition.count("?") == 2 else (thread_id,)
+                        connection.execute(f"DELETE FROM {table} WHERE {condition}", parameters)
+        except sqlite3.Error:
+            # The rollout is the source of truth and is already gone. A
+            # running desktop process may temporarily hold an index lock.
+            logger.warning("Could not remove deleted thread %s from %s", thread_id, path, exc_info=True)
 
     def read_thread(self, thread_id: str) -> dict[str, Any] | None:
         path = self._load_path_index().get(thread_id)

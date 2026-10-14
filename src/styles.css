@@ -221,6 +221,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-context-menu button { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: #c8cedb; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; }
 .thread-context-menu button:hover { background: rgba(103, 120, 172, .28); color: #f3f5fa; }
 .thread-context-menu button:disabled { cursor: wait; opacity: .62; }
+.thread-context-menu button.thread-context-menu__danger { margin-top: 3px; border-top: 1px solid rgba(220, 103, 107, .2); color: #ee9296; }
+.thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: rgba(176, 62, 69, .22); color: #ffb2b5; }
 .thread-rename-backdrop { position: fixed; z-index: 120; inset: 0; display: grid; place-items: center; padding: max(18px, env(safe-area-inset-top), var(--native-status-bar-inset)) max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); background: rgba(5, 7, 11, .68); backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
 .thread-rename-dialog { display: grid; width: min(100%, 380px); gap: 10px; padding: 19px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 14px; background: rgba(27, 30, 38, .98); color: #e9ebef; box-shadow: 0 22px 70px rgba(0, 0, 0, .48); }
 .thread-rename-dialog__heading { display: grid; gap: 5px; margin-bottom: 3px; }
@@ -236,6 +238,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-rename-dialog__actions button:last-child { border-color: rgba(158, 176, 243, .42); background: #5b6caa; color: #fff; }
 .thread-rename-dialog__actions button:hover:not(:disabled) { filter: brightness(1.12); }
 .thread-rename-dialog__actions button:disabled { cursor: wait; opacity: .55; }
+.thread-delete-dialog__title { display: flex; align-items: center; gap: 8px; }
+.thread-delete-dialog__title > svg { flex: 0 0 auto; color: #ef8589; }
+.thread-delete-dialog__thread { overflow: hidden; padding: 10px 11px; border: 1px solid rgba(224, 116, 121, .22); border-radius: 8px; background: rgba(84, 31, 36, .22); color: #f0d7d8; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
+.thread-delete-dialog__actions button:last-child { border-color: rgba(234, 114, 120, .5); background: #a53f46; color: #fff; }
 .workspace-file-context-menu { z-index: 100; min-width: 176px; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: calc(11px + var(--mobile-font-offset)); text-overflow: ellipsis; white-space: nowrap; }
 .workspace-selection-context-menu { width: min(300px, calc(100vw - 16px)); min-width: min(220px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow-y: auto; }
@@ -1085,6 +1091,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .theme-settings-panel__eyebrow { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .workspace-explorer__chevron { color: color-mix(in srgb, var(--custom-theme-text-color) 72%, transparent) !important; }
 .remote-shell--theme-custom .thread-context-menu { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: 0 15px 38px rgba(0, 0, 0, .18); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .thread-context-menu button.thread-context-menu__danger { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d95c63); color: color-mix(in srgb, var(--custom-theme-text-color) 55%, #ff666d); }
+.remote-shell--theme-custom .thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--custom-theme-active) 65%, rgba(171, 45, 53, .35)); color: color-mix(in srgb, var(--custom-theme-text-color) 42%, #ff8a90); }
+.remote-shell--theme-custom .thread-delete-dialog__thread { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d95c63); background: color-mix(in srgb, var(--custom-theme-surface) 72%, rgba(145, 40, 47, .3)); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .thread-delete-dialog__actions button:last-child { border-color: color-mix(in srgb, var(--custom-theme-border) 62%, #d95c63); background: color-mix(in srgb, var(--custom-theme-active) 55%, #9f3038); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-selection-context-menu__note { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-selection-context-menu__note::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 55%, transparent); }
 .remote-shell--theme-custom .pane-limit-notice { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
@@ -1170,6 +1180,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .remote-sidebar__footer button:hover { border-color: #dedede; background: #f0f0f0; color: #000; }
 .remote-shell--theme-light .thread-context-menu { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 15px 38px rgba(0, 0, 0, .16); }
 .remote-shell--theme-light .thread-context-menu button:hover { background: #ededed; color: #000; }
+.remote-shell--theme-light .thread-context-menu button.thread-context-menu__danger { border-color: #efd2d4; color: #b4232c; }
+.remote-shell--theme-light .thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: #fff0f1; color: #941b23; }
+.remote-shell--theme-light .thread-delete-dialog__thread { border-color: #edc9cc; background: #fff4f4; color: #7f1d24; }
+.remote-shell--theme-dark .thread-context-menu button.thread-context-menu__danger { border-color: rgba(238, 146, 150, .26); color: #ff9ca1; }
+.remote-shell--theme-dark .thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: rgba(176, 62, 69, .28); color: #ffc2c5; }
 .remote-shell--theme-light .workspace-selection-context-menu__note { border-color: #d4d4d4; background: #fff; color: #000; }
 .remote-shell--theme-light .workspace-selection-context-menu__note:focus { border-color: #888; box-shadow: 0 0 0 2px rgba(0, 0, 0, .08); }
 .remote-shell--theme-light .pane-limit-notice { border-color: #e4d5ad; background: #fff9e9; color: #000; box-shadow: 0 12px 28px rgba(0, 0, 0, .1); }

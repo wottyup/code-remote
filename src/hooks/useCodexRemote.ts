@@ -18,7 +18,7 @@ import {
 } from '../lib/codexRemoteClient'
 import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
 import { canUseCachedThreadHistory } from '../lib/threadHistoryPolicy'
-import { readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
+import { deleteThreadHistoryCache, readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
 import { visibleQueuedMessages } from '../lib/sharedQueueVisibility'
@@ -189,6 +189,20 @@ function persistActiveThreadId(threadId: string) {
     window.localStorage.setItem(activeThreadStorageKey, threadId)
   } catch {
     // The current conversation remains available until the page is closed.
+  }
+}
+
+function clearPersistedThread(threadId: string) {
+  try {
+    if (window.localStorage.getItem(activeThreadStorageKey) === threadId) {
+      window.localStorage.removeItem(activeThreadStorageKey)
+    }
+    const cached = window.localStorage.getItem(activeThreadCacheStorageKey)
+    if (cached && (JSON.parse(cached) as Record<string, unknown>).threadId === threadId) {
+      window.localStorage.removeItem(activeThreadCacheStorageKey)
+    }
+  } catch {
+    // Server deletion remains authoritative when local storage is unavailable.
   }
 }
 
@@ -1113,6 +1127,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const writerConflictRef = useRef(false)
   const writerRefreshTimer = useRef<number | undefined>(undefined)
   const restoringThreadId = useRef<string | null>(null)
+  const deletedThreadIds = useRef(new Set<string>())
   const threadHistoryCache = useRef(new Map<string, ThreadCacheEntry>())
   const pendingPersistentThreadCache = useRef(new Map<string, ThreadCacheEntry>())
   const persistentThreadCacheTimers = useRef(new Map<string, number>())
@@ -1491,6 +1506,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [writePersistentThreadCacheEntry])
 
   const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Partial<Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn' | 'operationsByTurn' | 'complete'>>) => {
+    if (deletedThreadIds.current.has(thread.id)) return
     const characters = cachedHistoryCharacters(nextMessages)
     const cache = threadHistoryCache.current
     const previous = cache.get(thread.id) ?? pendingPersistentThreadCache.current.get(thread.id)
@@ -1607,7 +1623,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const prefetchThread = useCallback(async (thread: CodexThread, force = false) => {
     if (!prefetchHistory || handedOffRef.current) return
-    if (!thread.id || thread.id === activeThreadId.current) return
+    if (!thread.id || thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
     const cache = threadHistoryCache.current
     const cached = cache.get(thread.id)
     if (!force && cached && threadTimestamp(cached.thread) >= threadTimestamp(thread)) return
@@ -1618,7 +1634,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     prefetchingThreadIds.current.add(thread.id)
     try {
       const loadedThread = await codexRemoteClient.readThread(token, thread.id)
-      if (thread.id === activeThreadId.current) return
+      if (thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
       const cachedThread = cache.get(thread.id)
       const loadedMessages = preserveCurrentImages(messagesFromThread(loadedThread), cachedThread?.messages ?? [])
       cacheThreadSnapshot(loadedThread, loadedMessages, {
@@ -1664,6 +1680,82 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     setLatestThreadCompletion((current) => current?.threadId === threadId ? null : current)
   }, [])
 
+  const removeDeletedThread = useCallback((threadId: string) => {
+    if (!threadId) return
+    deletedThreadIds.current.add(threadId)
+    threadListRef.current = threadListRef.current.filter((thread) => thread.id !== threadId)
+    setThreads((current) => current.filter((thread) => thread.id !== threadId))
+    clearThreadCompletion(threadId)
+
+    threadHistoryCache.current.delete(threadId)
+    pendingPersistentThreadCache.current.delete(threadId)
+    persistentThreadCacheKnown.current.delete(threadId)
+    const cacheTimer = persistentThreadCacheTimers.current.get(threadId)
+    if (cacheTimer !== undefined) window.clearTimeout(cacheTimer)
+    persistentThreadCacheTimers.current.delete(threadId)
+    prefetchingThreadIds.current.delete(threadId)
+    forcedPrefetchThreadIds.current.delete(threadId)
+    void deleteThreadHistoryCache(threadId)
+    if (persistActiveThread) clearPersistedThread(threadId)
+
+    updateQueuedMessages(threadId, () => [])
+    const nextServerQueues = { ...serverQueuedMessagesByThreadRef.current }
+    delete nextServerQueues[threadId]
+    serverQueuedMessagesByThreadRef.current = nextServerQueues
+    setServerQueuedMessagesByThread(nextServerQueues)
+    serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
+    pendingServerQueueRemovals.current.delete(threadId)
+    queuedTurnStartsInFlight.current.delete(threadId)
+    queuedTurnSteersInFlight.current.delete(threadId)
+    deferredQueueAdvanceAfterEdit.current.delete(threadId)
+    delete editingQueuedMessageByThread.current[threadId]
+    for (const [messageId, editingThreadId] of editingQueuedMessageThreadById.current) {
+      if (editingThreadId === threadId) editingQueuedMessageThreadById.current.delete(messageId)
+    }
+    for (const [requestId, delivery] of pendingTurnDeliveries.current) {
+      if (delivery.threadId === threadId) pendingTurnDeliveries.current.delete(requestId)
+    }
+    setQueueEditRevision((revision) => revision + 1)
+
+    if (activeThreadId.current !== threadId) return
+    loadRequest.current += 1
+    historyRevision.current += 1
+    activeThreadId.current = null
+    restoringThreadId.current = null
+    resumedThreadId.current = null
+    interruptRequestedThreadId.current = null
+    interruptRequestedTurnId.current = null
+    interruptInFlightThreadId.current = null
+    if (cachedActiveThreadRefreshTimer.current !== undefined) {
+      window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    if (writerRefreshTimer.current !== undefined) {
+      window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
+    }
+    resetStreamingAssistant()
+    setActiveTurnId(null)
+    turnStartedAtById.current.clear()
+    clearTurnTimer()
+    setQueueRecoveryReadyThreadId(null)
+    messagesRef.current = []
+    setActiveThread(null)
+    setMessages([])
+    setIsRunning(false)
+    setIsInterrupting(false)
+    setActivity(null)
+    setFileChangesByTurn({})
+    operationsByTurnRef.current = {}
+    setOperationsByTurn({})
+    writerConflictRef.current = false
+    setWriterConflict(false)
+    activityItemId.current = null
+    setApproval(null)
+    setLoadingHistory(false)
+    setError(null)
+  }, [clearThreadCompletion, clearTurnTimer, persistActiveThread, resetStreamingAssistant, setActiveTurnId, updateQueuedMessages])
+
   const markThreadCompletion = useCallback((threadId: string) => {
     if (!threadId || threadId === activeThreadId.current) return
     setCompletedThreadIds((current) => current.includes(threadId) ? current : [...current, threadId])
@@ -1675,7 +1767,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (threadListRequest.current) return threadListRequest.current
     const request = (async () => {
       try {
-        const next = await codexRemoteClient.threads(token)
+        const next = (await codexRemoteClient.threads(token)).filter((thread) => !deletedThreadIds.current.has(thread.id))
         threadListRef.current = next
         threadListLoadedRef.current = true
         threadListFetchedAtRef.current = Date.now()
@@ -2655,6 +2747,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       return
     }
+    if (event.method === 'thread/deleted') {
+      const threadId = typeof params.threadId === 'string' ? params.threadId : null
+      if (threadId) {
+        removeDeletedThread(threadId)
+        void refreshThreads()
+      }
+      return
+    }
     if (event.method === 'turn/completed') {
       const completedThreadId = eventThreadId ?? activeThreadId.current
       const completedTurnId = eventTurnId ?? activeTurnId.current
@@ -2976,7 +3076,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -3634,6 +3734,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     completedThreadIds,
     latestThreadCompletion,
     refreshThreads,
+    removeDeletedThread,
     renameThread,
     bindThreadWorkspace,
     refreshModels,

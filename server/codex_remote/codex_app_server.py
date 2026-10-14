@@ -48,6 +48,14 @@ class CodexNoActiveTurnError(CodexRuntimeError):
     """A request that requires an active turn arrived after it had finished."""
 
 
+class CodexThreadBusyError(CodexRuntimeError):
+    """A destructive thread operation was requested while its turn is active."""
+
+
+class CodexThreadNotFoundError(CodexRuntimeError):
+    """A requested thread no longer exists in Codex history."""
+
+
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
 
 
@@ -503,6 +511,44 @@ class CodexAppServer:
             thread["codexRemoteWorkspaceChanges"] = matched_workspace_changes
         return thread
 
+    async def delete_thread(self, thread_id: str) -> None:
+        try:
+            summary = await self.read_thread(thread_id, include_turns=False)
+        except CodexRuntimeError as error:
+            raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
+        status = summary.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else None
+        if await self._active_turn_id(thread_id) or status_type in {"active", "inProgress", "running", "started"}:
+            raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。")
+
+        await self._prepare_runtime_thread(thread_id)
+        try:
+            await self.request("thread/delete", {"threadId": thread_id})
+        except CodexRuntimeError as error:
+            detail = str(error).casefold()
+            if any(marker in detail for marker in ("active", "running", "in progress", "busy", "正在运行", "回复中")):
+                raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。") from error
+            if any(marker in detail for marker in ("not found", "unknown thread", "找不到")):
+                raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
+            raise
+
+        # An explicitly isolated runtime owns a synchronized copy. The native
+        # request removes that copy; remove the verified source record as well
+        # so desktop Codex and future runtime reseeds do not restore it.
+        if self._runtime_home != self._history_home:
+            try:
+                self._history.delete_thread(thread_id)
+            except OSError as error:
+                raise CodexRuntimeError(str(error)) from error
+        self._forget_thread_runtime_state(thread_id)
+        await self.notify_threads_changed()
+
+    def _forget_thread_runtime_state(self, thread_id: str) -> None:
+        self._active_turn_ids.pop(thread_id, None)
+        self._last_completed_turn_ids.pop(thread_id, None)
+        self._workspace_change_results.pop(thread_id, None)
+        self._history.invalidate()
+
     async def list_models(self) -> list[dict[str, Any]]:
         configured_models = self._configured_models()
         if configured_models:
@@ -912,7 +958,7 @@ class CodexAppServer:
                 "clientInfo": {
                     "name": "codex_remote_web",
                     "title": "Codex Remote Web",
-                    "version": "0.0.30",
+                    "version": "0.2.0-dev.1",
                 },
                 "capabilities": {
                     "experimentalApi": False,
@@ -1505,6 +1551,8 @@ class CodexAppServer:
                     self._workspace_completion_tasks[task] = watch
                     task.add_done_callback(lambda completed: self._workspace_completion_tasks.pop(completed, None))
                 self._schedule_runtime_thread_sync(completed_thread_id)
+            elif method == "thread/deleted" and thread_id:
+                self._forget_thread_runtime_state(thread_id)
             await self._emit({"type": "notification", "method": method, "params": params})
 
     async def _emit(self, event: dict[str, Any]) -> None:

@@ -464,6 +464,11 @@ export const codexRemoteClient = {
   readThread(token: string, threadId: string) {
     return request<CodexThreadDetails>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`)
   },
+  deleteThread(token: string, threadId: string) {
+    return request<{ thread_id: string; deleted: true; thread_ids: string[] }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`, {
+      method: 'DELETE',
+    })
+  },
   renameThread(token: string, threadId: string, name: string) {
     return request<{ thread_id: string; name: string }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/name`, {
       method: 'POST',

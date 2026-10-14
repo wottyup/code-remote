@@ -276,6 +276,19 @@ class SharedStateStore:
             (thread_id, cwd),
         )
 
+    def delete_thread(self, thread_id: str) -> None:
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            for table in (
+                "queued_messages",
+                "queue_receipts",
+                "queue_barriers",
+                "queue_blocks",
+                "pinned_threads",
+                "thread_workspaces",
+            ):
+                self.connection.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+
 
 def _turn_status(turn: dict[str, Any]) -> str:
     value = turn.get("status")
@@ -303,6 +316,12 @@ class SharedQueueService:
     async def changed(self, thread_id: str) -> None:
         self._wake.set()
         await self.codex._emit({"type": "remote.queue.changed", "threadId": thread_id})
+
+    async def delete_thread(self, thread_id: str) -> None:
+        async with self._lock(thread_id):
+            await self.codex.delete_thread(thread_id)
+            self.store.delete_thread(thread_id)
+            await self.changed(thread_id)
 
     async def _block(self, thread_id: str, reason: str | None) -> None:
         if self.store.set_block(thread_id, reason):

@@ -32,6 +32,7 @@ import {
   Settings2,
   ShieldCheck,
   Square,
+  Trash2,
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
@@ -2786,6 +2787,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
   const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
   const [threadRenameSaving, setThreadRenameSaving] = useState(false)
+  const [threadDeleteTarget, setThreadDeleteTarget] = useState<CodexThread | null>(null)
+  const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
+  const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
   const openSettingsPanel = useCallback(() => {
     const currentState = window.history.state
@@ -2829,7 +2833,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadContextMenu({
       thread,
       x: Math.max(8, Math.min(x, window.innerWidth - 174)),
-      y: Math.max(8, Math.min(y, window.innerHeight - 190)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 226)),
     })
   }
 
@@ -2904,6 +2908,51 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }
 
+  function startThreadDelete(thread: CodexThread) {
+    setThreadContextMenu(null)
+    setThreadDeleteTarget(thread)
+    setThreadDeleteError(null)
+  }
+
+  function closeThreadDelete() {
+    if (threadDeleteSaving) return
+    setThreadDeleteTarget(null)
+    setThreadDeleteError(null)
+  }
+
+  async function submitThreadDelete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!threadDeleteTarget || threadDeleteSaving) return
+    const thread = threadDeleteTarget
+    const deletedPaneIndex = paneIndexForThread(thread.id)
+    setThreadDeleteSaving(true)
+    setThreadDeleteError(null)
+    try {
+      const result = await codexRemoteClient.deleteThread(token, thread.id)
+      if (deletedPaneIndex !== undefined && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
+      for (const remote of remotes) remote.removeDeletedThread(thread.id)
+      setPinnedThreadIds(new Set(result.thread_ids))
+      setCompletionToast((current) => current?.threadId === thread.id ? null : current)
+      setThreadComposerPreferences((current) => {
+        if (!(thread.id in current)) return current
+        const next = { ...current }
+        delete next[thread.id]
+        return next
+      })
+      const draftScope = composerDraftScopeForThread(thread.id)
+      saveComposerDraft(draftScope, '')
+      forgetComposerImageDraftTarget(draftScope)
+      void saveComposerImageDraft(draftScope, []).catch(() => undefined)
+      setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
+      setThreadDeleteTarget(null)
+      showPaneNotice(`已删除“${titleOf(thread)}”`)
+    } catch (reason) {
+      setThreadDeleteError(reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。')
+    } finally {
+      setThreadDeleteSaving(false)
+    }
+  }
+
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
     if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) {
       sidebarTouchStart.current = null
@@ -2913,6 +2962,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!touch) return
     const globalOverlayOpen = settingsOpen
       || Boolean(threadRenameTarget)
+      || Boolean(threadDeleteTarget)
       || Boolean(threadContextMenu)
       || workspacePreviewModeRef.current === 'mobile'
     if (globalOverlayOpen) {
@@ -2947,6 +2997,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (action === 'close-global') {
       if (settingsOpen) closeSettingsPanel()
       else if (threadRenameTarget) closeThreadRename()
+      else if (threadDeleteTarget) closeThreadDelete()
       else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
       else if (threadContextMenu) setThreadContextMenu(null)
     } else if (action === 'open-sidebar') openSidebarPanel()
@@ -3076,6 +3127,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [threadRenameTarget, threadRenameSaving])
 
+  useEffect(() => {
+    if (!threadDeleteTarget) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      closeThreadDelete()
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [threadDeleteTarget, threadDeleteSaving])
+
   useLayoutEffect(() => {
     const handleBack = () => {
       if (settingsOpen) {
@@ -3084,6 +3146,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       }
       if (threadRenameTarget) {
         closeThreadRename()
+        return true
+      }
+      if (threadDeleteTarget) {
+        closeThreadDelete()
         return true
       }
       if (workspacePreviewModeRef.current === 'mobile') {
@@ -3109,12 +3175,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadRenameTarget, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTarget, threadRenameTarget, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-      if (threadRenameTarget) return
+      if (threadRenameTarget || threadDeleteTarget) return
       if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
@@ -3126,7 +3192,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt, threadRenameTarget])
+  }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTarget, threadRenameTarget])
 
   useEffect(() => {
     if (availableModels.length === 0) return
@@ -3549,6 +3615,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</button>
           <button type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</button>
           <button type="button" role="menuitem" onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</button>
+          <button className="thread-context-menu__danger" type="button" role="menuitem" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />删除聊天</button>
         </div>
       ) : null}
 
@@ -3565,6 +3632,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <div className="thread-rename-dialog__actions">
               <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>取消</button>
               <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />保存中</> : '确定'}</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {threadDeleteTarget ? (
+        <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadDelete() }}>
+          <form className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-delete-title" aria-describedby="thread-delete-description" onSubmit={(event) => { void submitThreadDelete(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">删除聊天</h2></div>
+              <p id="thread-delete-description">这会永久删除聊天记录，删除后无法恢复。</p>
+            </div>
+            <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTarget)}>{titleOf(threadDeleteTarget)}</div>
+            {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{threadDeleteError}</p> : null}
+            <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
+              <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>取消</button>
+              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />删除中</> : <><Trash2 size={14} />确认删除</>}</button>
             </div>
           </form>
         </div>

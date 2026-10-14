@@ -34,6 +34,8 @@ from .codex_app_server import (
     CodexHandoffBusyError,
     CodexNoActiveTurnError,
     CodexRuntimeError,
+    CodexThreadBusyError,
+    CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
@@ -898,7 +900,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.0.30", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.2.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
@@ -910,7 +912,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         allow_origins=[],
         allow_origin_regex=r"^http://(127\.0\.0\.1|localhost):\d+$",
         allow_credentials=False,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -1054,6 +1056,21 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
             return enrich_thread_images(thread, image_directory)
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.delete("/api/v1/codex/threads/{thread_id}")
+    async def delete_thread(thread_id: str) -> dict[str, Any]:
+        if not thread_id or len(thread_id) > 512:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="聊天编号无效。")
+        try:
+            await shared_queue.delete_thread(thread_id)
+            await app_server._emit({"type": "remote.pins.changed", "threadId": thread_id, "pinned": False})
+            return {"thread_id": thread_id, "deleted": True, "thread_ids": shared_state.pins()}
+        except CodexThreadBusyError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexThreadNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

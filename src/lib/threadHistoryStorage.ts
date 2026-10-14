@@ -196,3 +196,23 @@ export async function readThreadHistoryCache<T>(threadId: string): Promise<T | n
     transaction.onabort = () => resolve(null)
   })
 }
+
+export async function deleteThreadHistoryCache(threadId: string): Promise<boolean> {
+  await pendingWrites.get(threadId)?.catch(() => false)
+  const database = await openDatabase()
+  if (!database) return false
+
+  return new Promise<boolean>((resolve) => {
+    let transaction: IDBTransaction
+    try {
+      transaction = database.transaction(objectStoreName, 'readwrite')
+      transaction.objectStore(objectStoreName).delete(threadId)
+    } catch {
+      resolve(false)
+      return
+    }
+    transaction.oncomplete = () => resolve(true)
+    transaction.onerror = () => resolve(false)
+    transaction.onabort = () => resolve(false)
+  })
+}
