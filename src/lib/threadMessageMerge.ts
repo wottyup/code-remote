@@ -73,6 +73,22 @@ export function insertRemoteUserMessage(messages: CodexMessage[], incoming: Code
   if (messages.some((message) => message.id === incoming.sourceItemId
     || message.sourceItemId === incoming.sourceItemId)) return messages
 
+  // Prefer replacing an optimistic steer bubble with the canonical live item
+  // when both messages share a turn and payload.
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]
+    if (!message.id.startsWith('queued-') || !sameQueuedMessageHistoryContent(incoming, message)) continue
+    const next = [...messages]
+    next[index] = {
+      ...incoming,
+      ...(!incoming.sentAt && message.sentAt ? { sentAt: message.sentAt } : {}),
+      ...(!incoming.createdAt && message.createdAt ? { createdAt: message.createdAt } : {}),
+    }
+    return next
+  }
+
+  // A delayed socket echo may not have the same turn ID yet. Match the nearest
+  // optimistic bubble by payload and timestamp, then attach the canonical ID.
   let localEchoIndex = -1
   let localEchoDistance = Number.POSITIVE_INFINITY
   messages.forEach((message, index) => {

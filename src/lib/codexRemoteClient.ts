@@ -215,18 +215,22 @@ function plainText(value: unknown): string {
 
 function originalPdfAttachmentsFromText(value: string) {
   const documents: CodexDocumentAttachment[] = []
+  const collectAttachment = (_block: string, sourceFileId: string, encodedName: string) => {
+    let name = encodedName
+    try {
+      name = decodeURIComponent(encodedName)
+    } catch {
+      // Keep a readable fallback if an old or malformed history has an invalid filename marker.
+    }
+    documents.push({ name, content: '', sourceFileId })
+    return ''
+  }
   const text = value.replace(
+    /\[\[CODEX_REMOTE_FILE_BEGIN id=([A-Za-z0-9_-]{24,64}) name=([^\]\r\n]+)\]\][\s\S]*?\[\[CODEX_REMOTE_FILE_END id=\1\]\]/g,
+    collectAttachment,
+  ).replace(
     /\[\[CODEX_REMOTE_PDF_BEGIN id=([A-Za-z0-9_-]{24,64}) name=([^\]\r\n]+)\]\][\s\S]*?\[\[CODEX_REMOTE_PDF_END id=\1\]\]/g,
-    (_block, sourceFileId: string, encodedName: string) => {
-      let name = encodedName
-      try {
-        name = decodeURIComponent(encodedName)
-      } catch {
-        // Keep a readable fallback if an old or malformed history has an invalid filename marker.
-      }
-      documents.push({ name, content: '', sourceFileId })
-      return ''
-    },
+    collectAttachment,
   ).replace(/\n{3,}/g, '\n\n').trim()
   return { text, documents }
 }
@@ -481,6 +485,12 @@ export const codexRemoteClient = {
       body: JSON.stringify({ cwd }),
     })
   },
+  updateThreadApprovalPolicy(token: string, threadId: string, approvalPolicy: CodexApprovalPolicy) {
+    return request<Record<string, unknown>>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/settings`, {
+      method: 'POST',
+      body: JSON.stringify({ approval_policy: approvalPolicy }),
+    })
+  },
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },
@@ -551,7 +561,7 @@ export const codexRemoteClient = {
     const query = new URLSearchParams({ name: file.name })
     return request<{ attachment_id: string; name: string; size: number }>(token, `/api/v1/codex/pdf-attachments?${query.toString()}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/pdf' },
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
       body: file,
     })
   },

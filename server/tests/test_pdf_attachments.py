@@ -4,6 +4,7 @@ import os
 import tempfile
 import time
 import unittest
+import os
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -82,7 +83,8 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(stored.name, "invoice 3522.pdf")
         self.assertEqual(stored.path.read_bytes(), original)
         self.assertFalse(stored.path.is_relative_to(self.workspace))
-        self.assertEqual(stored.path.stat().st_mode & 0o777, 0o600)
+        if os.name != "nt":
+            self.assertEqual(stored.path.stat().st_mode & 0o777, 0o600)
 
     async def test_upload_rejects_non_pdf_and_invalid_pdf_signatures(self) -> None:
         upload = self.endpoint("/api/v1/codex/pdf-attachments")
@@ -93,6 +95,23 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(HTTPException) as invalid_pdf:
             await upload(self.upload_request(b"not a pdf"))
         self.assertEqual(invalid_pdf.exception.status_code, 422)
+
+    async def test_upload_stores_original_excel_workbook(self) -> None:
+        original = b"PK\x03\x04workbook-bytes"
+        upload = self.endpoint("/api/v1/codex/pdf-attachments")
+
+        result = await upload(self.upload_request(
+            original,
+            "mapping.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ))
+
+        stored = self.store.get(result["attachment_id"])
+        self.assertIsNotNone(stored)
+        assert stored is not None
+        self.assertEqual(stored.name, "mapping.xlsx")
+        self.assertEqual(stored.path.suffix, ".xlsx")
+        self.assertEqual(stored.path.read_bytes(), original)
 
     async def test_upload_rejects_oversized_pdf_before_reading_the_body(self) -> None:
         upload = self.endpoint("/api/v1/codex/pdf-attachments")
@@ -120,8 +139,15 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
         prompt = self.server.start_turn.await_args.args[1]
         self.assertEqual(result, {"turn_id": "turn-one"})
         self.assertIn(str(attachment.path), prompt)
-        self.assertIn("使用本机可用工具直接读取这个 PDF 原件", prompt)
-        self.assertIn("CODEX_REMOTE_PDF_BEGIN", prompt)
+        self.assertIn("使用本机可用工具直接读取这个PDF原件", prompt)
+        self.assertIn("临时读取副本路径", prompt)
+        self.assertIn("不是用户文件的原始目录", prompt)
+        self.assertIn(r"D:\111codex", prompt)
+        self.assertIn("本会话此前的用户消息", prompt)
+        self.assertIn("最近一次明确给出的绝对目录", prompt)
+        self.assertIn("本条消息只说‘放回原路径’", prompt)
+        self.assertIn("禁止写入上述临时附件目录", prompt)
+        self.assertIn("CODEX_REMOTE_FILE_BEGIN", prompt)
         self.assertNotIn("PRIVATE_PDF_TEXT", prompt)
 
     async def test_immediate_steer_also_passes_the_original_pdf_path(self) -> None:

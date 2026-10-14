@@ -8,6 +8,7 @@ import os
 import sqlite3
 import shutil
 import subprocess
+import time
 import uuid
 from contextlib import closing
 from dataclasses import dataclass, field
@@ -57,6 +58,25 @@ class CodexThreadNotFoundError(CodexRuntimeError):
 
 
 ApprovalPolicy = Literal["on-request", "untrusted", "never"]
+_MCP_ELICITATION_ONLY_APPROVAL_POLICY = {
+    "granular": {
+        "sandbox_approval": False,
+        "rules": False,
+        "skill_approval": False,
+        "request_permissions": False,
+        "mcp_elicitations": True,
+    },
+}
+
+
+def _app_server_approval_policy(policy: ApprovalPolicy) -> str | dict[str, dict[str, bool]]:
+    # Match HAPI: string `never` suppresses MCP elicitation requests before
+    # the browser can answer them. Granular never keeps them available while
+    # disabling command/sandbox/rule/skill approvals. This does not elevate
+    # the Windows process token; `danger-full-access` controls Codex sandboxing.
+    if policy == "never":
+        return _MCP_ELICITATION_ONLY_APPROVAL_POLICY
+    return policy
 
 
 @dataclass
@@ -106,6 +126,7 @@ def snapshot_workspace(workspace: Path) -> WorkspaceSnapshot:
     metadata: dict[str, tuple[int, int, int]] = {}
     total_bytes = 0
     complete = True
+    deadline = time.monotonic() + 0.5
     pending = [(str(root), "")]
     while pending:
         directory, prefix = pending.pop()
@@ -117,7 +138,7 @@ def snapshot_workspace(workspace: Path) -> WorkspaceSnapshot:
             continue
         next_directories: list[tuple[str, str]] = []
         for entry in entries:
-            if len(paths) >= _WORKSPACE_DIFF_MAX_FILES:
+            if len(paths) >= _WORKSPACE_DIFF_MAX_FILES or time.monotonic() >= deadline:
                 complete = False
                 break
             try:
@@ -292,6 +313,8 @@ class CodexAppServer:
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
+        self._thread_approval_policies: dict[str, ApprovalPolicy] = {}
+        self._pending_thread_settings: dict[tuple[str, ApprovalPolicy], asyncio.Future[dict[str, Any]]] = {}
         self._last_completed_turn_ids: dict[str, str] = {}
         self._pending_turn_starts: dict[str, asyncio.Future[str | None]] = {}
         self._workspace_change_watches: dict[str, WorkspaceChangeWatch] = {}
@@ -453,7 +476,18 @@ class CodexAppServer:
         runtime_turn_id = self._active_turn_ids.get(thread_id)
         thread: dict[str, Any] | None = None
         read_error: CodexRuntimeError | None = None
-        if runtime_turn_id is None and isinstance(history_thread, dict):
+        if not include_turns and self.connected:
+            # Busy/idle decisions must come from the live App Server. The
+            # rollout parser can see a stale inProgress tail after a completed
+            # Windows turn and incorrectly keep every later message queued.
+            try:
+                result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": False})
+                candidate = result.get("thread")
+                if isinstance(candidate, dict):
+                    thread = candidate
+            except CodexRuntimeError as error:
+                read_error = error
+        elif runtime_turn_id is None and isinstance(history_thread, dict):
             thread = history_thread
         else:
             try:
@@ -464,7 +498,7 @@ class CodexAppServer:
             except CodexRuntimeError as error:
                 read_error = error
 
-        if isinstance(history_thread, dict):
+        if include_turns and isinstance(history_thread, dict):
             server_turns = thread.get("turns") if thread is not None else None
             history_turns = history_thread.get("turns")
             if thread is None or (
@@ -630,7 +664,7 @@ class CodexAppServer:
         if model:
             params["model"] = model
         if approval_policy:
-            params["approvalPolicy"] = approval_policy
+            params["approvalPolicy"] = _app_server_approval_policy(approval_policy)
             params["sandbox"] = "danger-full-access" if approval_policy == "never" else "workspace-write"
         result = await self.request("thread/start", params)
         thread = result.get("thread")
@@ -658,6 +692,31 @@ class CodexAppServer:
 
     async def set_thread_name(self, thread_id: str, name: str) -> None:
         await self.request("thread/name/set", {"threadId": thread_id, "name": name})
+
+    async def update_thread_approval_policy(self, thread_id: str, policy: ApprovalPolicy) -> dict[str, Any]:
+        """Apply and await Codex's confirmation for subsequent turns."""
+        approval_policy = _app_server_approval_policy(policy)
+        sandbox_policy = {
+            "type": "dangerFullAccess" if policy == "never" else "workspaceWrite",
+        }
+        confirmation: asyncio.Future[dict[str, Any]] = asyncio.get_running_loop().create_future()
+        key = (thread_id, policy)
+        self._pending_thread_settings[key] = confirmation
+        try:
+            await self.request("thread/settings/update", {
+                "threadId": thread_id,
+                "approvalPolicy": approval_policy,
+                "sandboxPolicy": sandbox_policy,
+            })
+            try:
+                settings = await asyncio.wait_for(confirmation, timeout=15)
+            except TimeoutError as error:
+                raise CodexRuntimeError("Codex 未确认此会话的权限设置已更新") from error
+            self._thread_approval_policies[thread_id] = policy
+            return settings
+        finally:
+            if self._pending_thread_settings.get(key) is confirmation:
+                self._pending_thread_settings.pop(key, None)
 
     async def _watch_workspace_changes(self, stop_event: asyncio.Event, workspace: Path) -> WorkspaceSnapshot:
         # Native file-change events already supply live progress. This fallback
@@ -766,7 +825,7 @@ class CodexAppServer:
         if effort:
             params["effort"] = effort
         if approval_policy:
-            params["approvalPolicy"] = approval_policy
+            params["approvalPolicy"] = _app_server_approval_policy(approval_policy)
             params["sandboxPolicy"] = {
                 "type": "dangerFullAccess" if approval_policy == "never" else "workspaceWrite",
             }
@@ -1455,6 +1514,39 @@ class CodexAppServer:
             return
         request_id = message.get("id")
         method = message.get("method")
+        if method == "thread/settings/updated":
+            params = message.get("params")
+            params = params if isinstance(params, dict) else {}
+            thread_id = params.get("threadId")
+            settings = params.get("threadSettings")
+            if isinstance(thread_id, str) and isinstance(settings, dict):
+                approval = settings.get("approvalPolicy")
+                sandbox = settings.get("sandboxPolicy")
+                sandbox_type = sandbox.get("type") if isinstance(sandbox, dict) else None
+                granular = approval.get("granular") if isinstance(approval, dict) else None
+                granular_never = (
+                    isinstance(granular, dict)
+                    and granular.get("sandbox_approval") is False
+                    and granular.get("rules") is False
+                    and granular.get("skill_approval") is False
+                    and granular.get("request_permissions") is False
+                    and granular.get("mcp_elicitations") is True
+                )
+                if sandbox_type == "dangerFullAccess" and (approval == "never" or granular_never):
+                    policy: ApprovalPolicy | None = "never"
+                elif approval == "untrusted":
+                    policy = "untrusted"
+                elif approval == "on-request":
+                    policy = "on-request"
+                else:
+                    policy = None
+                if policy is not None:
+                    self._thread_approval_policies[thread_id] = policy
+                    confirmation = self._pending_thread_settings.get((thread_id, policy))
+                    if confirmation is not None and not confirmation.done():
+                        confirmation.set_result(settings)
+            await self._emit({"type": "notification", "method": method, "params": params})
+            return
         if request_id in self._pending and not isinstance(method, str):
             future = self._pending[request_id]
             if future.done():

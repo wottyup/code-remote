@@ -653,6 +653,7 @@ interface MessageComposerProps {
   onModelChange: (model: string) => void
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  approvalPolicyUpdating?: boolean
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
@@ -687,6 +688,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onModelChange,
   onEffortChange,
   onApprovalPolicyChange,
+  approvalPolicyUpdating = false,
   onUploadPdf,
   onSend,
   queuedMessages,
@@ -1144,7 +1146,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         try {
           if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
           if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
-          if (documentExtensionOf(file.name) === 'pdf' || file.type === 'application/pdf') {
+          if (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf') {
             const uploaded = await onUploadPdf(file)
             parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
             continue
@@ -1498,7 +1500,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {attachedDocuments.map((document, index) => (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 将读取文件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 将读取原件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
               <button type="button" disabled={readingDocuments} onClick={() => {
                 const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
                 attachedDocumentsRef.current = next
@@ -1579,7 +1581,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-preferences">
           <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
           <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
-          <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
@@ -3086,7 +3088,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
-  const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => updateComposerPreferences({ approvalPolicy }), [updateComposerPreferences])
+  const changeApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
+    const updated = activeThreadId ? await (remotes[selectedPaneIndex] ?? remote0).updateApprovalPolicy(approvalPolicy) : true
+    if (!updated) return
+    updateComposerPreferences({ approvalPolicy })
+  }, [activeThreadId, remote0, remotes, selectedPaneIndex, updateComposerPreferences])
 
   useEffect(() => {
     saveComposerPreferences(defaultComposerPreferences)
@@ -3729,6 +3735,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onModelChange={changeModel}
               onEffortChange={changeEffort}
               onApprovalPolicyChange={changeApprovalPolicy}
+              approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
@@ -4240,7 +4247,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, copied,
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
-        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始 PDF · Codex 读取文件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
+        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {message.role === 'assistant' && !message.streaming ? <OperationLog operations={operations} /> : null}

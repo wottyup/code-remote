@@ -685,6 +685,22 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(live_thread, await app_server.read_thread("disk-1"))
         app_server.request.assert_awaited_once()
 
+    async def test_status_only_read_uses_live_idle_status_over_stale_history(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        app_server._history.read_thread = Mock(return_value={
+            "id": "disk-1",
+            "status": {"type": "inProgress"},
+            "turns": [{"id": "old", "status": "inProgress"}],
+        })
+        app_server.request = AsyncMock(return_value={"thread": {"id": "disk-1", "status": {"type": "notLoaded"}}})
+
+        result = await app_server.read_thread("disk-1", include_turns=False)
+
+        self.assertEqual({"type": "notLoaded"}, result["status"])
+        app_server.request.assert_awaited_once_with("thread/read", {"threadId": "disk-1", "includeTurns": False})
+
     def test_configured_models_follow_codex_catalog_and_default(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)
@@ -731,6 +747,37 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             {"threadId": "thread-id", "name": "Project notes"},
         )
 
+    async def test_update_thread_approval_policy_waits_for_codex_confirmation(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        expected = {
+            "approvalPolicy": {
+                "granular": {
+                    "sandbox_approval": False,
+                    "rules": False,
+                    "skill_approval": False,
+                    "request_permissions": False,
+                    "mcp_elicitations": True,
+                },
+            },
+            "sandboxPolicy": {"type": "dangerFullAccess"},
+        }
+
+        async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            self.assertEqual(method, "thread/settings/update")
+            self.assertEqual(params, {"threadId": "thread-id", **expected})
+            await app_server._handle_message({
+                "method": "thread/settings/updated",
+                "params": {"threadId": "thread-id", "threadSettings": expected},
+            })
+            return {}
+
+        app_server.request = AsyncMock(side_effect=request)
+
+        result = await app_server.update_thread_approval_policy("thread-id", "never")
+
+        self.assertEqual(result, expected)
+        self.assertEqual(app_server._thread_approval_policies["thread-id"], "never")
+
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=[
@@ -748,7 +795,15 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "cwd": str(Path.cwd()),
                     "serviceName": "codex_remote_web",
-                    "approvalPolicy": "never",
+                    "approvalPolicy": {
+                        "granular": {
+                            "sandbox_approval": False,
+                            "rules": False,
+                            "skill_approval": False,
+                            "request_permissions": False,
+                            "mcp_elicitations": True,
+                        },
+                    },
                     "sandbox": "danger-full-access",
                 },
             ),
@@ -760,7 +815,15 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {
                     "threadId": "thread-id",
                     "input": [{"type": "text", "text": "hello"}],
-                    "approvalPolicy": "never",
+                    "approvalPolicy": {
+                        "granular": {
+                            "sandbox_approval": False,
+                            "rules": False,
+                            "skill_approval": False,
+                            "request_permissions": False,
+                            "mcp_elicitations": True,
+                        },
+                    },
                     "sandboxPolicy": {"type": "dangerFullAccess"},
                 },
             ),

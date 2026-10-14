@@ -309,6 +309,7 @@ class SharedQueueService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._runner: asyncio.Task[None] | None = None
         self._listener: asyncio.Task[None] | None = None
+        self._submit_can_steer = os.name == "nt"
 
     def _lock(self, thread_id: str) -> asyncio.Lock:
         return self._locks.setdefault(thread_id, asyncio.Lock())
@@ -449,7 +450,9 @@ class SharedQueueService:
             try:
                 if self.codex.handed_off:
                     return False
-                return await self._send_now(thread_id, payload["id"], allow_steer=False, require_head=True)
+                return await self._send_now(
+                    thread_id, payload["id"], allow_steer=self._submit_can_steer, require_head=True,
+                )
             except CodexRuntimeError:
                 await self._block(thread_id, "暂时无法确认 Codex 状态，连接恢复后自动发送")
                 return False
@@ -474,6 +477,13 @@ class SharedQueueService:
         thread = await self.codex.read_thread(thread_id, include_turns=False)
         status = thread.get("status")
         status_type = status.get("type") if isinstance(status, dict) else None
+        if status_type == "notLoaded":
+            # A notLoaded summary is not an idle verdict. Resume once to ask
+            # the local App Server for the real turn state before queueing.
+            await self.codex.resume_thread(thread_id)
+            thread = await self.codex.read_thread(thread_id, include_turns=False)
+            status = thread.get("status")
+            status_type = status.get("type") if isinstance(status, dict) else None
         active_turn = await self.codex._active_turn_id(thread_id)
         busy = status_type in {"active", "inProgress", "running", "started"}
         if not active_turn and status_type not in {"idle", "notLoaded"}:

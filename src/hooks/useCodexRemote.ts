@@ -1100,6 +1100,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
   const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
   const [writerConflict, setWriterConflict] = useState(false)
+  const [updatingApprovalPolicy, setUpdatingApprovalPolicy] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
   const [error, setError] = useState<string | null>(null)
   const [approval, setApproval] = useState<ApprovalRequest | null>(null)
@@ -1127,6 +1128,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const resumedThreadId = useRef<string | null>(null)
   const loadRequest = useRef(0)
   const historyRevision = useRef(0)
+  const historyReadSequence = useRef(0)
   const activityItemId = useRef<string | null>(null)
   const operationsByTurnRef = useRef<OperationsByTurn>({})
   const streamingAssistantMessageId = useRef<string | null>(null)
@@ -1883,9 +1885,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     preserveRunningTurnId: string | null = null,
   ) => {
     if (handedOffRef.current) return false
+    const readSequence = ++historyReadSequence.current
     try {
       const thread = await codexRemoteClient.readThread(token, threadId)
-      if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
+      if (activeThreadId.current !== threadId || revision !== historyRevision.current || readSequence !== historyReadSequence.current) return false
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
       const loadedMessages = messagesFromThread(thread)
@@ -3216,6 +3219,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       socketGeneration += 1
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
       if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
       if (streamingRenderTimer.current !== undefined) {
@@ -3230,6 +3234,27 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       window.removeEventListener('online', handleOnline)
     }
   }, [enabled, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+
+  useEffect(() => {
+    if (!enabled) return
+    let disposed = false
+    let timer: number | undefined
+    const reconcileHistory = async () => {
+      try {
+        const threadId = activeThreadId.current
+        if (threadId && !handedOffRef.current && document.visibilityState === 'visible') {
+          await loadThread(threadId, historyRevision.current, true)
+        }
+      } finally {
+        if (!disposed) timer = window.setTimeout(reconcileHistory, 4000)
+      }
+    }
+    timer = window.setTimeout(reconcileHistory, 4000)
+    return () => {
+      disposed = true
+      if (timer !== undefined) window.clearTimeout(timer)
+    }
+  }, [enabled, loadThread])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
@@ -3716,6 +3741,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (activeThreadId.current) void loadThread(activeThreadId.current)
   }, [loadThread])
 
+  const updateApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
+    const threadId = activeThreadId.current
+    if (!threadId || handedOffRef.current) return false
+    setUpdatingApprovalPolicy(true)
+    setError(null)
+    try {
+      await codexRemoteClient.updateThreadApprovalPolicy(token, threadId, approvalPolicy)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '更新会话权限失败')
+      return false
+    } finally {
+      setUpdatingApprovalPolicy(false)
+    }
+  }, [onUnauthorized, token])
+
   const uploadPdfAttachment = useCallback(async (file: File) => {
     try {
       return await codexRemoteClient.uploadPdfAttachment(token, file)
@@ -3746,6 +3788,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     handoffInProgress,
     loadingHistory,
     error,
+    updatingApprovalPolicy,
     approval,
     completedThreadIds,
     latestThreadCompletion,
@@ -3769,6 +3812,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     respondToApproval,
     clearThreadCompletion,
     refreshActiveThread,
+    updateApprovalPolicy,
   }
 }
 
