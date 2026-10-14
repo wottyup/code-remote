@@ -12,17 +12,18 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const viewport = window.visualViewport
       const layoutHeight = Math.round(window.innerHeight)
       const visualHeight = Math.round(viewport?.height ?? layoutHeight)
-      // Android WebView can keep the layout viewport at its full height while
-      // panning the visual viewport above the keyboard. Using only
-      // visualViewport.height in that state shortens the app twice and leaves
-      // a blank area between the composer and the keyboard. Keep the layout
-      // bottom when the native bridge is present; regular mobile browsers
-      // still follow their resized visual viewport.
       const nativeBridge = 'CodexRemoteAndroid' in window
       const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
+      const focusedComposer = document.activeElement instanceof HTMLElement
+        && document.activeElement.matches('.message-composer textarea, .message-composer input:not([type="file"]), .message-composer [contenteditable="true"]')
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
-      const height = nativeViewportIsPanned ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
+      const browserViewportIsPanned = !nativeBridge && focusedComposer && offsetTop > 1
+      const height = nativeViewportIsPanned
+        ? Math.max(layoutHeight, pannedVisualBottom)
+        : browserViewportIsPanned
+          ? pannedVisualBottom
+          : visualHeight
       const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         document.documentElement.style.setProperty('--native-composer-bottom-inset', `${composerBottomInset}px`)
@@ -57,7 +58,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     window.addEventListener('orientationchange', scheduleViewportSync)
     window.addEventListener('pageshow', scheduleViewportSync)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    document.addEventListener('focusin', scheduleViewportSync)
+    document.addEventListener('focusout', scheduleViewportSync)
     viewport?.addEventListener('resize', scheduleViewportSync)
+    viewport?.addEventListener('scroll', scheduleViewportSync)
     return () => {
       if (frame !== undefined) window.cancelAnimationFrame(frame)
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
@@ -65,7 +69,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       window.removeEventListener('orientationchange', scheduleViewportSync)
       window.removeEventListener('pageshow', scheduleViewportSync)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      document.removeEventListener('focusin', scheduleViewportSync)
+      document.removeEventListener('focusout', scheduleViewportSync)
       viewport?.removeEventListener('resize', scheduleViewportSync)
+      viewport?.removeEventListener('scroll', scheduleViewportSync)
     }
   }, [])
   return <>{children}</>

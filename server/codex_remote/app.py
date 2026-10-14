@@ -943,7 +943,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.8.0-dev.8", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.8.0-dev.9", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
