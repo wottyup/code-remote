@@ -49,7 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.88";
+    private static final String APP_VERSION = "0.0.89";
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
     private static final String PREFS_NAME = "codex_remote_mobile";
@@ -78,6 +78,7 @@ public class MainActivity extends Activity {
     private boolean handlingBack;
     private int navigationBarInsetPx;
     private volatile int composerBottomInsetDp;
+    private volatile int statusBarInsetDp;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
 
@@ -121,7 +122,7 @@ public class MainActivity extends Activity {
         checking = false;
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
-        applySystemBarInsets(root, false);
+        applySystemBarInsets(root, false, false);
         setContentView(root);
 
         ScrollView scrollView = new ScrollView(this);
@@ -300,7 +301,7 @@ public class MainActivity extends Activity {
         disposeWebView();
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
-        applySystemBarInsets(root, true);
+        applySystemBarInsets(root, true, true);
         setContentView(root);
 
         LinearLayout shell = new LinearLayout(this);
@@ -521,8 +522,18 @@ public class MainActivity extends Activity {
 
     private final class AndroidBridge {
         @JavascriptInterface
+        public int getStatusBarInsetDp() {
+            return statusBarInsetDp;
+        }
+
+        @JavascriptInterface
         public int getComposerBottomInsetDp() {
             return composerBottomInsetDp;
+        }
+
+        @JavascriptInterface
+        public void setStatusBarDarkIcons(boolean darkIcons) {
+            runOnUiThread(() -> applyStatusBarIconAppearance(darkIcons));
         }
 
         @JavascriptInterface
@@ -644,16 +655,42 @@ public class MainActivity extends Activity {
             getWindow().setDecorFitsSystemWindows(false);
         } else {
             getWindow().getDecorView().setSystemUiVisibility(
-                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+                    View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN);
         }
-        getWindow().setStatusBarColor(DARK);
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             getWindow().setNavigationBarContrastEnforced(false);
         }
     }
 
-    private void applySystemBarInsets(FrameLayout container, boolean extendWebViewBehindNavigationBar) {
+    private void applyStatusBarIconAppearance(boolean darkIcons) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            android.view.WindowInsetsController controller = getWindow().getInsetsController();
+            if (controller == null) return;
+            int appearance = darkIcons
+                    ? android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                    : 0;
+            controller.setSystemBarsAppearance(
+                    appearance,
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS);
+            return;
+        }
+
+        View decorView = getWindow().getDecorView();
+        int visibility = decorView.getSystemUiVisibility();
+        visibility = darkIcons
+                ? visibility | View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                : visibility & ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        decorView.setSystemUiVisibility(visibility);
+    }
+
+    private void applySystemBarInsets(
+            FrameLayout container,
+            boolean extendWebViewBehindNavigationBar,
+            boolean extendWebViewBehindStatusBar) {
         container.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int navigationBottom;
@@ -680,15 +717,32 @@ public class MainActivity extends Activity {
                 }
             }
             if (!imeVisible) navigationBarInsetPx = navigationBottom;
+            updateStatusBarInset(Math.round(top / getResources().getDisplayMetrics().density));
             int bottomInsetDp = imeVisible ? 0 : Math.round(navigationBottom / getResources().getDisplayMetrics().density);
             updateComposerBottomInset(bottomInsetDp);
             int contentBottom = extendWebViewBehindNavigationBar
                     ? imeBottom
                     : Math.max(navigationBottom, imeBottom);
-            view.setPadding(view.getPaddingLeft(), top, view.getPaddingRight(), contentBottom);
+            view.setPadding(
+                    view.getPaddingLeft(),
+                    extendWebViewBehindStatusBar ? 0 : top,
+                    view.getPaddingRight(),
+                    contentBottom);
             return insets;
         });
         container.requestApplyInsets();
+    }
+
+    private void updateStatusBarInset(int insetDp) {
+        statusBarInsetDp = insetDp;
+        WebView currentWebView = webView;
+        if (currentWebView == null) return;
+        currentWebView.post(() -> {
+            if (currentWebView != webView) return;
+            currentWebView.evaluateJavascript(
+                    "document.documentElement.style.setProperty('--native-status-bar-inset', '" + insetDp + "px')",
+                    null);
+        });
     }
 
     private void updateComposerBottomInset(int insetDp) {

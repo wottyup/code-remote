@@ -58,6 +58,8 @@ declare global {
       changeEndpoint?: () => void
       copyToClipboard?: (text: string) => boolean
       getComposerBottomInsetDp?: () => number
+      getStatusBarInsetDp?: () => number
+      setStatusBarDarkIcons?: (darkIcons: boolean) => void
       showKeyboard?: () => void
     }
     CodexRemoteHandleBack?: () => boolean
@@ -69,6 +71,19 @@ const connectionLabel = {
   connected: 'Codex 已连接',
   disconnected: '连接已断开',
   unavailable: 'Codex 不可用',
+}
+
+function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
+  if (preferences.theme === 'light' || preferences.theme === 'warm') return true
+  if (preferences.theme === 'dark') return false
+
+  const hex = preferences.customBackgroundColor.slice(1)
+  const channels = [0, 2, 4].map((index) => Number.parseInt(hex.slice(index, index + 2), 16) / 255)
+  const linearChannels = channels.map((channel) => channel <= 0.04045
+    ? channel / 12.92
+    : ((channel + 0.055) / 1.055) ** 2.4)
+  const relativeLuminance = 0.2126 * linearChannels[0] + 0.7152 * linearChannels[1] + 0.0722 * linearChannels[2]
+  return relativeLuminance >= 0.179
 }
 
 const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -2982,6 +2997,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       : themePreferences.theme === 'warm'
         ? '#5a3b27'
         : themePreferences.customTextColor
+  const darkStatusBarIcons = shouldUseDarkStatusBarIcons(themePreferences)
   const themeStyle = {
     ...themeRootStyle(themePreferences),
     '--marquee-color': marqueeColor,
@@ -2989,6 +3005,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     '--workspace-file-preview-handle-width': workspaceFilePreviewOpen ? '8px' : '0px',
     '--workspace-file-preview-width': workspaceFilePreviewOpen ? `${workspaceFilePreviewWidth}px` : '0px',
   } as CSSProperties
+
+  useEffect(() => {
+    window.CodexRemoteAndroid?.setStatusBarDarkIcons?.(darkStatusBarIcons)
+  }, [darkStatusBarIcons])
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
     if (!activeThreadId) {

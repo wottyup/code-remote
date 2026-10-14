@@ -27,6 +27,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         document.documentElement.style.setProperty('--native-composer-bottom-inset', `${composerBottomInset}px`)
       }
+      const statusBarInset = window.CodexRemoteAndroid?.getStatusBarInsetDp?.() ?? 0
+      if (Number.isFinite(statusBarInset) && statusBarInset >= 0) {
+        document.documentElement.style.setProperty('--native-status-bar-inset', `${statusBarInset}px`)
+      }
       // Do not replace a working viewport value with the occasional zero-sized
       // value that some mobile browsers report while returning from background.
       if (height < 160) return
