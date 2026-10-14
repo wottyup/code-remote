@@ -2748,7 +2748,13 @@ function RemoteChatPane({
             token={token}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
             onClose={() => setTerminalOpen(false)}
-            onInsertText={(value) => composerHandle.current?.insertDraftAtCursor(value, true)}
+            onInsertText={(value) => {
+              if (value.length >= longPasteThreshold) {
+                composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
+              } else {
+                composerHandle.current?.insertDraftAtCursor(value, true)
+              }
+            }}
           />
         </Suspense>
       ) : null}
