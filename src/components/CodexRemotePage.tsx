@@ -674,7 +674,6 @@ function ComposerMenu({
         onClick={() => onOpenChange(!open)}
       >
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
-        <ChevronDown size={13} aria-hidden="true" />
       </button>
       {open ? createPortal(
         <div
