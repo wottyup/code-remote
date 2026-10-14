@@ -330,7 +330,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message { display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 11px; width: min(100%, 900px); margin: 0 auto; }
 .chat-message.chat-message--assistant { grid-template-columns: minmax(0, 1fr); }
 .chat-message--assistant .chat-message__avatar { display: none; }
-.chat-message--user { display: flex; flex-wrap: wrap; justify-content: flex-end; margin: 4px auto 0; }
+.chat-message--user { display: flex; width: 100%; max-width: none; flex-wrap: wrap; justify-content: flex-end; margin: 4px 0 0; }
 .chat-message--user .chat-message__avatar { display: none; }
 .chat-message--user .chat-message__body { width: fit-content; min-width: 0; max-width: min(100%, 700px); padding: 10px 13px; border: 0; border-radius: 13px 13px 4px 13px; background: linear-gradient(145deg, #252a35, #1b1e25); box-shadow: none; }
 .chat-message--user .chat-message__meta { display: none; }
