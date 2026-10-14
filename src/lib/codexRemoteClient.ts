@@ -79,7 +79,7 @@ export interface CodexRuntime {
   connected: boolean
   workspace: string
   handedOff: boolean
-  runtimeMode?: 'shared' | 'isolated' | 'isolated-fallback' | 'direct'
+  runtimeMode?: 'shared' | 'isolated' | 'direct'
   runtimeMessage?: string | null
   fallbackReason?: string | null
   error: string | null

@@ -737,8 +737,17 @@ class PairingAuth:
         if configured_path:
             return Path(configured_path).expanduser()
         if os.name == "nt":
-            project_root = Path(__file__).resolve().parents[2]
-            return project_root / ".codex-remote" / "trusted-devices-v2.json"
+            configured_home = os.environ.get("CODEX_REMOTE_HOME")
+            if configured_home:
+                remote_home = Path(configured_home).expanduser()
+            else:
+                local_app_data = os.environ.get("LOCALAPPDATA")
+                remote_home = (
+                    Path(local_app_data) / "CodexRemote"
+                    if local_app_data
+                    else Path.home() / ".codex-remote"
+                )
+            return remote_home / "trusted-devices.json"
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return codex_home / "codex-remote" / "trusted-devices.json"
 
@@ -749,6 +758,7 @@ class PairingAuth:
         project_root = Path(__file__).resolve().parents[2]
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return (
+            project_root / ".codex-remote" / "trusted-devices-v2.json",
             project_root / ".codex-remote" / "trusted-devices.json",
             codex_home / "codex-remote" / "trusted-devices.json",
         )
@@ -866,10 +876,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         configured_workspace,
     )
     auth = PairingAuth()
+    try:
+        auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
     idempotent_requests = IdempotentRequestRegistry()
-    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
+    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
 
@@ -940,7 +954,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.8.0-dev.2", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.9.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests

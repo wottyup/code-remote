@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import hashlib
 import shutil
 import sqlite3
 import tempfile
@@ -91,11 +92,9 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
                 self.assertEqual(history_home.resolve(), app_server._runtime_home)
                 self.assertEqual(str(history_home.resolve()), child_environment["CODEX_HOME"])
-                self.assertEqual(os.name == "nt", app_server._use_shared_daemon)
+                self.assertEqual(os.name == "nt", app_server._use_windows_websocket)
                 self.assertEqual(
-                    ["codex", "app-server", "proxy"]
-                    if os.name == "nt"
-                    else ["codex", "app-server", "--listen", "stdio://"],
+                    ["codex", "app-server", "--listen", "stdio://"],
                     app_server._app_server_arguments("codex"),
                 )
                 await app_server._prepare_runtime_thread("not-in-history")
@@ -212,7 +211,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(history_home.resolve(), app_server._history.codex_home)
             self.assertEqual(str(Path(runtime_directory).resolve()), child_environment["CODEX_HOME"])
-            self.assertFalse(app_server._use_shared_daemon)
+            self.assertFalse(app_server._use_windows_websocket)
             self.assertEqual(
                 ["codex", "app-server", "--listen", "stdio://"],
                 app_server._app_server_arguments("codex"),
@@ -416,108 +415,129 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
             app_server._sync_runtime_created_history.assert_awaited_once_with(legacy_home)
 
-    async def test_shared_windows_runtime_starts_the_official_daemon_before_proxying(self) -> None:
+    async def test_windows_websocket_runtime_does_not_fallback_on_codex_errors(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
-        process = Mock(returncode=0)
-        process.communicate = AsyncMock(return_value=(b'{"status":"running"}', b""))
-        child_environment = {"CODEX_HOME": str(app_server._history_home)}
-
-        with patch(
-            "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
-            new_callable=AsyncMock,
-            return_value=process,
-        ) as create_process:
-            await app_server._ensure_shared_daemon("codex.exe", child_environment)
-
-        create_process.assert_awaited_once_with(
-            "codex.exe",
-            "app-server",
-            "daemon",
-            "start",
-            cwd=app_server.workspace,
-            env=child_environment,
-            stdin=asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            limit=1024 * 1024,
-        )
-
-    async def test_missing_standalone_keeps_main_history_for_direct_runtime(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        app_server._use_shared_daemon = True
-        app_server._fallback_runtime_home = Path(tempfile.gettempdir()) / "unused-runtime"
-        app_server._start_runtime = AsyncMock(side_effect=[
-            CodexRuntimeError("managed standalone Codex install not found at C:/missing/codex.exe"),
-            None,
-        ])
-        app_server._resolve_executable = Mock(return_value="codex.exe")
-        await app_server._start_with_shared_fallback("codex.exe")
-        self.assertEqual(2, app_server._start_runtime.await_count)
-        self.assertFalse(app_server._use_shared_daemon)
-        self.assertEqual(app_server._history_home, app_server._runtime_home)
-        self.assertEqual("direct", app_server.status()["runtimeMode"])
-        self.assertEqual(["codex.exe", "app-server", "--listen", "stdio://"], app_server._app_server_arguments("codex.exe"))
-
-    async def test_shared_windows_permission_failure_retries_with_an_isolated_runtime(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        fallback_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, fallback_home, ignore_errors=True)
-        app_server._use_shared_daemon = True
-        app_server._fallback_runtime_home = fallback_home
-        app_server._runtime_mode = "shared"
-        app_server._start_runtime = AsyncMock(side_effect=[
-            CodexRuntimeError("failed to open daemon operation lock: 拒绝访问 (os error 5)"),
-            None,
-        ])  # type: ignore[method-assign]
-        app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
-        app_server._emit = AsyncMock()  # type: ignore[method-assign]
+        app_server._use_windows_websocket = True
+        app_server._start_runtime = AsyncMock(side_effect=CodexRuntimeError("Codex app-server 启动失败：网络超时"))  # type: ignore[method-assign]
         app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
 
-        await app_server._ensure_started()
+        with self.assertRaisesRegex(CodexRuntimeError, "网络超时"):
+            await app_server._ensure_started()
 
-        self.assertEqual(2, app_server._start_runtime.await_count)
-        self.assertFalse(app_server._use_shared_daemon)
-        self.assertEqual(fallback_home, app_server._runtime_home)
-        self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
-        self.assertIn("已切换到兼容运行时", app_server.status()["runtimeMessage"])
-        self.assertIn("daemon operation lock", app_server.status()["fallbackReason"])
-        self.assertEqual("codex.exe", app_server._resolve_executable())
+        app_server._start_runtime.assert_awaited_once_with("codex.exe")
+        self.assertEqual(app_server._history_home, app_server._runtime_home)
+        self.assertEqual("shared", app_server.status()["runtimeMode"])
+
+    async def test_windows_websocket_transport_uses_loopback_and_capability_token(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._use_windows_websocket = True
+        app_server._websocket_uri = "ws://127.0.0.1:45678"
+        app_server._websocket_token = "local-secret"
+        process = Mock(returncode=None)
+        app_server._process = process
+        fake_socket = AsyncMock()
+        app_server._websocket_server_owned = False
+
+        with (
+            patch(
+                "codex_remote.codex_app_server.websocket_connect",
+                new_callable=AsyncMock,
+                return_value=fake_socket,
+            ) as connect,
+            patch.object(app_server, "_read_websocket", new_callable=AsyncMock),
+        ):
+            await app_server._connect_windows_websocket(process)
+
         self.assertEqual(
-            ["codex.exe", "app-server", "--listen", "stdio://"],
-            app_server._app_server_arguments("codex.exe"),
+            "ws://127.0.0.1:45678",
+            connect.await_args.args[0],
         )
+        self.assertEqual(
+            {"Authorization": "Bearer local-secret"},
+            connect.await_args.kwargs["additional_headers"],
+        )
+        self.assertIs(app_server._websocket, fake_socket)
 
-    async def test_fallback_re_resolves_to_the_managed_cli_after_shared_daemon_failure(self) -> None:
-        if os.name != "nt":
-            self.skipTest("Windows managed Codex CLI selection")
+    async def test_windows_runtime_starts_codex_with_hapi_websocket_transport(self) -> None:
+        app_server = CodexAppServer("codex.exe", Path.cwd())
+        app_server._use_windows_websocket = True
+        child = Mock(returncode=None, stdin=None, wait=AsyncMock(return_value=0))
+        child.stderr = asyncio.StreamReader()
+        child.stderr.feed_eof()
+        connected = asyncio.Event()
 
+        async def fake_connect(process: object) -> None:
+            app_server._websocket = AsyncMock()
+            app_server._websocket_server_owned = True
+            connected.set()
+
+        async def fake_request(method: str, params: dict[str, object], timeout: float) -> dict[str, object]:
+            return {"ok": True}
+
+        app_server._connect_windows_websocket = fake_connect  # type: ignore[method-assign]
+        app_server._request = fake_request  # type: ignore[method-assign]
+        with (
+            patch.object(app_server, "_seed_runtime_database"),
+            patch.object(app_server, "_app_server_environment", return_value={"CODEX_HOME": str(app_server._history_home)}),
+            patch.object(app_server, "_free_loopback_port", new_callable=AsyncMock, return_value=43210),
+            patch("codex_remote.codex_app_server.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn,
+        ):
+            await app_server._start_runtime("codex.exe")
+
+        self.assertTrue(connected.is_set())
+        args = spawn.await_args.args
+        kwargs = spawn.await_args.kwargs
+        self.assertEqual(
+            ["codex.exe", "app-server", "--listen", "ws://127.0.0.1:43210", "--ws-auth", "capability-token", "--ws-token-sha256"],
+            list(args[:7]),
+        )
+        self.assertEqual(hashlib.sha256(app_server._websocket_token.encode()).hexdigest(), args[7])
+        self.assertEqual(asyncio.subprocess.DEVNULL, kwargs["stdin"])
+        self.assertEqual(asyncio.subprocess.DEVNULL, kwargs["stdout"])
+        self.assertEqual(str(app_server._history_home), kwargs["env"]["CODEX_HOME"])
+        assert app_server._websocket is not None
+        await app_server._websocket.close()
+        await app_server._cancel_io_tasks()
+        app_server._process = None
+
+    async def test_windows_node_cli_shutdown_stops_the_owned_process_tree(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._process_uses_node_shim = True
+        process = Mock(pid=12345, returncode=None, wait=AsyncMock(return_value=0), terminate=Mock(), kill=Mock())
+        killer = Mock(returncode=0, wait=AsyncMock(return_value=0))
+
+        with (
+            patch("codex_remote.codex_app_server.os.name", "nt"),
+            patch(
+                "codex_remote.codex_app_server.asyncio.create_subprocess_exec",
+                new_callable=AsyncMock,
+                return_value=killer,
+            ) as spawn,
+        ):
+            await app_server._terminate_runtime_process(process)
+
+        self.assertEqual(("taskkill.exe", "/PID", "12345", "/T", "/F"), spawn.await_args.args)
+        process.terminate.assert_not_called()
+        process.kill.assert_not_called()
+    def test_windows_runtime_uses_path_codex_shim_before_managed_codex_executable(self) -> None:
         with tempfile.TemporaryDirectory() as home_directory:
             home = Path(home_directory)
+            shim = home / "npm" / "codex.cmd"
+            codex_script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+            codex_script.parent.mkdir(parents=True)
+            shim.parent.mkdir(parents=True, exist_ok=True)
+            shim.touch()
+            codex_script.touch()
             managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
-            fallback_home = home / "compat-runtime"
+            managed.parent.mkdir(parents=True)
+            managed.touch()
             old_home = os.environ.get("CODEX_HOME")
             old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
             try:
                 os.environ["CODEX_HOME"] = str(home)
-                app_server = CodexAppServer("legacy-codex.exe", Path.cwd())
-                app_server._fallback_runtime_home = fallback_home
-                app_server._schedule_runtime_history_sync = Mock()  # type: ignore[method-assign]
-                app_server._emit = AsyncMock()  # type: ignore[method-assign]
-                started_with: list[str] = []
-
-                async def start_runtime(executable: str) -> None:
-                    started_with.append(executable)
-                    if len(started_with) == 1:
-                        managed.parent.mkdir(parents=True)
-                        managed.touch()
-                        raise CodexRuntimeError("unrecognized subcommand 'daemon'")
-
-                app_server._start_runtime = AsyncMock(side_effect=start_runtime)  # type: ignore[method-assign]
-                with patch("codex_remote.codex_app_server.shutil.which", return_value="legacy-codex.exe"):
-                    await app_server._ensure_started()
-
-                self.assertEqual(started_with, ["legacy-codex.exe", str(managed)])
-                self.assertEqual("isolated-fallback", app_server.status()["runtimeMode"])
+                app_server = CodexAppServer(str(shim), Path.cwd())
+                app_server._use_windows_websocket = True
+                self.assertEqual(str(codex_script), app_server._resolve_executable())
             finally:
                 if old_home is None:
                     os.environ.pop("CODEX_HOME", None)
@@ -526,80 +546,36 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 if old_runtime_home is not None:
                     os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
 
-    def test_shared_windows_proxy_permission_failure_is_recognized_from_stderr(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        app_server._use_shared_daemon = True
-        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
-        app_server._recent_stderr = [
-            "failed to connect to socket at C:\\Users\\user\\.codex\\app-server-control\\app-server-control.sock",
-            "Caused by: 拒绝访问 (os error 10013)",
-        ]
-
-        self.assertTrue(app_server._should_fallback_from_shared_daemon(CodexRuntimeError("Codex app-server 已断开")))
-
-    def test_shared_windows_daemon_state_directory_permission_failure_triggers_fallback(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        app_server._use_shared_daemon = True
-        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
-        error = CodexRuntimeError(
-            "共享 Codex app-server 启动失败：WARNING: failed to clean up stale arg0 temp dirs: "
-            "拒绝访问。 (os error 5) WARNING: proceeding, even though we could not create PATH aliases: "
-            "拒绝访问。 (os error 5) at path \"C:\\Users\\05110\\.codex\\tmp\\arg0\\codex-arg0fobSfm\" "
-            "Error: failed to create daemon state directory C:\\Users\\05110\\.codex\\app-server-daemon "
-            "Caused by: 拒绝访问。 (os error 5)"
-        )
-
-        self.assertTrue(app_server._should_fallback_from_shared_daemon(error))
-
-    async def test_isolated_fallback_syncs_web_history_to_the_main_home(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        app_server._runtime_mode = "isolated-fallback"
-        app_server._runtime_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, app_server._runtime_home, ignore_errors=True)
-        app_server._sync_runtime_thread_to_history = Mock(return_value=True)  # type: ignore[method-assign]
-        app_server._history.invalidate = Mock()  # type: ignore[method-assign]
-
-        await app_server._sync_runtime_thread("thread-id")
-
-        app_server._sync_runtime_thread_to_history.assert_called_once_with("thread-id")
-        app_server._history.invalidate.assert_called_once()
-
-    async def test_shared_windows_non_permission_failure_does_not_fallback(self) -> None:
-        app_server = CodexAppServer("codex", Path.cwd())
-        app_server._use_shared_daemon = True
-        app_server._fallback_runtime_home = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, app_server._fallback_runtime_home, ignore_errors=True)
-        app_server._start_runtime = AsyncMock(side_effect=CodexRuntimeError("共享 Codex app-server 启动失败：网络超时"))  # type: ignore[method-assign]
-        app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
-
-        with self.assertRaisesRegex(CodexRuntimeError, "网络超时"):
-            await app_server._ensure_started()
-
-        app_server._start_runtime.assert_awaited_once_with("codex.exe")
-        self.assertTrue(app_server._use_shared_daemon)
-
-    def test_shared_windows_runtime_prefers_the_managed_daemon_executable(self) -> None:
-        with tempfile.TemporaryDirectory() as home_directory:
-            home = Path(home_directory)
-            managed = home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
-            managed.parent.mkdir(parents=True)
-            managed.touch()
+    def test_windows_npm_shim_resolves_to_node_script_without_combining_command_strings(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shim = root / "npm" / "codex.cmd"
+            script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+            script.parent.mkdir(parents=True)
+            shim.parent.mkdir(parents=True, exist_ok=True)
+            shim.touch()
+            script.touch()
             old_home = os.environ.get("CODEX_HOME")
+            old_local_app_data = os.environ.get("LOCALAPPDATA")
             old_runtime_home = os.environ.pop("CODEX_REMOTE_APP_SERVER_HOME", None)
             try:
-                os.environ["CODEX_HOME"] = str(home)
-                app_server = CodexAppServer("stale-codex.cmd", Path.cwd())
-                if os.name == "nt":
-                    self.assertEqual(str(managed), app_server._resolve_executable())
-                else:
-                    self.assertIsNone(app_server._resolve_executable())
+                os.environ["CODEX_HOME"] = str(root / "codex-home")
+                os.environ["LOCALAPPDATA"] = str(root / "local-app-data")
+                app_server = CodexAppServer(str(shim), Path.cwd())
+                app_server._use_windows_websocket = True
+
+                self.assertEqual(str(script), app_server._resolve_executable())
+                with patch("codex_remote.codex_app_server.shutil.which", return_value=None):
+                    self.assertEqual(["node", str(script)], app_server._codex_command_prefix(str(script)))
             finally:
                 if old_home is None:
                     os.environ.pop("CODEX_HOME", None)
                 else:
                     os.environ["CODEX_HOME"] = old_home
+                if old_local_app_data is None:
+                    os.environ.pop("LOCALAPPDATA", None)
+                else:
+                    os.environ["LOCALAPPDATA"] = old_local_app_data
                 if old_runtime_home is not None:
                     os.environ["CODEX_REMOTE_APP_SERVER_HOME"] = old_runtime_home
 
@@ -916,7 +892,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._active_turn_ids["thread-id"] = "turn-id"
         changes = asyncio.create_task(asyncio.sleep(0, result=WorkspaceSnapshot(frozenset(), {}, True)))
-        old_watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True))
+        old_watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True), Path.cwd())
         app_server._workspace_change_watches["thread-id"] = old_watch
         entered = asyncio.Event()
         release = asyncio.Event()
@@ -943,7 +919,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         app_server._pending["read-next"] = pending
         await app_server._handle_message({"id": "read-next", "result": {"ok": True}})
         self.assertEqual(await asyncio.wait_for(pending, 1), {"ok": True})
-        new_watch = WorkspaceChangeWatch(asyncio.Event(), changes, old_watch.baseline)
+        new_watch = WorkspaceChangeWatch(asyncio.Event(), changes, old_watch.baseline, Path.cwd())
         app_server._workspace_change_watches["thread-id"] = new_watch
         release.set()
         await asyncio.gather(*app_server._workspace_completion_tasks)
@@ -985,7 +961,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._active_turn_ids["thread-id"] = "new-turn"
         changes = asyncio.create_task(asyncio.sleep(0, result=WorkspaceSnapshot(frozenset(), {}, True)))
-        watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True))
+        watch = WorkspaceChangeWatch(asyncio.Event(), changes, WorkspaceSnapshot(frozenset(), {}, True), Path.cwd())
         app_server._workspace_change_watches["thread-id"] = watch
         await app_server._handle_message({"method": "turn/completed", "params": {
             "threadId": "thread-id", "turn": {"id": "old-turn", "status": "completed"},
@@ -1002,7 +978,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.Event().wait()
             return WorkspaceSnapshot(frozenset(), {}, True)
 
-        watch = WorkspaceChangeWatch(asyncio.Event(), asyncio.create_task(wait_for_stop()), WorkspaceSnapshot(frozenset(), {}, True))
+        watch = WorkspaceChangeWatch(asyncio.Event(), asyncio.create_task(wait_for_stop()), WorkspaceSnapshot(frozenset(), {}, True), Path.cwd())
         app_server._workspace_change_watches["thread-id"] = watch
         await app_server._handle_message({"method": "turn/completed", "params": {
             "threadId": "thread-id", "turn": {"id": "turn-id", "status": "completed"},

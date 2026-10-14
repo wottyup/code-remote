@@ -27,8 +27,8 @@ const vscodeCodexCandidates = isWindows && existsSync(vscodeExtensionRoot)
   : []
 const windowsCodexCandidates = isWindows
   ? [
-      managedDaemonCodex,
       ...pathCodexCandidates,
+      managedDaemonCodex,
       join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'codex.exe'),
       join(process.env.LOCALAPPDATA || '', 'OpenAI', 'Codex', 'bin', 'codex.exe'),
       ...vscodeCodexCandidates,

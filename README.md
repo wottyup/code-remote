@@ -62,7 +62,7 @@ Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-
 
 后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
 
-受信任设备的令牌摘要保存于 `~/.codex/codex-remote/trusted-devices.json`，原始令牌和配对码不会写入该文件。网页中的“退出”会撤销当前设备；如果设备遗失，可停止服务后删除该文件，再启动服务使所有设备重新配对。可用 `CODEX_REMOTE_AUTH_FILE` 设置该状态文件的位置。
+受信任设备的令牌摘要保存在用户数据目录中，原始令牌和配对码不会写入该文件。Windows 默认使用 `%LOCALAPPDATA%\CodexRemote`，避免把应用数据写入项目或受限的 Codex 运行目录；Linux/macOS 默认使用 `~/.codex/codex-remote`。网页中的“退出”会撤销当前设备；如果设备遗失，可停止服务后删除该目录中的授权文件，再启动服务使所有设备重新配对。可用 `CODEX_REMOTE_HOME` 或 `CODEX_REMOTE_AUTH_FILE` 设置位置。
 
 ## 工作目录和历史会话
 
@@ -74,7 +74,7 @@ CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:d
 
 历史列表读取本机 Codex 最近 100 条未归档会话，包含其他工作目录创建的会话；打开会话后，标题下方会显示该会话的工作目录。后端监听 Codex 会话文件变化，并通过 WebSocket 通知侧栏更新，无需刷新网页。
 
-本地 Codex App Server 默认直接使用用户级 `CODEX_HOME`，因此网页端与桌面 Codex 读取并写入同一套配置、模型和会话历史。Windows 会先通过 Codex 官方共享 daemon 与 stdio proxy 接入主运行时，启动器优先使用官方受控 CLI；如果 Codex 的 Windows 沙箱令牌不能访问桌面实例私有的 daemon socket，服务会自动切换到兼容运行时，不会无限重连。兼容运行时继续读取主 `.codex` 的模型和配置，并在主 `.codex/sessions` 可写时将网页会话同步到本机 Codex 历史。桌面侧栏还依赖主 `state_5.sqlite` 索引；该文件可写时会补登网页会话，无写入权限时则保留网页会话，待以有权限的终端启动后补登。可显式设置 `CODEX_REMOTE_APP_SERVER_HOME` 固定使用独立运行目录。
+本地 Codex App Server 默认直接使用用户级 `CODEX_HOME`，因此网页端与桌面 Codex 读取并写入同一套配置、模型和会话历史。Windows 与 Hapi 一样，优先使用 PATH 中实际解析到的 Codex CLI，并直接启动 app-server，通过仅监听 `127.0.0.1` 的随机端口和 capability token 连接；不再依赖需要额外权限的共享 daemon/control socket。npm 安装的 Codex 会从 `.cmd` shim 解析到同一安装下的 `codex.js`，再由 Node 启动。网页新建、恢复的会话由 Codex app-server 写入用户原有历史。可显式设置 `CODEX_REMOTE_APP_SERVER_HOME` 固定使用独立运行目录。
 
 ## 在网页与本机 Codex 间交还会话
 
