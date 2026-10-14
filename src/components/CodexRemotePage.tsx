@@ -738,6 +738,7 @@ interface MessageComposerProps {
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
+  reserveQueuedMessageSpace: boolean
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
@@ -772,6 +773,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
+  reserveQueuedMessageSpace,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
@@ -1642,6 +1644,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               )
             })}
           </div>
+        </div>
+      ) : reserveQueuedMessageSpace ? (
+        <div className="composer-queue composer-queue--collapsed composer-queue--placeholder" aria-hidden="true">
+          <span className="composer-queue__placeholder-label">已排队 0 条</span>
         </div>
       ) : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
@@ -3962,6 +3968,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
+              reserveQueuedMessageSpace={openPaneIndexes.length > 1}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
