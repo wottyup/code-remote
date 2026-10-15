@@ -28,6 +28,12 @@ export const documentAttachmentAccept = [
   'application/vnd.openxmlformats-officedocument.presentationml.presentation',
 ].join(',')
 
+export function attachmentAcceptForLayout(mobileLayout: boolean) {
+  // Large extension lists can make mobile browsers slow to open the native picker.
+  // Keep validation in isSupportedDocumentFile; accept is only a picker hint.
+  return mobileLayout ? undefined : documentAttachmentAccept
+}
+
 export function documentExtensionOf(name: string) {
   const lowerName = name.toLowerCase()
   if (lowerName.startsWith('.env')) return 'env'

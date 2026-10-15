@@ -795,6 +795,7 @@ def prepare_claude_turn_files(
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
     """Embed images created by this process so a refreshed thread can render them."""
     image_root = image_directory.resolve()
+    system_temp_root = Path(tempfile.gettempdir()).resolve()
     turns = thread.get("turns")
     if not isinstance(turns, list):
         return thread
@@ -811,14 +812,21 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
             if not isinstance(content, list):
                 continue
             for part in content:
-                if not isinstance(part, dict) or part.get("type") != "localImage":
+                if not isinstance(part, dict) or part.get("type") not in {"localImage", "local_image"}:
                     continue
                 raw_path = part.get("path")
                 if not isinstance(raw_path, str) or not raw_path:
                     continue
                 try:
                     image_path = Path(raw_path).expanduser().resolve()
-                    image_path.relative_to(image_root)
+                    in_remote_image_directory = image_path.is_relative_to(image_root)
+                    is_codex_clipboard_image = (
+                        image_path.parent == system_temp_root
+                        and image_path.stem.startswith("codex-clipboard-")
+                        and image_path.suffix.lower() in IMAGE_MEDIA_TYPES
+                    )
+                    if not in_remote_image_directory and not is_codex_clipboard_image:
+                        continue
                     if not image_path.is_file():
                         continue
                     if image_path.stat().st_size > MAX_IMAGE_BYTES:
@@ -835,6 +843,16 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
                 part["mediaType"] = media_type
                 part["data"] = data
     return thread
+
+
+def enrich_user_message_item(item: dict[str, Any], image_directory: Path) -> dict[str, Any]:
+    """Embed permitted local images in one live app-server user item."""
+    item_type = item.get("type")
+    if not isinstance(item_type, str) or item_type.replace("-", "").replace("_", "").lower() != "usermessage":
+        return item
+    wrapper = {"turns": [{"items": [{**item, "type": "userMessage"}]}]}
+    enrich_thread_images(wrapper, image_directory)
+    return wrapper["turns"][0]["items"][0]
 
 
 class PairingAuth:
@@ -857,8 +875,17 @@ class PairingAuth:
         if configured_path:
             return Path(configured_path).expanduser()
         if os.name == "nt":
-            project_root = Path(__file__).resolve().parents[2]
-            return project_root / ".codex-remote" / "trusted-devices-v2.json"
+            configured_home = os.environ.get("CODEX_REMOTE_HOME")
+            if configured_home:
+                remote_home = Path(configured_home).expanduser()
+            else:
+                local_app_data = os.environ.get("LOCALAPPDATA")
+                remote_home = (
+                    Path(local_app_data) / "CodexRemote"
+                    if local_app_data
+                    else Path.home() / ".codex-remote"
+                )
+            return remote_home / "trusted-devices.json"
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return codex_home / "codex-remote" / "trusted-devices.json"
 
@@ -869,6 +896,7 @@ class PairingAuth:
         project_root = Path(__file__).resolve().parents[2]
         codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
         return (
+            project_root / ".codex-remote" / "trusted-devices-v2.json",
             project_root / ".codex-remote" / "trusted-devices.json",
             codex_home / "codex-remote" / "trusted-devices.json",
         )
@@ -986,6 +1014,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         configured_workspace,
     )
     auth = PairingAuth()
+    try:
+        auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    except OSError as error:
+        raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
@@ -995,7 +1027,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         app_server._emit,
     )
     idempotent_requests = IdempotentRequestRegistry()
-    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-"))
+    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
 
@@ -1677,8 +1709,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         async def send_events() -> None:
             while True:
                 event = browser_event(await queue.get(), thread_id=subscribed_thread_id, filter_thread=filter_thread)
-                if event is not None:
-                    await send_event(event)
+                if event is None:
+                    continue
+                if event.get("method") in {"item/started", "item/completed"}:
+                    params = event.get("params")
+                    item = params.get("item") if isinstance(params, dict) else None
+                    if isinstance(item, dict):
+                        event = {
+                            **event,
+                            "params": {
+                                **params,
+                                "item": enrich_user_message_item(item, image_directory),
+                            },
+                        }
+                await send_event(event)
 
         async def receive_events() -> None:
             nonlocal subscribed_thread_id, filter_thread

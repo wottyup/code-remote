@@ -103,7 +103,7 @@ export interface CodexRuntime {
   connected: boolean
   workspace: string
   handedOff: boolean
-  runtimeMode?: 'shared' | 'isolated' | 'isolated-fallback' | 'direct'
+  runtimeMode?: 'shared' | 'isolated' | 'direct'
   runtimeMessage?: string | null
   fallbackReason?: string | null
   error: string | null
@@ -202,7 +202,7 @@ async function request<T>(
     const abort = () => controller.abort(init?.signal?.reason)
     if (init?.signal?.aborted) abort()
     else init?.signal?.addEventListener('abort', abort, { once: true })
-    const timer = window.setTimeout(() => {
+    const timer = globalThis.setTimeout(() => {
       timedOut = true
       controller.abort()
     }, options.timeoutMs ?? (method === 'GET' ? 30_000 : 120_000))
@@ -248,7 +248,7 @@ async function request<T>(
       attempt += 1
       await wait(delay)
     } finally {
-      window.clearTimeout(timer)
+      globalThis.clearTimeout(timer)
       init?.signal?.removeEventListener('abort', abort)
     }
   }
@@ -311,13 +311,24 @@ function imagesFromContent(value: unknown): CodexMessageImage[] {
   return value.flatMap((part, index) => {
     if (!part || typeof part !== 'object') return []
     const image = part as Record<string, unknown>
-    if (image.type !== 'localImage' || typeof image.data !== 'string' || image.data.length === 0) return []
-    const mediaType = typeof image.mediaType === 'string'
-      ? image.mediaType
-      : typeof image.media_type === 'string' ? image.media_type : 'image/png'
-    if (!mediaType.startsWith('image/')) return []
+    const dataUrl = image.type === 'image' && typeof image.image_url === 'string'
+      ? image.image_url
+      : ''
+    const embeddedData = image.type === 'localImage' && typeof image.data === 'string'
+      ? image.data
+      : ''
+    const mediaType = dataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,/)?.[1]
+      ?? (typeof image.mediaType === 'string'
+        ? image.mediaType
+        : typeof image.media_type === 'string' ? image.media_type : 'image/png')
+    const previewUrl = dataUrl.match(/^data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/]+={0,2}$/)
+      ? dataUrl
+      : /^(?:image\/(?:png|jpeg|webp|gif))$/.test(mediaType) && /^[A-Za-z0-9+/]+={0,2}$/.test(embeddedData)
+        ? `data:${mediaType};base64,${embeddedData}`
+        : ''
+    if (!previewUrl) return []
     const name = typeof image.name === 'string' && image.name.length > 0 ? image.name : `image-${index + 1}`
-    return [{ name, previewUrl: `data:${mediaType};base64,${image.data}` }]
+    return [{ name, previewUrl }]
   })
 }
 

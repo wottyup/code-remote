@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
 import sqlite3
 from contextlib import closing
 from datetime import datetime, timezone
@@ -73,6 +74,22 @@ def _normalise_item(item: dict[str, Any]) -> dict[str, Any]:
     }
     if isinstance(item_type, str):
         result["type"] = type_map.get(item_type, item_type[:1].lower() + item_type[1:])
+    content = result.get("content")
+    if isinstance(content, list) and result.get("type") == "userMessage":
+        normalized_content: list[Any] = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") not in {"local_image", "localImage"}:
+                normalized_content.append(part)
+                continue
+            normalized_part = {**part, "type": "localImage"}
+            image_path = part.get("path")
+            if isinstance(image_path, str):
+                normalized_part.setdefault("name", Path(image_path).name)
+                media_type, _ = mimetypes.guess_type(image_path)
+                if media_type in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                    normalized_part.setdefault("mediaType", media_type)
+            normalized_content.append(normalized_part)
+        result["content"] = normalized_content
     if result.get("type") == "agentMessage" and not isinstance(result.get("text"), str):
         text = _text_from_content(result.get("content"))
         if text:

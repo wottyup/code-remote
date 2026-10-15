@@ -27,6 +27,7 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)
         self.server = self.app.state.codex
+        self.server.read_thread = AsyncMock(return_value={"cwd": str(workspace)})
 
     def endpoint(self, path: str):
         return next(route.endpoint for route in self.app.routes if getattr(route, "path", None) == path)
@@ -44,7 +45,7 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"id": "thread-one", "cwd": "/workspace"})
         self.assertEqual(retry, result)
         self.assertIs(original["turns"], history)
-        self.server.resume_thread.assert_awaited_once_with("thread-one")
+        self.server.resume_thread.assert_awaited_once_with("thread-one", cwd=None)
         entry = next(iter(self.app.state.idempotent_requests._entries.values()))
         self.assertNotIn("turns", entry.task.result())
 

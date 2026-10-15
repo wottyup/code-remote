@@ -313,6 +313,7 @@ class SharedQueueService:
         self._runner: asyncio.Task[None] | None = None
         self._listener: asyncio.Task[None] | None = None
         self._submit_can_steer = os.name == "nt"
+        self._closed = False
 
     def _lock(self, thread_id: str) -> asyncio.Lock:
         return self._locks.setdefault(thread_id, asyncio.Lock())
@@ -353,11 +354,13 @@ class SharedQueueService:
         self._listener = asyncio.create_task(self._listen())
 
     async def close(self) -> None:
-        for task in (self._runner, self._listener):
-            if task:
-                task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await task
+        self._closed = True
+        self._wake.set()
+        tasks = tuple(task for task in (self._runner, self._listener) if task is not None)
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _listen(self) -> None:
         events = await self.codex.subscribe()
@@ -372,7 +375,7 @@ class SharedQueueService:
             self.codex.unsubscribe(events)
 
     async def _run(self) -> None:
-        while True:
+        while not self._closed:
             self._wake.clear()
             for thread_id in self.store.thread_ids():
                 try:

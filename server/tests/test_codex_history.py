@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest.mock import patch
 
+from codex_remote.app import enrich_thread_images, enrich_user_message_item
 from codex_remote.codex_history import CodexHistoryStore
 
 
@@ -120,6 +122,72 @@ class CodexHistoryStoreTests(unittest.TestCase):
                 [("userMessage", [{"type": "text", "text": "读取不到聊天"}, {"type": "localImage", "name": "image-1", "mediaType": "image/png", "data": "aGVsbG8="}]), ("agentMessage", "正在检查历史解析。")],
                 [(item["type"], item.get("content", item.get("text"))) for item in thread["turns"][0]["items"]],
             )
+
+    def test_normalizes_native_local_image_history_items(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            session_dir = codex_home / "sessions" / "2026" / "10" / "14"
+            session_dir.mkdir(parents=True)
+            session_path = session_dir / "rollout-native-image.jsonl"
+            lines = [
+                {"type": "session_meta", "payload": {"id": "native-image-session"}},
+                {"type": "event_msg", "payload": {"type": "task_started", "turn_id": "turn-image"}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "turn-image", "item": {
+                    "type": "UserMessage",
+                    "id": "user-image",
+                    "content": [
+                        {"type": "text", "text": "图片消息"},
+                        {"type": "local_image", "path": "C:/Users/user/AppData/Local/Temp/codex-clipboard-example.png"},
+                        {"type": "image", "image_url": "data:image/png;base64,aGVsbG8="},
+                    ],
+                }}},
+            ]
+            session_path.write_text("\n".join(json.dumps(line) for line in lines) + "\n", encoding="utf-8")
+
+            thread = CodexHistoryStore(codex_home).read_thread("native-image-session")
+
+            assert thread is not None
+            content = thread["turns"][0]["items"][0]["content"]
+            self.assertEqual("localImage", content[1]["type"])
+            self.assertEqual("codex-clipboard-example.png", content[1]["name"])
+            self.assertEqual("image/png", content[1]["mediaType"])
+            self.assertEqual("image", content[2]["type"])
+            self.assertEqual("data:image/png;base64,aGVsbG8=", content[2]["image_url"])
+
+    def test_embeds_only_codex_clipboard_images_from_system_temp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clipboard_image = root / "codex-clipboard-example.png"
+            clipboard_image.write_bytes(b"image-bytes")
+            unrelated_image = root / "private-image.png"
+            unrelated_image.write_bytes(b"private-bytes")
+            thread = {"turns": [{"items": [{"type": "userMessage", "content": [
+                {"type": "localImage", "path": str(clipboard_image)},
+                {"type": "localImage", "path": str(unrelated_image)},
+            ]}]}]}
+
+            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+                enrich_thread_images(thread, root / "remote-images")
+
+            content = thread["turns"][0]["items"][0]["content"]
+            self.assertEqual("aW1hZ2UtYnl0ZXM=", content[0]["data"])
+            self.assertEqual("image/png", content[0]["mediaType"])
+            self.assertNotIn("data", content[1])
+
+    def test_embeds_allowed_clipboard_image_in_live_user_event_item(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            clipboard_image = root / "codex-clipboard-live.png"
+            clipboard_image.write_bytes(b"live-image")
+            item = {
+                "type": "userMessage",
+                "content": [{"type": "local_image", "path": str(clipboard_image)}],
+            }
+
+            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+                enriched = enrich_user_message_item(item, root / "remote-images")
+
+            self.assertEqual("bGl2ZS1pbWFnZQ==", enriched["content"][0]["data"])
 
 
 if __name__ == "__main__":

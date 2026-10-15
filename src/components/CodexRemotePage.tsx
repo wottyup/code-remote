@@ -44,7 +44,7 @@ import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, t
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
-import { documentAttachmentAccept, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
@@ -116,8 +116,6 @@ const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType
   webp: 'image/webp',
   gif: 'image/gif',
 }
-const imageAttachmentAccept = [...imageTypes].join(',')
-const mobileAttachmentAccept = `${imageAttachmentAccept},${documentAttachmentAccept}`
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageEdge = 1_920
@@ -1780,7 +1778,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-actions">
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
-            <input className="image-input" type="file" accept={mobileLayout ? mobileAttachmentAccept : documentAttachmentAccept} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
+            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
@@ -2848,6 +2846,9 @@ function RemoteChatPane({
   }, [])
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const currentConnectionLabel = remote.handedOff
+    ? '已交还给本机'
+    : connectionLabel[remote.connection]
   const activeEngineLabel = remote.activeThread?.engine === 'claude-code' ? 'Claude Code' : 'Codex'
   const targetEngine = remote.activeThread?.engine === 'claude-code' ? 'codex' : 'claude-code'
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
@@ -2856,7 +2857,7 @@ function RemoteChatPane({
     ? 'Claude Code 不可用'
     : `切换到 ${targetEngineLabel} 聊天`
   const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
-  const hasStreamingAssistant = Boolean(streamingAssistant)
+  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
   const activeTurnStartedAt = remote.turnStartedAt ?? (Number.isFinite(streamingStartedAt) ? streamingStartedAt : null)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
@@ -2929,7 +2930,6 @@ function RemoteChatPane({
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
         <div className="message-stream__content" ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
-          {remote.runtime.runtimeMode === 'isolated-fallback' && remote.runtime.runtimeMessage ? <div className="runtime-notice" role="status"><strong>已启用 Windows 兼容运行时</strong><span>{remote.runtime.runtimeMessage}</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
           <h1>{remote.activeThread?.engine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
@@ -3389,11 +3389,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
   const changeClaudePermissionMode = useCallback((claudePermissionMode: ClaudeCodePermissionMode) => updateComposerPreferences({ claudePermissionMode }), [updateComposerPreferences])
-  const changeApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
-    const updated = activeThreadId ? await (remotes[selectedPaneIndex] ?? remote0).updateApprovalPolicy(approvalPolicy) : true
-    if (!updated) return
+  const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => {
     updateComposerPreferences({ approvalPolicy })
-  }, [activeThreadId, remote0, remotes, selectedPaneIndex, updateComposerPreferences])
+  }, [updateComposerPreferences])
 
   useEffect(() => {
     saveComposerPreferences(defaultComposerPreferences)

@@ -38,6 +38,7 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)
         self.server = self.app.state.codex
+        self.server.read_thread = AsyncMock(return_value={"cwd": str(workspace)})
         self.store: PdfAttachmentStore = self.app.state.pdf_attachments
 
     def endpoint(self, path: str):

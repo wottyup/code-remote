@@ -2,39 +2,27 @@ from __future__ import annotations
 
 import asyncio
 import difflib
+import hashlib
 import json
 import logging
 import os
+import secrets
 import sqlite3
 import shutil
+import socket
 import subprocess
 import time
 import uuid
-from contextlib import closing
+from contextlib import closing, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
 from watchfiles import Change, DefaultFilter, awatch
+from websockets.asyncio.client import connect as websocket_connect
 from .codex_history import CodexHistoryStore
 
 logger = logging.getLogger(__name__)
-
-
-_SHARED_DAEMON_FALLBACK_MARKERS = (
-    "daemon.lock",
-    "daemon operation lock",
-    "daemon state directory",
-    "app-server-control.sock",
-    "app-server control socket",
-    "failed to connect to socket",
-    "unrecognized subcommand 'daemon'",
-)
-_WINDOWS_ACCESS_DENIED_MARKERS = ("os error 5", "os error 10013", "access is denied", "permission denied", "拒绝访问")
-_SHARED_DAEMON_FALLBACK_MESSAGE = (
-    "Windows 共享 Codex app-server 不可用，已切换到兼容运行时；"
-    "网页会话会尝试同步到本机 Codex 历史；若主索引不可写，桌面侧栏暂时不会显示这些会话。"
-)
 
 
 class CodexRuntimeError(RuntimeError):
@@ -287,21 +275,24 @@ class CodexAppServer:
             if configured_runtime_home
             else self._history_home
         )
-        self._use_shared_daemon = os.name == "nt" and configured_runtime_home is None
+        # HAPI's Windows transport avoids Codex's daemon/control-socket setup:
+        # run app-server against the user's real CODEX_HOME and connect over an
+        # authenticated loopback WebSocket instead.
+        self._use_windows_websocket = os.name == "nt" and configured_runtime_home is None
         default_history_home = (Path.home() / ".codex").resolve()
-        self._fallback_runtime_home = (
-            Path(__file__).resolve().parents[2] / ".codex-remote" / "app-server-home"
-            if os.name == "nt" and configured_runtime_home is None
-            else None
-        )
         self._legacy_runtime_home = (
-            self._fallback_runtime_home
+            Path(__file__).resolve().parents[2] / ".codex-remote" / "app-server-home"
             if os.name == "nt"
             and configured_runtime_home is None
             and self._history_home == default_history_home
             else None
         )
         self._process: asyncio.subprocess.Process | None = None
+        self._process_uses_node_shim = False
+        self._websocket: Any | None = None
+        self._websocket_uri: str | None = None
+        self._websocket_token: str | None = None
+        self._websocket_server_owned = False
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._history_sync_task: asyncio.Task[None] | None = None
@@ -316,6 +307,7 @@ class CodexAppServer:
         # thread/start creates an in-memory thread before its first rollout
         # exists. Such a thread can accept turn/start but not thread/resume.
         self._fresh_thread_cwds: dict[str, Path] = {}
+        self._loaded_thread_workspaces: dict[str, Path] = {}
         self._thread_approval_policies: dict[str, ApprovalPolicy] = {}
         self._pending_thread_settings: dict[tuple[str, ApprovalPolicy], asyncio.Future[dict[str, Any]]] = {}
         self._last_completed_turn_ids: dict[str, str] = {}
@@ -333,7 +325,7 @@ class CodexAppServer:
         self._last_error: str | None = None
         self._runtime_mode = (
             "shared"
-            if self._use_shared_daemon
+            if self._use_windows_websocket
             else "isolated"
             if configured_runtime_home
             else "direct"
@@ -361,7 +353,7 @@ class CodexAppServer:
             "workspace": str(self.workspace),
             "handedOff": self._handed_off,
             "runtimeMode": self._runtime_mode,
-            "runtimeMessage": _SHARED_DAEMON_FALLBACK_MESSAGE if self._runtime_mode == "isolated-fallback" else None,
+            "runtimeMessage": None,
             "fallbackReason": self._fallback_reason,
             "error": self._last_error,
         }
@@ -558,19 +550,72 @@ class CodexAppServer:
             raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
         status = summary.get("status")
         status_type = status.get("type") if isinstance(status, dict) else None
-        if await self._active_turn_id(thread_id) or status_type in {"active", "inProgress", "running", "started"}:
-            raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。")
+        active_turn_id = await self._active_turn_id(thread_id)
+        if active_turn_id or status_type in {"active", "inProgress", "running", "started"}:
+            if not active_turn_id:
+                raise CodexThreadBusyError("Codex 尚未确认当前回复的编号，请先等待状态同步后再删除。")
+            try:
+                await self.interrupt(thread_id, active_turn_id)
+            except CodexRuntimeError as error:
+                detail = str(error).casefold()
+                if not any(marker in detail for marker in ("not active", "no active turn", "already completed", "no turn", "没有可中断", "没有正在运行")):
+                    raise CodexThreadBusyError("无法停止当前回复，聊天未删除。请稍后再试。") from error
+
+            for attempt in range(15):
+                try:
+                    summary = await self.read_thread(thread_id, include_turns=False)
+                except CodexRuntimeError as error:
+                    raise CodexThreadBusyError("未能确认回复已停止，聊天未删除。请稍后再试。") from error
+                status = summary.get("status")
+                status_type = status.get("type") if isinstance(status, dict) else None
+                if not await self._active_turn_id(thread_id) and status_type not in {"active", "inProgress", "running", "started"}:
+                    break
+                if attempt < 14:
+                    await asyncio.sleep(0.2)
+            else:
+                raise CodexThreadBusyError("回复仍在停止中，聊天未删除。请稍后再试。")
 
         await self._prepare_runtime_thread(thread_id)
         try:
             await self.request("thread/delete", {"threadId": thread_id})
         except CodexRuntimeError as error:
             detail = str(error).casefold()
-            if any(marker in detail for marker in ("active", "running", "in progress", "busy", "正在运行", "回复中")):
-                raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。") from error
+            busy_markers = ("active", "running", "in progress", "busy", "正在运行", "回复中")
+            if any(marker in detail for marker in busy_markers):
+                # Codex can reject deletion from a stale busy index even when
+                # the conversation has no active turn. Confirm against a fresh
+                # full read before making exactly one safe retry.
+                try:
+                    result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": True})
+                except CodexRuntimeError:
+                    raise CodexThreadBusyError("Codex 未能确认聊天已空闲，聊天未删除。请稍后重试。") from error
+                current = result.get("thread")
+                current = current if isinstance(current, dict) else {}
+                current_status = current.get("status")
+                current_status_type = current_status.get("type") if isinstance(current_status, dict) else None
+                current_turns = current.get("turns")
+                current_turns = current_turns if isinstance(current_turns, list) else []
+                active_turn_statuses = {"active", "inProgress", "running", "started"}
+                has_active_turn = any(
+                    isinstance(turn, dict) and turn.get("status") in active_turn_statuses
+                    for turn in current_turns
+                )
+                confirmed_idle_statuses = {"idle", "completed", "failed", "interrupted", "notLoaded"}
+                if current_status_type not in confirmed_idle_statuses or has_active_turn:
+                    raise CodexThreadBusyError("该聊天仍在回复中，请等待完成或停止回复后再删除。") from error
+                try:
+                    await self.request("thread/delete", {"threadId": thread_id})
+                except CodexRuntimeError as retry_error:
+                    retry_detail = str(retry_error).casefold()
+                    if any(marker in retry_detail for marker in busy_markers):
+                        raise CodexThreadBusyError("Codex 仍拒绝删除该聊天，请稍后重试。") from retry_error
+                    if any(marker in retry_detail for marker in ("not found", "unknown thread", "找不到")):
+                        raise CodexThreadNotFoundError("找不到要删除的聊天。") from retry_error
+                    raise
             if any(marker in detail for marker in ("not found", "unknown thread", "找不到")):
                 raise CodexThreadNotFoundError("找不到要删除的聊天。") from error
-            raise
+            if not any(marker in detail for marker in busy_markers):
+                raise
 
         # An explicitly isolated runtime owns a synchronized copy. The native
         # request removes that copy; remove the verified source record as well
@@ -585,6 +630,8 @@ class CodexAppServer:
 
     def _forget_thread_runtime_state(self, thread_id: str) -> None:
         self._active_turn_ids.pop(thread_id, None)
+        self._fresh_thread_cwds.pop(thread_id, None)
+        self._loaded_thread_workspaces.pop(thread_id, None)
         self._last_completed_turn_ids.pop(thread_id, None)
         self._workspace_change_results.pop(thread_id, None)
         self._history.invalidate()
@@ -680,6 +727,7 @@ class CodexAppServer:
         if not isinstance(thread_cwd, str) or not thread_cwd.strip():
             thread_cwd = str(cwd or self.workspace)
         self._fresh_thread_cwds[thread["id"]] = Path(thread_cwd)
+        self._loaded_thread_workspaces[thread["id"]] = Path(thread_cwd).expanduser().resolve()
         return {**thread, "cwd": thread_cwd}
 
     async def resume_thread(self, thread_id: str, cwd: Path | None = None) -> dict[str, Any]:
@@ -695,6 +743,10 @@ class CodexAppServer:
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 无法恢复该对话")
+        thread_cwd = thread.get("cwd")
+        if not isinstance(thread_cwd, str) or not thread_cwd.strip():
+            thread_cwd = str(cwd or self.workspace)
+        self._loaded_thread_workspaces[thread_id] = Path(thread_cwd).expanduser().resolve()
         return {**thread, "cwd": str(cwd)} if cwd is not None else thread
 
     async def set_thread_name(self, thread_id: str, name: str) -> None:
@@ -840,18 +892,22 @@ class CodexAppServer:
         self._pending_turn_starts[thread_id] = pending_start
         try:
             fresh_cwd = self._fresh_thread_cwds.get(thread_id)
-            if fresh_cwd is not None and cwd is not None and cwd != fresh_cwd:
+            resolved_cwd = cwd.expanduser().resolve() if cwd is not None else None
+            if fresh_cwd is not None and resolved_cwd is not None and resolved_cwd != fresh_cwd.expanduser().resolve():
                 # The workspace can be rebound before the first message.
                 # turn/start accepts cwd without requiring a rollout to resume.
                 params["cwd"] = str(cwd)
-            elif cwd is not None and fresh_cwd is None:
+            elif resolved_cwd is not None and fresh_cwd is None and self._loaded_thread_workspaces.get(thread_id) != resolved_cwd:
                 await self.resume_thread(thread_id, cwd)
             await self._start_workspace_change_watch(thread_id, cwd)
             result = await self.request("turn/start", params)
             turn = result.get("turn")
             turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
             if turn_id:
-                self._fresh_thread_cwds.pop(thread_id, None)
+                fresh_cwd = self._fresh_thread_cwds.pop(thread_id, None)
+                self._loaded_thread_workspaces[thread_id] = (
+                    resolved_cwd or (fresh_cwd.expanduser().resolve() if fresh_cwd is not None else self.workspace)
+                )
             completed = isinstance(turn, dict) and turn.get("status") in {"completed", "interrupted", "failed"}
             if turn_id and not completed and self._last_completed_turn_ids.get(thread_id) != turn_id:
                 self._active_turn_ids[thread_id] = turn_id
@@ -931,21 +987,25 @@ class CodexAppServer:
         self._server_requests.clear()
         self._active_turn_ids.clear()
         self._fresh_thread_cwds.clear()
+        self._loaded_thread_workspaces.clear()
         self._finish_pending_turn_starts()
         await self._clear_workspace_change_watches()
         if process is None:
             return
+        websocket = self._websocket
+        websocket_server_owned = self._websocket_server_owned
+        self._websocket = None
+        self._websocket_server_owned = False
+        self._websocket_uri = None
+        self._websocket_token = None
+        if websocket is not None and websocket_server_owned:
+            with suppress(Exception):
+                await asyncio.wait_for(websocket.close(), timeout=1)
         if process.stdin and not process.stdin.is_closing():
             process.stdin.close()
-        try:
-            await asyncio.wait_for(process.wait(), timeout=3)
-        except TimeoutError:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=3)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+        # The npm Windows shim is a Node parent which spawns the native CLI.
+        # Stop its process tree so closing Remote cannot orphan app-server.
+        await self._terminate_runtime_process(process)
         await self._cancel_io_tasks()
         self._process = None
         self._fail_pending("Codex app-server 已关闭")
@@ -962,49 +1022,36 @@ class CodexAppServer:
                 raise CodexRuntimeError(f"找不到 Codex CLI：{self.command}")
             if not self.workspace.is_dir():
                 raise CodexRuntimeError(f"工作目录不存在：{self.workspace}")
-            await self._start_with_shared_fallback(executable)
+            try:
+                await self._start_runtime(executable)
+            except CodexRuntimeError as error:
+                self._last_error = str(error)
+                raise
             self._last_error = None
             self._schedule_runtime_history_sync()
             await self._emit({"type": "connection", **self.status()})
-
-    async def _start_with_shared_fallback(self, executable: str) -> None:
-        try:
-            await self._start_runtime(executable)
-        except CodexRuntimeError as error:
-            if not self._should_fallback_from_shared_daemon(error):
-                self._last_error = str(error)
-                raise
-            await self._stop_process()
-            if "managed standalone codex install not found at" in str(error).casefold():
-                # Missing daemon packaging does not imply that the main history
-                # is inaccessible. Keep the same home so desktop and web use
-                # Codex's own history and sidebar indexes in both directions.
-                self._use_shared_daemon = False
-                self._runtime_mode = "direct"
-                self._fallback_reason = str(error)
-                logger.info("Managed daemon unavailable; using stdio with the main Codex home")
-            else:
-                self._activate_isolated_fallback(error)
-            fallback_executable = self._resolve_executable() or executable
-            try:
-                await self._start_runtime(fallback_executable)
-            except CodexRuntimeError as fallback_error:
-                self._last_error = str(fallback_error)
-                raise
 
     async def _start_runtime(self, executable: str) -> None:
         self._recent_stderr.clear()
         try:
             self._seed_runtime_database()
             child_environment = self._app_server_environment()
-            if self._use_shared_daemon:
-                await self._ensure_shared_daemon(executable, child_environment)
-            arguments = self._app_server_arguments(executable)
+            if self._use_windows_websocket:
+                port = await self._free_loopback_port()
+                self._websocket_uri = f"ws://127.0.0.1:{port}"
+                self._websocket_token = secrets.token_urlsafe(32)
+                token_digest = hashlib.sha256(self._websocket_token.encode("utf-8")).hexdigest()
+                arguments = [
+                    *self._codex_command_prefix(executable), "app-server", "--listen", self._websocket_uri,
+                    "--ws-auth", "capability-token", "--ws-token-sha256", token_digest,
+                ]
+            else:
+                arguments = [*self._codex_command_prefix(executable), *self._app_server_arguments("")[1:]]
             process_options = {
                 "cwd": self.workspace,
                 "env": child_environment,
-                "stdin": asyncio.subprocess.PIPE,
-                "stdout": asyncio.subprocess.PIPE,
+                "stdin": asyncio.subprocess.DEVNULL if self._use_windows_websocket else asyncio.subprocess.PIPE,
+                "stdout": asyncio.subprocess.DEVNULL if self._use_windows_websocket else asyncio.subprocess.PIPE,
                 "stderr": asyncio.subprocess.PIPE,
                 # thread/read returns a whole conversation as one JSONL line.
                 # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
@@ -1021,9 +1068,13 @@ class CodexAppServer:
             raise CodexRuntimeError(f"无法启动 Codex app-server：{error}") from error
 
         self._process = process
-        self._reader_task = asyncio.create_task(self._read_stdout(process))
+        self._process_uses_node_shim = executable.casefold().endswith(".js")
         self._stderr_task = asyncio.create_task(self._read_stderr(process))
         try:
+            if self._use_windows_websocket:
+                await self._connect_windows_websocket(process)
+            else:
+                self._reader_task = asyncio.create_task(self._read_stdout(process))
             await self._request("initialize", {
                 "clientInfo": {
                     "name": "codex_remote_web",
@@ -1046,71 +1097,76 @@ class CodexAppServer:
                 raise
             raise CodexRuntimeError(f"Codex app-server 初始化失败：{error}") from error
 
-    def _should_fallback_from_shared_daemon(self, error: CodexRuntimeError) -> bool:
-        if not self._use_shared_daemon or self._fallback_runtime_home is None:
-            return False
-        detail = "\n".join((str(error), *self._recent_stderr)).casefold()
-        if any(marker in detail for marker in (
-            "unrecognized subcommand 'daemon'",
-            "managed standalone codex install not found at",
-        )):
-            return True
-        has_private_runtime_path = any(
-            marker.casefold() in detail
-            for marker in _SHARED_DAEMON_FALLBACK_MARKERS
-            if marker != "unrecognized subcommand 'daemon'"
-        )
-        return has_private_runtime_path and any(marker.casefold() in detail for marker in _WINDOWS_ACCESS_DENIED_MARKERS)
+    @staticmethod
+    async def _free_loopback_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            return int(listener.getsockname()[1])
 
-    def _activate_isolated_fallback(self, error: CodexRuntimeError) -> None:
-        fallback_home = self._fallback_runtime_home
-        if fallback_home is None:
-            raise error
-        self._runtime_home = fallback_home
-        self._use_shared_daemon = False
-        self._runtime_mode = "isolated-fallback"
-        self._fallback_reason = str(error)
-        logger.warning("%s Cause: %s", _SHARED_DAEMON_FALLBACK_MESSAGE, error)
+    async def _connect_windows_websocket(self, process: asyncio.subprocess.Process) -> None:
+        uri = self._websocket_uri
+        token = self._websocket_token
+        if not uri or not token:
+            raise CodexRuntimeError("Windows Codex app-server WebSocket 配置不完整")
+        deadline = time.monotonic() + 20
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            if process.returncode is not None:
+                detail = "\n".join(self._recent_stderr)
+                suffix = f"：{detail}" if detail else ""
+                raise CodexRuntimeError(f"Codex app-server 提前退出（代码 {process.returncode}）{suffix}")
+            try:
+                self._websocket = await websocket_connect(
+                    uri,
+                    additional_headers={"Authorization": f"Bearer {token}"},
+                    proxy=None,
+                    open_timeout=0.5,
+                    max_size=64 * 1024 * 1024,
+                    compression=None,
+                )
+                self._websocket_server_owned = True
+                self._reader_task = asyncio.create_task(self._read_websocket(self._websocket))
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                last_error = error
+                await asyncio.sleep(0.1)
+        detail = "\n".join(self._recent_stderr)
+        suffix = f"；Codex 输出：{detail}" if detail else ""
+        raise CodexRuntimeError(f"连接本机 Codex app-server WebSocket 超时：{last_error}{suffix}")
+
+    async def _read_websocket(self, websocket: Any) -> None:
+        try:
+            async for raw_message in websocket:
+                try:
+                    message = json.loads(raw_message)
+                except (UnicodeDecodeError, json.JSONDecodeError, TypeError):
+                    logger.warning("Ignoring non-JSON WebSocket frame from Codex app-server")
+                    continue
+                await self._handle_message(message)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            if websocket is self._websocket:
+                logger.exception("Codex app-server WebSocket reader stopped")
+        finally:
+            if websocket is self._websocket and websocket is not None:
+                self._websocket = None
+                self._initialized = False
+                error = CodexRuntimeError("Codex app-server WebSocket 已断开")
+                self._last_error = str(error)
+                self._fail_pending(str(error))
+                await self._emit({"type": "connection", **self.status()})
 
     def _app_server_arguments(self, executable: str) -> list[str]:
-        if self._use_shared_daemon:
-            return [executable, "app-server", "proxy"]
         return [executable, "app-server", "--listen", "stdio://"]
 
-    async def _ensure_shared_daemon(self, executable: str, child_environment: dict[str, str]) -> None:
-        """Start Codex's user-level shared App Server before attaching its stdio proxy."""
-        arguments = [executable, "app-server", "daemon", "start"]
-        process_options = {
-            "cwd": self.workspace,
-            "env": child_environment,
-            "stdin": asyncio.subprocess.DEVNULL,
-            "stdout": asyncio.subprocess.PIPE,
-            "stderr": asyncio.subprocess.PIPE,
-            "limit": 1024 * 1024,
-        }
-        try:
-            if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
-                process = await asyncio.create_subprocess_shell(
-                    subprocess.list2cmdline(arguments),
-                    **process_options,
-                )
-            else:
-                process = await asyncio.create_subprocess_exec(*arguments, **process_options)
-            try:
-                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-            except TimeoutError as error:
-                process.kill()
-                await process.wait()
-                raise CodexRuntimeError("启动共享 Codex app-server 超时") from error
-        except OSError as error:
-            raise CodexRuntimeError(f"无法启动共享 Codex app-server：{error}") from error
-
-        if process.returncode != 0:
-            detail = stderr.decode("utf-8", errors="replace").strip()
-            if not detail:
-                detail = stdout.decode("utf-8", errors="replace").strip()
-            suffix = f"：{detail}" if detail else ""
-            raise CodexRuntimeError(f"共享 Codex app-server 启动失败{suffix}")
+    @staticmethod
+    def _codex_command_prefix(executable: str) -> list[str]:
+        if executable.casefold().endswith(".js"):
+            return [shutil.which("node") or "node", executable]
+        return [executable]
 
     async def _prepare_runtime_thread(self, thread_id: str) -> None:
         """Make a local Codex thread visible when a separate runtime home is configured."""
@@ -1443,21 +1499,44 @@ class CodexAppServer:
         return child_environment
 
     def _resolve_executable(self) -> str | None:
-        # The shared-daemon protocol is part of the managed Windows CLI.  npm
-        # shims and editor-bundled binaries can report a similar version while
-        # resolving a different command set at runtime, so use the managed
-        # executable whenever it is installed.
-        if self._use_shared_daemon or self._runtime_mode == "isolated-fallback":
-            managed = self._history_home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe"
-            if managed.is_file():
-                return str(managed)
+        # Follow the same Windows executable-selection order as Hapi: use the
+        # Codex CLI resolved from PATH first, unwrapping npm's .cmd shim to its
+        # JavaScript entrypoint so it can be launched directly with Node.
+        if self._use_windows_websocket:
+            if self.command.lower().endswith((".cmd", ".bat")):
+                shim = Path(self.command)
+                codex_script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+                if codex_script.is_file():
+                    return str(codex_script)
         candidates = [self.command]
         if os.name == "nt" and not Path(self.command).suffix:
             candidates.extend((f"{self.command}.cmd", f"{self.command}.exe"))
         for candidate in candidates:
             executable = shutil.which(candidate)
             if executable:
+                if os.name == "nt" and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
+                    shim = Path(executable)
+                    codex_script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+                    if codex_script.is_file():
+                        return str(codex_script)
+                    continue
                 return executable
+        if self._use_windows_websocket:
+            # The Codex desktop installer also places a managed CLI outside
+            # PATH. Keep it as a fallback, but do not let it override the CLI
+            # the user's terminal (and Hapi) resolve first.
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            managed_candidates = [
+                self._history_home / "packages" / "app-server-daemon" / "current" / "bin" / "codex.exe",
+            ]
+            if local_app_data:
+                managed_candidates.extend((
+                    Path(local_app_data) / "OpenAI" / "Codex" / "bin" / "codex.exe",
+                    Path(local_app_data) / "OpenAI" / "Codex" / "codex.exe",
+                ))
+            for managed in managed_candidates:
+                if managed.is_file():
+                    return str(managed)
         return None
 
     def _raise_if_handed_off(self) -> None:
@@ -1483,10 +1562,19 @@ class CodexAppServer:
 
     async def _write(self, payload: dict[str, Any]) -> None:
         process = self._process
-        if process is None or process.returncode is not None or process.stdin is None:
+        if process is None or process.returncode is not None:
             raise CodexRuntimeError("Codex app-server 未运行")
         data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
         async with self._write_lock:
+            websocket = self._websocket
+            if websocket is not None:
+                try:
+                    await websocket.send(data.decode("utf-8"))
+                except Exception as error:
+                    raise ConnectionError(f"Codex app-server WebSocket 写入失败：{error}") from error
+                return
+            if process.stdin is None:
+                raise CodexRuntimeError("Codex app-server 未运行")
             process.stdin.write(data)
             await process.stdin.drain()
 
@@ -1690,19 +1778,57 @@ class CodexAppServer:
     async def _stop_process(self) -> None:
         process = self._process
         self._process = None
+        websocket = self._websocket
+        self._websocket = None
+        websocket_server_owned = self._websocket_server_owned
+        self._websocket_server_owned = False
+        self._websocket_uri = None
+        self._websocket_token = None
         self._initialized = False
         self._server_requests.clear()
         self._active_turn_ids.clear()
         self._fresh_thread_cwds.clear()
+        self._loaded_thread_workspaces.clear()
         self._last_completed_turn_ids.clear()
         self._finish_pending_turn_starts()
         await self._clear_workspace_change_watches()
-        if process and process.returncode is None:
-            process.terminate()
+        if websocket is not None and websocket_server_owned:
             try:
-                await asyncio.wait_for(process.wait(), timeout=3)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+                await asyncio.wait_for(websocket.close(), timeout=1)
+            except Exception:
+                logger.debug("Codex app-server WebSocket close failed", exc_info=True)
+        if process:
+            await self._terminate_runtime_process(process)
+        self._process_uses_node_shim = False
         await self._cancel_io_tasks()
         self._fail_pending("Codex app-server 正在重启")
+
+    async def _terminate_runtime_process(self, process: asyncio.subprocess.Process) -> None:
+        if process.returncode is not None:
+            return
+        if os.name == "nt" and self._process_uses_node_shim and process.pid:
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill.exe", "/PID", str(process.pid), "/T", "/F",
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                )
+                await asyncio.wait_for(killer.wait(), timeout=5)
+                if killer.returncode == 0:
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=3)
+                    except TimeoutError:
+                        process.kill()
+                        await process.wait()
+                    return
+            except (OSError, TimeoutError):
+                logger.warning("Could not stop the Codex CLI process tree; terminating its launcher", exc_info=True)
+        if process.returncode is None:
+            process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=3)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
