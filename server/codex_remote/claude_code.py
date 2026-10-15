@@ -485,6 +485,7 @@ class ClaudeCodeServer:
                 raise ClaudeCodeError("找不到 Claude Code CLI。")
             args = [
                 str(command), "--print", "--output-format", "stream-json", "--include-partial-messages",
+                "--verbose",
             ]
             if model and model != "default":
                 args.extend(["--model", model])
@@ -518,6 +519,7 @@ class ClaudeCodeServer:
                 await self._terminate_process(process)
 
             assert process.stdout is not None
+            received_init = False
             while True:
                 line = await process.stdout.readline()
                 if not line:
@@ -530,6 +532,7 @@ class ClaudeCodeServer:
                     continue
                 record_type = record.get("type")
                 if record_type == "system" and record.get("subtype") == "init":
+                    received_init = True
                     started = True
                     with self._connection:
                         self._connection.execute(
@@ -580,7 +583,7 @@ class ClaudeCodeServer:
                 elif record_type == "result":
                     result = record.get("result")
                     if record.get("is_error") is True:
-                        result_error = "Claude Code 执行失败，请检查本机 CLI 登录状态和权限设置后重试。"
+                        result_error = "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
                     elif isinstance(result, str) and result and not assistant_text:
                         assistant_text = result
                         await self._emit_delta(thread_id, turn_id, assistant_item_id, result)
@@ -589,7 +592,10 @@ class ClaudeCodeServer:
             if thread_id in self._interrupts:
                 result_error = None
             elif return_code != 0 and result_error is None:
-                result_error = "Claude Code 执行失败，请检查本机 CLI 登录状态和权限设置后重试。"
+                result_error = (
+                    "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
+                    if received_init else "Claude Code CLI 启动失败，请检查本机 CLI 参数与配置。"
+                )
             elif not assistant_text and result_error is None:
                 result_error = "Claude Code 没有返回回复，请检查本机 CLI 和权限设置。"
         except asyncio.CancelledError:
