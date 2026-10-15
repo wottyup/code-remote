@@ -79,6 +79,12 @@ const connectionLabel = {
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
+type ChatEngine = 'codex' | 'claude-code'
+
+function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
+  return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
+}
+
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
   if (preferences.theme === 'dark') return false
@@ -2896,7 +2902,7 @@ function RemoteChatPane({
               }
             }}
           >
-            {targetEngine === 'claude-code' ? <TerminalIcon size={16} /> : <MessagesSquare size={16} />}
+            <EngineBrandIcon engine={targetEngine} />
           </button>
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
@@ -3063,7 +3069,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [newThreadMenuOpen, setNewThreadMenuOpen] = useState(false)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
@@ -3087,22 +3092,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
   const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
-
-  useEffect(() => {
-    if (!newThreadMenuOpen) return
-    const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (event.target instanceof Element && !event.target.closest('.new-thread-control')) setNewThreadMenuOpen(false)
-    }
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setNewThreadMenuOpen(false)
-    }
-    document.addEventListener('pointerdown', closeOnOutsidePointer)
-    document.addEventListener('keydown', closeOnEscape)
-    return () => {
-      document.removeEventListener('pointerdown', closeOnOutsidePointer)
-      document.removeEventListener('keydown', closeOnEscape)
-    }
-  }, [newThreadMenuOpen])
 
   useEffect(() => {
     let current = true
@@ -3756,22 +3745,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return openPaneIndexes.find((index) => remotes[index]?.activeThread?.id === threadId)
   }
 
-  async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine: 'codex' | 'claude-code' = 'codex') {
+  async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
     const target = remotes[paneIndex] ?? remote0
+    const selectedEngine = engine ?? (target.activeThread?.engine === 'claude-code' ? 'claude-code' : 'codex')
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
       : activeComposerPreferences
     const thread = await target.createThread(
-      engine === 'codex' ? targetPreferences.model : undefined,
-      engine === 'codex' ? targetPreferences.approvalPolicy : undefined,
+      selectedEngine === 'codex' ? targetPreferences.model : undefined,
+      selectedEngine === 'codex' ? targetPreferences.approvalPolicy : undefined,
       undefined,
       cwd,
-      engine,
+      selectedEngine,
     )
     if (!thread) return null
     if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
-    rememberThreadComposerPreferences(thread.id, engine === 'codex'
+    rememberThreadComposerPreferences(thread.id, selectedEngine === 'codex'
       ? {
           model: targetPreferences.model,
           effort: targetPreferences.effort,
@@ -3799,7 +3789,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
     }
     const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
-    setNewThreadMenuOpen(false)
     setSidebarOpen(false)
     if (targetThread) {
       const existingPane = paneIndexForThread(targetThread.id)
@@ -3815,10 +3804,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return createThreadForPane(paneIndex, cwd, engine)
   }
 
-  async function createThread(engine: 'codex' | 'claude-code' = 'codex') {
-    setNewThreadMenuOpen(false)
+  async function createThread() {
     setSidebarOpen(false)
-    await createThreadForPane(selectedPaneIndex, undefined, engine)
+    await createThreadForPane(selectedPaneIndex)
   }
 
   async function selectThread(thread: CodexThread) {
@@ -4049,11 +4037,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
         <div className="new-thread-control">
-          <button className="new-thread-button" type="button" aria-haspopup="menu" aria-expanded={newThreadMenuOpen} onClick={() => setNewThreadMenuOpen((open) => !open)} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span><ChevronDown className="new-thread-button__chevron" size={14} /></button>
-          {newThreadMenuOpen ? <div className="new-thread-menu" role="menu" aria-label="选择对话模式">
-            <button type="button" role="menuitem" onClick={() => void createThread('codex')}><MessagesSquare size={15} /><span><strong>Codex</strong><small>使用 Codex App Server</small></span></button>
-            <button type="button" role="menuitem" disabled={claudeCodeAvailable === false} onClick={() => void createThread('claude-code')}><TerminalIcon size={15} /><span><strong>Claude Code</strong><small>{claudeCodeAvailable === false ? '本机未找到 Claude Code CLI' : claudeCodeAvailable === null ? '检查本机 CLI…' : '使用本机 Claude Code CLI'}</small></span></button>
-          </div> : null}
+          <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
         <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : '最近对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
@@ -4072,7 +4056,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 clearThreadLongPress()
                 void selectThread(thread)
               }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
-                {thread.engine === 'claude-code' ? <TerminalIcon size={15} /> : <MessagesSquare size={15} />}
+                <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
               </button>
