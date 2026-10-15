@@ -1361,7 +1361,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.16.0-dev.6", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.16.0-dev.7", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1718,7 +1718,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/queue/{thread_id}/start-if-idle")
     async def start_queued_message_if_idle(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
         try:
-            sent = await shared_queue.send_now(thread_id, body.message_id, allow_steer=False, require_head=True)
+            # An explicit user click may prioritize any queued item. Automatic
+            # queue advancement remains FIFO in SharedQueueService.advance().
+            sent = await shared_queue.send_now(thread_id, body.message_id, allow_steer=False)
         except QueueConflictError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
