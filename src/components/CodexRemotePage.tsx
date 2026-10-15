@@ -2578,6 +2578,8 @@ interface RemoteChatPaneProps {
   onActivate: () => void
   onClose: () => void
   onCreateThread: () => void
+  claudeCodeAvailable: boolean | null
+  onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
@@ -2596,6 +2598,8 @@ function RemoteChatPane({
   onActivate,
   onClose,
   onCreateThread,
+  claudeCodeAvailable,
+  onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
   onOpenWorkspaceFile,
@@ -2605,6 +2609,7 @@ function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
@@ -2778,6 +2783,12 @@ function RemoteChatPane({
 
   const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const activeEngineLabel = remote.activeThread?.engine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const targetEngine = remote.activeThread?.engine === 'claude-code' ? 'codex' : 'claude-code'
+  const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
+  const engineSwitchLabel = claudeCodeUnavailable
+    ? 'Claude Code 不可用'
+    : `切换到 ${targetEngineLabel}（新建对话）`
   const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
   const hasStreamingAssistant = Boolean(streamingAssistant)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
@@ -2808,6 +2819,25 @@ function RemoteChatPane({
           <div className="remote-chat__title"><span className="remote-chat__eyebrow">{activeEngineLabel} · 当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
         <div className="remote-chat__controls">
+          <button
+            className="icon-button engine-switch-button"
+            type="button"
+            aria-label={engineSwitchLabel}
+            title={engineSwitchLabel}
+            disabled={claudeCodeUnavailable || engineSwitching}
+            onClick={async (event) => {
+              event.stopPropagation()
+              if (claudeCodeUnavailable || engineSwitching) return
+              setEngineSwitching(true)
+              try {
+                await onSwitchEngine(targetEngine)
+              } finally {
+                setEngineSwitching(false)
+              }
+            }}
+          >
+            {targetEngine === 'claude-code' ? <TerminalIcon size={16} /> : <MessagesSquare size={16} />}
+          </button>
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
             type="button"
@@ -4017,6 +4047,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
+                    claudeCodeAvailable={claudeCodeAvailable}
+                    onSwitchEngine={(engine) => {
+                      activatePane(paneIndex)
+                      const currentRemote = remotes[paneIndex] ?? remote0
+                      return createThreadForPane(paneIndex, currentRemote.activeThread?.cwd || currentRemote.runtime.workspace || undefined, engine)
+                    }}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
                     onOpenWorkspaceFile={(path, cwd, diff) => {

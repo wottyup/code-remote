@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.12.0-dev.3] - 在聊天顶部增加 Codex 与 Claude Code 切换入口
+
 ## [0.12.0-dev.2] - 修复移动端打开输入框时页面闪动
 
 ## [0.12.0-dev.1] - 支持在 Codex 与 Claude Code 之间选择对话模式
