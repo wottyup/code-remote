@@ -997,6 +997,43 @@ public class MainActivity extends Activity {
             FrameLayout container,
             boolean extendWebViewBehindNavigationBar,
             boolean extendWebViewBehindStatusBar) {
+        final boolean deferWebViewImeInsets = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                && extendWebViewBehindNavigationBar
+                && extendWebViewBehindStatusBar;
+        final boolean[] imeAnimationRunning = {false};
+        if (deferWebViewImeInsets) {
+            container.setWindowInsetsAnimationCallback(new android.view.WindowInsetsAnimation.Callback(
+                    android.view.WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
+                @Override
+                public void onPrepare(android.view.WindowInsetsAnimation animation) {
+                    if ((animation.getTypeMask() & android.view.WindowInsets.Type.ime()) != 0) {
+                        imeAnimationRunning[0] = true;
+                    }
+                    super.onPrepare(animation);
+                }
+
+                @Override
+                public android.view.WindowInsets onProgress(
+                        android.view.WindowInsets insets,
+                        java.util.List<android.view.WindowInsetsAnimation> runningAnimations) {
+                    return insets;
+                }
+
+                @Override
+                public void onEnd(android.view.WindowInsetsAnimation animation) {
+                    if ((animation.getTypeMask() & android.view.WindowInsets.Type.ime()) != 0) {
+                        imeAnimationRunning[0] = false;
+                        android.view.WindowInsets finalInsets = container.getRootWindowInsets();
+                        if (finalInsets != null) {
+                            publishWebViewImeInsets(finalInsets);
+                        } else {
+                            container.requestApplyInsets();
+                        }
+                    }
+                    super.onEnd(animation);
+                }
+            });
+        }
         container.setOnApplyWindowInsetsListener((view, insets) -> {
             int top;
             int navigationBottom;
@@ -1023,13 +1060,15 @@ public class MainActivity extends Activity {
                 }
             }
             softKeyboardVisible = imeVisible;
-            updateKeyboardInset(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && imeVisible
-                    ? Math.round(imeBottom / getResources().getDisplayMetrics().density)
-                    : 0);
             if (!imeVisible) navigationBarInsetPx = navigationBottom;
             updateStatusBarInset(Math.round(top / getResources().getDisplayMetrics().density));
             int bottomInsetDp = imeVisible ? 0 : Math.round(navigationBottom / getResources().getDisplayMetrics().density);
-            updateComposerBottomInset(bottomInsetDp);
+            if (!deferWebViewImeInsets || !imeAnimationRunning[0]) {
+                updateKeyboardInset(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && imeVisible
+                        ? Math.round(imeBottom / getResources().getDisplayMetrics().density)
+                        : 0);
+                updateComposerBottomInset(bottomInsetDp);
+            }
             int contentBottom = extendWebViewBehindNavigationBar
                     ? 0
                     : Math.max(navigationBottom, imeBottom);
@@ -1041,6 +1080,17 @@ public class MainActivity extends Activity {
             return insets;
         });
         container.requestApplyInsets();
+    }
+
+    private void publishWebViewImeInsets(android.view.WindowInsets insets) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return;
+        boolean imeVisible = insets.isVisible(android.view.WindowInsets.Type.ime());
+        android.graphics.Insets navigationBars = insets.getInsets(android.view.WindowInsets.Type.navigationBars());
+        int imeBottom = imeVisible ? insets.getInsets(android.view.WindowInsets.Type.ime()).bottom : 0;
+        float density = getResources().getDisplayMetrics().density;
+        softKeyboardVisible = imeVisible;
+        updateKeyboardInset(imeVisible ? Math.round(imeBottom / density) : 0);
+        updateComposerBottomInset(imeVisible ? 0 : Math.round(navigationBars.bottom / density));
     }
 
     private void updateStatusBarInset(int insetDp) {
