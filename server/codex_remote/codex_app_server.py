@@ -313,6 +313,9 @@ class CodexAppServer:
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
+        # thread/start creates an in-memory thread before its first rollout
+        # exists. Such a thread can accept turn/start but not thread/resume.
+        self._fresh_thread_cwds: dict[str, Path] = {}
         self._thread_approval_policies: dict[str, ApprovalPolicy] = {}
         self._pending_thread_settings: dict[tuple[str, ApprovalPolicy], asyncio.Future[dict[str, Any]]] = {}
         self._last_completed_turn_ids: dict[str, str] = {}
@@ -676,6 +679,7 @@ class CodexAppServer:
         thread_cwd = thread.get("cwd")
         if not isinstance(thread_cwd, str) or not thread_cwd.strip():
             thread_cwd = str(cwd or self.workspace)
+        self._fresh_thread_cwds[thread["id"]] = Path(thread_cwd)
         return {**thread, "cwd": thread_cwd}
 
     async def resume_thread(self, thread_id: str, cwd: Path | None = None) -> dict[str, Any]:
@@ -835,12 +839,19 @@ class CodexAppServer:
         pending_start = asyncio.get_running_loop().create_future()
         self._pending_turn_starts[thread_id] = pending_start
         try:
-            if cwd is not None:
+            fresh_cwd = self._fresh_thread_cwds.get(thread_id)
+            if fresh_cwd is not None and cwd is not None and cwd != fresh_cwd:
+                # The workspace can be rebound before the first message.
+                # turn/start accepts cwd without requiring a rollout to resume.
+                params["cwd"] = str(cwd)
+            elif cwd is not None and fresh_cwd is None:
                 await self.resume_thread(thread_id, cwd)
             await self._start_workspace_change_watch(thread_id, cwd)
             result = await self.request("turn/start", params)
             turn = result.get("turn")
             turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+            if turn_id:
+                self._fresh_thread_cwds.pop(thread_id, None)
             completed = isinstance(turn, dict) and turn.get("status") in {"completed", "interrupted", "failed"}
             if turn_id and not completed and self._last_completed_turn_ids.get(thread_id) != turn_id:
                 self._active_turn_ids[thread_id] = turn_id
@@ -919,6 +930,7 @@ class CodexAppServer:
         self._initialized = False
         self._server_requests.clear()
         self._active_turn_ids.clear()
+        self._fresh_thread_cwds.clear()
         self._finish_pending_turn_starts()
         await self._clear_workspace_change_watches()
         if process is None:
@@ -1681,6 +1693,7 @@ class CodexAppServer:
         self._initialized = False
         self._server_requests.clear()
         self._active_turn_ids.clear()
+        self._fresh_thread_cwds.clear()
         self._last_completed_turn_ids.clear()
         self._finish_pending_turn_starts()
         await self._clear_workspace_change_watches()

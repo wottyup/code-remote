@@ -3860,7 +3860,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         applyServerQueueResponse(thread.id, delivery.acknowledged
           ? result.queue.filter((message) => message.id !== payload.id)
           : result.queue)
-        setError(null)
+        const pendingResult = result.queue.find((message) => message.id === payload.id)
+        setError(!result.sent && !delivery.acknowledged && pendingResult?.sendAttempt
+          ? '消息送达未确认，请先核对聊天记录和排队消息，避免重复发送。'
+          : null)
         if (result.sent || delivery.acknowledged) {
           appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
           if (delivery.turnId) applyTurnDelivery(thread.id, payload.id, delivery.turnId)
