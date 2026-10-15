@@ -31,6 +31,13 @@ from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
 from .browser_payload import browser_event, browser_thread, browser_thread_summary
+from .claude_code import (
+    ClaudeCodeError,
+    ClaudeCodeServer,
+    ClaudeThreadBusyError,
+    ClaudeThreadNotFoundError,
+    is_claude_thread_id,
+)
 from .codex_app_server import (
     ApprovalPolicy,
     CodexAppServer,
@@ -212,6 +219,7 @@ class PdfAttachmentStore:
 
 
 class ThreadStartRequest(BaseModel):
+    engine: Literal["codex", "claude-code"] = "codex"
     model: str | None = Field(default=None, max_length=200)
     approval_policy: ApprovalPolicy | None = None
     cwd: str | None = Field(default=None, max_length=4_096)
@@ -243,6 +251,9 @@ class TurnRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approval_policy: ApprovalPolicy | None = None
+    claude_model: str | None = Field(default=None, max_length=200)
+    claude_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    claude_permission_mode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] = "default"
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -275,6 +286,9 @@ class QueuedMessageRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approvalPolicy: ApprovalPolicy | None = None
+    claudeModel: str | None = Field(default=None, max_length=200)
+    claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
 
 
@@ -694,7 +708,13 @@ def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Pat
         raise
 
 
-def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: PdfAttachmentStore) -> str:
+def prompt_with_original_pdfs(
+    prompt: str,
+    attachment_ids: list[str],
+    store: PdfAttachmentStore,
+    *,
+    path_overrides: dict[str, Path] | None = None,
+) -> str:
     blocks: list[str] = []
     seen: set[str] = set()
     for attachment_id in attachment_ids:
@@ -708,7 +728,7 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
                 detail="PDF 临时附件已失效，请重新添加 PDF 后发送。",
             )
         encoded_name = quote(attachment.name, safe="")
-        path = str(attachment.path.resolve())
+        path = str((path_overrides or {}).get(attachment_id, attachment.path).resolve())
         kind = "PDF" if attachment.path.suffix.lower() == ".pdf" else "Excel 工作簿"
         blocks.append(
             f"[[CODEX_REMOTE_FILE_BEGIN id={attachment.attachment_id} name={encoded_name}]]\n"
@@ -726,6 +746,50 @@ def prompt_with_original_pdfs(prompt: str, attachment_ids: list[str], store: Pdf
         return prompt
     combined = "\n\n".join(([prompt.strip()] if prompt.strip() else []) + blocks)
     return combined
+
+
+def prepare_claude_turn_files(
+    prompt: str,
+    images: list[TurnImage],
+    attachment_ids: list[str],
+    store: PdfAttachmentStore,
+    temporary_root: Path,
+) -> tuple[Path | None, str, list[Path], list[Path]]:
+    """Stage this turn's attachments in a private directory visible only to its CLI process."""
+    if not images and not attachment_ids:
+        return None, prompt, [], []
+
+    turn_directory = Path(tempfile.mkdtemp(prefix="claude-turn-", dir=temporary_root))
+    try:
+        image_paths = save_turn_images(images, turn_directory)
+        attachment_paths: list[Path] = []
+        path_overrides: dict[str, Path] = {}
+        seen: set[str] = set()
+        for attachment_id in attachment_ids:
+            if attachment_id in seen:
+                continue
+            seen.add(attachment_id)
+            attachment = store.get(attachment_id)
+            if attachment is None:
+                raise HTTPException(
+                    status_code=status.HTTP_410_GONE,
+                    detail="PDF 临时附件已失效，请重新添加 PDF 后发送。",
+                )
+            staged_path = turn_directory / f"attachment-{attachment_id}{attachment.path.suffix.lower()}"
+            shutil.copyfile(attachment.path, staged_path)
+            os.chmod(staged_path, 0o600)
+            attachment_paths.append(staged_path)
+            path_overrides[attachment_id] = staged_path
+        staged_prompt = prompt_with_original_pdfs(
+            prompt,
+            attachment_ids,
+            store,
+            path_overrides=path_overrides,
+        )
+        return turn_directory, staged_prompt, image_paths, attachment_paths
+    except Exception:
+        shutil.rmtree(turn_directory, ignore_errors=True)
+        raise
 
 
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
@@ -956,6 +1020,12 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
+    claude_code = ClaudeCodeServer(
+        os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
+        configured_workspace,
+        state_path.parent / "claude-code.sqlite3",
+        app_server._emit,
+    )
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
@@ -979,6 +1049,29 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
         images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
+        if is_claude_thread_id(thread_id):
+            turn_directory, prompt, image_paths, attachment_paths = prepare_claude_turn_files(
+                payload["requestText"], images, pdf_ids, pdf_attachments, image_directory,
+            )
+            try:
+                turn_id = await claude_code.start_turn(
+                    thread_id,
+                    prompt,
+                    display_prompt=payload["requestText"] or ("已附加图片" if images else "已附加文件"),
+                    image_paths=image_paths,
+                    attachment_paths=attachment_paths,
+                    temporary_directory=turn_directory,
+                    request_id=payload["id"],
+                    model=payload.get("claudeModel"),
+                    effort=payload.get("claudeEffort"),
+                    permission_mode=payload.get("claudePermissionMode"),
+                )
+            except Exception:
+                if turn_directory is not None:
+                    shutil.rmtree(turn_directory, ignore_errors=True)
+                raise
+            await app_server.notify_turn_delivery(thread_id, payload["id"], turn_id)
+            return turn_id
         if steer:
             result = await steer_turn(thread_id, SteerRequest(
                 prompt=payload["requestText"], images=images, pdf_attachments=pdf_ids, request_id=payload["id"],
@@ -991,7 +1084,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             ))
         return result.get("turn_id")
 
-    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn)
+    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
 
     async def thread_workspace_for_turn(thread_id: str) -> Path:
         bound_cwd = shared_state.thread_workspace(thread_id)
@@ -1019,6 +1112,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await terminal_reaper
             await shared_queue.close()
+            await claude_code.close()
             for terminal_session in tuple(terminal_sessions):
                 await terminal_session.close()
             history_watcher.cancel()
@@ -1028,8 +1122,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.12.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.15.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
+    app.state.claude_code = claude_code
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
@@ -1105,6 +1200,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             runtime_status["error"] = f"找不到 Codex CLI：{app_server.command}"
         return runtime_status
 
+    @app.get("/api/v1/claude/status")
+    async def claude_status() -> dict[str, Any]:
+        return claude_code.status()
+
     @app.get("/api/v1/codex/workspace/tree")
     async def workspace_tree(cwd: str | None = None, path: str = "", offset: int = 0) -> dict[str, Any]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
@@ -1127,6 +1226,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
+        await claude_code.refresh_native_threads()
+        claude_threads = claude_code.list_threads()
         try:
             threads = await app_server.list_threads()
             workspaces = shared_state.thread_workspaces()
@@ -1141,9 +1242,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     if thread_id in workspaces:
                         summary["cwd"] = workspaces[thread_id]
                 result.append(summary)
-            return result
+            return [*result, *claude_threads]
         except CodexRuntimeError as error:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+            logger.warning("Could not list Codex threads while returning Claude Code chats: %s", error)
+            return claude_threads
 
     @app.get("/api/v1/codex/models")
     async def list_models() -> list[dict[str, Any]]:
@@ -1173,6 +1275,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def create_thread(body: ThreadStartRequest) -> dict[str, Any]:
         async def create() -> dict[str, Any]:
             cwd = workspace_base_for_cwd(app_server.workspace, body.cwd) if body.cwd else None
+            if body.engine == "claude-code":
+                return await claude_code.create_thread(cwd)
             return await app_server.start_thread(
                 body.model.strip() or None if body.model else None,
                 body.approval_policy,
@@ -1189,9 +1293,17 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except ClaudeCodeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.get("/api/v1/codex/threads/{thread_id}")
     async def read_thread(thread_id: str, since: str | None = None) -> dict[str, Any]:
+        if is_claude_thread_id(thread_id):
+            try:
+                thread = await claude_code.read_thread(thread_id)
+                return browser_history_sync.response(thread, since)
+            except ClaudeThreadNotFoundError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             # Capture before reading: a concurrent append must leave this
             # response stale, rather than claiming to contain the new data.
@@ -1220,14 +1332,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        except ClaudeCodeError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
 
     @app.post("/api/v1/codex/threads/{thread_id}/workspace")
     async def bind_thread_workspace(thread_id: str, body: ThreadWorkspaceRequest) -> dict[str, str]:
+        cwd = workspace_base_for_cwd(app_server.workspace, body.cwd)
+        if is_claude_thread_id(thread_id):
+            try:
+                result = await claude_code.set_workspace(thread_id, cwd)
+                shared_state.set_thread_workspace(thread_id, result["cwd"])
+                return result
+            except ClaudeCodeError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             await app_server.read_thread(thread_id, include_turns=False)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
-        cwd = workspace_base_for_cwd(app_server.workspace, body.cwd)
         shared_state.set_thread_workspace(thread_id, str(cwd))
         await app_server.notify_threads_changed()
         return {"thread_id": thread_id, "cwd": str(cwd)}
@@ -1241,6 +1362,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="会话名称不能超过 72 个字符。")
         if any(unicodedata.category(character) == "Cc" for character in name):
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="会话名称不能包含控制字符。")
+        if is_claude_thread_id(thread_id):
+            try:
+                return await claude_code.rename_thread(thread_id, name)
+            except ClaudeCodeError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             await app_server.set_thread_name(thread_id, name)
             return {"thread_id": thread_id, "name": name}
@@ -1249,6 +1375,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/codex/threads/{thread_id}/settings")
     async def update_thread_settings(thread_id: str, body: ThreadSettingsUpdateRequest) -> dict[str, Any]:
+        if is_claude_thread_id(thread_id):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Claude Code 对话使用本机 Claude Code 的权限设置。")
         try:
             return await app_server.update_thread_approval_policy(thread_id, body.approval_policy)
         except CodexRuntimeError as error:
@@ -1387,6 +1515,15 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/codex/threads/{thread_id}/resume")
     async def resume_thread(thread_id: str, body: ResumeRequest | None = None) -> dict[str, Any]:
+        if is_claude_thread_id(thread_id):
+            try:
+                thread = await claude_code.read_thread(thread_id)
+                if body is not None and not body.include_history:
+                    return {key: value for key, value in thread.items() if key != "turns"}
+                return thread
+            except ClaudeThreadNotFoundError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+
         async def resume() -> dict[str, Any]:
             bound_cwd = shared_state.thread_workspace(thread_id)
             cwd = workspace_base_for_cwd(app_server.workspace, bound_cwd) if bound_cwd else None
@@ -1417,6 +1554,42 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         prompt = body.prompt.strip()
         if not prompt and not body.images and not body.pdf_attachments:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
+
+        if is_claude_thread_id(thread_id):
+            async def start_claude_turn() -> dict[str, Any]:
+                turn_directory, turn_prompt, image_paths, attachment_paths = prepare_claude_turn_files(
+                    prompt, body.images, body.pdf_attachments, pdf_attachments, image_directory,
+                )
+                try:
+                    turn_id = await claude_code.start_turn(
+                        thread_id,
+                        turn_prompt,
+                        display_prompt=prompt or ("已附加图片" if body.images else "已附加文件"),
+                        image_paths=image_paths,
+                        attachment_paths=attachment_paths,
+                        temporary_directory=turn_directory,
+                        request_id=body.request_id,
+                        model=body.claude_model,
+                        effort=body.claude_effort,
+                        permission_mode=body.claude_permission_mode,
+                    )
+                except Exception:
+                    if turn_directory is not None:
+                        shutil.rmtree(turn_directory, ignore_errors=True)
+                    raise
+                await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
+                return {"turn_id": turn_id}
+
+            try:
+                return await run_idempotent_request(
+                    "turn.start", thread_id, body.request_id, body, start_claude_turn,
+                )
+            except ClaudeThreadBusyError as error:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+            except ClaudeThreadNotFoundError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+            except ClaudeCodeError as error:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
         async def start() -> dict[str, Any]:
             image_paths = save_turn_images(body.images, image_directory)
@@ -1455,6 +1628,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")
     async def interrupt_turn(thread_id: str, body: InterruptRequest | None = None) -> dict[str, bool]:
+        if is_claude_thread_id(thread_id):
+            try:
+                return {"interrupted": await claude_code.interrupt(thread_id, body.turn_id if body else None)}
+            except ClaudeThreadNotFoundError as error:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             await app_server.interrupt(thread_id, body.turn_id if body else None)
             return {"interrupted": True}

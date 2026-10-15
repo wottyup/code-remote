@@ -40,7 +40,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
@@ -78,6 +78,12 @@ const connectionLabel = {
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
+
+type ChatEngine = 'codex' | 'claude-code'
+
+function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
+  return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
+}
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
@@ -223,6 +229,9 @@ interface ComposerPreferences {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
@@ -346,6 +355,11 @@ function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
   return undefined
 }
 
+function claudePermissionModeOf(value: unknown): ClaudeCodePermissionMode | undefined {
+  return value === 'default' || value === 'manual' || value === 'acceptEdits'
+    || value === 'auto' || value === 'dontAsk' || value === 'plan' ? value : undefined
+}
+
 function composerPreferencesFrom(value: unknown): ComposerPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const parsed = value as Record<string, unknown>
@@ -354,6 +368,10 @@ function composerPreferencesFrom(value: unknown): ComposerPreferences {
   if (typeof parsed.effort === 'string' && parsed.effort) preferences.effort = parsed.effort
   const approvalPolicy = approvalPolicyOf(parsed.approvalPolicy)
   if (approvalPolicy) preferences.approvalPolicy = approvalPolicy
+  if (typeof parsed.claudeModel === 'string' && parsed.claudeModel) preferences.claudeModel = parsed.claudeModel
+  if (typeof parsed.claudeEffort === 'string' && parsed.claudeEffort) preferences.claudeEffort = parsed.claudeEffort
+  const claudePermissionMode = claudePermissionModeOf(parsed.claudePermissionMode)
+  if (claudePermissionMode) preferences.claudePermissionMode = claudePermissionMode
   return preferences
 }
 
@@ -366,6 +384,9 @@ function resolvedComposerPreferences(defaults: ComposerPreferences, threadPrefer
     model: threadPreferences?.model ?? defaults.model,
     effort: threadPreferences?.effort ?? defaults.effort,
     approvalPolicy: threadPreferences?.approvalPolicy ?? defaults.approvalPolicy,
+    claudeModel: threadPreferences?.claudeModel ?? defaults.claudeModel,
+    claudeEffort: threadPreferences?.claudeEffort ?? defaults.claudeEffort,
+    claudePermissionMode: threadPreferences?.claudePermissionMode ?? defaults.claudePermissionMode,
   }
 }
 
@@ -485,6 +506,31 @@ const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }
   { value: 'on-request', label: '请求批准' },
   { value: 'untrusted', label: '帮我批准' },
   { value: 'never', label: '完全访问' },
+]
+
+const claudeModelOptions = [
+  { value: 'default', label: '本机默认模型' },
+  { value: 'fable', label: 'Claude Fable' },
+  { value: 'opus', label: 'Claude Opus' },
+  { value: 'sonnet', label: 'Claude Sonnet' },
+]
+
+const claudeEffortOptions = [
+  { value: 'default', label: '本机默认' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'xhigh', label: '极高' },
+  { value: 'max', label: '最大' },
+]
+
+const claudePermissionModeOptions: Array<{ value: ClaudeCodePermissionMode; label: string }> = [
+  { value: 'default', label: '本机默认权限' },
+  { value: 'manual', label: '手动确认' },
+  { value: 'acceptEdits', label: '自动接受编辑' },
+  { value: 'auto', label: '自动模式' },
+  { value: 'dontAsk', label: '不询问（拒绝需授权操作）' },
+  { value: 'plan', label: '计划模式' },
 ]
 
 function readImage(file: File): Promise<CodexImageAttachment> {
@@ -740,6 +786,9 @@ interface ComposerSendInput {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 interface ComposerHandle {
@@ -761,18 +810,24 @@ interface MessageComposerProps {
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
   reserveQueuedMessageSpace: boolean
+  showCodexPreferences: boolean
   isInterrupting: boolean
   writerConflict: boolean
   modelSupportsImages: boolean
   selectedModel: string
   selectedEffort: string
   selectedApprovalPolicy: CodexApprovalPolicy
+  selectedClaudePermissionMode: ClaudeCodePermissionMode
   modelOptions: ComposerMenuOption[]
   reasoningOptions: ComposerMenuOption[]
   authorizationOptions: ComposerMenuOption[]
+  claudeModelOptions: ComposerMenuOption[]
+  claudeEffortOptions: ComposerMenuOption[]
+  claudePermissionModeOptions: ComposerMenuOption[]
   onModelChange: (model: string) => void
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onClaudePermissionModeChange: (mode: ClaudeCodePermissionMode) => void
   approvalPolicyUpdating?: boolean
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
@@ -796,18 +851,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
   reserveQueuedMessageSpace,
+  showCodexPreferences,
   isInterrupting,
   writerConflict,
   modelSupportsImages,
   selectedModel,
   selectedEffort,
   selectedApprovalPolicy,
+  selectedClaudePermissionMode,
   modelOptions,
   reasoningOptions,
   authorizationOptions,
+  claudeModelOptions,
+  claudeEffortOptions,
+  claudePermissionModeOptions,
   onModelChange,
   onEffortChange,
   onApprovalPolicyChange,
+  onClaudePermissionModeChange,
   approvalPolicyUpdating = false,
   onUploadPdf,
   onSend,
@@ -1360,9 +1421,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         prompt,
         images: previousImages,
         documents: previousDocuments,
-        model: selectedModel || undefined,
-        effort: selectedEffort || undefined,
-        approvalPolicy: selectedApprovalPolicy,
+        model: showCodexPreferences ? selectedModel || undefined : undefined,
+        effort: showCodexPreferences ? selectedEffort || undefined : undefined,
+        approvalPolicy: showCodexPreferences ? selectedApprovalPolicy : undefined,
+        claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
+        claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
+        claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
       })
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
@@ -1658,7 +1722,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : '立即发送给当前 Codex 回复'}>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
                     {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>立即发送</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
@@ -1687,18 +1751,28 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
           onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
-          onPointerDown={() => window.CodexRemoteAndroid?.showKeyboard?.()}
-          placeholder={editingQueuedMessageId ? '编辑排队消息…' : '给 Codex 发送消息…'}
-          aria-label={editingQueuedMessageId ? '编辑排队消息' : '发送消息给 Codex'}
+          onPointerDown={(event) => {
+            if (document.activeElement === event.currentTarget) {
+              window.CodexRemoteAndroid?.showKeyboard?.()
+            }
+          }}
+          placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
+          aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
           inputMode="text"
           enterKeyHint="send"
         />
       </div>
       <div className="message-composer__footer">
         <div className="composer-preferences">
-          <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-          <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
-          <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          {showCodexPreferences ? <>
+            <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
+            <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+            <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+          </> : <>
+            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
+            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
+          </>}
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
@@ -2569,6 +2643,8 @@ interface RemoteChatPaneProps {
   onActivate: () => void
   onClose: () => void
   onCreateThread: () => void
+  claudeCodeAvailable: boolean | null
+  onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
@@ -2587,6 +2663,8 @@ function RemoteChatPane({
   onActivate,
   onClose,
   onCreateThread,
+  claudeCodeAvailable,
+  onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
   onOpenWorkspaceFile,
@@ -2596,6 +2674,7 @@ function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
@@ -2771,6 +2850,13 @@ function RemoteChatPane({
   const currentConnectionLabel = remote.handedOff
     ? '已交还给本机'
     : connectionLabel[remote.connection]
+  const activeEngineLabel = remote.activeThread?.engine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const targetEngine = remote.activeThread?.engine === 'claude-code' ? 'codex' : 'claude-code'
+  const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
+  const engineSwitchLabel = claudeCodeUnavailable
+    ? 'Claude Code 不可用'
+    : `切换到 ${targetEngineLabel} 聊天`
   const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
@@ -2798,9 +2884,28 @@ function RemoteChatPane({
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{activeEngineLabel} · 当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
         <div className="remote-chat__controls">
+          <button
+            className="icon-button engine-switch-button"
+            type="button"
+            aria-label={engineSwitchLabel}
+            title={engineSwitchLabel}
+            disabled={claudeCodeUnavailable || engineSwitching}
+            onClick={async (event) => {
+              event.stopPropagation()
+              if (claudeCodeUnavailable || engineSwitching) return
+              setEngineSwitching(true)
+              try {
+                await onSwitchEngine(targetEngine)
+              } finally {
+                setEngineSwitching(false)
+              }
+            }}
+          >
+            <EngineBrandIcon engine={targetEngine} />
+          </button>
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
             type="button"
@@ -2823,12 +2928,12 @@ function RemoteChatPane({
         </div>
       </header>
 
-      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} Codex 对话`}>
+      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
         <div className="message-stream__content" ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-              <h1>与Codex Remote一起完成伟大项目</h1>
+          <h1>{remote.activeThread?.engine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
@@ -2945,6 +3050,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const isClaudeCodeThread = activeRemote.activeThread?.engine === 'claude-code'
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
@@ -2964,6 +3070,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
@@ -2988,6 +3095,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
   const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+
+  useEffect(() => {
+    let current = true
+    void codexRemoteClient.claudeStatus(token).then((status) => {
+      if (current) setClaudeCodeAvailable(status.available)
+    }).catch(() => {
+      if (current) setClaudeCodeAvailable(false)
+    })
+    return () => { current = false }
+  }, [token])
   const openSettingsPanel = useCallback(() => {
     const currentState = window.history.state
     if (!isSettingsHistoryEntry(currentState)) {
@@ -3354,9 +3471,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const activeComposerPreferences = activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences
-  const selectedModel = activeComposerPreferences.model ?? ''
-  const selectedEffort = activeComposerPreferences.effort ?? ''
+  const selectedModel = isClaudeCodeThread
+    ? activeComposerPreferences.claudeModel ?? 'default'
+    : activeComposerPreferences.model ?? ''
+  const selectedEffort = isClaudeCodeThread
+    ? activeComposerPreferences.claudeEffort ?? 'default'
+    : activeComposerPreferences.effort ?? ''
   const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
+  const selectedClaudePermissionMode = activeComposerPreferences.claudePermissionMode ?? 'default'
   const availableModels = useMemo(() => {
     const source = remotes.find((remote) => remote.models.length > 0)
     return source?.models ?? []
@@ -3393,8 +3515,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }, [])
 
-  const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
-  const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
+  const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeClaudePermissionMode = useCallback((claudePermissionMode: ClaudeCodePermissionMode) => updateComposerPreferences({ claudePermissionMode }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => {
     updateComposerPreferences({ approvalPolicy })
   }, [updateComposerPreferences])
@@ -3526,21 +3649,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTarget, threadRenameTarget])
 
   useEffect(() => {
-    if (availableModels.length === 0) return
+    if (isClaudeCodeThread || availableModels.length === 0) return
     if (selectedModel && availableModels.some((model) => modelIdOf(model) === selectedModel)) return
     const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0]
     updateComposerPreferences({ model: modelIdOf(defaultModel) })
-  }, [availableModels, selectedModel, updateComposerPreferences])
+  }, [availableModels, isClaudeCodeThread, selectedModel, updateComposerPreferences])
 
   useEffect(() => {
-    if (availableModels.length === 0 || !chosenModel) return
+    if (isClaudeCodeThread || availableModels.length === 0 || !chosenModel) return
     if (effortOptions.length === 0) {
       if (selectedEffort) updateComposerPreferences({ effort: undefined })
       return
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
     updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
-  }, [availableModels.length, chosenModel, effortOptions, selectedEffort, updateComposerPreferences])
+  }, [availableModels.length, chosenModel, effortOptions, isClaudeCodeThread, selectedEffort, updateComposerPreferences])
 
   useEffect(() => {
     const completions = remotes
@@ -3749,17 +3872,63 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return openPaneIndexes.find((index) => remotes[index]?.activeThread?.id === threadId)
   }
 
-  async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string) {
+  async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
     const target = remotes[paneIndex] ?? remote0
+    const selectedEngine = engine ?? (target.activeThread?.engine === 'claude-code' ? 'claude-code' : 'codex')
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
       : activeComposerPreferences
-    const thread = await target.createThread(targetPreferences.model, targetPreferences.approvalPolicy, undefined, cwd)
+    const thread = await target.createThread(
+      selectedEngine === 'codex' ? targetPreferences.model : undefined,
+      selectedEngine === 'codex' ? targetPreferences.approvalPolicy : undefined,
+      undefined,
+      cwd,
+      selectedEngine,
+    )
     if (!thread) return null
     if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
-    rememberThreadComposerPreferences(thread.id, targetPreferences)
+    rememberThreadComposerPreferences(thread.id, selectedEngine === 'codex'
+      ? {
+          model: targetPreferences.model,
+          effort: targetPreferences.effort,
+          approvalPolicy: targetPreferences.approvalPolicy,
+        }
+      : {
+          claudeModel: targetPreferences.claudeModel ?? 'default',
+          claudeEffort: targetPreferences.claudeEffort ?? 'default',
+          claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
+        })
+    if (paneIndex !== 0) await remote0.refreshThreads()
     return thread
+  }
+
+  async function switchEngineForPane(paneIndex: number, engine: 'codex' | 'claude-code') {
+    const targetRemote = remotes[paneIndex] ?? remote0
+    const cwd = targetRemote.activeThread?.cwd || targetRemote.runtime.workspace || undefined
+    const threadsForEngine = (threads: CodexThread[]) => threads.filter((thread) => (thread.engine ?? 'codex') === engine)
+    const openTargetThread = remotes
+      .map((remote) => remote.activeThread)
+      .find((thread) => thread && (thread.engine ?? 'codex') === engine && (!cwd || thread.cwd === cwd))
+    let targetThreads = threadsForEngine(remote0.threads)
+    if (targetThreads.length === 0) {
+      const refreshedThreads = await remote0.refreshThreads()
+      targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
+    }
+    const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
+    setSidebarOpen(false)
+    if (targetThread) {
+      const existingPane = paneIndexForThread(targetThread.id)
+      if (existingPane !== undefined) {
+        setSelectedPaneIndex(existingPane)
+        return targetThread
+      }
+      activatePane(paneIndex)
+      await targetRemote.selectThread(targetThread)
+      return targetThread
+    }
+    activatePane(paneIndex)
+    return createThreadForPane(paneIndex, cwd, engine)
   }
 
   async function createThread() {
@@ -3945,9 +4114,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
-  const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : connectionLabel[activeRemote.connection]
+  const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : isClaudeCodeThread
+    ? activeRemote.connection === 'connected'
+      ? claudeCodeAvailable === false ? 'Claude Code 不可用' : claudeCodeAvailable === null ? '正在检查 Claude Code' : 'Claude Code 就绪'
+      : activeRemote.connection === 'connecting' ? '正在连接' : '连接已断开'
+    : connectionLabel[activeRemote.connection]
   const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.CodexRemoteAndroid?.changeEndpoint === 'function'
-  const modelSupportsImages = !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
+  const modelSupportsImages = isClaudeCodeThread || !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const modelOptions = useMemo<ComposerMenuOption[]>(() => availableModels.flatMap((model) => {
     const id = modelIdOf(model)
     return id ? [{ value: id, label: modelLabelOf(model) }] : []
@@ -3956,11 +4129,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
-  const sidebarThreads = useMemo(() => [...remote0.threads].sort((left, right) => {
-    const leftPinned = pinnedThreadIds.has(left.id)
-    const rightPinned = pinnedThreadIds.has(right.id)
-    return Number(rightPinned) - Number(leftPinned)
-  }), [pinnedThreadIds, remote0.threads])
+  const sidebarThreads = useMemo(() => remote0.threads
+    .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
+    .sort((left, right) => {
+      const leftPinned = pinnedThreadIds.has(left.id)
+      const rightPinned = pinnedThreadIds.has(right.id)
+      return Number(rightPinned) - Number(leftPinned)
+    }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
   const completedThread = findCompletedThread()
 
   return (
@@ -3991,8 +4166,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
-        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : '最近对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="new-thread-control">
+          <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
+        </div>
+        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
           {sidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
@@ -4009,14 +4186,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 clearThreadLongPress()
                 void selectThread(thread)
               }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
-                <MessagesSquare size={15} />
-                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="Codex 已完成回复" title="Codex 已完成回复" /> : null}<small>{timeOf(thread)}</small></span></span>
+                <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />
+                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
               </button>
             )
           })}
-          {remote0.threads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
-          {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {sidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
+          {remote0.loadingHistory && sidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
@@ -4090,6 +4267,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
+                    claudeCodeAvailable={claudeCodeAvailable}
+                    onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
@@ -4121,18 +4300,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
               reserveQueuedMessageSpace={openPaneIndexes.length > 1}
+              showCodexPreferences={!isClaudeCodeThread}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
               selectedModel={selectedModel}
               selectedEffort={selectedEffort}
               selectedApprovalPolicy={selectedApprovalPolicy}
+              selectedClaudePermissionMode={selectedClaudePermissionMode}
               modelOptions={modelOptions}
               reasoningOptions={reasoningOptions}
               authorizationOptions={approvalPolicyOptions}
+              claudeModelOptions={claudeModelOptions}
+              claudeEffortOptions={claudeEffortOptions}
+              claudePermissionModeOptions={claudePermissionModeOptions}
               onModelChange={changeModel}
               onEffortChange={changeEffort}
               onApprovalPolicyChange={changeApprovalPolicy}
+              onClaudePermissionModeChange={changeClaudePermissionMode}
               approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}

@@ -102,6 +102,7 @@ public class MainActivity extends Activity {
     private int navigationBarInsetPx;
     private volatile int composerBottomInsetDp;
     private volatile int statusBarInsetDp;
+    private volatile boolean softKeyboardVisible;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
 
@@ -750,7 +751,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void showKeyboard() {
             runOnUiThread(() -> {
-                if (webView == null) return;
+                if (webView == null || softKeyboardVisible) return;
                 webView.requestFocus(View.FOCUS_DOWN);
                 InputMethodManager inputMethodManager = (InputMethodManager) getSystemService(Context.INPUT_METHOD_SERVICE);
                 if (inputMethodManager == null) return;
@@ -759,7 +760,7 @@ public class MainActivity extends Activity {
                     if (webView == null || !webView.hasFocus()) return;
                     inputMethodManager.showSoftInput(webView, InputMethodManager.SHOW_FORCED);
                     webView.postDelayed(() -> {
-                        if (webView != null && webView.hasFocus()) {
+                        if (webView != null && webView.hasFocus() && !softKeyboardVisible) {
                             inputMethodManager.showSoftInput(webView, InputMethodManager.SHOW_FORCED);
                         }
                     }, 240);
@@ -990,6 +991,7 @@ public class MainActivity extends Activity {
                     navigationBottom = systemBottom;
                 }
             }
+            softKeyboardVisible = imeVisible;
             if (!imeVisible) navigationBarInsetPx = navigationBottom;
             updateStatusBarInset(Math.round(top / getResources().getDisplayMetrics().density));
             int bottomInsetDp = imeVisible ? 0 : Math.round(navigationBottom / getResources().getDisplayMetrics().density);

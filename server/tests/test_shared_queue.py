@@ -342,6 +342,7 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         }):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)
+        self.addAsyncCleanup(self.app.state.claude_code.close)
         self.app.state.codex.read_thread = AsyncMock(return_value={"status": {"type": "idle"}})
 
     def endpoint(self, path: str):

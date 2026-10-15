@@ -116,3 +116,4 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
                 self.assertTrue(any(middleware.cls is GZipMiddleware for middleware in app.user_middleware))
             finally:
                 app.state.shared_state.close()
+                await app.state.claude_code.close()

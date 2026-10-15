@@ -8,6 +8,7 @@ import {
   userMessageFromEventItem,
   type CodexDocumentAttachment,
   type CodexImageAttachment,
+  type ClaudeCodePermissionMode,
   type CodexMessage,
   type CodexModel,
   type CodexApprovalPolicy,
@@ -98,6 +99,9 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 interface SendMessageInput {
@@ -107,6 +111,9 @@ interface SendMessageInput {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
   onThreadCreated?: (thread: CodexThread) => void
 }
 
@@ -257,6 +264,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
 function compactThread(thread: CodexThread): CodexThread {
   return {
     id: thread.id,
+    ...(thread.engine ? { engine: thread.engine } : {}),
     ...(thread.name !== undefined ? { name: thread.name } : {}),
     ...(thread.preview !== undefined ? { preview: thread.preview } : {}),
     ...(thread.cwd !== undefined ? { cwd: thread.cwd } : {}),
@@ -412,6 +420,9 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    ...(input.claudeModel ? { claudeModel: input.claudeModel } : {}),
+    ...(input.claudeEffort ? { claudeEffort: input.claudeEffort } : {}),
+    ...(input.claudePermissionMode ? { claudePermissionMode: input.claudePermissionMode } : {}),
     createdAt: new Date().toISOString(),
   }
 }
@@ -467,6 +478,16 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const approvalPolicy = payload.approvalPolicy === 'on-request' || payload.approvalPolicy === 'untrusted' || payload.approvalPolicy === 'never'
     ? payload.approvalPolicy
     : undefined
+  const claudeModel = typeof payload.claudeModel === 'string' && payload.claudeModel.length <= 200 ? payload.claudeModel : undefined
+  const claudeEffort = payload.claudeEffort === 'low' || payload.claudeEffort === 'medium'
+    || payload.claudeEffort === 'high' || payload.claudeEffort === 'xhigh' || payload.claudeEffort === 'max'
+    ? payload.claudeEffort
+    : undefined
+  const claudePermissionMode = payload.claudePermissionMode === 'default' || payload.claudePermissionMode === 'manual'
+    || payload.claudePermissionMode === 'acceptEdits' || payload.claudePermissionMode === 'auto'
+    || payload.claudePermissionMode === 'dontAsk' || payload.claudePermissionMode === 'plan'
+    ? payload.claudePermissionMode
+    : undefined
   const attempt = payload.sendAttempt && typeof payload.sendAttempt === 'object'
     ? payload.sendAttempt as Record<string, unknown>
     : null
@@ -487,6 +508,9 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(claudeModel ? { claudeModel } : {}),
+    ...(claudeEffort ? { claudeEffort } : {}),
+    ...(claudePermissionMode ? { claudePermissionMode } : {}),
     ...(sendAttempt ? { sendAttempt } : {}),
     createdAt,
   }
@@ -2440,6 +2464,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       model: payload.model,
       effort: payload.effort,
       approvalPolicy: payload.approvalPolicy,
+      claudeModel: payload.claudeModel,
+      claudeEffort: payload.claudeEffort,
+      claudePermissionMode: payload.claudePermissionMode,
       requestId: payload.id,
     })
     if (resumedThreadId.current !== threadId) {
@@ -2980,6 +3007,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (event.type === 'remote.pins.changed') {
       setPinRevision((revision) => revision + 1)
+      return
+    }
+    if (event.type === 'claude.threads.changed') {
+      void refreshThreads()
       return
     }
     if (event.type === 'threads.changed') {
@@ -3733,6 +3764,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     approvalPolicy?: CodexApprovalPolicy,
     requestId = queuedMessageId(),
     cwd?: string,
+    engine: 'codex' | 'claude-code' = 'codex',
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3747,7 +3779,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     historyRevision.current += 1
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd)
+      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd, engine)
       activeThreadId.current = thread.id
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setQueueRecoveryReadyThreadId(null)
@@ -3778,7 +3810,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return thread
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-      setError(reason instanceof Error ? reason.message : '创建 Codex 对话失败')
+      setError(reason instanceof Error ? reason.message : '创建对话失败')
       return null
     } finally {
       setLoadingHistory(false)
@@ -3828,7 +3860,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         applyServerQueueResponse(thread.id, delivery.acknowledged
           ? result.queue.filter((message) => message.id !== payload.id)
           : result.queue)
-        setError(null)
+        const pendingResult = result.queue.find((message) => message.id === payload.id)
+        setError(!result.sent && !delivery.acknowledged && pendingResult?.sendAttempt
+          ? '消息送达未确认，请先核对聊天记录和排队消息，避免重复发送。'
+          : null)
         if (result.sent || delivery.acknowledged) {
           appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
           if (delivery.turnId) applyTurnDelivery(thread.id, payload.id, delivery.turnId)

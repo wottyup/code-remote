@@ -1,5 +1,6 @@
 export interface CodexThread {
   id: string
+  engine?: 'codex' | 'claude-code'
   name?: string | null
   preview?: string
   cwd?: string
@@ -13,6 +14,8 @@ export interface CodexThreadDetails extends CodexThread {
   turns?: unknown[]
   codexRemoteWorkspaceChanges?: Record<string, unknown>
 }
+
+export type ClaudeCodePermissionMode = 'default' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan'
 
 interface ThreadSyncResponse extends CodexThreadDetails {
   historySync?: {
@@ -76,6 +79,9 @@ export interface CodexQueuedMessage {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
@@ -601,6 +607,9 @@ export const codexRemoteClient = {
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
+  claudeStatus(token: string) {
+    return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
     if (cwd) query.set('cwd', cwd)
@@ -716,10 +725,10 @@ export const codexRemoteClient = {
   reclaimForRemote(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/reclaim', { method: 'POST' })
   },
-  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string, cwd?: string) {
+  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string, cwd?: string, engine: 'codex' | 'claude-code' = 'codex') {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
-      body: JSON.stringify({ model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
+      body: JSON.stringify({ engine, model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
     }, { networkRetries: 3 })
   },
   uploadPdfAttachment(token: string, file: File) {
@@ -737,6 +746,9 @@ export const codexRemoteClient = {
     model?: string
     effort?: string
     approvalPolicy?: CodexApprovalPolicy
+    claudeModel?: string
+    claudeEffort?: string
+    claudePermissionMode?: ClaudeCodePermissionMode
     requestId: string
   }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
@@ -746,6 +758,9 @@ export const codexRemoteClient = {
         model: input.model,
         effort: input.effort,
         approval_policy: input.approvalPolicy,
+        claude_model: input.claudeModel,
+        claude_effort: input.claudeEffort,
+        claude_permission_mode: input.claudePermissionMode,
         request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,
