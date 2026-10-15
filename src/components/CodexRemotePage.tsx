@@ -2788,7 +2788,7 @@ function RemoteChatPane({
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
   const engineSwitchLabel = claudeCodeUnavailable
     ? 'Claude Code 不可用'
-    : `切换到 ${targetEngineLabel}（新建对话）`
+    : `切换到 ${targetEngineLabel} 聊天`
   const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
   const hasStreamingAssistant = Boolean(streamingAssistant)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
@@ -3705,7 +3705,37 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!thread) return null
     if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
     if (engine === 'codex') rememberThreadComposerPreferences(thread.id, targetPreferences)
+    if (paneIndex !== 0) await remote0.refreshThreads()
     return thread
+  }
+
+  async function switchEngineForPane(paneIndex: number, engine: 'codex' | 'claude-code') {
+    const targetRemote = remotes[paneIndex] ?? remote0
+    const cwd = targetRemote.activeThread?.cwd || targetRemote.runtime.workspace || undefined
+    const threadsForEngine = (threads: CodexThread[]) => threads.filter((thread) => (thread.engine ?? 'codex') === engine)
+    const openTargetThread = remotes
+      .map((remote) => remote.activeThread)
+      .find((thread) => thread && (thread.engine ?? 'codex') === engine && (!cwd || thread.cwd === cwd))
+    let targetThreads = threadsForEngine(remote0.threads)
+    if (targetThreads.length === 0) {
+      const refreshedThreads = await remote0.refreshThreads()
+      targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
+    }
+    const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
+    setNewThreadMenuOpen(false)
+    setSidebarOpen(false)
+    if (targetThread) {
+      const existingPane = paneIndexForThread(targetThread.id)
+      if (existingPane !== undefined) {
+        setSelectedPaneIndex(existingPane)
+        return targetThread
+      }
+      activatePane(paneIndex)
+      await targetRemote.selectThread(targetThread)
+      return targetThread
+    }
+    activatePane(paneIndex)
+    return createThreadForPane(paneIndex, cwd, engine)
   }
 
   async function createThread(engine: 'codex' | 'claude-code' = 'codex') {
@@ -4048,11 +4078,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
                     claudeCodeAvailable={claudeCodeAvailable}
-                    onSwitchEngine={(engine) => {
-                      activatePane(paneIndex)
-                      const currentRemote = remotes[paneIndex] ?? remote0
-                      return createThreadForPane(paneIndex, currentRemote.activeThread?.cwd || currentRemote.runtime.workspace || undefined, engine)
-                    }}
+                    onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
