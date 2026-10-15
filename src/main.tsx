@@ -12,8 +12,10 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     let frame: number | undefined
     let settleTimer: number | undefined
     let keyboardTransitionTimer: number | undefined
+    let keyboardPreviewTimer: number | undefined
     let nativeLayoutHeight: number | undefined
     let nativeLayoutWidth = Math.round(window.innerWidth)
+    let nativeKeyboardOpening = false
     let checkingForUpdate = false
     let lastUpdateCheckAt = 0
     const editingInput = () => document.activeElement instanceof HTMLElement
@@ -30,6 +32,30 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
         keyboardTransitionTimer = undefined
         delete document.documentElement.dataset.keyboardTransition
       }, 320)
+    }
+    const expectedNativeKeyboardInset = () => {
+      const value = window.CodexRemoteAndroid?.getExpectedKeyboardInsetDp?.() ?? 0
+      if (!Number.isFinite(value)) return 0
+      return Math.max(0, Math.min(Math.round(value), Math.round(window.innerHeight * .65)))
+    }
+    const previewNativeKeyboard = () => {
+      if (typeof window.CodexRemoteAndroid?.getKeyboardInsetDp !== 'function') return
+      nativeKeyboardOpening = true
+      markKeyboardTransition()
+      const previewInset = expectedNativeKeyboardInset()
+      if (previewInset > 0) {
+        document.documentElement.dataset.keyboardVisible = 'true'
+        document.documentElement.dataset.composerKeyboard = 'true'
+        writePixels('--native-keyboard-inset', previewInset)
+        writePixels('--app-viewport-height', nativeLayoutHeight ?? Math.round(window.innerHeight))
+      }
+      if (keyboardPreviewTimer !== undefined) window.clearTimeout(keyboardPreviewTimer)
+      keyboardPreviewTimer = window.setTimeout(() => {
+        keyboardPreviewTimer = undefined
+        if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) > 0) return
+        nativeKeyboardOpening = false
+        scheduleViewportSync()
+      }, 1_200)
     }
     const assetSignature = (root: ParentNode, baseUrl: string) => Array.from(
       root.querySelectorAll('link[rel="stylesheet"][href], script[type="module"][src]'),
@@ -73,10 +99,17 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const nativeKeyboardInset = nativeKeyboardInsetAvailable
         ? Math.max(0, window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0)
         : 0
+      if (nativeKeyboardInset > 0) nativeKeyboardOpening = false
+      const effectiveNativeKeyboardInset = nativeKeyboardInset > 0
+        ? nativeKeyboardInset
+        : nativeKeyboardOpening
+          ? expectedNativeKeyboardInset()
+          : 0
       const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
       const focusedComposer = document.activeElement instanceof HTMLElement
         && document.activeElement.matches('.message-composer textarea, .message-composer input:not([type="file"]), .message-composer [contenteditable="true"]')
+      const composerKeyboardActive = focusedComposer || nativeKeyboardOpening
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
       const browserViewportIsPanned = !nativeBridge && focusedComposer && offsetTop > 1
       if (nativeKeyboardInsetAvailable) {
@@ -95,15 +128,18 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
         }
       }
       const height = nativeKeyboardInsetAvailable
-        ? Math.max(160, (nativeLayoutHeight ?? layoutHeight) - nativeKeyboardInset)
+        ? composerKeyboardActive
+          ? Math.max(160, nativeLayoutHeight ?? layoutHeight)
+          : Math.max(160, (nativeLayoutHeight ?? layoutHeight) - nativeKeyboardInset)
         : nativeViewportIsPanned
           ? Math.max(layoutHeight, pannedVisualBottom)
           : browserViewportIsPanned
             ? pannedVisualBottom
             : visualHeight
       document.documentElement.dataset.nativeKeyboardInsets = String(nativeKeyboardInsetAvailable)
-      document.documentElement.dataset.keyboardVisible = String(nativeKeyboardInset > 0)
-      writePixels('--native-keyboard-inset', nativeKeyboardInset)
+      document.documentElement.dataset.keyboardVisible = String(effectiveNativeKeyboardInset > 0)
+      document.documentElement.dataset.composerKeyboard = String(nativeKeyboardInsetAvailable && composerKeyboardActive)
+      writePixels('--native-keyboard-inset', effectiveNativeKeyboardInset)
       const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         writePixels('--native-composer-bottom-inset', composerBottomInset)
@@ -150,10 +186,19 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       scheduleViewportSync()
     }
     const handleFocusChange = (event: FocusEvent) => {
-      if (event.target instanceof HTMLElement && event.target.matches('.message-composer textarea')) markKeyboardTransition()
+      if (event.type === 'focusin' && event.target instanceof HTMLElement && event.target.matches('.message-composer textarea')) {
+        previewNativeKeyboard()
+      } else if (event.type === 'focusout' && (window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) {
+        nativeKeyboardOpening = false
+      }
       scheduleViewportSync()
     }
     const handleKeyboardInset = () => {
+      if (keyboardPreviewTimer !== undefined) {
+        window.clearTimeout(keyboardPreviewTimer)
+        keyboardPreviewTimer = undefined
+      }
+      nativeKeyboardOpening = false
       markKeyboardTransition()
       scheduleViewportSync()
     }
@@ -167,6 +212,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     document.addEventListener('visibilitychange', handleVisibilityChange)
     document.addEventListener('focusin', handleFocusChange)
     document.addEventListener('focusout', handleFocusChange)
+    window.addEventListener('codex-remote:keyboard-opening', previewNativeKeyboard)
     window.addEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
     viewport?.addEventListener('resize', scheduleViewportSync)
     viewport?.addEventListener('scroll', scheduleViewportSync)
@@ -174,6 +220,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       if (frame !== undefined) window.cancelAnimationFrame(frame)
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
       if (keyboardTransitionTimer !== undefined) window.clearTimeout(keyboardTransitionTimer)
+      if (keyboardPreviewTimer !== undefined) window.clearTimeout(keyboardPreviewTimer)
       delete document.documentElement.dataset.keyboardTransition
       window.removeEventListener('resize', scheduleViewportSync)
       window.removeEventListener('orientationchange', handleOrientationChange)
@@ -183,6 +230,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('focusin', handleFocusChange)
       document.removeEventListener('focusout', handleFocusChange)
+      window.removeEventListener('codex-remote:keyboard-opening', previewNativeKeyboard)
       window.removeEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
       viewport?.removeEventListener('resize', scheduleViewportSync)
       viewport?.removeEventListener('scroll', scheduleViewportSync)

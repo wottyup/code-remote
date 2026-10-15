@@ -66,6 +66,8 @@ public class MainActivity extends Activity {
     private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 4102;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
+    private static final String KEYBOARD_INSET_PORTRAIT_KEY = "keyboard_inset_portrait_dp";
+    private static final String KEYBOARD_INSET_LANDSCAPE_KEY = "keyboard_inset_landscape_dp";
     private static final String NOTIFICATION_CHANNEL_ID = "codex_remote_updates";
     private static final String EXTRA_NOTIFICATION_THREAD_ID = "notification_thread_id";
     private static final int DARK = Color.rgb(16, 17, 20);
@@ -691,6 +693,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public int getExpectedKeyboardInsetDp() {
+            return MainActivity.this.expectedKeyboardInsetDp();
+        }
+
+        @JavascriptInterface
         public int getKeyboardInsetDp() {
             return keyboardInsetDp;
         }
@@ -1063,6 +1070,9 @@ public class MainActivity extends Activity {
     private void updateKeyboardInset(int insetDp) {
         if (keyboardInsetDp == insetDp) return;
         keyboardInsetDp = insetDp;
+        if (insetDp > 0 && preferences != null) {
+            preferences.edit().putInt(keyboardInsetPreferenceKey(), insetDp).apply();
+        }
         WebView currentWebView = webView;
         if (currentWebView == null) return;
         currentWebView.post(() -> {
@@ -1072,5 +1082,25 @@ public class MainActivity extends Activity {
                             + "window.dispatchEvent(new Event('codex-remote:keyboard-inset'))",
                     null);
         });
+    }
+
+    private String keyboardInsetPreferenceKey() {
+        return getResources().getConfiguration().orientation
+                == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+                ? KEYBOARD_INSET_LANDSCAPE_KEY
+                : KEYBOARD_INSET_PORTRAIT_KEY;
+    }
+
+    private int expectedKeyboardInsetDp() {
+        if (keyboardInsetDp > 0) return keyboardInsetDp;
+        int rememberedInset = preferences == null
+                ? 0
+                : preferences.getInt(keyboardInsetPreferenceKey(), 0);
+        if (rememberedInset > 0) return rememberedInset;
+
+        float density = getResources().getDisplayMetrics().density;
+        int heightPx = getResources().getDisplayMetrics().heightPixels;
+        int heightDp = Math.round(heightPx / Math.max(density, 1f));
+        return Math.max(180, Math.min(360, Math.round(heightDp * .38f)));
     }
 }

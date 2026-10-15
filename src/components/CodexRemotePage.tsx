@@ -1836,6 +1836,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           onPaste={handlePaste}
           onFocus={requestComposerKeyboard}
           onPointerDown={(event) => {
+            window.dispatchEvent(new Event('codex-remote:keyboard-opening'))
             if (document.activeElement === event.currentTarget) {
               requestComposerKeyboard()
             }

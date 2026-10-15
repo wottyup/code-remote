@@ -3,6 +3,7 @@ export interface AndroidNotificationBridge {
   copyToClipboard?: (text: string) => boolean
   readClipboardText?: () => string | null
   getComposerBottomInsetDp?: () => number
+  getExpectedKeyboardInsetDp?: () => number
   getKeyboardInsetDp?: () => number
   getStatusBarInsetDp?: () => number
   requestNotificationPermission?: () => void
