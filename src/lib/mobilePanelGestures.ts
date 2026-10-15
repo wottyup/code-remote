@@ -15,6 +15,7 @@ export type MobilePanelGestureAction =
   | 'close-workspace'
   | 'close-global'
 
+const mobilePanelGestureThreshold = 44
 const mobileBackEdgeSize = 36
 
 export function beginMobilePanelGesture(
@@ -59,7 +60,7 @@ export function resolveMobilePanelGesture(
   start: MobilePanelGestureStart,
   endX: number,
   endY: number,
-  threshold = 64,
+  threshold = mobilePanelGestureThreshold,
 ): MobilePanelGestureAction | null {
   const deltaX = endX - start.x
   const deltaY = endY - start.y

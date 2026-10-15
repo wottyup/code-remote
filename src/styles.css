@@ -715,7 +715,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .workspace-explorer__add:hover { border-color: rgba(170, 186, 255, .54); background: rgba(117, 135, 177, .16); color: #eef1f6; }
   .mobile-workspace-button { display: grid; }
   .theme-settings-panel { grid-column: auto; }
-  .remote-chat { position: relative; width: 100%; max-width: 100vw; height: 100%; grid-template-rows: 56px minmax(0, 1fr) auto auto auto; overflow-x: hidden; }
+  .remote-chat { position: relative; width: 100%; max-width: 100vw; height: 100%; grid-template-rows: 50px minmax(0, 1fr) auto auto auto; overflow-x: hidden; }
   .remote-chat__header { width: 100%; min-width: 0; padding: 0 16px; }
   .remote-chat__title-wrap { min-width: 0; flex: 1 1 auto; gap: 5px; overflow: hidden; }
   .remote-chat__title { min-width: 0; max-width: 100%; }
