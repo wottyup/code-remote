@@ -7,11 +7,14 @@ import os
 import shutil
 import signal
 import sqlite3
+import time
 import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
+
+from .claude_native_history import scan_native_sessions
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +64,9 @@ class ClaudeCodeServer:
         self.database_path = database_path
         self.emit = emit
         self._lock = asyncio.Lock()
+        self._native_refresh_lock = asyncio.Lock()
+        self._next_native_scan_at = 0.0
+        self._native_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser().resolve()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._interrupts: set[str] = set()
@@ -82,6 +88,14 @@ class ClaudeCodeServer:
                 running_turn_id TEXT,
                 messages_json TEXT NOT NULL DEFAULT '[]'
             )"""
+        )
+        columns = {row["name"] for row in self._connection.execute("PRAGMA table_info(claude_threads)")}
+        if "native_source" not in columns:
+            self._connection.execute("ALTER TABLE claude_threads ADD COLUMN native_source TEXT")
+        if "native_mtime_ns" not in columns:
+            self._connection.execute("ALTER TABLE claude_threads ADD COLUMN native_mtime_ns INTEGER")
+        self._connection.execute(
+            "CREATE TABLE IF NOT EXISTS claude_native_hidden (session_id TEXT PRIMARY KEY)",
         )
         self._recover_interrupted_turns()
         self._connection.commit()
@@ -156,6 +170,68 @@ class ClaudeCodeServer:
         ).fetchall()
         return [self._summary(row) for row in rows]
 
+    async def refresh_native_threads(self) -> None:
+        """Import local CLI sessions without changing Claude Code's own files."""
+        async with self._native_refresh_lock:
+            if time.monotonic() < self._next_native_scan_at:
+                return
+            self._next_native_scan_at = time.monotonic() + 5
+            known = {
+                row["session_id"]: (row["native_source"], row["native_mtime_ns"])
+                for row in self._connection.execute(
+                    "SELECT session_id, native_source, native_mtime_ns FROM claude_threads",
+                )
+            }
+            hidden = {
+                row["session_id"] for row in self._connection.execute(
+                    "SELECT session_id FROM claude_native_hidden",
+                )
+            }
+            sessions = await asyncio.to_thread(
+                scan_native_sessions, self._native_home, self.workspace, known, hidden,
+            )
+            if not sessions:
+                return
+            changed = False
+            async with self._lock:
+                with self._connection:
+                    for session in sessions:
+                        if self._connection.execute(
+                            "SELECT 1 FROM claude_native_hidden WHERE session_id = ?",
+                            (session["session_id"],),
+                        ).fetchone():
+                            continue
+                        row = self._connection.execute(
+                            "SELECT native_source, running_turn_id FROM claude_threads WHERE session_id = ?",
+                            (session["session_id"],),
+                        ).fetchone()
+                        if row is not None:
+                            if row["native_source"] is None or row["running_turn_id"]:
+                                continue
+                            self._connection.execute(
+                                """UPDATE claude_threads
+                                SET preview = ?, updated_at = ?, messages_json = ?,
+                                    native_source = ?, native_mtime_ns = ?
+                                WHERE session_id = ?""",
+                                (session["preview"], session["updated_at"],
+                                 session["messages_json"], session["native_source"],
+                                 session["native_mtime_ns"], session["session_id"]),
+                            )
+                        else:
+                            self._connection.execute(
+                                """INSERT INTO claude_threads
+                                (thread_id, session_id, name, preview, cwd, created_at,
+                                 updated_at, started, messages_json, native_source, native_mtime_ns)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                                (session["thread_id"], session["session_id"], session["name"],
+                                 session["preview"], session["cwd"], session["created_at"],
+                                 session["updated_at"], session["messages_json"],
+                                 session["native_source"], session["native_mtime_ns"]),
+                            )
+                        changed = True
+            if changed:
+                await self._notify_threads_changed()
+
     async def create_thread(self, cwd: Path | None = None) -> dict[str, Any]:
         status = self.status()
         if not status["available"]:
@@ -179,6 +255,7 @@ class ClaudeCodeServer:
     async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
         if not is_claude_thread_id(thread_id):
             raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
+        await self.refresh_native_threads()
         row = self._row(thread_id)
         result = self._summary(row)
         if not include_turns:
@@ -257,12 +334,17 @@ class ClaudeCodeServer:
     async def delete_thread(self, thread_id: str) -> None:
         if not is_claude_thread_id(thread_id):
             raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
+        row = self._row(thread_id)
         if thread_id in self._tasks:
             await self.interrupt(thread_id)
             task = self._tasks.get(thread_id)
             if task:
                 await asyncio.gather(task, return_exceptions=True)
         with self._connection:
+            self._connection.execute(
+                "INSERT OR IGNORE INTO claude_native_hidden(session_id) VALUES (?)",
+                (row["session_id"],),
+            )
             cursor = self._connection.execute(
                 "DELETE FROM claude_threads WHERE thread_id = ?", (thread_id,),
             )
@@ -332,7 +414,8 @@ class ClaudeCodeServer:
             with self._connection:
                 self._connection.execute(
                     """UPDATE claude_threads
-                    SET name = ?, preview = ?, updated_at = ?, running_turn_id = ?, messages_json = ?
+                    SET name = ?, preview = ?, updated_at = ?, running_turn_id = ?, messages_json = ?,
+                        native_source = NULL, native_mtime_ns = NULL
                     WHERE thread_id = ?""",
                     (name, preview, created_at, turn_id, json.dumps(messages, ensure_ascii=False), thread_id),
                 )

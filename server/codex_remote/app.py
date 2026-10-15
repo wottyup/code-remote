@@ -1090,7 +1090,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.13.1-dev.2", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.14.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1194,6 +1194,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
+        await claude_code.refresh_native_threads()
         claude_threads = claude_code.list_threads()
         try:
             threads = await app_server.list_threads()

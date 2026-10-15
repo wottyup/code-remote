@@ -4002,11 +4002,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
-  const sidebarThreads = useMemo(() => [...remote0.threads].sort((left, right) => {
-    const leftPinned = pinnedThreadIds.has(left.id)
-    const rightPinned = pinnedThreadIds.has(right.id)
-    return Number(rightPinned) - Number(leftPinned)
-  }), [pinnedThreadIds, remote0.threads])
+  const sidebarThreads = useMemo(() => remote0.threads
+    .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
+    .sort((left, right) => {
+      const leftPinned = pinnedThreadIds.has(left.id)
+      const rightPinned = pinnedThreadIds.has(right.id)
+      return Number(rightPinned) - Number(leftPinned)
+    }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
   const completedThread = findCompletedThread()
 
   return (
@@ -4039,7 +4041,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : '最近对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
           {sidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
@@ -4062,8 +4064,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               </button>
             )
           })}
-          {remote0.threads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">还没有对话</p> : null}
-          {remote0.loadingHistory && remote0.threads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {sidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
+          {remote0.loadingHistory && sidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
