@@ -257,6 +257,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
 function compactThread(thread: CodexThread): CodexThread {
   return {
     id: thread.id,
+    ...(thread.engine ? { engine: thread.engine } : {}),
     ...(thread.name !== undefined ? { name: thread.name } : {}),
     ...(thread.preview !== undefined ? { preview: thread.preview } : {}),
     ...(thread.cwd !== undefined ? { cwd: thread.cwd } : {}),
@@ -2982,6 +2983,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setPinRevision((revision) => revision + 1)
       return
     }
+    if (event.type === 'claude.threads.changed') {
+      void refreshThreads()
+      return
+    }
     if (event.type === 'threads.changed') {
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       writerRefreshTimer.current = window.setTimeout(() => {
@@ -3733,6 +3738,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     approvalPolicy?: CodexApprovalPolicy,
     requestId = queuedMessageId(),
     cwd?: string,
+    engine: 'codex' | 'claude-code' = 'codex',
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3747,7 +3753,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     historyRevision.current += 1
     setLoadingHistory(true)
     try {
-      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd)
+      const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd, engine)
       activeThreadId.current = thread.id
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setQueueRecoveryReadyThreadId(null)
@@ -3778,7 +3784,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return thread
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-      setError(reason instanceof Error ? reason.message : '创建 Codex 对话失败')
+      setError(reason instanceof Error ? reason.message : '创建对话失败')
       return null
     } finally {
       setLoadingHistory(false)

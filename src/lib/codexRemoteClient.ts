@@ -1,5 +1,6 @@
 export interface CodexThread {
   id: string
+  engine?: 'codex' | 'claude-code'
   name?: string | null
   preview?: string
   cwd?: string
@@ -590,6 +591,9 @@ export const codexRemoteClient = {
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
+  claudeStatus(token: string) {
+    return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
     if (cwd) query.set('cwd', cwd)
@@ -705,10 +709,10 @@ export const codexRemoteClient = {
   reclaimForRemote(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/reclaim', { method: 'POST' })
   },
-  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string, cwd?: string) {
+  createThread(token: string, model: string | undefined, approvalPolicy: CodexApprovalPolicy | undefined, requestId: string, cwd?: string, engine: 'codex' | 'claude-code' = 'codex') {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
-      body: JSON.stringify({ model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
+      body: JSON.stringify({ engine, model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
     }, { networkRetries: 3 })
   },
   uploadPdfAttachment(token: string, file: File) {

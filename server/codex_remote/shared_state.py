@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from .codex_app_server import CodexAppServer, CodexRuntimeError
+from .claude_code import ClaudeCodeServer, is_claude_thread_id
 
 logger = logging.getLogger(__name__)
 
@@ -301,10 +302,12 @@ class SharedQueueService:
         store: SharedStateStore,
         codex: CodexAppServer,
         send: Callable[[str, dict[str, Any], bool], Awaitable[str | None]],
+        claude: ClaudeCodeServer | None = None,
     ) -> None:
         self.store = store
         self.codex = codex
         self.send = send
+        self.claude = claude
         self._wake = asyncio.Event()
         self._locks: dict[str, asyncio.Lock] = {}
         self._runner: asyncio.Task[None] | None = None
@@ -320,9 +323,26 @@ class SharedQueueService:
 
     async def delete_thread(self, thread_id: str) -> None:
         async with self._lock(thread_id):
-            await self.codex.delete_thread(thread_id)
+            if is_claude_thread_id(thread_id) and self.claude is not None:
+                await self.claude.delete_thread(thread_id)
+            else:
+                await self.codex.delete_thread(thread_id)
             self.store.delete_thread(thread_id)
             await self.changed(thread_id)
+
+    async def _read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
+        if is_claude_thread_id(thread_id) and self.claude is not None:
+            return await self.claude.read_thread(thread_id, include_turns=include_turns)
+        return await self.codex.read_thread(thread_id, include_turns=include_turns)
+
+    async def _active_turn_id(self, thread_id: str) -> str | None:
+        if is_claude_thread_id(thread_id) and self.claude is not None:
+            return await self.claude.active_turn_id(thread_id)
+        return await self.codex._active_turn_id(thread_id)
+
+    async def _resume_thread(self, thread_id: str) -> None:
+        if not (is_claude_thread_id(thread_id) and self.claude is not None):
+            await self.codex.resume_thread(thread_id)
 
     async def _block(self, thread_id: str, reason: str | None) -> None:
         if self.store.set_block(thread_id, reason):
@@ -373,17 +393,18 @@ class SharedQueueService:
     async def advance(self, thread_id: str) -> None:
         async with self._lock(thread_id):
             queue = self.store.queue(thread_id)
-            if not queue or queue[0].get("editing") or queue[0].get("sendAttempt") or self.codex.handed_off:
+            is_claude = is_claude_thread_id(thread_id) and self.claude is not None
+            if not queue or queue[0].get("editing") or queue[0].get("sendAttempt") or (self.codex.handed_off and not is_claude):
                 return
-            summary = await self.codex.read_thread(thread_id, include_turns=False)
-            if await self.codex._active_turn_id(thread_id):
+            summary = await self._read_thread(thread_id, include_turns=False)
+            if await self._active_turn_id(thread_id):
                 return
             summary_status = summary.get("status")
             if isinstance(summary_status, dict) and summary_status.get("type") in {"active", "inProgress", "running", "started"}:
                 return
             # Recovery of an existing queue still checks the last turn and
             # barrier; an explicit new submission may release a stopped turn.
-            thread = await self.codex.read_thread(thread_id)
+            thread = await self._read_thread(thread_id)
             turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
             latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
             barrier = self.store.barrier(thread_id)
@@ -406,13 +427,13 @@ class SharedQueueService:
                 status = thread["status"].get("type")
                 if status not in {None, "idle", "notLoaded"}:
                     return
-            if await self.codex._active_turn_id(thread_id):
+            if await self._active_turn_id(thread_id):
                 return
             await self._block(thread_id, None)
             # Resume before claiming. A failed resume cannot create a delivery
             # ambiguity and leaves the item safely pending.
             if not isinstance(summary_status, dict) or summary_status.get("type") != "idle":
-                await self.codex.resume_thread(thread_id)
+                await self._resume_thread(thread_id)
             payload = self.store.claim(thread_id, queue[0]["id"])
             if not payload:
                 return
@@ -423,7 +444,7 @@ class SharedQueueService:
         try:
             turn_id = await self.send(thread_id, payload, not new_turn)
             if not turn_id:
-                raise RuntimeError("Codex 未确认消息所属的回复轮次")
+                raise RuntimeError("对话引擎未确认消息所属的回复轮次")
         except asyncio.CancelledError:
             self.store.unverified(payload["id"])
             await self.changed(thread_id)
@@ -448,7 +469,7 @@ class SharedQueueService:
         async with self._lock(thread_id):
             self.store.enqueue(thread_id, payload, submitting=True)
             try:
-                if self.codex.handed_off:
+                if self.codex.handed_off and not (is_claude_thread_id(thread_id) and self.claude is not None):
                     return False
                 return await self._send_now(
                     thread_id, payload["id"], allow_steer=self._submit_can_steer, require_head=True,
@@ -474,23 +495,24 @@ class SharedQueueService:
 
         # Do not load a whole long conversation just to ask whether it is busy.
         # read_thread also reconciles a cached active ID against this snapshot.
-        thread = await self.codex.read_thread(thread_id, include_turns=False)
+        is_claude = is_claude_thread_id(thread_id) and self.claude is not None
+        thread = await self._read_thread(thread_id, include_turns=False)
         status = thread.get("status")
         status_type = status.get("type") if isinstance(status, dict) else None
         if status_type == "notLoaded":
             # A notLoaded summary is not an idle verdict. Resume once to ask
             # the local App Server for the real turn state before queueing.
-            await self.codex.resume_thread(thread_id)
-            thread = await self.codex.read_thread(thread_id, include_turns=False)
+            await self._resume_thread(thread_id)
+            thread = await self._read_thread(thread_id, include_turns=False)
             status = thread.get("status")
             status_type = status.get("type") if isinstance(status, dict) else None
-        active_turn = await self.codex._active_turn_id(thread_id)
+        active_turn = await self._active_turn_id(thread_id)
         busy = status_type in {"active", "inProgress", "running", "started"}
         if not active_turn and status_type not in {"idle", "notLoaded"}:
             # Older App Server versions may omit the summary status. Fall back
             # conservatively rather than treating an unknown status as idle.
             if not busy:
-                thread = await self.codex.read_thread(thread_id)
+                thread = await self._read_thread(thread_id)
                 status = thread.get("status")
                 status_type = status.get("type") if isinstance(status, dict) else None
                 turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
@@ -498,19 +520,19 @@ class SharedQueueService:
                 busy = status_type in {"active", "inProgress", "running", "started"} or bool(
                     latest and _turn_status(latest) in {"inprogress", "running", "started"}
                 )
-                active_turn = await self.codex._active_turn_id(thread_id)
+                active_turn = await self._active_turn_id(thread_id)
                 if not busy and not active_turn and (
                     (latest is not None and _turn_status(latest) not in {"completed", "complete", "success", "interrupted", "failed"})
                     or (latest is None and status_type not in {None, "idle", "notLoaded"})
                 ):
                     await self._block(thread_id, "等待确认 Codex 的回复状态，暂不自动发送")
                     return False
-        if (active_turn or busy) and not allow_steer:
+        if (active_turn or busy) and (not allow_steer or is_claude):
             return False
         if busy and not active_turn:
             raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
         if not active_turn and status_type != "idle":
-            await self.codex.resume_thread(thread_id)
+            await self._resume_thread(thread_id)
         payload = self.store.claim(thread_id, message_id)
         if not payload:
             raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")

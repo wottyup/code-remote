@@ -20,7 +20,7 @@ def _records(value: Any) -> list[dict[str, Any]]:
 
 
 def browser_thread_summary(thread: dict[str, Any]) -> dict[str, Any]:
-    result = _pick(thread, ("id", "name", "preview", "cwd", "createdAt", "updatedAt", "status", "historyRevision"))
+    result = _pick(thread, ("id", "engine", "name", "preview", "cwd", "createdAt", "updatedAt", "status", "historyRevision"))
     for key, limit in (("name", 240), ("preview", 400)):
         text = result.get(key)
         if isinstance(text, str) and len(text) > limit:
