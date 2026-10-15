@@ -27,7 +27,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 @media (pointer: coarse) {
   :root[data-native-keyboard-insets="true"][data-composer-keyboard="true"] .remote-shell--android .remote-workspace { padding-bottom: var(--native-keyboard-inset); }
-  :root[data-native-keyboard-insets="true"][data-composer-keyboard="true"][data-keyboard-transition="true"] .remote-shell--android .remote-workspace { transition: padding-bottom .22s cubic-bezier(.2, .75, .25, 1); }
   :root[data-keyboard-transition="true"] .message-composer { backdrop-filter: none; -webkit-backdrop-filter: none; }
   :root[data-keyboard-transition="true"] .message-composer--running::after { animation: none; filter: none; opacity: .28; }
 }
