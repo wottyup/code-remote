@@ -17,6 +17,19 @@ export type MobilePanelGestureAction =
 
 const mobilePanelGestureThreshold = 44
 const mobileBackEdgeSize = 36
+const mobileSidebarClosedOffsetRatio = 1.05
+
+export function mobileSidebarDragOffset(panelOpen: boolean, panelWidth: number, deltaX: number) {
+  const closedOffset = -Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio
+  const startOffset = panelOpen ? 0 : closedOffset
+  return Math.max(closedOffset, Math.min(0, startOffset + deltaX))
+}
+
+export function shouldOpenMobileSidebarAfterDrag(offset: number, panelWidth: number, action: MobilePanelGestureAction | null) {
+  if (action === 'open-sidebar') return true
+  if (action === 'close-sidebar') return false
+  return offset > -(Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio) / 2
+}
 
 export function beginMobilePanelGesture(
   x: number,
