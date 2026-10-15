@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -30,7 +31,8 @@ class SharedStateStore:
     def __init__(self, path: Path) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path, isolation_level=None)
-        os.chmod(path, 0o600)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
         self.connection.row_factory = sqlite3.Row
         self.connection.executescript("""
             CREATE TABLE IF NOT EXISTS queued_messages (
