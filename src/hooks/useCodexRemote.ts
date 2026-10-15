@@ -3158,6 +3158,38 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventTurnId = typeof eventTurn?.id === 'string'
       ? eventTurn.id
       : typeof params.turnId === 'string' ? params.turnId : null
+    const applyRemoteUserItem = (item: Record<string, unknown> | undefined, turnId: string | null) => {
+      if (!activeThreadId.current) return
+      const itemId = typeof item?.id === 'string' ? item.id : undefined
+      const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
+        .some((delivery) => delivery.threadId === activeThreadId.current)
+      const remoteUserMessage = userMessageFromEventItem(item, turnId)
+      const alreadyVisible = itemId ? messagesRef.current.some((message) =>
+        message.id === itemId || message.sourceItemId === itemId,
+      ) : false
+      if (remoteUserMessage && !pendingLocalDelivery && !alreadyVisible) {
+        const continuesTurn = Boolean(turnId && messagesRef.current.some((message) =>
+          message.role === 'user' && message.turnId === turnId,
+        ))
+        if (continuesTurn && streamingAssistantTurnId.current === turnId) {
+          finalizeVisibleStreamingTurn(turnId)
+        }
+        setMessages((current) => {
+          const next = insertRemoteUserMessage(current, remoteUserMessage)
+          return sameMessages(current, next) ? current : next
+        })
+      }
+      const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
+        if (!part || typeof part !== 'object') return false
+        const content = part as Record<string, unknown>
+        return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
+      })
+      if (hasUnresolvedImages && !pendingLocalDelivery) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
+      } else if (!remoteUserMessage) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
+      }
+    }
     if (event.method === 'thread/name/updated') {
       const threadId = typeof params.threadId === 'string' ? params.threadId : null
       if (threadId && (typeof params.threadName === 'string' || params.threadName === null)) {
@@ -3406,35 +3438,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType === 'usermessage' && activeThreadId.current) {
-        const itemId = typeof item?.id === 'string' ? item.id : undefined
-        const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
-          .some((delivery) => delivery.threadId === activeThreadId.current)
-        const remoteUserMessage = userMessageFromEventItem(item, turnId)
-        const alreadyVisible = itemId ? messagesRef.current.some((message) =>
-          message.id === itemId || message.sourceItemId === itemId,
-        ) : false
-        if (remoteUserMessage && !pendingLocalDelivery && !alreadyVisible) {
-          const continuesTurn = Boolean(turnId && messagesRef.current.some((message) =>
-            message.role === 'user' && message.turnId === turnId,
-          ))
-          if (continuesTurn && streamingAssistantTurnId.current === turnId) {
-            finalizeVisibleStreamingTurn(turnId)
-          }
-          setMessages((current) => {
-            const next = insertRemoteUserMessage(current, remoteUserMessage)
-            return sameMessages(current, next) ? current : next
-          })
-        }
-        const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
-          if (!part || typeof part !== 'object') return false
-          const content = part as Record<string, unknown>
-          return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
-        })
-        if (hasUnresolvedImages && !pendingLocalDelivery) {
-          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
-        } else if (!remoteUserMessage) {
-          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
-        }
+        applyRemoteUserItem(item, turnId)
       }
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem(item, 'running')
@@ -3499,6 +3503,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       const itemId = typeof item?.id === 'string' ? item.id : null
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'usermessage') {
+        applyRemoteUserItem(item, turnId)
+      }
       if (itemType === 'agentmessage' && itemId && turnId) {
         const text = assistantItemText(item?.text)
         commitTurnActivityMessage(activeThreadId.current, turnId, itemId, text.length || streamingAssistantParts.current.get(itemId)?.length || 0)
