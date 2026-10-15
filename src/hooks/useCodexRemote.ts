@@ -83,6 +83,10 @@ export interface QueuedTurnMessage {
   text: string
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
+  model?: string
+  effort?: string
+  claudeModel?: string
+  claudeEffort?: string
   createdAt: string
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
@@ -97,11 +101,7 @@ export interface QueuedTurnMessage {
 
 interface QueuedTurnPayload extends QueuedTurnMessage {
   requestText: string
-  model?: string
-  effort?: string
   approvalPolicy?: CodexApprovalPolicy
-  claudeModel?: string
-  claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
 }
 
@@ -2942,8 +2942,24 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const sharedSendQueuedMessageNow = useCallback(async (messageId: string) => {
     const threadId = activeThreadId.current
-    return threadId ? sharedQueueAction(threadId, 'send-now', messageId) : false
-  }, [sharedQueueAction])
+    if (!threadId) return false
+    const message = serverQueuedMessagesByThreadRef.current[threadId]?.find((item) => item.id === messageId)
+    // turn/steer cannot apply a message's model/effort overrides. The idle-only
+    // endpoint also protects against another client starting a turn meanwhile.
+    const needsSeparateTurn = Boolean(message?.model || message?.effort || message?.claudeModel || message?.claudeEffort)
+    if (!needsSeparateTurn) return sharedQueueAction(threadId, 'send-now', messageId)
+    try {
+      const result = await codexRemoteClient.startQueuedIfIdle(token, threadId, messageId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return result.sent
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '发送排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, sharedQueueAction, token])
 
   useEffect(() => {
     const threadId = activeThread?.id

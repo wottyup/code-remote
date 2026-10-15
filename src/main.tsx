@@ -2,7 +2,10 @@ import { StrictMode, useEffect, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { AppRecoveryBoundary } from './components/AppRecoveryBoundary'
+import { syncMobileLayout } from './lib/mobileLayout'
 import './styles.css'
+
+syncMobileLayout()
 
 function MobileViewportGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
@@ -10,6 +13,13 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     let settleTimer: number | undefined
     let checkingForUpdate = false
     let lastUpdateCheckAt = 0
+    const editingInput = () => document.activeElement instanceof HTMLElement
+      && document.activeElement.matches('textarea, input, [contenteditable="true"]')
+    const writePixels = (name: string, value: number) => {
+      const next = `${value}px`
+      const style = document.documentElement.style
+      if (style.getPropertyValue(name) !== next) style.setProperty(name, next)
+    }
     const assetSignature = (root: ParentNode, baseUrl: string) => Array.from(
       root.querySelectorAll('link[rel="stylesheet"][href], script[type="module"][src]'),
       (element) => {
@@ -19,7 +29,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     ).filter(Boolean).sort().join('\n')
     const loadedAssetSignature = assetSignature(document, window.location.href)
     const checkForUpdate = async () => {
-      if (!('CodexRemoteAndroid' in window) || document.hidden || checkingForUpdate) return
+      if (!('CodexRemoteAndroid' in window) || document.hidden || checkingForUpdate || editingInput()) return
       const now = Date.now()
       if (now - lastUpdateCheckAt < 1_000) return
       lastUpdateCheckAt = now
@@ -33,7 +43,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
         if (!response.ok) return
         const html = new DOMParser().parseFromString(await response.text(), 'text/html')
         const latestAssetSignature = assetSignature(html, response.url || window.location.href)
-        if (loadedAssetSignature && latestAssetSignature && latestAssetSignature !== loadedAssetSignature) {
+        if (loadedAssetSignature && latestAssetSignature && latestAssetSignature !== loadedAssetSignature && !editingInput()) {
           window.location.reload()
         }
       } catch {
@@ -43,6 +53,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       }
     }
     const syncViewportHeight = () => {
+      syncMobileLayout()
       const viewport = window.visualViewport
       const layoutHeight = Math.round(window.innerHeight)
       const visualHeight = Math.round(viewport?.height ?? layoutHeight)
@@ -60,19 +71,19 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
           : visualHeight
       const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
-        document.documentElement.style.setProperty('--native-composer-bottom-inset', `${composerBottomInset}px`)
+        writePixels('--native-composer-bottom-inset', composerBottomInset)
       }
       const statusBarInset = window.CodexRemoteAndroid?.getStatusBarInsetDp?.() ?? 0
       if (Number.isFinite(statusBarInset) && statusBarInset >= 0) {
-        document.documentElement.style.setProperty('--native-status-bar-inset', `${statusBarInset}px`)
+        writePixels('--native-status-bar-inset', statusBarInset)
       }
       // Do not replace a working viewport value with the occasional zero-sized
       // value that some mobile browsers report while returning from background.
       if (height < 160) return
-      document.documentElement.style.setProperty('--app-viewport-height', `${height}px`)
+      writePixels('--app-viewport-height', height)
     }
     const scheduleViewportSync = () => {
-      if (frame !== undefined) window.cancelAnimationFrame(frame)
+      if (frame !== undefined) return
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
       frame = window.requestAnimationFrame(() => {
         frame = undefined
@@ -93,6 +104,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     scheduleViewportSync()
     window.addEventListener('resize', scheduleViewportSync)
     window.addEventListener('orientationchange', scheduleViewportSync)
+    window.screen.orientation?.addEventListener('change', scheduleViewportSync)
     window.addEventListener('pageshow', scheduleViewportSync)
     window.addEventListener('codex-remote:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
@@ -105,6 +117,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
       window.removeEventListener('resize', scheduleViewportSync)
       window.removeEventListener('orientationchange', scheduleViewportSync)
+      window.screen.orientation?.removeEventListener('change', scheduleViewportSync)
       window.removeEventListener('pageshow', scheduleViewportSync)
       window.removeEventListener('codex-remote:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)

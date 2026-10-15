@@ -1,5 +1,6 @@
 import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
   AlertTriangle,
   ArrowUp,
@@ -154,8 +155,6 @@ const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
 const compactLandscapeComposerHeight = 50
-const compactLandscapeMediaQuery = '(orientation: landscape) and (pointer: coarse)'
-const mobileLayoutMediaQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
@@ -248,9 +247,10 @@ interface ComposerPreferences {
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
+type TemporaryModelPreferences = Pick<ComposerPreferences, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 function workspacePanelsWidthLimit() {
-  if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
+  if (typeof window !== 'undefined' && isMobileLayout()) {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
@@ -663,6 +663,8 @@ function ComposerMenu({
   open,
   onOpenChange,
   onChange,
+  footer,
+  temporary = false,
 }: {
   label: string
   value: string
@@ -672,6 +674,8 @@ function ComposerMenu({
   open: boolean
   onOpenChange: (open: boolean) => void
   onChange: (value: string) => void
+  footer?: ReactNode
+  temporary?: boolean
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
@@ -766,39 +770,44 @@ function ComposerMenu({
         }}
         onClick={() => onOpenChange(!open)}
       >
-        <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
+        <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
       </button>
       {open ? createPortal(
         <div
           ref={popover}
           className="composer-menu__popover composer-menu__popover--floating"
           style={position ?? { visibility: 'hidden' }}
-          role="listbox"
-          aria-label={label}
         >
-          {options.length > 0 ? options.map((option) => (
-            <button
-              className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              onClick={() => {
-                onChange(option.value)
-                onOpenChange(false)
-                const focusTarget = composerFocusBeforeOpen.current
-                composerFocusBeforeOpen.current = null
-                if (focusTarget?.isConnected) {
-                  window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
-                }
-              }}
-            >
-              <span className="composer-menu__option-copy">
-                <strong>{option.label}</strong>
-              </span>
-              {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
-            </button>
-          )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+          {footer}
+          <div className="composer-menu__options" role="listbox" aria-label={label}>
+            {options.length > 0 ? options.map((option) => (
+              <button
+                className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                disabled={disabled}
+                onPointerDown={(event) => {
+                  if (composerFocusBeforeOpen.current) event.preventDefault()
+                }}
+                onClick={() => {
+                  onChange(option.value)
+                  onOpenChange(false)
+                  const focusTarget = composerFocusBeforeOpen.current
+                  composerFocusBeforeOpen.current = null
+                  if (focusTarget?.isConnected) {
+                    window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                  }
+                }}
+              >
+                <span className="composer-menu__option-copy">
+                  <strong>{option.label}</strong>
+                </span>
+                {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+              </button>
+            )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+          </div>
         </div>,
         root.current?.closest('.remote-shell') ?? document.body,
       ) : null}
@@ -847,6 +856,8 @@ interface MessageComposerProps {
   selectedEffort: string
   selectedApprovalPolicy: CodexApprovalPolicy
   selectedClaudePermissionMode: ClaudeCodePermissionMode
+  temporaryPreferences: boolean
+  onTemporaryPreferencesChange: (enabled: boolean) => void
   modelOptions: ComposerMenuOption[]
   reasoningOptions: ComposerMenuOption[]
   authorizationOptions: ComposerMenuOption[]
@@ -888,6 +899,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   selectedEffort,
   selectedApprovalPolicy,
   selectedClaudePermissionMode,
+  temporaryPreferences,
+  onTemporaryPreferencesChange,
   modelOptions,
   reasoningOptions,
   authorizationOptions,
@@ -919,15 +932,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
+  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
-    window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+    isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
     if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
     if (typeof window === 'undefined') return defaultComposerHeight
-    return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
@@ -948,6 +961,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
+  const keyboardFallbackTimer = useRef<number | undefined>(undefined)
+  const requestComposerKeyboard = useCallback(() => {
+    if (!window.CodexRemoteAndroid?.showKeyboard) return
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+    const beforeHeight = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+    // Let the normal WebView focus open the IME first. The native fallback
+    // restarts the input connection, so only use it if focus did not open it.
+    keyboardFallbackTimer.current = window.setTimeout(() => {
+      keyboardFallbackTimer.current = undefined
+      if (document.activeElement !== composer.current) return
+      const height = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+      if (beforeHeight - height > 80) return
+      window.CodexRemoteAndroid?.showKeyboard?.()
+    }, 350)
+  }, [])
+  useEffect(() => () => {
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+  }, [])
   const editingDraftSnapshot = useRef<{
     draft: string
     images: CodexImageAttachment[]
@@ -960,16 +991,19 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [composerHeight, composerHeightMemory])
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
     const syncComposerHeight = () => {
-      setCompactLandscape(mediaQuery.matches)
+      const landscape = isCompactLandscape()
+      setCompactLandscape(landscape)
       if (composerHeightWasResized.current) return
-      setComposerHeight(mediaQuery.matches ? compactLandscapeComposerHeight : defaultComposerHeight)
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
     }
     syncComposerHeight()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
     else mediaQuery.addListener(syncComposerHeight)
+    window.addEventListener(mobileLayoutChangedEvent, syncComposerHeight)
     return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncComposerHeight)
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
       else mediaQuery.removeListener(syncComposerHeight)
     }
@@ -978,12 +1012,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useEffect(() => {
     const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
     const syncMobileLayout = () => {
-      setMobileLayout(mediaQuery.matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint))
+      setMobileLayout(isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint))
     }
     syncMobileLayout()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncMobileLayout)
     else mediaQuery.addListener(syncMobileLayout)
+    window.addEventListener(mobileLayoutChangedEvent, syncMobileLayout)
     return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncMobileLayout)
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncMobileLayout)
       else mediaQuery.removeListener(syncMobileLayout)
     }
@@ -1112,18 +1148,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
       updateDraft(value)
-      window.requestAnimationFrame(() => composer.current?.focus())
+      window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
     appendDraft(value, focus = true) {
       const current = draftRef.current
       const additions = workspacePathsMissingFromDraft(current, value.split(/\r?\n/))
       if (additions.length === 0) {
-        if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+        if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
         return
       }
       const separator = current && !/\s$/.test(current) ? '\n' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
-      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
     insertDraftAtCursor(value, focus = true) {
       const textarea = composer.current
@@ -1136,7 +1172,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         window.requestAnimationFrame(() => {
           const activeTextarea = composer.current
           if (!activeTextarea) return
-          activeTextarea.focus()
+          activeTextarea.focus({ preventScroll: true })
           const cursor = start + value.length
           activeTextarea.setSelectionRange(cursor, cursor)
         })
@@ -1144,7 +1180,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     },
     addDocumentAttachment(document, focus = true) {
       const added = appendDocument(document)
-      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
       return added
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
@@ -1257,7 +1293,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [])
 
   const canCompose = !sending && !writerConflict && connection === 'connected'
-  const canConfigure = canCompose && !isRunning
+  const canConfigure = canCompose && !editingQueuedMessageId
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
     && !readingDocuments
     && !readingImages
@@ -1265,6 +1301,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
+    && !draft.trim() && attachedImages.length === 0 && attachedDocuments.length === 0
+  const temporaryPreferencesToggle = (
+    <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
+      aria-checked={temporaryPreferences} disabled={!canConfigure}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => onTemporaryPreferencesChange(!temporaryPreferences)}>
+      <span className="composer-menu__option-copy"><strong>仅本次</strong><small>发送后恢复原模型和思考等级</small></span>
+      {temporaryPreferences ? <Check size={14} aria-hidden="true" /> : null}
+    </button>
+  )
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
   )
@@ -1533,7 +1579,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
     setAttachmentError(null)
-    window.requestAnimationFrame(() => composer.current?.focus())
+    window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
   }
 
   async function finishQueuedEdit() {
@@ -1583,7 +1629,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (sendingQueuedId) return
     setSendingQueuedId(messageId)
     try {
-      await onSendQueuedNow(messageId)
+      if (!await onSendQueuedNow(messageId)) {
+        setAttachmentError('消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
+      }
     } finally {
       setSendingQueuedId((current) => current === messageId ? null : current)
     }
@@ -1741,17 +1789,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const isEditing = editingQueuedMessageId === message.id
               const deliveryUnverified = Boolean(message.sendAttempt)
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
+              const queuedModel = showCodexPreferences ? message.model : message.claudeModel
+              const queuedEffort = showCodexPreferences ? message.effort : message.claudeEffort
+              const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
+              const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
+              const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
+              const needsSeparateTurn = Boolean(message.model || message.effort || message.claudeModel || message.claudeEffort)
               const summary = message.text || (message.documents?.length
                 ? `附件文档：${message.documents.length} 个文件`
                 : `${message.images.length} 张图片`)
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待自动发送')}</small></span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待自动发送')}</small></span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing || (needsSeparateTurn && (isRunning || index > 0))} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn ? '按消息保存的模型和思考等级开始下一轮；等待前面的回复完成' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
                     {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>立即发送</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
@@ -1779,10 +1833,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
-          onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
+          onFocus={requestComposerKeyboard}
           onPointerDown={(event) => {
             if (document.activeElement === event.currentTarget) {
-              window.CodexRemoteAndroid?.showKeyboard?.()
+              requestComposerKeyboard()
             }
           }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
@@ -1794,12 +1848,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <div className="message-composer__footer">
         <div className="composer-preferences">
           {showCodexPreferences ? <>
-            <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-            <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+            <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
+            <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
             <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           </> : <>
-            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
+            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
             <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
           </>}
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
@@ -1811,7 +1865,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-            : isRunning && !stopWithSendButton ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
+            : isRunning && editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
           {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
@@ -1967,12 +2021,12 @@ function selectedCodeFromEditor(editor: HTMLTextAreaElement) {
 
 function desktopWorkspacePreviewAvailable() {
   return typeof window !== 'undefined'
-    && !window.matchMedia(mobileLayoutMediaQuery).matches
+    && !isMobileLayout()
 }
 
 function concurrentPaneLimit() {
   if (typeof window === 'undefined') return 5
-  const mobileLayout = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+  const mobileLayout = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
   return mobileLayout ? 3 : 5
 }
 
@@ -2531,7 +2585,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
 
     event.preventDefault()
     setContextMenu(null)
-    const isMobile = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+    const isMobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
     const menuWidth = Math.min(300, window.innerWidth - 16)
     const menuHeight = isMobile ? 132 : 240
     const selectionBounds = isMobile
@@ -3135,6 +3189,7 @@ function RemoteChatPane({
       if (forceToBottom) settleForcedMessageStreamBottom()
     })
     observer.observe(content)
+    if (messageContainer.current) observer.observe(messageContainer.current)
     return () => observer.disconnect()
   }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
 
@@ -3474,7 +3529,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function handleThreadTouchStart(event: ReactTouchEvent<HTMLButtonElement>, thread: CodexThread) {
     clearThreadLongPress()
-    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) return
+    if (!isMobileLayout() || event.touches.length !== 1) return
     const touch = event.touches[0]
     if (!touch) return
     const pending = {
@@ -3583,7 +3638,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
-    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) {
+    if (!isMobileLayout() || event.touches.length !== 1) {
       const previousStart = sidebarTouchStart.current
       sidebarTouchStart.current = null
       if (sidebarDrag.current?.active) {
@@ -3766,9 +3821,26 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const syncWorkspaceDraft = useCallback((draft: string) => {
     setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
   }, [composerDraftScope])
-  const activeComposerPreferences = activeThreadId
+  const savedComposerPreferences = useMemo(() => activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
-    : defaultComposerPreferences
+    : defaultComposerPreferences, [activeThreadId, defaultComposerPreferences, threadComposerPreferences])
+  const [temporaryPreferencesByScope, setTemporaryPreferencesByScope] = useState<Record<string, TemporaryModelPreferences>>({})
+  const preferencesScope = `${selectedPaneIndex}:${activeRemote.activeEngine}:${activeThreadId ?? 'new'}`
+  const temporaryPreferences = temporaryPreferencesByScope[preferencesScope]
+  const activeComposerPreferences = temporaryPreferences ? { ...savedComposerPreferences, ...temporaryPreferences } : savedComposerPreferences
+  const changeTemporaryPreferences = useCallback((enabled: boolean) => {
+    setTemporaryPreferencesByScope((current) => {
+      const next = { ...current }
+      if (enabled) next[preferencesScope] = {
+        model: savedComposerPreferences.model,
+        effort: savedComposerPreferences.effort,
+        claudeModel: savedComposerPreferences.claudeModel,
+        claudeEffort: savedComposerPreferences.claudeEffort,
+      }
+      else delete next[preferencesScope]
+      return next
+    })
+  }, [preferencesScope, savedComposerPreferences])
   const selectedModel = isClaudeCodeThread
     ? activeComposerPreferences.claudeModel ?? 'default'
     : activeComposerPreferences.model ?? ''
@@ -3794,6 +3866,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [darkStatusBarIcons])
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
+    if (temporaryPreferences && ('model' in changes || 'effort' in changes || 'claudeModel' in changes || 'claudeEffort' in changes)) {
+      setTemporaryPreferencesByScope((current) => ({
+        ...current,
+        [preferencesScope]: { ...current[preferencesScope], ...changes },
+      }))
+      return
+    }
     if (!activeThreadId) {
       setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
       return
@@ -3805,7 +3884,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         changes,
       ),
     }))
-  }, [activeThreadId, defaultComposerPreferences])
+  }, [activeThreadId, defaultComposerPreferences, preferencesScope, temporaryPreferences])
 
   const rememberThreadComposerPreferences = useCallback((threadId: string, preferences: ComposerPreferences) => {
     if (!threadId) return
@@ -3840,7 +3919,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!settingsOpen) return
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
-      if (window.matchMedia(mobileLayoutMediaQuery).matches) return
+      if (isMobileLayout()) return
       event.preventDefault()
       event.stopPropagation()
       closeSettingsPanel()
@@ -4176,7 +4255,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
-      : activeComposerPreferences
+      : savedComposerPreferences
     const thread = await target.createThread(
       selectedEngine === 'codex' ? targetPreferences.model : undefined,
       selectedEngine === 'codex' ? targetPreferences.approvalPolicy : undefined,
@@ -4326,17 +4405,37 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
   }, [])
 
-  const sendComposerMessage = useCallback((input: ComposerSendInput) => {
+  const sendComposerMessage = useCallback(async (input: ComposerSendInput) => {
     const target = remotes[selectedPaneIndex] ?? remote0
-    const preferences = composerPreferencesFrom(input)
-    return target.sendMessage({
+    const preferences = temporaryPreferences ? savedComposerPreferences : composerPreferencesFrom(input)
+    let submittedPreferencesScope = preferencesScope
+    const sent = await target.sendMessage({
       ...input,
       onThreadCreated: (thread) => {
         composerHandle.current?.adoptUnassignedDraft(thread.id, false)
         rememberThreadComposerPreferences(thread.id, preferences)
+        if (temporaryPreferences) {
+          submittedPreferencesScope = `${selectedPaneIndex}:${target.activeEngine}:${thread.id}`
+          const nextScope = submittedPreferencesScope
+          setTemporaryPreferencesByScope((current) => {
+            if (current[preferencesScope] !== temporaryPreferences) return current
+            const next = { ...current, [nextScope]: temporaryPreferences }
+            delete next[preferencesScope]
+            return next
+          })
+        }
       },
     })
-  }, [rememberThreadComposerPreferences, remote0, remote1, remote2, remote3, remote4, selectedPaneIndex])
+    if (sent && temporaryPreferences) {
+      setTemporaryPreferencesByScope((current) => {
+        if (current[submittedPreferencesScope] !== temporaryPreferences) return current
+        const next = { ...current }
+        delete next[submittedPreferencesScope]
+        return next
+      })
+    }
+    return sent
+  }, [preferencesScope, rememberThreadComposerPreferences, remote0, remote1, remote2, remote3, remote4, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
@@ -4606,6 +4705,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               selectedEffort={selectedEffort}
               selectedApprovalPolicy={selectedApprovalPolicy}
               selectedClaudePermissionMode={selectedClaudePermissionMode}
+              temporaryPreferences={Boolean(temporaryPreferences)}
+              onTemporaryPreferencesChange={changeTemporaryPreferences}
               modelOptions={modelOptions}
               reasoningOptions={reasoningOptions}
               authorizationOptions={approvalPolicyOptions}
