@@ -102,6 +102,7 @@ public class MainActivity extends Activity {
     private int navigationBarInsetPx;
     private volatile int composerBottomInsetDp;
     private volatile int statusBarInsetDp;
+    private volatile int keyboardInsetDp;
     private volatile boolean softKeyboardVisible;
     private ValueCallback<Uri[]> pendingFileChooser;
     private OnBackInvokedCallback backInvokedCallback;
@@ -111,7 +112,9 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         captureNotificationNavigation(getIntent());
         configureSystemBars();
-        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+        getWindow().setSoftInputMode(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+                ? WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+                : WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
         registerBackNavigationCallback();
         showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
@@ -688,6 +691,11 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public int getKeyboardInsetDp() {
+            return keyboardInsetDp;
+        }
+
+        @JavascriptInterface
         public boolean hasNotificationPermission() {
             return MainActivity.this.hasNotificationPermission();
         }
@@ -936,6 +944,7 @@ public class MainActivity extends Activity {
         }
         getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        getWindow().getDecorView().setBackgroundColor(DARK);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             getWindow().setNavigationBarContrastEnforced(false);
         }
@@ -992,12 +1001,15 @@ public class MainActivity extends Activity {
                 }
             }
             softKeyboardVisible = imeVisible;
+            updateKeyboardInset(Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && imeVisible
+                    ? Math.round(imeBottom / getResources().getDisplayMetrics().density)
+                    : 0);
             if (!imeVisible) navigationBarInsetPx = navigationBottom;
             updateStatusBarInset(Math.round(top / getResources().getDisplayMetrics().density));
             int bottomInsetDp = imeVisible ? 0 : Math.round(navigationBottom / getResources().getDisplayMetrics().density);
             updateComposerBottomInset(bottomInsetDp);
             int contentBottom = extendWebViewBehindNavigationBar
-                    ? imeBottom
+                    ? 0
                     : Math.max(navigationBottom, imeBottom);
             view.setPadding(
                     view.getPaddingLeft(),
@@ -1029,6 +1041,20 @@ public class MainActivity extends Activity {
             if (currentWebView != webView) return;
             currentWebView.evaluateJavascript(
                     "document.documentElement.style.setProperty('--native-composer-bottom-inset', '" + insetDp + "px')",
+                    null);
+        });
+    }
+
+    private void updateKeyboardInset(int insetDp) {
+        if (keyboardInsetDp == insetDp) return;
+        keyboardInsetDp = insetDp;
+        WebView currentWebView = webView;
+        if (currentWebView == null) return;
+        currentWebView.post(() -> {
+            if (currentWebView != webView) return;
+            currentWebView.evaluateJavascript(
+                    "document.documentElement.style.setProperty('--native-keyboard-inset', '" + insetDp + "px');"
+                            + "window.dispatchEvent(new Event('codex-remote:keyboard-inset'))",
                     null);
         });
     }

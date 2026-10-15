@@ -1,6 +1,7 @@
 :root {
   --app-viewport-height: 100vh;
   --native-composer-bottom-inset: 0px;
+  --native-keyboard-inset: 0px;
   --native-status-bar-inset: 0px;
   --device-font-offset: 0px;
   --mobile-font-offset: 0px;
@@ -23,6 +24,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 @media (max-width: 700px) {
   :root { --device-font-offset: -2px; --mobile-font-offset: -2px; }
+}
+@media (pointer: coarse) {
+  :root[data-native-keyboard-insets="true"][data-keyboard-transition="true"] .remote-shell { transition: height .2s cubic-bezier(.2, .75, .25, 1), min-height .2s cubic-bezier(.2, .75, .25, 1); }
+  :root[data-keyboard-transition="true"] .message-composer { backdrop-filter: none; -webkit-backdrop-filter: none; }
+  :root[data-keyboard-transition="true"] .message-composer--running::after { animation: none; filter: none; opacity: .28; }
 }
 @media (pointer: coarse) {
   :root:where([data-touch-landscape="true"]) { --device-font-offset: -2px; --mobile-font-offset: -2px; }

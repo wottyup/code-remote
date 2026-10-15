@@ -11,6 +11,7 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     let frame: number | undefined
     let settleTimer: number | undefined
+    let keyboardTransitionTimer: number | undefined
     let checkingForUpdate = false
     let lastUpdateCheckAt = 0
     const editingInput = () => document.activeElement instanceof HTMLElement
@@ -19,6 +20,14 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const next = `${value}px`
       const style = document.documentElement.style
       if (style.getPropertyValue(name) !== next) style.setProperty(name, next)
+    }
+    const markKeyboardTransition = () => {
+      document.documentElement.dataset.keyboardTransition = 'true'
+      if (keyboardTransitionTimer !== undefined) window.clearTimeout(keyboardTransitionTimer)
+      keyboardTransitionTimer = window.setTimeout(() => {
+        keyboardTransitionTimer = undefined
+        delete document.documentElement.dataset.keyboardTransition
+      }, 320)
     }
     const assetSignature = (root: ParentNode, baseUrl: string) => Array.from(
       root.querySelectorAll('link[rel="stylesheet"][href], script[type="module"][src]'),
@@ -58,17 +67,26 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       const layoutHeight = Math.round(window.innerHeight)
       const visualHeight = Math.round(viewport?.height ?? layoutHeight)
       const nativeBridge = 'CodexRemoteAndroid' in window
+      const nativeKeyboardInsetAvailable = typeof window.CodexRemoteAndroid?.getKeyboardInsetDp === 'function'
+      const nativeKeyboardInset = nativeKeyboardInsetAvailable
+        ? Math.max(0, window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0)
+        : 0
       const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
       const focusedComposer = document.activeElement instanceof HTMLElement
         && document.activeElement.matches('.message-composer textarea, .message-composer input:not([type="file"]), .message-composer [contenteditable="true"]')
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
       const browserViewportIsPanned = !nativeBridge && focusedComposer && offsetTop > 1
-      const height = nativeViewportIsPanned
-        ? Math.max(layoutHeight, pannedVisualBottom)
-        : browserViewportIsPanned
-          ? pannedVisualBottom
-          : visualHeight
+      const height = nativeKeyboardInsetAvailable
+        ? Math.max(160, layoutHeight - nativeKeyboardInset)
+        : nativeViewportIsPanned
+          ? Math.max(layoutHeight, pannedVisualBottom)
+          : browserViewportIsPanned
+            ? pannedVisualBottom
+            : visualHeight
+      document.documentElement.dataset.nativeKeyboardInsets = String(nativeKeyboardInsetAvailable)
+      document.documentElement.dataset.keyboardVisible = String(nativeKeyboardInset > 0)
+      writePixels('--native-keyboard-inset', nativeKeyboardInset)
       const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         writePixels('--native-composer-bottom-inset', composerBottomInset)
@@ -100,6 +118,14 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       void checkForUpdate()
     }
     const handleAppResume = () => { void checkForUpdate() }
+    const handleFocusChange = (event: FocusEvent) => {
+      if (event.target instanceof HTMLElement && event.target.matches('.message-composer textarea')) markKeyboardTransition()
+      scheduleViewportSync()
+    }
+    const handleKeyboardInset = () => {
+      markKeyboardTransition()
+      scheduleViewportSync()
+    }
     const viewport = window.visualViewport
     scheduleViewportSync()
     window.addEventListener('resize', scheduleViewportSync)
@@ -108,21 +134,25 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     window.addEventListener('pageshow', scheduleViewportSync)
     window.addEventListener('codex-remote:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
-    document.addEventListener('focusin', scheduleViewportSync)
-    document.addEventListener('focusout', scheduleViewportSync)
+    document.addEventListener('focusin', handleFocusChange)
+    document.addEventListener('focusout', handleFocusChange)
+    window.addEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
     viewport?.addEventListener('resize', scheduleViewportSync)
     viewport?.addEventListener('scroll', scheduleViewportSync)
     return () => {
       if (frame !== undefined) window.cancelAnimationFrame(frame)
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
+      if (keyboardTransitionTimer !== undefined) window.clearTimeout(keyboardTransitionTimer)
+      delete document.documentElement.dataset.keyboardTransition
       window.removeEventListener('resize', scheduleViewportSync)
       window.removeEventListener('orientationchange', scheduleViewportSync)
       window.screen.orientation?.removeEventListener('change', scheduleViewportSync)
       window.removeEventListener('pageshow', scheduleViewportSync)
       window.removeEventListener('codex-remote:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
-      document.removeEventListener('focusin', scheduleViewportSync)
-      document.removeEventListener('focusout', scheduleViewportSync)
+      document.removeEventListener('focusin', handleFocusChange)
+      document.removeEventListener('focusout', handleFocusChange)
+      window.removeEventListener('codex-remote:keyboard-inset', handleKeyboardInset)
       viewport?.removeEventListener('resize', scheduleViewportSync)
       viewport?.removeEventListener('scroll', scheduleViewportSync)
     }

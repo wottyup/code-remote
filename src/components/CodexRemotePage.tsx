@@ -971,10 +971,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     keyboardFallbackTimer.current = window.setTimeout(() => {
       keyboardFallbackTimer.current = undefined
       if (document.activeElement !== composer.current) return
+      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) > 0) return
       const height = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
       if (beforeHeight - height > 80) return
       window.CodexRemoteAndroid?.showKeyboard?.()
-    }, 350)
+    }, 500)
   }, [])
   useEffect(() => () => {
     if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
