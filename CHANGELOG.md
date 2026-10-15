@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.18.1-dev.3] - 修复 Android 客户端配对请求地址
+
 ## [0.18.1-dev.2] - 优化 Android 原生客户端的同步和断线恢复
 
 ## [0.18.1-dev.1] - 使用 Kotlin 原生界面重建 Android 移动端

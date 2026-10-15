@@ -297,10 +297,9 @@ class MainActivity : Activity() {
             connect.isEnabled = false
             connect.text = "正在连接…"
             status.setTextColor(MUTED)
-            status.text = "正在检测电脑网页服务…"
+            status.text = "正在连接电脑服务并验证配对码…"
             io.execute {
                 try {
-                    RemoteApi(normalized).get("/health")
                     val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
                     val newToken = paired.getString("token")
                     handler.post {
