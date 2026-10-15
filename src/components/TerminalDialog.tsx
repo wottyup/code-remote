@@ -1,19 +1,20 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, Copy, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, Copy, Delete, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
 const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
-const terminalDirectionKeys = [
+const terminalControlKeys = [
   { label: '向左', code: 'D', icon: ArrowLeft },
   { label: '向上', code: 'A', icon: ArrowUp },
   { label: '向下', code: 'B', icon: ArrowDown },
   { label: '向右', code: 'C', icon: ArrowRight },
+  { label: '退格', code: 'Backspace', icon: Delete },
 ] as const
-type TerminalDirectionCode = (typeof terminalDirectionKeys)[number]['code']
+type TerminalControlCode = (typeof terminalControlKeys)[number]['code']
 
 interface TerminalDialogProps {
   token: string
@@ -89,37 +90,37 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-  const sendDirectionInput = useRef<(code: TerminalDirectionCode) => void>(() => {})
-  const directionRepeatDelay = useRef<number | undefined>(undefined)
-  const directionRepeatInterval = useRef<number | undefined>(undefined)
-  const directionPointer = useRef<number | null>(null)
+  const sendControlInput = useRef<(code: TerminalControlCode) => void>(() => {})
+  const controlRepeatDelay = useRef<number | undefined>(undefined)
+  const controlRepeatInterval = useRef<number | undefined>(undefined)
+  const controlPointer = useRef<number | null>(null)
 
-  const stopDirectionRepeat = () => {
-    if (directionRepeatDelay.current !== undefined) window.clearTimeout(directionRepeatDelay.current)
-    if (directionRepeatInterval.current !== undefined) window.clearInterval(directionRepeatInterval.current)
-    directionRepeatDelay.current = undefined
-    directionRepeatInterval.current = undefined
-    directionPointer.current = null
+  const stopControlRepeat = () => {
+    if (controlRepeatDelay.current !== undefined) window.clearTimeout(controlRepeatDelay.current)
+    if (controlRepeatInterval.current !== undefined) window.clearInterval(controlRepeatInterval.current)
+    controlRepeatDelay.current = undefined
+    controlRepeatInterval.current = undefined
+    controlPointer.current = null
   }
 
-  const beginDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>, code: TerminalDirectionCode) => {
+  const beginControlRepeat = (event: ReactPointerEvent<HTMLButtonElement>, code: TerminalControlCode) => {
     event.preventDefault()
     event.stopPropagation()
-    stopDirectionRepeat()
+    stopControlRepeat()
     const pointerId = event.pointerId
-    directionPointer.current = pointerId
+    controlPointer.current = pointerId
     event.currentTarget.setPointerCapture(pointerId)
-    sendDirectionInput.current(code)
-    directionRepeatDelay.current = window.setTimeout(() => {
-      directionRepeatDelay.current = undefined
-      if (directionPointer.current !== pointerId) return
-      directionRepeatInterval.current = window.setInterval(() => sendDirectionInput.current(code), 80)
+    sendControlInput.current(code)
+    controlRepeatDelay.current = window.setTimeout(() => {
+      controlRepeatDelay.current = undefined
+      if (controlPointer.current !== pointerId) return
+      controlRepeatInterval.current = window.setInterval(() => sendControlInput.current(code), 80)
     }, 360)
   }
 
-  const endDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>) => {
-    if (directionPointer.current !== event.pointerId) return
-    stopDirectionRepeat()
+  const endControlRepeat = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (controlPointer.current !== event.pointerId) return
+    stopControlRepeat()
   }
 
   useEffect(() => {
@@ -209,7 +210,11 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       send({ type: 'input', data })
     }
     const dataSubscription = terminal.onData(sendInput)
-    sendDirectionInput.current = (code) => {
+    sendControlInput.current = (code) => {
+      if (code === 'Backspace') {
+        sendInput('\x7f')
+        return
+      }
       const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
       sendInput(`\x1b${cursorPrefix}${code}`)
     }
@@ -304,25 +309,25 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         for (const data of pendingInput.splice(0)) send({ type: 'input', data })
         fitAndResize()
       } else if (payload.type === 'error') {
-        stopDirectionRepeat()
+        stopControlRepeat()
         setStatus('disconnected')
         terminal.writeln(`\r\n\x1b[31m${payload.message || '无法启动终端。'}\x1b[0m`)
       } else if (payload.type === 'exit') {
         exited = true
-        stopDirectionRepeat()
+        stopControlRepeat()
         setStatus('exited')
         terminal.writeln('\r\n\x1b[90m[终端会话已结束]\x1b[0m')
       }
     })
     socket.addEventListener('close', () => {
       if (!disposed && ready && !exited) {
-        stopDirectionRepeat()
+        stopControlRepeat()
         setStatus('disconnected')
       }
     })
     socket.addEventListener('error', () => {
       if (!disposed) {
-        stopDirectionRepeat()
+        stopControlRepeat()
         setStatus('disconnected')
       }
     })
@@ -341,8 +346,8 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
       clearLongPress()
-      stopDirectionRepeat()
-      sendDirectionInput.current = () => {}
+      stopControlRepeat()
+      sendControlInput.current = () => {}
       dataSubscription.dispose()
       send({ type: 'close' })
       socket.close()
@@ -368,24 +373,24 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
       footer={(
-        <div className="terminal-dialog__navigation" role="group" aria-label="终端方向键">
-          {terminalDirectionKeys.map(({ label, code, icon: DirectionIcon }) => (
+        <div className="terminal-dialog__navigation" role="group" aria-label="终端快捷键">
+          {terminalControlKeys.map(({ label, code, icon: ControlIcon }) => (
             <button
               className="terminal-dialog__navigation-button"
               type="button"
               key={label}
               disabled={status !== 'connected'}
               aria-label={`终端${label}`}
-              title={`终端${label}，长按连续输入`}
-              onPointerDown={(event) => beginDirectionRepeat(event, code)}
-              onPointerUp={endDirectionRepeat}
-              onPointerCancel={endDirectionRepeat}
-              onPointerLeave={endDirectionRepeat}
-              onLostPointerCapture={endDirectionRepeat}
-              onClick={(event) => { if (event.detail === 0) sendDirectionInput.current(code) }}
+              title={code === 'Backspace' ? '终端退格，长按连续删除' : `终端${label}，长按连续输入`}
+              onPointerDown={(event) => beginControlRepeat(event, code)}
+              onPointerUp={endControlRepeat}
+              onPointerCancel={endControlRepeat}
+              onPointerLeave={endControlRepeat}
+              onLostPointerCapture={endControlRepeat}
+              onClick={(event) => { if (event.detail === 0) sendControlInput.current(code) }}
               onContextMenu={(event) => event.preventDefault()}
             >
-              <DirectionIcon size={18} aria-hidden="true" />
+              <ControlIcon size={18} aria-hidden="true" />
             </button>
           ))}
         </div>
