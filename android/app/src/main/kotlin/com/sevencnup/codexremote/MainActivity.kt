@@ -118,6 +118,13 @@ class MainActivity : Activity() {
     private var sidebarVisible = false
     private var sidebarProgress = 0f
     private var sidebarAnimator: ValueAnimator? = null
+    private var workspaceVisible = false
+    private var workspaceProgress = 0f
+    private var workspaceAnimator: ValueAnimator? = null
+    private var workspaceOverlay: FrameLayout? = null
+    private var workspacePanel: LinearLayout? = null
+    private var workspaceScrim: View? = null
+    private var workspaceLoader: ((String) -> Unit)? = null
     private var historyLoadingThreadId: String? = null
     private var historyLoadError: String? = null
     private var historySelectionGeneration = 0L
@@ -135,6 +142,9 @@ class MainActivity : Activity() {
     private var terminalSocket: WebSocket? = null
     private var terminalOutput: TextView? = null
     private var terminalDraftInput: EditText? = null
+    @Volatile private var terminalReady = false
+    private var terminalImeVisible = false
+    private var terminalImeHiddenUntil = 0L
     private var attachRequestActive = false
     private var workspaceCurrentPath = ""
     private var workspaceRootPath = ""
@@ -261,7 +271,16 @@ class MainActivity : Activity() {
     @Deprecated("Native back handling is kept compatible with Android versions supported by this app")
     override fun onBackPressed() {
         when {
+            terminalDialog?.isShowing == true && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
+                terminalImeHiddenUntil = 0L
+                val input = terminalDraftInput
+                if (input != null) {
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                        ?.hideSoftInputFromWindow(input.windowToken, 0)
+                }
+            }
             terminalDialog?.isShowing == true -> terminalDialog?.dismiss()
+            workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
             activeThreadId != null -> AlertDialog.Builder(this)
                 .setMessage("要关闭 Codex Remote 吗？")
@@ -358,10 +377,17 @@ class MainActivity : Activity() {
                 RemoteApi(endpoint, token).get("/api/v1/codex/status")
                 handler.post { openChatHome() }
             } catch (error: Exception) {
-                handler.post {
-                    prefs.edit().remove(KEY_TOKEN).apply()
-                    token = ""
-                    showConnectionPage(error.message ?: "连接已失效，请重新配对。")
+                if (error is RemoteApiException && error.statusCode == 401) {
+                    handler.post {
+                        prefs.edit().remove(KEY_TOKEN).apply()
+                        token = ""
+                        showConnectionPage(error.message ?: "配对已失效，请重新输入匹配码。")
+                    }
+                } else {
+                    handler.post {
+                        openChatHome()
+                        showStatus("电脑服务暂时无法连接，已保留配对信息，正在重试。")
+                    }
                 }
             }
         }
@@ -383,6 +409,14 @@ class MainActivity : Activity() {
         historySelectionGeneration += 1
         sidebarVisible = false
         sidebarProgress = 0f
+        workspaceVisible = false
+        workspaceProgress = 0f
+        workspaceAnimator?.cancel()
+        workspaceOverlay?.visibility = View.GONE
+        workspaceOverlay = null
+        workspacePanel = null
+        workspaceScrim = null
+        workspaceLoader = null
         syncRevisions.clear()
         renderHome()
         refreshRuntime()
@@ -785,6 +819,7 @@ class MainActivity : Activity() {
 
     private fun setSidebarVisible(visible: Boolean) {
         if (!::drawer.isInitialized) return
+        if (visible && workspaceVisible) setWorkspaceVisible(false)
         sidebarVisible = visible
         if (visible) renderSidebar()
         sidebarAnimator?.cancel()
@@ -839,90 +874,138 @@ class MainActivity : Activity() {
         private var startX = 0f
         private var startY = 0f
         private var startProgress = 0f
-        private var swipeCandidate = false
+        private var swipeTarget: String? = null
         private var interceptingSwipe = false
         private var velocityTracker: VelocityTracker? = null
 
-        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+        override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = event.x
                     startY = event.y
-                    startProgress = sidebarProgress
                     velocityTracker?.recycle()
                     velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
-                    swipeCandidate = if (sidebarVisible || sidebarProgress > .02f) {
-                        event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))
-                    } else {
-                        // Stay outside Android's reserved back-gesture strip.
-                        event.x in dp(24).toFloat()..dp(58).toFloat()
+                    swipeTarget = when {
+                        sidebarVisible || sidebarProgress > .02f -> if (event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))) "sidebar" else null
+                        workspaceVisible || workspaceProgress > .02f -> "workspace"
+                        !isChatSwipeOrigin(event.y) -> null
+                        event.x >= dp(24).toFloat() && event.x < width / 2f -> "sidebar"
+                        event.x >= width / 2f && event.x <= width - dp(24) -> "workspace"
+                        else -> null
                     }
+                    startProgress = if (swipeTarget == "workspace") workspaceProgress else sidebarProgress
                     interceptingSwipe = false
+                    return super.dispatchTouchEvent(event)
                 }
                 MotionEvent.ACTION_MOVE -> {
                     velocityTracker?.addMovement(event)
-                    if (swipeCandidate && !interceptingSwipe) {
-                        val dx = event.x - startX
-                        val dy = event.y - startY
-                        val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.25f
-                        val opens = !sidebarVisible && dx > touchSlop
-                        val closes = sidebarVisible && dx < -touchSlop
-                        if (horizontal && (opens || closes)) {
-                            interceptingSwipe = true
-                            sidebarAnimator?.cancel()
-                            sidebarAnimator = null
-                            if (opens) {
-                                drawer.visibility = View.VISIBLE
-                                (drawer.tag as? View)?.visibility = View.VISIBLE
-                                renderSidebar()
-                            }
-                            return true
-                        }
+                    if (!interceptingSwipe && beginSwipeIfNeeded(event)) return true
+                    if (interceptingSwipe) {
+                        updateSwipeProgress(event)
+                        return true
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!interceptingSwipe) {
-                        swipeCandidate = false
-                        velocityTracker?.recycle()
-                        velocityTracker = null
+                MotionEvent.ACTION_UP -> {
+                    velocityTracker?.addMovement(event)
+                    if (interceptingSwipe) {
+                        updateSwipeProgress(event)
+                        finishInterceptedSwipe(event, cancelled = false)
+                        return true
+                    }
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    if (interceptingSwipe) {
+                        finishInterceptedSwipe(event, cancelled = true)
+                        return true
                     }
                 }
             }
-            return interceptingSwipe || super.onInterceptTouchEvent(event)
+            val handled = super.dispatchTouchEvent(event)
+            if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) clearSwipeTracking()
+            return handled
         }
 
-        override fun onTouchEvent(event: MotionEvent): Boolean {
-            if (!interceptingSwipe) return super.onTouchEvent(event)
-            velocityTracker?.addMovement(event)
-            when (event.actionMasked) {
-                MotionEvent.ACTION_MOVE -> {
-                    val width = drawer.width.takeIf { it > 0 } ?: dp(320)
-                    updateSidebarProgress(startProgress + (event.x - startX) / width)
+        private fun beginSwipeIfNeeded(event: MotionEvent): Boolean {
+            val target = swipeTarget ?: return false
+            val dx = event.x - startX
+            val dy = event.y - startY
+            val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.25f
+            val isOpen = if (target == "workspace") workspaceVisible else sidebarVisible
+            val opens = !isOpen && if (target == "workspace") dx < -touchSlop else dx > touchSlop
+            val closes = isOpen && if (target == "workspace") dx > touchSlop else dx < -touchSlop
+            if (!horizontal || (!opens && !closes)) return false
+
+            interceptingSwipe = true
+            if (target == "workspace") {
+                workspaceAnimator?.cancel()
+                workspaceAnimator = null
+                if (opens) prepareWorkspaceForGesture()
+            } else {
+                sidebarAnimator?.cancel()
+                sidebarAnimator = null
+                if (opens) {
+                    drawer.visibility = View.VISIBLE
+                    (drawer.tag as? View)?.visibility = View.VISIBLE
+                    renderSidebar()
                 }
-                MotionEvent.ACTION_UP -> {
+            }
+
+            val cancel = MotionEvent.obtain(event)
+            cancel.setAction(MotionEvent.ACTION_CANCEL)
+            super.dispatchTouchEvent(cancel)
+            cancel.recycle()
+            updateSwipeProgress(event)
+            return true
+        }
+
+        private fun updateSwipeProgress(event: MotionEvent) {
+            val target = swipeTarget ?: return
+            if (target == "workspace") {
+                val panelWidth = workspacePanel?.width?.takeIf { it > 0 } ?: dp(320)
+                updateWorkspaceProgress(startProgress - (event.x - startX) / panelWidth)
+            } else {
+                val drawerWidth = drawer.width.takeIf { it > 0 } ?: dp(320)
+                updateSidebarProgress(startProgress + (event.x - startX) / drawerWidth)
+            }
+        }
+
+        private fun finishInterceptedSwipe(event: MotionEvent, cancelled: Boolean) {
+            val target = swipeTarget
+            if (target == "workspace") {
+                if (cancelled) {
+                    setWorkspaceVisible(startProgress >= .5f)
+                } else {
                     velocityTracker?.computeCurrentVelocity(1000)
                     val velocity = velocityTracker?.xVelocity ?: 0f
                     val fastSwipe = abs(velocity) > dp(450)
-                    val shouldOpen = if (fastSwipe) velocity > 0 else sidebarProgress >= .5f
-                    sidebarVisible = shouldOpen
-                    setSidebarVisible(shouldOpen)
-                    interceptingSwipe = false
-                    swipeCandidate = false
-                    velocityTracker?.recycle()
-                    velocityTracker = null
+                    val shouldOpen = if (fastSwipe) velocity < 0 else workspaceProgress >= .25f
+                    val swipedBack = workspaceVisible && event.x - startX > touchSlop
+                    if (swipedBack && workspaceCurrentPath.isNotBlank()) handleWorkspaceBack()
+                    else if (workspaceVisible && !shouldOpen) setWorkspaceVisible(false)
+                    else setWorkspaceVisible(shouldOpen)
                 }
-                MotionEvent.ACTION_CANCEL -> {
-                    val shouldOpen = sidebarProgress >= .5f
-                    sidebarVisible = shouldOpen
-                    setSidebarVisible(shouldOpen)
-                    interceptingSwipe = false
-                    swipeCandidate = false
-                    velocityTracker?.recycle()
-                    velocityTracker = null
+            } else if (target == "sidebar") {
+                val shouldOpen = if (cancelled) {
+                    startProgress >= .5f
+                } else {
+                    velocityTracker?.computeCurrentVelocity(1000)
+                    val velocity = velocityTracker?.xVelocity ?: 0f
+                    if (abs(velocity) > dp(450)) velocity > 0 else sidebarProgress >= .25f
                 }
+                sidebarVisible = shouldOpen
+                setSidebarVisible(shouldOpen)
             }
-            return true
+            clearSwipeTracking()
         }
+
+        private fun clearSwipeTracking() {
+            interceptingSwipe = false
+            swipeTarget = null
+            velocityTracker?.recycle()
+            velocityTracker = null
+        }
+
+        private fun isChatSwipeOrigin(y: Float): Boolean = y >= dp(48) && y <= height - dp(145)
     }
 
     private fun refreshRuntime() {
@@ -1291,6 +1374,7 @@ class MainActivity : Activity() {
                         if (messageText(item, "user").isNotBlank() || hasImage) {
                             messages += "user" to JSONObject(item.toString()).put("_turnId", turnId)
                         }
+                        assistantInTurn = null
                     }
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
@@ -1374,13 +1458,20 @@ class MainActivity : Activity() {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                    setHorizontallyScrolling(false)
+                    breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                    hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                 }
                 bubble.addView(content, widthWrap())
             }
             addMessageImages(bubble, item)
             val time = item.optString("createdAt").ifBlank { item.optString("timestamp") }
             if (time.isNotBlank()) bubble.addView(label(time.take(16).replace('T', ' '), 9, MUTED), widthWrap())
-            val maxBubbleWidth = (resources.displayMetrics.widthPixels * if (role == "user") .84f else .96f).toInt()
+            val viewportWidth = messageScroll.width.takeIf { it > 0 }
+                ?: root.width.takeIf { it > 0 }
+                ?: resources.displayMetrics.widthPixels
+            val availableWidth = (viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(4)).coerceAtLeast(dp(160))
+            val maxBubbleWidth = (availableWidth * if (role == "user") .84f else .96f).toInt()
             row.addView(bubble, LinearLayout.LayoutParams(maxBubbleWidth, WRAP))
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
 
@@ -1925,56 +2016,105 @@ class MainActivity : Activity() {
 
     private fun showWorkspaceBrowser() {
         if (token.isBlank()) return
-        val dialog = Dialog(this)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val content = LinearLayout(this).apply {
+        ensureWorkspaceBrowser()
+        setWorkspaceVisible(true)
+        workspaceLoader?.invoke(workspaceCurrentPath)
+    }
+
+    private fun ensureWorkspaceBrowser() {
+        if (workspaceOverlay != null) return
+        val overlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            elevation = dp(16).toFloat()
+            clipChildren = false
+        }
+        val scrim = View(this).apply {
+            setBackgroundColor(Color.BLACK)
+            alpha = 0f
+            setOnClickListener { setWorkspaceVisible(false) }
+        }
+        overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        val availableWidth = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val panelWidth = min(dp(440), (availableWidth * .84f).toInt()).coerceAtLeast(dp(260))
+        val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(9), dp(12), dp(8))
             background = rounded(PANEL, dp(16), BORDER, dp(1))
+            elevation = dp(4).toFloat()
         }
-        val currentPath = arrayOf("")
+        overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, Gravity.END))
+
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val pathTitle = label("文件", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
+        val pathTitle = label("文件", 14, TEXT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }
         header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
         header.addView(iconButton("arrow_up", "返回上级目录") {
-            val normalized = currentPath[0].trimEnd('/')
-            currentPath[0] = normalized.substringBeforeLast('/', "")
-            workspaceCurrentPath = currentPath[0]
-            refreshDirectory()
+            val normalized = workspaceCurrentPath.trimEnd('/')
+            workspaceLoader?.invoke(normalized.substringBeforeLast('/', ""))
         }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("add", "新建文件或文件夹") { showCreateEntry(currentPath[0], ::refreshDirectory) }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("close", "关闭文件树") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        content.addView(header, widthWrap())
+        header.addView(iconButton("add", "新建文件或文件夹") {
+            showCreateEntry(workspaceCurrentPath, ::refreshDirectory)
+        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("close", "关闭文件树") {
+            setWorkspaceVisible(false)
+        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        panel.addView(header, widthWrap())
+
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
         scroll.addView(entries)
-        content.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(5); bottomMargin = dp(6) })
+        panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply {
+            topMargin = dp(5)
+            bottomMargin = dp(6)
+        })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         footer.addView(label("长按条目可重命名、复制、剪切或删除", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
-        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries(currentPath[0], ::refreshDirectory) })
-        content.addView(footer, widthWrap())
+        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries(workspaceCurrentPath, ::refreshDirectory) })
+        panel.addView(footer, widthWrap())
 
-        fun load(path: String) {
-            currentPath[0] = path
+        workspaceOverlay = overlay
+        workspacePanel = panel
+        workspaceScrim = scrim
+        root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+
+        workspaceLoader = { requestedPath ->
+            val path = requestedPath.trim('/')
             workspaceCurrentPath = path
-            pathTitle.text = path.ifBlank { activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" } ?: runtime.optString("workspace", "工作区") }
+            pathTitle.text = path.ifBlank {
+                activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
+                    ?: runtime.optString("workspace", "工作区")
+            }
             entries.removeAllViews()
-            entries.addView(label("正在读取…", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap())
-            val cwd = activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
+            entries.addView(label("正在读取…", 12, MUTED).apply {
+                setPadding(dp(8), dp(12), dp(8), dp(12))
+            }, widthWrap())
+
+            val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             val query = buildString {
-                append("?path=${Uri.encode(path)}")
-                if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
+                append("?path=")
+                append(Uri.encode(path))
+                if (!cwd.isNullOrBlank()) {
+                    append("&cwd=")
+                    append(Uri.encode(cwd))
+                }
             }
             io.execute {
                 try {
                     val tree = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/tree$query")
                     handler.post {
-                        if (!dialog.isShowing || currentPath[0] != path) return@post
+                        if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
                         workspaceRootPath = tree.optString("cwd")
-                        pathTitle.text = tree.optString("cwd", "") + if (path.isBlank()) "" else "/$path"
+                        pathTitle.text = tree.optString("cwd") + if (path.isBlank()) "" else "/$path"
                         entries.removeAllViews()
                         val children = tree.optJSONArray("entries") ?: JSONArray()
-                        if (children.length() == 0) entries.addView(label("空文件夹", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap())
+                        if (children.length() == 0) {
+                            entries.addView(label("空文件夹", 12, MUTED).apply {
+                                setPadding(dp(8), dp(12), dp(8), dp(12))
+                            }, widthWrap())
+                        }
                         for (index in 0 until children.length()) {
                             val entry = children.optJSONObject(index) ?: continue
                             val isDirectory = entry.optString("kind") == "directory"
@@ -1984,44 +2124,113 @@ class MainActivity : Activity() {
                                 setPadding(dp(8), dp(6), dp(5), dp(6))
                                 background = rounded(Color.TRANSPARENT, dp(7))
                             }
-                            row.addView(label(if (isDirectory) "▰" else fileGlyph(entry.optString("name")), 14, if (isDirectory) ACCENT else SUBTLE, true), LinearLayout.LayoutParams(dp(25), WRAP))
-                            val name = label(entry.optString("name"), 13, TEXT).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
+                            row.addView(
+                                label(if (isDirectory) "▰" else fileGlyph(entry.optString("name")), 14, if (isDirectory) ACCENT else SUBTLE, true),
+                                LinearLayout.LayoutParams(dp(25), WRAP),
+                            )
+                            val name = label(entry.optString("name"), 13, TEXT).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                            }
                             row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
                             if (!isDirectory) row.addView(label(formatFileSize(entry.optLong("size")), 10, MUTED), widthWrap())
                             row.setOnClickListener {
-                                if (isDirectory) load(entry.optString("path")) else showFilePreview(entry.optString("path"), cwd)
+                                if (isDirectory) workspaceLoader?.invoke(entry.optString("path"))
+                                else showFilePreview(entry.optString("path"), cwd)
                             }
-                            row.setOnLongClickListener { showWorkspaceEntryActions(entry, cwd) { load(currentPath[0]) }; true }
+                            row.setOnLongClickListener {
+                                showWorkspaceEntryActions(entry, cwd) { refreshDirectory() }
+                                true
+                            }
                             entries.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(1) })
                         }
-                        val truncated = tree.optBoolean("truncated", false)
-                        if (truncated) entries.addView(label("目录内容较多，已显示前 400 项", 10, MUTED).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }, widthWrap())
+                        if (tree.optBoolean("truncated", false)) {
+                            entries.addView(label("目录内容较多，已显示前 400 项", 10, MUTED).apply {
+                                setPadding(dp(8), dp(8), dp(8), dp(8))
+                            }, widthWrap())
+                        }
                     }
                 } catch (error: Exception) {
                     handler.post {
-                        if (!dialog.isShowing || currentPath[0] != path) return@post
+                        if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
                         entries.removeAllViews()
-                        entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap())
+                        entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply {
+                            setPadding(dp(8), dp(12), dp(8), dp(12))
+                        }, widthWrap())
                     }
                 }
             }
         }
-
-        // Captured local loader is reached through this small callback after the dialog is built.
-        workspaceLoader = { path -> load(path) }
-        dialog.setContentView(content)
-        dialog.setOnDismissListener { workspaceLoader = null }
-        dialog.show()
-        dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(MATCH, (resources.displayMetrics.heightPixels * .88f).toInt())
-            setGravity(Gravity.BOTTOM)
-            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        }
-        load("")
+        updateWorkspaceProgress(workspaceProgress)
     }
 
-    private var workspaceLoader: ((String) -> Unit)? = null
+    private fun prepareWorkspaceForGesture() {
+        if (sidebarVisible) {
+            sidebarAnimator?.cancel()
+            sidebarAnimator = null
+            sidebarVisible = false
+            updateSidebarProgress(0f)
+            drawer.visibility = View.GONE
+            (drawer.tag as? View)?.visibility = View.GONE
+        }
+        ensureWorkspaceBrowser()
+        workspaceVisible = true
+        workspaceOverlay?.visibility = View.VISIBLE
+        workspaceLoader?.invoke(workspaceCurrentPath)
+        updateWorkspaceProgress(workspaceProgress)
+    }
+
+    private fun setWorkspaceVisible(visible: Boolean) {
+        if (visible) {
+            ensureWorkspaceBrowser()
+            if (sidebarVisible) setSidebarVisible(false)
+            workspaceOverlay?.visibility = View.VISIBLE
+        }
+        workspaceVisible = visible
+        workspaceAnimator?.cancel()
+        val start = workspaceProgress
+        val target = if (visible) 1f else 0f
+        if (start == target) {
+            updateWorkspaceProgress(target)
+            if (!visible) workspaceOverlay?.visibility = View.GONE
+            return
+        }
+        workspaceAnimator = ValueAnimator.ofFloat(start, target).apply {
+            duration = 190L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { updateWorkspaceProgress(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (!workspaceVisible && workspaceProgress <= .001f) workspaceOverlay?.visibility = View.GONE
+                    workspaceAnimator = null
+                }
+            })
+            start()
+        }
+    }
+
+    private fun updateWorkspaceProgress(progress: Float) {
+        workspaceProgress = progress.coerceIn(0f, 1f)
+        val panel = workspacePanel ?: return
+        val overlay = workspaceOverlay ?: return
+        val width = panel.width.takeIf { it > 0 } ?: panel.layoutParams?.width ?: dp(340)
+        panel.translationX = width * (1f - workspaceProgress)
+        workspaceScrim?.alpha = workspaceProgress * .2f
+        if (workspaceProgress > .001f) overlay.visibility = View.VISIBLE
+        else if (!workspaceVisible) overlay.visibility = View.GONE
+    }
+
+    private fun handleWorkspaceBack(): Boolean {
+        if (!workspaceVisible) return false
+        val path = workspaceCurrentPath.trim('/')
+        if (path.isBlank()) {
+            setWorkspaceVisible(false)
+        } else {
+            workspaceLoader?.invoke(path.substringBeforeLast('/', ""))
+            setWorkspaceVisible(true)
+        }
+        return true
+    }
 
     private fun refreshDirectory() { workspaceLoader?.invoke(workspaceCurrentPath) }
 
@@ -2189,23 +2398,83 @@ class MainActivity : Activity() {
         terminalDraftInput = editField("终端命令", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
             typeface = Typeface.MONOSPACE
             setSingleLine(true)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            showSoftInputOnFocus = true
             imeOptions = EditorInfo.IME_ACTION_SEND
             setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_SEND) { sendTerminalLine(); true } else false
+                if (action == EditorInfo.IME_ACTION_SEND || action == EditorInfo.IME_NULL) { sendTerminalLine(); true } else false
+            }
+            setOnClickListener {
+                requestFocus()
+                post {
+                    (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                        ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+                }
             }
         }
         inputRow.addView(terminalDraftInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         inputRow.addView(smallButton("发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
         shell.addView(inputRow, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(5) })
         dialog.setContentView(shell)
-        dialog.setOnDismissListener { terminalSocket?.close(1000, "closed"); terminalSocket = null; terminalDialog = null }
+        terminalReady = false
+        terminalImeVisible = false
+        dialog.setOnDismissListener {
+            terminalReady = false
+            terminalSocket?.close(1000, "closed")
+            terminalSocket = null
+            terminalDialog = null
+            terminalDraftInput = null
+            terminalOutput = null
+        }
         terminalDialog = dialog
         dialog.show()
+        val baseTerminalHeight = (resources.displayMetrics.heightPixels * .72f).toInt()
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
-            setLayout(MATCH, (resources.displayMetrics.heightPixels * .72f).toInt())
+            clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
+            setLayout(MATCH, baseTerminalHeight)
             setGravity(Gravity.BOTTOM)
-            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+            val adjustMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            } else {
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+            }
+            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or adjustMode)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                decorView.setOnApplyWindowInsetsListener { _, insets ->
+                    val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+                    val systemTop = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()).top
+                    val activityInsets = this@MainActivity.window.decorView.rootWindowInsets
+                    val activityImeBottom = activityInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0
+                    val activityTopInset = activityInsets
+                        ?.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout())?.top ?: systemTop
+                    val imeVisible = insets.isVisible(WindowInsets.Type.ime())
+                    val wasImeVisible = terminalImeVisible
+                    terminalImeVisible = imeVisible
+                    terminalImeHiddenUntil = when {
+                        imeVisible -> 0L
+                        wasImeVisible -> System.currentTimeMillis() + 600L
+                        else -> terminalImeHiddenUntil
+                    }
+                    val keyboardBottom = if (imeVisible) maxOf(imeBottom, activityImeBottom) else 0
+                    val targetHeight = if (imeVisible) {
+                        (resources.displayMetrics.heightPixels - keyboardBottom - activityTopInset).coerceAtLeast(dp(260))
+                    } else baseTerminalHeight
+                    val targetGravity = if (imeVisible) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.BOTTOM
+                    val targetY = if (imeVisible) systemTop else 0
+                    val windowAttributes = this@apply.attributes
+                    if (windowAttributes.height != targetHeight || windowAttributes.gravity != targetGravity || windowAttributes.y != targetY) {
+                        windowAttributes.width = MATCH
+                        windowAttributes.height = targetHeight
+                        windowAttributes.gravity = targetGravity
+                        windowAttributes.y = targetY
+                        this@apply.attributes = windowAttributes
+                    }
+                    insets
+                }
+                decorView.requestApplyInsets()
+            }
         }
         connectTerminal()
     }
@@ -2215,26 +2484,45 @@ class MainActivity : Activity() {
         val request = Request.Builder().url(url).build()
         terminalSocket = socketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                appendTerminal("WebSocket 已连接，正在启动终端…\n")
                 val thread = activeThreadId
                 val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
-                webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
+                val sent = webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
                     .putOpt("threadId", thread).putOpt("cwd", cwd.takeIf { it.isNotBlank() })
                     .put("columns", 88).put("rows", 26).toString())
+                if (!sent) appendTerminal("终端连接信息发送失败。\n")
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
                     val event = JSONObject(text)
                     when (event.optString("type")) {
-                        "ready" -> appendTerminal("已连接 ${event.optString("shell")} · ${event.optString("cwd")}\n")
-                        "error" -> appendTerminal("\n${event.optString("message", "终端连接失败")}\n")
-                        "exit" -> appendTerminal("\n[终端已退出]\n")
+                        "ready" -> {
+                            terminalReady = true
+                            appendTerminal("已连接 ${event.optString("shell")} · ${event.optString("cwd")}\n")
+                        }
+                        "error" -> {
+                            terminalReady = false
+                            appendTerminal("\n${event.optString("message", "终端连接失败")}\n")
+                        }
+                        "exit" -> {
+                            terminalReady = false
+                            appendTerminal("\n[终端已退出]\n")
+                        }
                     }
                 } catch (_: JSONException) { }
             }
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) { appendTerminal(bytes.utf8()) }
-            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) { appendTerminal("\n终端连接失败：${t.message}\n") }
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                terminalReady = false
+                appendTerminal("\n终端连接失败：${t.message}\n")
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                terminalReady = false
+                if (terminalDialog?.isShowing == true) appendTerminal("\n终端连接已关闭（$code）：${reason.ifBlank { "无原因说明" }}\n")
+            }
         })
     }
 
@@ -2258,12 +2546,20 @@ class MainActivity : Activity() {
 
     private fun sendTerminalLine() {
         val input = terminalDraftInput ?: return
-        sendTerminalInput(input.text.toString() + "\n")
-        input.setText("")
+        val value = input.text.toString()
+        if (value.isBlank()) return
+        if (!terminalReady) {
+            showToast("终端还在连接，命令先留在输入框里")
+            return
+        }
+        if (sendTerminalInput(value + "\n")) input.setText("")
     }
 
-    private fun sendTerminalInput(value: String) {
-        terminalSocket?.send(JSONObject().put("type", "input").put("data", value).toString())
+    private fun sendTerminalInput(value: String): Boolean {
+        if (!terminalReady) return false
+        val sent = terminalSocket?.send(JSONObject().put("type", "input").put("data", value).toString()) == true
+        if (!sent) terminalReady = false
+        return sent
     }
 
     private fun fileGlyph(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {

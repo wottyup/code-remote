@@ -10,6 +10,11 @@ import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
+internal class RemoteApiException(
+    val statusCode: Int,
+    message: String,
+) : IOException(message)
+
 internal class RemoteApi(
     private val endpoint: String,
     private val token: String? = null,
@@ -100,7 +105,7 @@ internal class RemoteApi(
             413 -> "附件太大，无法上传。"
             else -> "服务器请求失败（HTTP $code）。"
         }
-        return IOException(detail.ifBlank { fallback })
+        return RemoteApiException(code, detail.ifBlank { fallback })
     }
 
     companion object {
