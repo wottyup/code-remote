@@ -396,7 +396,7 @@ public class MainActivity extends Activity {
                 picker.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, fileChooserParams.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
                 picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 try {
-                    startActivityForResult(Intent.createChooser(picker, "选择附件"), FILE_CHOOSER_REQUEST_CODE);
+                    startActivityForResult(picker, FILE_CHOOSER_REQUEST_CODE);
                 } catch (ActivityNotFoundException error) {
                     pendingFileChooser = null;
                     filePathCallback.onReceiveValue(null);
