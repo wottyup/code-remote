@@ -8,11 +8,12 @@ import '@xterm/xterm/css/xterm.css'
 
 const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 const terminalDirectionKeys = [
-  { label: '向左', data: '\x1b[D', icon: ArrowLeft },
-  { label: '向上', data: '\x1b[A', icon: ArrowUp },
-  { label: '向下', data: '\x1b[B', icon: ArrowDown },
-  { label: '向右', data: '\x1b[C', icon: ArrowRight },
-]
+  { label: '向左', code: 'D', icon: ArrowLeft },
+  { label: '向上', code: 'A', icon: ArrowUp },
+  { label: '向下', code: 'B', icon: ArrowDown },
+  { label: '向右', code: 'C', icon: ArrowRight },
+] as const
+type TerminalDirectionCode = (typeof terminalDirectionKeys)[number]['code']
 
 interface TerminalDialogProps {
   token: string
@@ -88,7 +89,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
-  const sendInput = useRef<(data: string) => void>(() => {})
+  const sendDirectionInput = useRef<(code: TerminalDirectionCode) => void>(() => {})
   const directionRepeatDelay = useRef<number | undefined>(undefined)
   const directionRepeatInterval = useRef<number | undefined>(undefined)
   const directionPointer = useRef<number | null>(null)
@@ -101,18 +102,18 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     directionPointer.current = null
   }
 
-  const beginDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>, data: string) => {
+  const beginDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>, code: TerminalDirectionCode) => {
     event.preventDefault()
     event.stopPropagation()
     stopDirectionRepeat()
     const pointerId = event.pointerId
     directionPointer.current = pointerId
     event.currentTarget.setPointerCapture(pointerId)
-    sendInput.current(data)
+    sendDirectionInput.current(code)
     directionRepeatDelay.current = window.setTimeout(() => {
       directionRepeatDelay.current = undefined
       if (directionPointer.current !== pointerId) return
-      directionRepeatInterval.current = window.setInterval(() => sendInput.current(data), 80)
+      directionRepeatInterval.current = window.setInterval(() => sendDirectionInput.current(code), 80)
     }, 360)
   }
 
@@ -200,19 +201,17 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       })
     resizeObserver?.observe(container)
 
-    const dataSubscription = terminal.onData((data) => {
+    const sendInput = (data: string) => {
       if (!ready) {
         pendingInput.push(data)
         return
       }
       send({ type: 'input', data })
-    })
-    sendInput.current = (data) => {
-      if (!ready) {
-        pendingInput.push(data)
-        return
-      }
-      send({ type: 'input', data })
+    }
+    const dataSubscription = terminal.onData(sendInput)
+    sendDirectionInput.current = (code) => {
+      const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
+      sendInput(`\x1b${cursorPrefix}${code}`)
     }
     const showContextMenu = (clientX: number, clientY: number) => {
       const selectedText = terminal.getSelection()
@@ -343,7 +342,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       container.removeEventListener('touchcancel', handleTouchCancel)
       clearLongPress()
       stopDirectionRepeat()
-      sendInput.current = () => {}
+      sendDirectionInput.current = () => {}
       dataSubscription.dispose()
       send({ type: 'close' })
       socket.close()
@@ -370,7 +369,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       }}
       footer={(
         <div className="terminal-dialog__navigation" role="group" aria-label="终端方向键">
-          {terminalDirectionKeys.map(({ label, data, icon: DirectionIcon }) => (
+          {terminalDirectionKeys.map(({ label, code, icon: DirectionIcon }) => (
             <button
               className="terminal-dialog__navigation-button"
               type="button"
@@ -378,12 +377,12 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
               disabled={status !== 'connected'}
               aria-label={`终端${label}`}
               title={`终端${label}，长按连续输入`}
-              onPointerDown={(event) => beginDirectionRepeat(event, data)}
+              onPointerDown={(event) => beginDirectionRepeat(event, code)}
               onPointerUp={endDirectionRepeat}
               onPointerCancel={endDirectionRepeat}
               onPointerLeave={endDirectionRepeat}
               onLostPointerCapture={endDirectionRepeat}
-              onClick={(event) => { if (event.detail === 0) sendInput.current(data) }}
+              onClick={(event) => { if (event.detail === 0) sendDirectionInput.current(code) }}
               onContextMenu={(event) => event.preventDefault()}
             >
               <DirectionIcon size={18} aria-hidden="true" />
