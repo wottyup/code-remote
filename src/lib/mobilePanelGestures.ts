@@ -18,6 +18,7 @@ export type MobilePanelGestureAction =
 const mobilePanelGestureThreshold = 44
 const mobileBackEdgeSize = 36
 const mobileSidebarClosedOffsetRatio = 1.05
+const mobileWorkspaceClosedOffsetRatio = 1.05
 const mobileSidebarBackdropMaxOpacity = 0.2
 
 export function mobileSidebarBackdropOpacity(visibleRatio: number) {
@@ -35,6 +36,18 @@ export function shouldOpenMobileSidebarAfterDrag(offset: number, panelWidth: num
   if (action === 'open-sidebar') return true
   if (action === 'close-sidebar') return false
   return offset > -(Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio) / 2
+}
+
+export function mobileWorkspaceDragOffset(panelOpen: boolean, panelWidth: number, deltaX: number) {
+  const closedOffset = Math.max(0, panelWidth) * mobileWorkspaceClosedOffsetRatio
+  const startOffset = panelOpen ? 0 : closedOffset
+  return Math.max(0, Math.min(closedOffset, startOffset + deltaX))
+}
+
+export function shouldOpenMobileWorkspaceAfterDrag(offset: number, panelWidth: number, action: MobilePanelGestureAction | null) {
+  if (action === 'open-workspace') return true
+  if (action === 'close-workspace') return false
+  return offset < (Math.max(0, panelWidth) * mobileWorkspaceClosedOffsetRatio) / 2
 }
 
 export function beginMobilePanelGesture(
