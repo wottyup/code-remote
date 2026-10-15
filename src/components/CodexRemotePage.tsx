@@ -45,7 +45,7 @@ import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
-import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
@@ -3225,7 +3225,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     drag.offset = mobileSidebarDragOffset(sidebarOpen, drag.panelWidth, deltaX)
     sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', String(drag.offset) + 'px')
     const visibleRatio = Math.max(0, Math.min(1, (drag.panelWidth + drag.offset) / drag.panelWidth))
-    remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(visibleRatio * 0.56))
+    remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
     if (event.cancelable) event.preventDefault()
   }
 

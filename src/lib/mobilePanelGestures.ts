@@ -18,6 +18,12 @@ export type MobilePanelGestureAction =
 const mobilePanelGestureThreshold = 44
 const mobileBackEdgeSize = 36
 const mobileSidebarClosedOffsetRatio = 1.05
+const mobileSidebarBackdropMaxOpacity = 0.2
+
+export function mobileSidebarBackdropOpacity(visibleRatio: number) {
+  const ratio = Math.max(0, Math.min(1, visibleRatio))
+  return ratio * mobileSidebarBackdropMaxOpacity
+}
 
 export function mobileSidebarDragOffset(panelOpen: boolean, panelWidth: number, deltaX: number) {
   const closedOffset = -Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio
