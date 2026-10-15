@@ -4187,7 +4187,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           claudeEffort: targetPreferences.claudeEffort ?? 'default',
           claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
         })
-    if (paneIndex !== 0) await remote0.refreshThreads()
+    if (paneIndex !== 0) await remote0.refreshThreads(true)
     return thread
   }
 
@@ -4200,7 +4200,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       .find((thread) => thread && (thread.engine ?? 'codex') === engine && (!cwd || thread.cwd === cwd))
     let targetThreads = threadsForEngine(remote0.threads)
     if (targetThreads.length === 0) {
-      const refreshedThreads = await remote0.refreshThreads()
+      const refreshedThreads = await remote0.refreshThreads(true)
       targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
     }
     const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
@@ -4457,7 +4457,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
           {sidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)

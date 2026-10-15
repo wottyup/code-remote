@@ -1,3 +1,5 @@
+import { deleteThreadTransportCache, readThreadTransportCache, writeThreadTransportCache, type ThreadTransportSnapshot } from './threadTransportCache'
+
 export interface CodexThread {
   id: string
   engine?: 'codex' | 'claude-code'
@@ -25,12 +27,6 @@ interface ThreadSyncResponse extends CodexThreadDetails {
     itemIds?: Record<string, string[]>
     workspaceTurnIds?: string[]
   }
-}
-
-interface ThreadTransportSnapshot {
-  thread: CodexThreadDetails
-  revision: string
-  characters: number
 }
 
 export interface CodexMessageImage {
@@ -486,8 +482,19 @@ function uniqueThreads(threads: CodexThread[]) {
 }
 
 const threadListRequests = new Map<string, Promise<CodexThread[]>>()
+const threadLists = new Map<string, { threads: CodexThread[]; fetchedAt: number }>()
+export const threadListRefreshIntervalMs = 15_000
 const threadReadRequests = new Map<string, Promise<CodexThreadDetails>>()
-const threadTransportSnapshots = new Map<string, ThreadTransportSnapshot>()
+const syncControllers = new Map<string, AbortController>()
+
+function syncSignal(token: string) {
+  let controller = syncControllers.get(token)
+  if (!controller) {
+    controller = new AbortController()
+    syncControllers.set(token, controller)
+  }
+  return controller.signal
+}
 
 function recordsById(values: unknown[]) {
   const result = new Map<string, Record<string, unknown>>()
@@ -547,35 +554,28 @@ function mergeThreadSync(response: ThreadSyncResponse, cached?: ThreadTransportS
 }
 
 async function readThreadWithChanges(token: string, threadId: string, key: string) {
-  const cached = threadTransportSnapshots.get(key)
+  const signal = syncSignal(token)
+  const cached = await readThreadTransportCache(key, threadId)
   const path = `/api/v1/codex/threads/${encodeURIComponent(threadId)}`
   const options = { timeoutMs: 120_000 }
-  let response = await request<ThreadSyncResponse>(token, `${path}${cached ? `?since=${encodeURIComponent(cached.revision)}` : ''}`, undefined, options)
+  let response = await request<ThreadSyncResponse>(token, `${path}${cached ? `?since=${encodeURIComponent(cached.revision)}` : ''}`, { signal }, options)
   let thread = mergeThreadSync(response, cached)
   if (!thread) {
-    threadTransportSnapshots.delete(key)
-    response = await request<ThreadSyncResponse>(token, path, undefined, options)
+    await deleteThreadTransportCache(key, threadId)
+    response = await request<ThreadSyncResponse>(token, path, { signal }, options)
     thread = mergeThreadSync(response)
     if (!thread) throw new Error('聊天增量同步的历史版本不完整，请刷新聊天后重试。')
   }
   if (thread.id !== threadId) throw new Error('聊天同步返回了不匹配的对话，请刷新后重试。')
-  threadTransportSnapshots.delete(key)
   const revision = response.historySync?.revision
   if (typeof revision === 'string' && revision) {
-    // The parsed UI/IndexedDB cache is separate. Bound the transport base so
-    // incremental sync cannot retain an unbounded second copy of histories.
-    const characters = JSON.stringify(thread).length
-    if (characters <= 8 * 1024 * 1024) {
-      threadTransportSnapshots.set(key, { thread, revision, characters })
-      let total = [...threadTransportSnapshots.values()].reduce((sum, entry) => sum + entry.characters, 0)
-      while (threadTransportSnapshots.size > 5 || total > 8 * 1024 * 1024) {
-        const oldest = threadTransportSnapshots.entries().next().value
-        if (!oldest) break
-        total -= oldest[1].characters
-        threadTransportSnapshots.delete(oldest[0])
-      }
+    if (revision !== cached?.revision || response.historySync?.baseRevision === undefined) {
+      await writeThreadTransportCache(key, { thread, revision })
     }
+  } else {
+    await deleteThreadTransportCache(key, threadId)
   }
+  signal.throwIfAborted()
   return thread
 }
 
@@ -590,6 +590,20 @@ function shareRequest<T>(requests: Map<string, Promise<T>>, key: string, read: (
 }
 
 export const codexRemoteClient = {
+  pauseHistorySync(token: string) {
+    syncSignal(token)
+    syncControllers.get(token)?.abort()
+  },
+  resumeHistorySync(token: string) {
+    if (syncControllers.get(token)?.signal.aborted) syncControllers.set(token, new AbortController())
+  },
+  updateThreadListEntry(token: string, threadId: string, patch: Partial<CodexThread> | null) {
+    const cached = threadLists.get(token)
+    if (!cached) return
+    cached.threads = patch === null
+      ? cached.threads.filter((thread) => thread.id !== threadId)
+      : cached.threads.map((thread) => thread.id === threadId ? { ...thread, ...patch } : thread)
+  },
   pair(code: string) {
     return request<{ token: string }>('pairing', '/api/v1/pair', {
       method: 'POST',
@@ -657,10 +671,19 @@ export const codexRemoteClient = {
       body: JSON.stringify({ cwd, paths, destination, mode }),
     })
   },
-  threads(token: string) {
-    return shareRequest(threadListRequests, token, () => request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>
-      uniqueThreads(threads).sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left)),
-    ))
+  threads(token: string, force = false) {
+    const pending = threadListRequests.get(token)
+    if (pending) return pending
+    const cached = threadLists.get(token)
+    if (!force && cached && Date.now() - cached.fetchedAt < threadListRefreshIntervalMs) return Promise.resolve(cached.threads)
+    return shareRequest(threadListRequests, token, async () => {
+      const result = await request<CodexThread[]>(token, '/api/v1/codex/threads', { signal: syncSignal(token) }, { networkRetries: 0 })
+      const threads = uniqueThreads(result).sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left))
+      threadLists.delete(token)
+      threadLists.set(token, { threads, fetchedAt: Date.now() })
+      if (threadLists.size > 3) threadLists.delete(threadLists.keys().next().value!)
+      return threads
+    })
   },
   readThread(token: string, threadId: string) {
     const key = JSON.stringify([token, threadId])
@@ -669,19 +692,19 @@ export const codexRemoteClient = {
   deleteThread(token: string, threadId: string) {
     return request<{ thread_id: string; deleted: true; thread_ids: string[] }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}`, {
       method: 'DELETE',
-    })
+    }).then((result) => { threadLists.delete(token); return result })
   },
   renameThread(token: string, threadId: string, name: string) {
     return request<{ thread_id: string; name: string }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/name`, {
       method: 'POST',
       body: JSON.stringify({ name }),
-    })
+    }).then((result) => { threadLists.delete(token); return result })
   },
   bindThreadWorkspace(token: string, threadId: string, cwd: string) {
     return request<{ thread_id: string; cwd: string }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/workspace`, {
       method: 'POST',
       body: JSON.stringify({ cwd }),
-    })
+    }).then((result) => { threadLists.delete(token); return result })
   },
   updateThreadApprovalPolicy(token: string, threadId: string, approvalPolicy: CodexApprovalPolicy) {
     return request<Record<string, unknown>>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/settings`, {
@@ -753,7 +776,7 @@ export const codexRemoteClient = {
     return request<CodexThread>(token, '/api/v1/codex/threads', {
       method: 'POST',
       body: JSON.stringify({ engine, model, approval_policy: approvalPolicy, request_id: requestId, cwd }),
-    }, { networkRetries: 3 })
+    }, { networkRetries: 3 }).then((result) => { threadLists.delete(token); return result })
   },
   uploadPdfAttachment(token: string, file: File) {
     const query = new URLSearchParams({ name: file.name })
