@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useReducer, useRef, useState, type SetStateAction } from 'react'
 import {
   codexRemoteClient,
   isAmbiguousNetworkFailure,
@@ -168,6 +168,24 @@ interface PersistedActiveThread {
   messages: CodexMessage[]
 }
 
+type ChatEngine = NonNullable<CodexThread['engine']>
+
+interface ActiveThreadSelection {
+  thread: CodexThread | null
+  engine: ChatEngine
+}
+
+function engineOfThread(thread: CodexThread): ChatEngine {
+  return thread.engine ?? (thread.id.startsWith('claude:') ? 'claude-code' : 'codex')
+}
+
+function updateActiveThreadSelection(current: ActiveThreadSelection, action: SetStateAction<CodexThread | null>): ActiveThreadSelection {
+  const thread = typeof action === 'function' ? action(current.thread) : action
+  if (thread === current.thread) return current
+  // A deleted conversation leaves an empty pane in the same engine.
+  return { thread, engine: thread ? engineOfThread(thread) : current.engine }
+}
+
 interface ThreadCacheEntry {
   thread: CodexThread
   messages: CodexMessage[]
@@ -190,6 +208,8 @@ export interface UseCodexRemoteOptions {
   persistActiveThread?: boolean
   /** Restore a pane-specific conversation without replacing the primary thread. */
   initialThreadId?: string | null
+  /** Restore the engine even when the pane no longer has a conversation. */
+  initialEngine?: ChatEngine
   /** Keep the socket and background requests closed while a pane is hidden. */
   enabled?: boolean
   /** Keep list/model/history warm-up work in the primary controller only. */
@@ -749,6 +769,7 @@ function streamingAssistantText(parts: Map<string, string>) {
 
 function sameActiveThread(left: CodexThread | null, right: CodexThread) {
   return left?.id === right.id
+    && left.engine === right.engine
     && left.name === right.name
     && left.preview === right.preview
     && left.cwd === right.cwd
@@ -1289,8 +1310,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   // Keep the saved thread ID available before its history has finished
   // loading. This gives the composer a stable draft scope and lets a new turn
   // start without waiting for a large thread/read response.
-  const [activeThread, setActiveThread] = useState<CodexThread | null>(() =>
-    initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null),
+  const [{ thread: activeThread, engine: activeEngine }, setActiveThread] = useReducer(
+    updateActiveThreadSelection,
+    null,
+    (): ActiveThreadSelection => {
+      const thread = initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null)
+      return { thread, engine: thread ? engineOfThread(thread) : options.initialEngine ?? 'codex' }
+    },
   )
   const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
   const activeThreadRef = useRef(activeThread)
@@ -3851,7 +3877,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     approvalPolicy?: CodexApprovalPolicy,
     requestId = queuedMessageId(),
     cwd?: string,
-    engine: 'codex' | 'claude-code' = 'codex',
+    engine: ChatEngine = activeEngine,
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3902,7 +3928,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       setLoadingHistory(false)
     }
-  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
+  }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
 
   const sendMessage = useCallback(async (input: SendMessageInput) => {
     if (handedOffRef.current) {
@@ -4221,6 +4247,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     threads,
     models,
     activeThread,
+    activeEngine,
     messages,
     queuedMessages: activeThread ? serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages,
     pinRevision,

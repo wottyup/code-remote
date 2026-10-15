@@ -168,10 +168,11 @@ interface PersistedPaneLayout {
   openPaneIndexes: number[]
   selectedPaneIndex: number
   threadIdsByPane: Record<string, string>
+  enginesByPane: Record<string, ChatEngine>
 }
 
 function readPersistedPaneLayout(): PersistedPaneLayout {
-  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {} }
+  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {}, enginesByPane: {} }
   if (typeof window === 'undefined') return fallback
   try {
     const value = window.localStorage.getItem(paneLayoutStorageKey)
@@ -198,7 +199,15 @@ function readPersistedPaneLayout(): PersistedPaneLayout {
         ? [[String(index), threadId.trim()]]
         : []
     }))
-    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane }
+    const savedEngines = parsed.enginesByPane && typeof parsed.enginesByPane === 'object' && !Array.isArray(parsed.enginesByPane)
+      ? parsed.enginesByPane as Record<string, unknown>
+      : {}
+    const enginesByPane: Record<string, ChatEngine> = {}
+    for (const index of openPaneIndexes) {
+      const engine = savedEngines[String(index)]
+      if (engine === 'codex' || engine === 'claude-code') enginesByPane[String(index)] = engine
+    }
+    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
   } catch {
     return fallback
   }
@@ -3138,8 +3147,8 @@ function RemoteChatPane({
   const currentConnectionLabel = remote.handedOff
     ? '已交还给本机'
     : connectionLabel[remote.connection]
-  const activeEngineLabel = remote.activeThread?.engine === 'claude-code' ? 'Claude Code' : 'Codex'
-  const targetEngine = remote.activeThread?.engine === 'claude-code' ? 'codex' : 'claude-code'
+  const activeEngineLabel = remote.activeEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const targetEngine = remote.activeEngine === 'claude-code' ? 'codex' : 'claude-code'
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
   const engineSwitchLabel = claudeCodeUnavailable
@@ -3221,7 +3230,7 @@ function RemoteChatPane({
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-          <h1>{remote.activeThread?.engine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
+              <h1>{remote.activeEngine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
@@ -3331,22 +3340,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
   const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
-  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], initialEngine: initialPaneLayout.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], initialEngine: initialPaneLayout.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
-  const isClaudeCodeThread = activeRemote.activeThread?.engine === 'claude-code'
+  const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
       const threadId = remotes[paneIndex]?.activeThread?.id
       return threadId ? [[String(paneIndex), threadId]] : []
     }))
-    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane })
-  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id])
+    const enginesByPane = Object.fromEntries(openPaneIndexes.map((paneIndex) => [String(paneIndex), remotes[paneIndex].activeEngine]))
+    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane })
+  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id, remote0.activeEngine, remote1.activeEngine, remote2.activeEngine, remote3.activeEngine, remote4.activeEngine])
 
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
@@ -3548,7 +3558,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadDeleteError(null)
     try {
       const result = await codexRemoteClient.deleteThread(token, thread.id)
-      if (deletedPaneIndex !== undefined && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
+      if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
       for (const remote of remotes) remote.removeDeletedThread(thread.id)
       setPinnedThreadIds(new Set(result.thread_ids))
       setCompletionToast((current) => current?.threadId === thread.id ? null : current)
@@ -4162,7 +4172,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
     const target = remotes[paneIndex] ?? remote0
-    const selectedEngine = engine ?? (target.activeThread?.engine === 'claude-code' ? 'claude-code' : 'codex')
+    const selectedEngine = engine ?? target.activeEngine
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
