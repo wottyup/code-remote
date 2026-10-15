@@ -15,6 +15,8 @@ export interface CodexThreadDetails extends CodexThread {
   codexRemoteWorkspaceChanges?: Record<string, unknown>
 }
 
+export type ClaudeCodePermissionMode = 'default' | 'manual' | 'acceptEdits' | 'auto' | 'dontAsk' | 'plan'
+
 interface ThreadSyncResponse extends CodexThreadDetails {
   historySync?: {
     revision: string
@@ -77,6 +79,9 @@ export interface CodexQueuedMessage {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
@@ -730,6 +735,9 @@ export const codexRemoteClient = {
     model?: string
     effort?: string
     approvalPolicy?: CodexApprovalPolicy
+    claudeModel?: string
+    claudeEffort?: string
+    claudePermissionMode?: ClaudeCodePermissionMode
     requestId: string
   }) {
     return request<{ turn_id: string | null }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/turns`, {
@@ -739,6 +747,9 @@ export const codexRemoteClient = {
         model: input.model,
         effort: input.effort,
         approval_policy: input.approvalPolicy,
+        claude_model: input.claudeModel,
+        claude_effort: input.claudeEffort,
+        claude_permission_mode: input.claudePermissionMode,
         request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,

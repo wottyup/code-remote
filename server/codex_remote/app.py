@@ -251,6 +251,9 @@ class TurnRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approval_policy: ApprovalPolicy | None = None
+    claude_model: str | None = Field(default=None, max_length=200)
+    claude_effort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    claude_permission_mode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] = "default"
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 
 
@@ -283,6 +286,9 @@ class QueuedMessageRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approvalPolicy: ApprovalPolicy | None = None
+    claudeModel: str | None = Field(default=None, max_length=200)
+    claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
+    claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
 
 
@@ -1024,6 +1030,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     attachment_paths=attachment_paths,
                     temporary_directory=turn_directory,
                     request_id=payload["id"],
+                    model=payload.get("claudeModel"),
+                    effort=payload.get("claudeEffort"),
+                    permission_mode=payload.get("claudePermissionMode"),
                 )
             except Exception:
                 if turn_directory is not None:
@@ -1081,7 +1090,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.12.0-dev.4", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.13.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1527,6 +1536,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                         attachment_paths=attachment_paths,
                         temporary_directory=turn_directory,
                         request_id=body.request_id,
+                        model=body.claude_model,
+                        effort=body.claude_effort,
+                        permission_mode=body.claude_permission_mode,
                     )
                 except Exception:
                     if turn_directory is not None:

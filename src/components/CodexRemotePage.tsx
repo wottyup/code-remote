@@ -40,7 +40,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
@@ -225,6 +225,9 @@ interface ComposerPreferences {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
@@ -348,6 +351,11 @@ function approvalPolicyOf(value: unknown): CodexApprovalPolicy | undefined {
   return undefined
 }
 
+function claudePermissionModeOf(value: unknown): ClaudeCodePermissionMode | undefined {
+  return value === 'default' || value === 'manual' || value === 'acceptEdits'
+    || value === 'auto' || value === 'dontAsk' || value === 'plan' ? value : undefined
+}
+
 function composerPreferencesFrom(value: unknown): ComposerPreferences {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
   const parsed = value as Record<string, unknown>
@@ -356,6 +364,10 @@ function composerPreferencesFrom(value: unknown): ComposerPreferences {
   if (typeof parsed.effort === 'string' && parsed.effort) preferences.effort = parsed.effort
   const approvalPolicy = approvalPolicyOf(parsed.approvalPolicy)
   if (approvalPolicy) preferences.approvalPolicy = approvalPolicy
+  if (typeof parsed.claudeModel === 'string' && parsed.claudeModel) preferences.claudeModel = parsed.claudeModel
+  if (typeof parsed.claudeEffort === 'string' && parsed.claudeEffort) preferences.claudeEffort = parsed.claudeEffort
+  const claudePermissionMode = claudePermissionModeOf(parsed.claudePermissionMode)
+  if (claudePermissionMode) preferences.claudePermissionMode = claudePermissionMode
   return preferences
 }
 
@@ -368,6 +380,9 @@ function resolvedComposerPreferences(defaults: ComposerPreferences, threadPrefer
     model: threadPreferences?.model ?? defaults.model,
     effort: threadPreferences?.effort ?? defaults.effort,
     approvalPolicy: threadPreferences?.approvalPolicy ?? defaults.approvalPolicy,
+    claudeModel: threadPreferences?.claudeModel ?? defaults.claudeModel,
+    claudeEffort: threadPreferences?.claudeEffort ?? defaults.claudeEffort,
+    claudePermissionMode: threadPreferences?.claudePermissionMode ?? defaults.claudePermissionMode,
   }
 }
 
@@ -487,6 +502,31 @@ const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }
   { value: 'on-request', label: '请求批准' },
   { value: 'untrusted', label: '帮我批准' },
   { value: 'never', label: '完全访问' },
+]
+
+const claudeModelOptions = [
+  { value: 'default', label: '本机默认模型' },
+  { value: 'fable', label: 'Claude Fable' },
+  { value: 'opus', label: 'Claude Opus' },
+  { value: 'sonnet', label: 'Claude Sonnet' },
+]
+
+const claudeEffortOptions = [
+  { value: 'default', label: '本机默认' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+  { value: 'xhigh', label: '极高' },
+  { value: 'max', label: '最大' },
+]
+
+const claudePermissionModeOptions: Array<{ value: ClaudeCodePermissionMode; label: string }> = [
+  { value: 'default', label: '本机默认权限' },
+  { value: 'manual', label: '手动确认' },
+  { value: 'acceptEdits', label: '自动接受编辑' },
+  { value: 'auto', label: '自动模式' },
+  { value: 'dontAsk', label: '不询问（拒绝需授权操作）' },
+  { value: 'plan', label: '计划模式' },
 ]
 
 function readImage(file: File): Promise<CodexImageAttachment> {
@@ -742,6 +782,9 @@ interface ComposerSendInput {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 interface ComposerHandle {
@@ -770,12 +813,17 @@ interface MessageComposerProps {
   selectedModel: string
   selectedEffort: string
   selectedApprovalPolicy: CodexApprovalPolicy
+  selectedClaudePermissionMode: ClaudeCodePermissionMode
   modelOptions: ComposerMenuOption[]
   reasoningOptions: ComposerMenuOption[]
   authorizationOptions: ComposerMenuOption[]
+  claudeModelOptions: ComposerMenuOption[]
+  claudeEffortOptions: ComposerMenuOption[]
+  claudePermissionModeOptions: ComposerMenuOption[]
   onModelChange: (model: string) => void
   onEffortChange: (effort: string) => void
   onApprovalPolicyChange: (approvalPolicy: CodexApprovalPolicy) => void
+  onClaudePermissionModeChange: (mode: ClaudeCodePermissionMode) => void
   approvalPolicyUpdating?: boolean
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
@@ -806,12 +854,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   selectedModel,
   selectedEffort,
   selectedApprovalPolicy,
+  selectedClaudePermissionMode,
   modelOptions,
   reasoningOptions,
   authorizationOptions,
+  claudeModelOptions,
+  claudeEffortOptions,
+  claudePermissionModeOptions,
   onModelChange,
   onEffortChange,
   onApprovalPolicyChange,
+  onClaudePermissionModeChange,
   approvalPolicyUpdating = false,
   onUploadPdf,
   onSend,
@@ -1364,9 +1417,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         prompt,
         images: previousImages,
         documents: previousDocuments,
-        model: selectedModel || undefined,
-        effort: selectedEffort || undefined,
-        approvalPolicy: selectedApprovalPolicy,
+        model: showCodexPreferences ? selectedModel || undefined : undefined,
+        effort: showCodexPreferences ? selectedEffort || undefined : undefined,
+        approvalPolicy: showCodexPreferences ? selectedApprovalPolicy : undefined,
+        claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
+        claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
+        claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
       })
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
@@ -1708,7 +1764,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
             <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
             <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-          </> : <span className="composer-engine-notice"><TerminalIcon size={14} />Claude Code · 使用本机权限设置</span>}
+          </> : <>
+            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
+            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
+          </>}
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
@@ -2983,6 +3043,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
+  const isClaudeCodeThread = activeRemote.activeThread?.engine === 'claude-code'
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
@@ -3292,9 +3353,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const activeComposerPreferences = activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences
-  const selectedModel = activeComposerPreferences.model ?? ''
-  const selectedEffort = activeComposerPreferences.effort ?? ''
+  const selectedModel = isClaudeCodeThread
+    ? activeComposerPreferences.claudeModel ?? 'default'
+    : activeComposerPreferences.model ?? ''
+  const selectedEffort = isClaudeCodeThread
+    ? activeComposerPreferences.claudeEffort ?? 'default'
+    : activeComposerPreferences.effort ?? ''
   const selectedApprovalPolicy = activeComposerPreferences.approvalPolicy ?? 'on-request'
+  const selectedClaudePermissionMode = activeComposerPreferences.claudePermissionMode ?? 'default'
   const availableModels = useMemo(() => {
     const source = remotes.find((remote) => remote.models.length > 0)
     return source?.models ?? []
@@ -3331,8 +3397,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }, [])
 
-  const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
-  const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
+  const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
+  const changeClaudePermissionMode = useCallback((claudePermissionMode: ClaudeCodePermissionMode) => updateComposerPreferences({ claudePermissionMode }), [updateComposerPreferences])
   const changeApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
     const updated = activeThreadId ? await (remotes[selectedPaneIndex] ?? remote0).updateApprovalPolicy(approvalPolicy) : true
     if (!updated) return
@@ -3466,21 +3533,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTarget, threadRenameTarget])
 
   useEffect(() => {
-    if (availableModels.length === 0) return
+    if (isClaudeCodeThread || availableModels.length === 0) return
     if (selectedModel && availableModels.some((model) => modelIdOf(model) === selectedModel)) return
     const defaultModel = availableModels.find((model) => model.isDefault) ?? availableModels[0]
     updateComposerPreferences({ model: modelIdOf(defaultModel) })
-  }, [availableModels, selectedModel, updateComposerPreferences])
+  }, [availableModels, isClaudeCodeThread, selectedModel, updateComposerPreferences])
 
   useEffect(() => {
-    if (availableModels.length === 0 || !chosenModel) return
+    if (isClaudeCodeThread || availableModels.length === 0 || !chosenModel) return
     if (effortOptions.length === 0) {
       if (selectedEffort) updateComposerPreferences({ effort: undefined })
       return
     }
     if (selectedEffort && effortOptions.some((option) => option.reasoningEffort === selectedEffort)) return
     updateComposerPreferences({ effort: chosenModel.defaultReasoningEffort ?? effortOptions[0].reasoningEffort })
-  }, [availableModels.length, chosenModel, effortOptions, selectedEffort, updateComposerPreferences])
+  }, [availableModels.length, chosenModel, effortOptions, isClaudeCodeThread, selectedEffort, updateComposerPreferences])
 
   useEffect(() => {
     const completions = remotes
@@ -3704,7 +3771,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     )
     if (!thread) return null
     if (paneIndex === selectedPaneIndex && !activeThreadId) composerHandle.current?.adoptUnassignedDraft(thread.id)
-    if (engine === 'codex') rememberThreadComposerPreferences(thread.id, targetPreferences)
+    rememberThreadComposerPreferences(thread.id, engine === 'codex'
+      ? {
+          model: targetPreferences.model,
+          effort: targetPreferences.effort,
+          approvalPolicy: targetPreferences.approvalPolicy,
+        }
+      : {
+          claudeModel: targetPreferences.claudeModel ?? 'default',
+          claudeEffort: targetPreferences.claudeEffort ?? 'default',
+          claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
+        })
     if (paneIndex !== 0) await remote0.refreshThreads()
     return thread
   }
@@ -3922,7 +3999,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
-  const isClaudeCodeThread = activeRemote.activeThread?.engine === 'claude-code'
   const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : isClaudeCodeThread
     ? activeRemote.connection === 'connected'
       ? claudeCodeAvailable === false ? 'Claude Code 不可用' : claudeCodeAvailable === null ? '正在检查 Claude Code' : 'Claude Code 就绪'
@@ -4117,12 +4193,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               selectedModel={selectedModel}
               selectedEffort={selectedEffort}
               selectedApprovalPolicy={selectedApprovalPolicy}
+              selectedClaudePermissionMode={selectedClaudePermissionMode}
               modelOptions={modelOptions}
               reasoningOptions={reasoningOptions}
               authorizationOptions={approvalPolicyOptions}
+              claudeModelOptions={claudeModelOptions}
+              claudeEffortOptions={claudeEffortOptions}
+              claudePermissionModeOptions={claudePermissionModeOptions}
               onModelChange={changeModel}
               onEffortChange={changeEffort}
               onApprovalPolicyChange={changeApprovalPolicy}
+              onClaudePermissionModeChange={changeClaudePermissionMode}
               approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}

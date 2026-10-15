@@ -8,6 +8,7 @@ import {
   userMessageFromEventItem,
   type CodexDocumentAttachment,
   type CodexImageAttachment,
+  type ClaudeCodePermissionMode,
   type CodexMessage,
   type CodexModel,
   type CodexApprovalPolicy,
@@ -98,6 +99,9 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
 }
 
 interface SendMessageInput {
@@ -107,6 +111,9 @@ interface SendMessageInput {
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
   onThreadCreated?: (thread: CodexThread) => void
 }
 
@@ -413,6 +420,9 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
     ...(input.model ? { model: input.model } : {}),
     ...(input.effort ? { effort: input.effort } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
+    ...(input.claudeModel ? { claudeModel: input.claudeModel } : {}),
+    ...(input.claudeEffort ? { claudeEffort: input.claudeEffort } : {}),
+    ...(input.claudePermissionMode ? { claudePermissionMode: input.claudePermissionMode } : {}),
     createdAt: new Date().toISOString(),
   }
 }
@@ -468,6 +478,16 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const approvalPolicy = payload.approvalPolicy === 'on-request' || payload.approvalPolicy === 'untrusted' || payload.approvalPolicy === 'never'
     ? payload.approvalPolicy
     : undefined
+  const claudeModel = typeof payload.claudeModel === 'string' && payload.claudeModel.length <= 200 ? payload.claudeModel : undefined
+  const claudeEffort = payload.claudeEffort === 'low' || payload.claudeEffort === 'medium'
+    || payload.claudeEffort === 'high' || payload.claudeEffort === 'xhigh' || payload.claudeEffort === 'max'
+    ? payload.claudeEffort
+    : undefined
+  const claudePermissionMode = payload.claudePermissionMode === 'default' || payload.claudePermissionMode === 'manual'
+    || payload.claudePermissionMode === 'acceptEdits' || payload.claudePermissionMode === 'auto'
+    || payload.claudePermissionMode === 'dontAsk' || payload.claudePermissionMode === 'plan'
+    ? payload.claudePermissionMode
+    : undefined
   const attempt = payload.sendAttempt && typeof payload.sendAttempt === 'object'
     ? payload.sendAttempt as Record<string, unknown>
     : null
@@ -488,6 +508,9 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     ...(approvalPolicy ? { approvalPolicy } : {}),
+    ...(claudeModel ? { claudeModel } : {}),
+    ...(claudeEffort ? { claudeEffort } : {}),
+    ...(claudePermissionMode ? { claudePermissionMode } : {}),
     ...(sendAttempt ? { sendAttempt } : {}),
     createdAt,
   }
@@ -2441,6 +2464,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       model: payload.model,
       effort: payload.effort,
       approvalPolicy: payload.approvalPolicy,
+      claudeModel: payload.claudeModel,
+      claudeEffort: payload.claudeEffort,
+      claudePermissionMode: payload.claudePermissionMode,
       requestId: payload.id,
     })
     if (resumedThreadId.current !== threadId) {

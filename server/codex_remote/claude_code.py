@@ -16,6 +16,8 @@ from typing import Any, Awaitable, Callable
 logger = logging.getLogger(__name__)
 
 CLAUDE_THREAD_PREFIX = "claude:"
+CLAUDE_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
+CLAUDE_PERMISSION_MODES = {"default", "manual", "acceptEdits", "auto", "dontAsk", "plan"}
 
 
 class ClaudeCodeError(RuntimeError):
@@ -283,6 +285,9 @@ class ClaudeCodeServer:
         attachment_paths: list[Path] | None = None,
         temporary_directory: Path | None = None,
         request_id: str | None = None,
+        model: str | None = None,
+        effort: str | None = None,
+        permission_mode: str | None = None,
     ) -> str:
         if not is_claude_thread_id(thread_id):
             raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
@@ -291,6 +296,10 @@ class ClaudeCodeServer:
             raise ClaudeCodeError(status["error"] or "Claude Code CLI 不可用。")
         if not prompt.strip() and not image_paths and not attachment_paths:
             raise ClaudeCodeError("请填写消息或附加文件。")
+        if effort is not None and effort not in CLAUDE_EFFORT_LEVELS:
+            raise ClaudeCodeError("Claude Code 思考等级无效。")
+        if permission_mode is not None and permission_mode not in CLAUDE_PERMISSION_MODES:
+            raise ClaudeCodeError("Claude Code 权限模式无效。")
         async with self._lock:
             row = self._row(thread_id)
             if row["running_turn_id"]:
@@ -353,6 +362,9 @@ class ClaudeCodeServer:
                 list(image_paths or []),
                 list(attachment_paths or []),
                 temporary_directory,
+                model.strip() if model else None,
+                effort,
+                permission_mode,
             ))
             return turn_id
 
@@ -364,6 +376,9 @@ class ClaudeCodeServer:
         image_paths: list[Path],
         attachment_paths: list[Path],
         temporary_directory: Path | None,
+        model: str | None,
+        effort: str | None,
+        permission_mode: str | None,
     ) -> None:
         assistant_item_id = f"assistant-{turn_id}"
         assistant_text = ""
@@ -388,6 +403,12 @@ class ClaudeCodeServer:
             args = [
                 str(command), "--print", "--output-format", "stream-json", "--include-partial-messages",
             ]
+            if model and model != "default":
+                args.extend(["--model", model])
+            if effort:
+                args.extend(["--effort", effort])
+            if permission_mode and permission_mode != "default":
+                args.extend(["--permission-mode", permission_mode])
             args.extend(["--resume", row["session_id"]] if started else ["--session-id", row["session_id"]])
             for directory in {path.parent.resolve() for path in [*image_paths, *attachment_paths] if path.exists()}:
                 args.extend(["--add-dir", str(directory)])
