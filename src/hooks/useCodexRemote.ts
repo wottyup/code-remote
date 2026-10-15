@@ -62,6 +62,11 @@ export type CodexActivityTimelineEntry =
 export interface CodexThreadCompletion {
   threadId: string
   completedAt: number
+  engine: 'codex' | 'claude-code'
+}
+
+export interface SelectThreadOptions {
+  refreshHistory?: boolean
 }
 
 export interface CodexFileChangeEntry {
@@ -2071,8 +2076,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const markThreadCompletion = useCallback((threadId: string) => {
     if (!threadId || (threadId === activeThreadId.current && !isBackground())) return
+    const thread = threadListRef.current.find((candidate) => candidate.id === threadId) ?? { id: threadId }
     setCompletedThreadIds((current) => current.includes(threadId) ? current : [...current, threadId])
-    setLatestThreadCompletion({ threadId, completedAt: Date.now() })
+    setLatestThreadCompletion({ threadId, completedAt: Date.now(), engine: engineOfThread(thread) })
   }, [isBackground])
 
   const refreshThreads = useCallback(async (force = false) => {
@@ -3745,11 +3751,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [enabled, isBackground, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshModels, refreshServerQueue, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
-  const selectThread = useCallback(async (thread: CodexThread) => {
+  const selectThread = useCallback(async (thread: CodexThread, options: SelectThreadOptions = {}) => {
     if (handedOffRef.current) return
     if (!thread.id) return
+    const refreshHistory = options.refreshHistory ?? false
     if (thread.id === activeThreadId.current) {
       clearThreadCompletion(thread.id)
+      if (!refreshHistory) return
+      const threadRevision = ++historyRevision.current
+      if (messagesRef.current.length === 0) setLoadingHistory(true)
+      try {
+        const loaded = await loadThread(thread.id, threadRevision)
+        if (loaded) setError(null)
+      } finally {
+        if (activeThreadId.current === thread.id && historyRevision.current === threadRevision) setLoadingHistory(false)
+      }
       return
     }
     if (cachedActiveThreadRefreshTimer.current !== undefined) {
@@ -3847,7 +3863,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       || latestThread.updatedAt !== undefined
     )
     const cachedIsFresh = () => Boolean(
-      cachedThread
+      !refreshHistory
+      && cachedThread
       && !threadHistoryGaps.current.has(thread.id)
       && cachedHistoryMatchesThreadMetadata(
         cachedThread,
@@ -3882,7 +3899,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
 
-    if (cachedThread) {
+    if (cachedThread && !refreshHistory) {
       scheduleBackgroundRefresh()
       return
     }

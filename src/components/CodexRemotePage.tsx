@@ -43,7 +43,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
@@ -3509,7 +3509,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
-  const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
+  const [completionToast, setCompletionToast] = useState<CodexThreadCompletion | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
@@ -4166,7 +4166,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     const completions = remotes
       .map((remote) => remote.latestThreadCompletion)
-      .filter((completion): completion is { threadId: string; completedAt: number } => Boolean(completion))
+      .filter((completion): completion is CodexThreadCompletion => Boolean(completion))
       .sort((left, right) => right.completedAt - left.completedAt)
     const latest = completions[0]
     if (!latest) return
@@ -4434,17 +4434,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     await createThreadForPane(selectedPaneIndex)
   }
 
-  async function selectThread(thread: CodexThread) {
+  async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
       setSelectedPaneIndex(existingPane)
+      if (options?.refreshHistory) await remotes[existingPane].selectThread(thread, options)
       return
     }
     const targetIndex = openPaneIndexes.includes(selectedPaneIndex) ? selectedPaneIndex : (openPaneIndexes[0] ?? 0)
     setSelectedPaneIndex(targetIndex)
-    await remotes[targetIndex].selectThread(thread)
+    await remotes[targetIndex].selectThread(thread, options)
   }
 
   function openSystemNotificationThread(threadId: string) {
@@ -4510,8 +4511,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function openCompletedThread() {
     if (!completionToast) return
-    const thread = findCompletedThread() ?? { id: completionToast.threadId }
-    void selectThread(thread)
+    const thread = findCompletedThread() ?? { id: completionToast.threadId, engine: completionToast.engine }
+    void selectThread(thread, { refreshHistory: true })
     setCompletionToast(null)
   }
 
@@ -4669,8 +4670,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
-            <span className="thread-completion-toast__icon"><Check size={15} strokeWidth={2.8} /></span>
-            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>点击查看这条对话</small></span>
+            <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
+            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} · 点击查看这条对话</small></span>
           </button>
           <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={() => setCompletionToast(null)}><X size={15} /></button>
         </div>
