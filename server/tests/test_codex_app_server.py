@@ -746,6 +746,38 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         }
 
         async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
+            if method == "thread/resume":
+                self.assertEqual(params, {"threadId": "thread-id"})
+                return {"thread": {"id": "thread-id", "cwd": str(Path.cwd())}}
+            if method == "thread/settings/update":
+                self.assertEqual(params, {"threadId": "thread-id", **expected})
+                await app_server._handle_message({
+                    "method": "thread/settings/updated",
+                    "params": {"threadId": "thread-id", "threadSettings": expected},
+                })
+                return {}
+            raise AssertionError(f"Unexpected method: {method}")
+
+        app_server.request = AsyncMock(side_effect=request)
+
+        result = await app_server.update_thread_approval_policy("thread-id", "never")
+
+        self.assertEqual(result, expected)
+        self.assertEqual(app_server._thread_approval_policies["thread-id"], "never")
+        self.assertEqual(
+            [call.args[0] for call in app_server.request.await_args_list],
+            ["thread/resume", "thread/settings/update"],
+        )
+
+    async def test_update_thread_approval_policy_skips_resume_for_a_loaded_thread(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._loaded_thread_workspaces["thread-id"] = Path.cwd()
+        expected = {
+            "approvalPolicy": "on-request",
+            "sandboxPolicy": {"type": "workspaceWrite"},
+        }
+
+        async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
             self.assertEqual(method, "thread/settings/update")
             self.assertEqual(params, {"threadId": "thread-id", **expected})
             await app_server._handle_message({
@@ -756,10 +788,12 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         app_server.request = AsyncMock(side_effect=request)
 
-        result = await app_server.update_thread_approval_policy("thread-id", "never")
+        await app_server.update_thread_approval_policy("thread-id", "on-request")
 
-        self.assertEqual(result, expected)
-        self.assertEqual(app_server._thread_approval_policies["thread-id"], "never")
+        app_server.request.assert_awaited_once_with(
+            "thread/settings/update",
+            {"threadId": "thread-id", **expected},
+        )
 
     async def test_thread_and_turn_use_their_respective_sandbox_enum_formats(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

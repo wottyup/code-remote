@@ -746,6 +746,11 @@ class CodexAppServer:
 
     async def update_thread_approval_policy(self, thread_id: str, policy: ApprovalPolicy) -> dict[str, Any]:
         """Apply and await Codex's confirmation for subsequent turns."""
+        if thread_id not in self._loaded_thread_workspaces:
+            # A thread can be visible from the on-disk Codex history while it
+            # is not yet loaded by this app-server process. Settings updates
+            # require a live app-server thread, so resume it first.
+            await self.resume_thread(thread_id)
         approval_policy = _app_server_approval_policy(policy)
         sandbox_policy = {
             "type": "dangerFullAccess" if policy == "never" else "workspaceWrite",
