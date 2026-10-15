@@ -14,7 +14,6 @@ import {
   Copy,
   Download,
   Eye,
-  File,
   FileText,
   Folder,
   FolderOpen,
@@ -52,6 +51,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 
 interface Props {
   token: string
@@ -2383,7 +2383,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
               onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
             >
               {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
-              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
+              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <WorkspaceFileTypeIcon path={entry.path} size={16} />}
               <span className="workspace-explorer__entry-name">{entry.name}</span>
               {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
             </button>
@@ -2528,8 +2528,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           }}
           header={(
             <div className="workspace-file-preview-panel__heading">
-              <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
-              <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              <WorkspaceFileTypeIcon path={previewImage?.path ?? previewFile?.path ?? previewPath} size={19} />
+              <span className="workspace-file-preview-panel__heading-copy">
+                <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
+                <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              </span>
             </div>
           )}
           footer={(
@@ -4831,12 +4834,12 @@ const OperationLog = memo(function OperationLog({
               ) : null}
               {fileChange?.changes.map((change) => (
                 <span className="operation-log__actions" key={`${operation.id}:${change.path}`}>
-                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><FileText size={12} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
+                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><WorkspaceFileTypeIcon path={change.path} size={13} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
                 </span>
               ))}
               {additionalPaths.map((path) => (
                 <span className="operation-log__actions" key={`${operation.id}:path:${path}`}>
-                  <button type="button" onClick={() => onOpenFile(path)} title={path}><FileText size={12} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
+                  <button type="button" onClick={() => onOpenFile(path)} title={path}><WorkspaceFileTypeIcon path={path} size={13} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
                 </span>
               ))}
               {operation.steps?.length ? (

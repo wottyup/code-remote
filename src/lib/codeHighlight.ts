@@ -25,6 +25,7 @@ import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
 import yaml from 'highlight.js/lib/languages/yaml'
+import { workspaceFileType } from './workspaceFileTypes'
 
 const batchWithStrings: LanguageFn = (highlighter) => {
   const language = dos(highlighter)
@@ -66,67 +67,61 @@ for (const [name, language] of Object.entries(languages)) {
   hljs.registerLanguage(name, language)
 }
 
+const lazyLanguages: Record<string, () => Promise<{ default: LanguageFn }>> = {
+  '1c': () => import('highlight.js/lib/languages/1c'),
+  clojure: () => import('highlight.js/lib/languages/clojure'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  diff: () => import('highlight.js/lib/languages/diff'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
+  erb: () => import('highlight.js/lib/languages/erb'),
+  erlang: () => import('highlight.js/lib/languages/erlang'),
+  fsharp: () => import('highlight.js/lib/languages/fsharp'),
+  glsl: () => import('highlight.js/lib/languages/glsl'),
+  graphql: () => import('highlight.js/lib/languages/graphql'),
+  handlebars: () => import('highlight.js/lib/languages/handlebars'),
+  haskell: () => import('highlight.js/lib/languages/haskell'),
+  ini: () => import('highlight.js/lib/languages/ini'),
+  latex: () => import('highlight.js/lib/languages/latex'),
+  less: () => import('highlight.js/lib/languages/less'),
+  lisp: () => import('highlight.js/lib/languages/lisp'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  nix: () => import('highlight.js/lib/languages/nix'),
+  objectivec: () => import('highlight.js/lib/languages/objectivec'),
+  perl: () => import('highlight.js/lib/languages/perl'),
+  properties: () => import('highlight.js/lib/languages/properties'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
+  r: () => import('highlight.js/lib/languages/r'),
+  ruby: () => import('highlight.js/lib/languages/ruby'),
+  scala: () => import('highlight.js/lib/languages/scala'),
+  scheme: () => import('highlight.js/lib/languages/scheme'),
+  scss: () => import('highlight.js/lib/languages/scss'),
+  swift: () => import('highlight.js/lib/languages/swift'),
+  tcl: () => import('highlight.js/lib/languages/tcl'),
+  vbnet: () => import('highlight.js/lib/languages/vbnet'),
+  vbscript: () => import('highlight.js/lib/languages/vbscript'),
+  vim: () => import('highlight.js/lib/languages/vim'),
+  wasm: () => import('highlight.js/lib/languages/wasm'),
+  x86asm: () => import('highlight.js/lib/languages/x86asm'),
+}
+
+async function ensureLanguage(language: string) {
+  if (hljs.getLanguage(language)) return true
+  const loader = lazyLanguages[language]
+  if (!loader) return false
+  try {
+    hljs.registerLanguage(language, (await loader()).default)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface HighlightedCodeSegment {
   text: string
   className: string
 }
 
-const languageByExtension: Record<string, string> = {
-  bash: 'bash',
-  bat: 'dos',
-  c: 'c',
-  cc: 'cpp',
-  cjs: 'javascript',
-  cmd: 'dos',
-  cpp: 'cpp',
-  cs: 'csharp',
-  csh: 'bash',
-  css: 'css',
-  cts: 'typescript',
-  cxx: 'cpp',
-  dockerfile: 'dockerfile',
-  go: 'go',
-  gradle: 'gradle',
-  groovy: 'groovy',
-  h: 'c',
-  hpp: 'cpp',
-  hxx: 'cpp',
-  htm: 'xml',
-  html: 'xml',
-  java: 'java',
-  js: 'javascript',
-  json: 'json',
-  jsonc: 'json',
-  jsx: 'javascript',
-  kt: 'kotlin',
-  kts: 'kotlin',
-  less: 'css',
-  md: 'markdown',
-  markdown: 'markdown',
-  mjs: 'javascript',
-  mts: 'typescript',
-  php: 'php',
-  ps1: 'powershell',
-  psd1: 'powershell',
-  psm1: 'powershell',
-  py: 'python',
-  pyw: 'python',
-  rs: 'rust',
-  sass: 'css',
-  scss: 'css',
-  sh: 'bash',
-  sql: 'sql',
-  svg: 'xml',
-  ts: 'typescript',
-  tsx: 'typescript',
-  xml: 'xml',
-  xsd: 'xml',
-  xsl: 'xml',
-  yaml: 'yaml',
-  yml: 'yaml',
-}
-
-const plainTextExtensions = new Set(['csv', 'log', 'text', 'tsv', 'txt'])
 const autoDetectionSampleLength = 16 * 1024
 
 const escapedEntities: Record<string, string> = {
@@ -186,18 +181,6 @@ function plainTextLines(content: string): HighlightedCodeSegment[][] {
   return lines.map((text) => text ? [{ text, className: '' }] : [])
 }
 
-function languageForPath(path: string) {
-  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
-  if (filename === 'dockerfile' || filename.startsWith('dockerfile.')) return 'dockerfile'
-  if (filename === 'makefile' || filename === 'gnumakefile') return 'makefile'
-  if (filename === 'cmakelists.txt') return 'cmake'
-  if (filename === 'jenkinsfile') return 'groovy'
-  if (filename === 'gradlew') return 'bash'
-
-  const extension = filename.split('.').at(-1) ?? ''
-  return languageByExtension[extension] ?? null
-}
-
 function isConfidentAutoDetection(result: AutoHighlightResult, content: string) {
   if (!result.language || result.relevance < 3) return false
 
@@ -222,19 +205,17 @@ function highlightedLines(markup: string, content: string): HighlightedCodeSegme
 }
 
 export async function highlightCodeLines(path: string, content: string): Promise<HighlightedCodeSegment[][]> {
-  const language = languageForPath(path)
-  if (language) {
+  const fileType = workspaceFileType(path)
+  if (fileType.language && await ensureLanguage(fileType.language)) {
     try {
-      const result = hljs.highlight(content, { language, ignoreIllegals: true })
+      const result = hljs.highlight(content, { language: fileType.language, ignoreIllegals: true })
       return highlightedLines(result.value, content)
     } catch {
       return plainTextLines(content)
     }
   }
 
-  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
-  const extension = filename.split('.').at(-1) ?? ''
-  if (!content.trim() || plainTextExtensions.has(extension)) return plainTextLines(content)
+  if (!content.trim() || fileType.plainText) return plainTextLines(content)
 
   try {
     // Keep the full language bundle out of the normal preview path; it is
