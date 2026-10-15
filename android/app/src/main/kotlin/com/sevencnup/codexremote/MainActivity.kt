@@ -1,5 +1,6 @@
 package com.sevencnup.codexremote
 
+import android.animation.ValueAnimator
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
@@ -12,6 +13,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
@@ -29,16 +31,19 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewConfiguration
+import android.view.VelocityTracker
 import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
 import android.view.Window
 import android.view.WindowManager
+import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.HorizontalScrollView
+import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -53,6 +58,11 @@ import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.IOException
+import java.security.MessageDigest
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.URLEncoder
@@ -62,8 +72,11 @@ import java.util.UUID
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.zip.GZIPInputStream
+import java.util.zip.GZIPOutputStream
 import kotlin.math.max
 import kotlin.math.abs
+import kotlin.math.min
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
@@ -103,6 +116,11 @@ class MainActivity : Activity() {
     private var running = false
     private var foreground = false
     private var sidebarVisible = false
+    private var sidebarProgress = 0f
+    private var sidebarAnimator: ValueAnimator? = null
+    private var historyLoadingThreadId: String? = null
+    private var historyLoadError: String? = null
+    private var historySelectionGeneration = 0L
     private var queueExpanded = false
     private var expandedOperationIds = mutableSetOf<String>()
     private var selectedFiles = mutableListOf<JSONObject>()
@@ -126,7 +144,7 @@ class MainActivity : Activity() {
     private lateinit var root: FrameLayout
     private lateinit var page: LinearLayout
     private lateinit var titleView: TextView
-    private lateinit var modeButton: TextView
+    private lateinit var modeButton: ImageButton
     private lateinit var statusView: TextView
     private lateinit var messageScroll: ScrollView
     private lateinit var messageList: LinearLayout
@@ -360,6 +378,11 @@ class MainActivity : Activity() {
         threads = JSONArray()
         models = JSONArray()
         queuedMessages = JSONArray()
+        historyLoadingThreadId = null
+        historyLoadError = null
+        historySelectionGeneration += 1
+        sidebarVisible = false
+        sidebarProgress = 0f
         syncRevisions.clear()
         renderHome()
         refreshRuntime()
@@ -440,7 +463,7 @@ class MainActivity : Activity() {
             setPadding(dp(10), dp(2), dp(8), dp(2))
             background = rounded(DARK, 0, BORDER, dp(1))
         }
-        val menu = iconButton("☰", "打开对话列表") { setSidebarVisible(true) }
+        val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }
         header.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
@@ -448,10 +471,10 @@ class MainActivity : Activity() {
         val path = label("本机项目", 10, MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         titleColumn.addView(path, widthWrap())
         header.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
-        modeButton = iconButton(if (currentMode == "codex") "◉" else "◈", "切换 Codex / Claude") { switchMode() }
+        modeButton = iconButton(if (currentMode == "codex") "codex" else "claude", "切换 Codex / Claude") { switchMode() }
         header.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
-        header.addView(iconButton("▤", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        header.addView(iconButton("▣", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         page.addView(header, LinearLayout.LayoutParams(MATCH, dp(44)))
     }
 
@@ -503,7 +526,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        footer.addView(iconButton("＋", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val preferenceScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val preferenceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         modelButton = preferenceButton("模型") { showModelOptions() }
@@ -531,49 +554,146 @@ class MainActivity : Activity() {
     private fun buildSidebar() {
         drawer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(12), dp(12), dp(10))
-            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            setPadding(dp(14), dp(12), dp(14), dp(12))
+            background = rounded(PANEL, dp(18), BORDER, dp(1))
             visibility = View.GONE
             elevation = dp(12).toFloat()
         }
-        val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        heading.addView(label("对话", 17, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        heading.addView(iconButton("×", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        drawer.addView(heading, LinearLayout.LayoutParams(MATCH, dp(40)))
-        drawerSearch = editField("搜索聊天记录", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT).apply {
+        val brand = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), 0, 0, dp(2))
+        }
+        val brandMark = ImageView(this).apply {
+            setImageResource(R.drawable.ic_brand_codex)
+            setColorFilter(ACCENT)
+            background = rounded(PANEL_INSET, dp(10))
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            contentDescription = "Codex Remote"
+        }
+        brand.addView(brandMark, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
+        val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
+        brandCopy.addView(label("Codex Remote", 15, TEXT, true), widthWrap())
+        brandCopy.addView(label("对话工作台", 10, MUTED), widthWrap())
+        brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        brand.addView(iconButton("close", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
+
+        val searchBox = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), 0, dp(8), 0)
+            background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
+        }
+        val searchIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_search)
+            imageTintList = ColorStateList.valueOf(MUTED)
+            contentDescription = "搜索"
+        }
+        searchBox.addView(searchIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
+        drawerSearch = EditText(this).apply {
+            hint = "搜索聊天记录"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
             setSingleLine(true)
+            textSize = 13f
+            setTextColor(TEXT)
+            setHintTextColor(MUTED)
+            background = null
+            setPadding(0, 0, 0, 0)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
             addTextChangedListener(SimpleTextWatcher { renderSidebar() })
         }
-        drawer.addView(drawerSearch, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(7) })
-        val newThread = actionButton("＋  新建对话")
-        newThread.setOnClickListener { createThread() }
-        drawer.addView(newThread, LinearLayout.LayoutParams(MATCH, dp(38)).apply { topMargin = dp(7) })
-        val settings = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        settings.addView(smallButton("设置") { showSettings() }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { rightMargin = dp(4); topMargin = dp(5) })
-        settings.addView(smallButton("重新连接") { reconnect() }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(4); topMargin = dp(5) })
-        drawer.addView(settings, widthWrap())
+        searchBox.addView(drawerSearch, LinearLayout.LayoutParams(0, MATCH, 1f))
+        searchBox.addView(iconButton("close", "清除搜索") { drawerSearch.setText("") }.apply {
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            visibility = View.GONE
+            tag = "sidebar_search_clear"
+        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        drawerSearch.addTextChangedListener(SimpleTextWatcher { value ->
+            searchBox.findViewWithTag<View>("sidebar_search_clear")?.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
+        })
+        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(12) })
+
+        val newThread = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), 0, dp(12), 0)
+            val fill = if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+            background = rounded(fill, dp(10))
+            isClickable = true
+            isFocusable = true
+            contentDescription = "新建对话"
+            setOnClickListener { createThread() }
+        }
+        val newIcon = ImageView(this).apply {
+            setImageResource(R.drawable.ic_add)
+            imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37))
+            background = rounded(if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37), dp(7))
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        newThread.addView(newIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
+        newThread.addView(label("新建对话", 13, if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37), true), widthWrap())
+        drawer.addView(newThread, LinearLayout.LayoutParams(MATCH, dp(43)).apply { topMargin = dp(9) })
+
+        val recentHeading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(3), 0, 0, 0)
+        }
+        recentHeading.addView(label("最近对话", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(iconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(8) })
         val threadScroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
-        drawerThreads = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(6), 0, 0) }
+        drawerThreads = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(2), 0, 0) }
         threadScroll.addView(drawerThreads)
         drawer.addView(threadScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        val footerDivider = View(this).apply { setBackgroundColor(BORDER) }
+        drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        drawer.addView(footer, widthWrap())
+
         val scrim = View(this).apply {
             setBackgroundColor(Color.argb(140, 0, 0, 0))
             visibility = View.GONE
+            alpha = 0f
             setOnClickListener { setSidebarVisible(false) }
         }
         root.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
-        root.addView(drawer, FrameLayout.LayoutParams(dp(300), MATCH, Gravity.START))
+        val drawerWidth = min(dp(340), (resources.displayMetrics.widthPixels - dp(44)).coerceAtLeast(dp(260)))
+        root.addView(drawer, FrameLayout.LayoutParams(drawerWidth, MATCH, Gravity.START))
+        drawer.translationX = -drawerWidth.toFloat()
         drawer.tag = scrim
         renderSidebar()
     }
 
+    private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(9), 0, dp(7), 0)
+        background = rounded(Color.TRANSPARENT, dp(8))
+        isClickable = true
+        isFocusable = true
+        contentDescription = title
+        setOnClickListener { action() }
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(iconResource(icon))
+            imageTintList = ColorStateList.valueOf(SUBTLE)
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
+        addView(label(title, 11, SUBTLE, true), widthWrap())
+    }
+
     private fun renderHeader() {
         if (!::titleView.isInitialized) return
-        val title = activeThread?.optString("name")?.takeIf { it.isNotBlank() && it != "null" }
-            ?: activeThread?.optString("preview")?.takeIf { it.isNotBlank() }
+        val title = activeThread?.let { threadTitle(it) }
             ?: if (activeThreadId == null) "新对话" else "Codex Remote"
         titleView.text = title
-        if (::modeButton.isInitialized) modeButton.text = if (currentMode == "codex") "◉" else "◈"
+        if (::modeButton.isInitialized) {
+            setBrandIcon(modeButton, currentMode)
+            modeButton.contentDescription = if (currentMode == "codex") "切换到 Claude Code" else "切换到 Codex"
+        }
         val path = page.findViewWithTag<TextView>("workspace_path")
         path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             ?: runtime.optString("workspace", "本机项目")
@@ -588,6 +708,11 @@ class MainActivity : Activity() {
         updateComposerPreferences()
     }
 
+    private fun threadTitle(thread: JSONObject): String = listOf(
+        thread.optString("name"),
+        thread.optString("preview"),
+    ).firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
+
     private fun renderSidebar() {
         if (!::drawerThreads.isInitialized) return
         drawerThreads.removeAllViews()
@@ -596,69 +721,146 @@ class MainActivity : Activity() {
         for (index in 0 until threads.length()) {
             val thread = threads.optJSONObject(index) ?: continue
             if (thread.optString("engine", "codex") != currentMode) continue
-            val title = thread.optString("name").ifBlank { thread.optString("preview") }
+            val title = threadTitle(thread)
             if (query.isNotBlank() && !title.lowercase(Locale.ROOT).contains(query)) continue
             filtered += thread
         }
         filtered.sortWith(compareByDescending<JSONObject> { pinnedThreadIds.contains(it.optString("id")) }
             .thenByDescending { it.optString("updatedAt") })
         if (filtered.isEmpty()) {
-            drawerThreads.addView(label(if (query.isBlank()) "還没有对话" else "没有匹配的对话", 12, MUTED).apply {
-                setPadding(dp(8), dp(16), dp(8), dp(16))
-            }, widthWrap())
+            val empty = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(28), dp(12), dp(28))
+            }
+            empty.addView(ImageView(this).apply {
+                setImageResource(if (currentMode == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+                setColorFilter(MUTED)
+                alpha = .55f
+            }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { bottomMargin = dp(9) })
+            empty.addView(label(if (query.isBlank()) "当前模式暂无对话" else "没有匹配的对话", 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
+            drawerThreads.addView(empty, widthWrap())
         }
         filtered.forEach { thread ->
             val id = thread.optString("id")
+            val selected = id == activeThreadId
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(9), dp(6), dp(6), dp(6))
-                background = rounded(if (id == activeThreadId) PANEL_INSET else Color.TRANSPARENT, dp(8))
+                setPadding(dp(9), dp(5), dp(5), dp(5))
+                background = if (selected) rounded(PANEL_INSET, dp(9), if (lightTheme) ACCENT else Color.rgb(76, 84, 112), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
+                isClickable = true
+                isFocusable = true
+                contentDescription = threadTitle(thread)
             }
-            val icon = label(if (thread.optString("engine") == "claude-code") "◈" else "◉", 14, if (thread.optString("engine") == "claude-code") ACCENT_WARM else ACCENT, true)
-            row.addView(icon, LinearLayout.LayoutParams(dp(24), WRAP))
-            val title = thread.optString("name").ifBlank { thread.optString("preview").ifBlank { "新对话" } }
-            val titleView = label(title, 13, if (id == activeThreadId) TEXT else SUBTLE).apply {
-                maxLines = 2
+            val engine = thread.optString("engine", "codex")
+            val icon = ImageView(this).apply {
+                setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+                setColorFilter(if (engine == "claude-code") ACCENT_WARM else ACCENT)
+                contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
+            }
+            row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
+            val title = threadTitle(thread)
+            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
+            val titleView = label(title, 12, if (selected) TEXT else SUBTLE, selected).apply {
+                maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            row.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
-            row.addView(iconButton("⋮", "对话操作") { showThreadActions(thread) }, LinearLayout.LayoutParams(dp(30), dp(30)))
+            copy.addView(titleView, widthWrap())
+            val preview = thread.optString("preview").takeIf { it.isNotBlank() && it != title }
+                ?: if (pinnedThreadIds.contains(id)) "已置顶" else if (selected) "当前对话" else ""
+            if (preview.isNotBlank()) {
+                copy.addView(label(preview.take(56), 10, MUTED).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, widthWrap())
+            }
+            row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+            row.addView(iconButton("more", "对话操作") { showThreadActions(thread) }, LinearLayout.LayoutParams(dp(32), dp(32)))
             row.setOnClickListener { selectThread(thread) }
             row.setOnLongClickListener { showThreadActions(thread); true }
-            drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
+            drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         }
     }
 
     private fun setSidebarVisible(visible: Boolean) {
-        sidebarVisible = visible
         if (!::drawer.isInitialized) return
-        drawer.visibility = if (visible) View.VISIBLE else View.GONE
-        (drawer.tag as? View)?.visibility = if (visible) View.VISIBLE else View.GONE
+        sidebarVisible = visible
         if (visible) renderSidebar()
+        sidebarAnimator?.cancel()
+        val start = sidebarProgress
+        val target = if (visible) 1f else 0f
+        if (start == target) {
+            updateSidebarProgress(target)
+            if (!visible) {
+                drawer.visibility = View.GONE
+                (drawer.tag as? View)?.visibility = View.GONE
+            }
+            return
+        }
+        if (visible) {
+            drawer.visibility = View.VISIBLE
+            (drawer.tag as? View)?.visibility = View.VISIBLE
+        }
+        sidebarAnimator = ValueAnimator.ofFloat(start, target).apply {
+            duration = 190L
+            interpolator = DecelerateInterpolator()
+            addUpdateListener { updateSidebarProgress(it.animatedValue as Float) }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    if (!sidebarVisible && sidebarProgress <= 0.001f) {
+                        drawer.visibility = View.GONE
+                        (drawer.tag as? View)?.visibility = View.GONE
+                    }
+                    sidebarAnimator = null
+                }
+            })
+            start()
+        }
+    }
+
+    private fun updateSidebarProgress(progress: Float) {
+        sidebarProgress = progress.coerceIn(0f, 1f)
+        if (!::drawer.isInitialized) return
+        val width = drawer.width.takeIf { it > 0 } ?: drawer.layoutParams?.width ?: dp(300)
+        drawer.translationX = -width * (1f - sidebarProgress)
+        val scrim = drawer.tag as? View ?: return
+        scrim.alpha = sidebarProgress
+        if (sidebarProgress > 0.001f) {
+            drawer.visibility = View.VISIBLE
+            scrim.visibility = View.VISIBLE
+        } else if (!sidebarVisible) {
+            scrim.visibility = View.GONE
+        }
     }
 
     private inner class ChatRootLayout(context: Context) : FrameLayout(context) {
         private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
         private var startX = 0f
         private var startY = 0f
+        private var startProgress = 0f
         private var swipeCandidate = false
         private var interceptingSwipe = false
+        private var velocityTracker: VelocityTracker? = null
 
         override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     startX = event.x
                     startY = event.y
-                    swipeCandidate = if (sidebarVisible) {
-                        event.x < dp(300)
+                    startProgress = sidebarProgress
+                    velocityTracker?.recycle()
+                    velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                    swipeCandidate = if (sidebarVisible || sidebarProgress > .02f) {
+                        event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))
                     } else {
                         // Stay outside Android's reserved back-gesture strip.
-                        event.x in dp(24).toFloat()..dp(56).toFloat()
+                        event.x in dp(24).toFloat()..dp(58).toFloat()
                     }
                     interceptingSwipe = false
                 }
                 MotionEvent.ACTION_MOVE -> {
+                    velocityTracker?.addMovement(event)
                     if (swipeCandidate && !interceptingSwipe) {
                         val dx = event.x - startX
                         val dy = event.y - startY
@@ -667,27 +869,56 @@ class MainActivity : Activity() {
                         val closes = sidebarVisible && dx < -touchSlop
                         if (horizontal && (opens || closes)) {
                             interceptingSwipe = true
+                            sidebarAnimator?.cancel()
+                            sidebarAnimator = null
+                            if (opens) {
+                                drawer.visibility = View.VISIBLE
+                                (drawer.tag as? View)?.visibility = View.VISIBLE
+                                renderSidebar()
+                            }
                             return true
                         }
                     }
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> swipeCandidate = false
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!interceptingSwipe) {
+                        swipeCandidate = false
+                        velocityTracker?.recycle()
+                        velocityTracker = null
+                    }
+                }
             }
             return interceptingSwipe || super.onInterceptTouchEvent(event)
         }
 
         override fun onTouchEvent(event: MotionEvent): Boolean {
             if (!interceptingSwipe) return super.onTouchEvent(event)
+            velocityTracker?.addMovement(event)
             when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    val width = drawer.width.takeIf { it > 0 } ?: dp(320)
+                    updateSidebarProgress(startProgress + (event.x - startX) / width)
+                }
                 MotionEvent.ACTION_UP -> {
-                    val dx = event.x - startX
-                    if (abs(dx) >= dp(56)) setSidebarVisible(dx > 0)
+                    velocityTracker?.computeCurrentVelocity(1000)
+                    val velocity = velocityTracker?.xVelocity ?: 0f
+                    val fastSwipe = abs(velocity) > dp(450)
+                    val shouldOpen = if (fastSwipe) velocity > 0 else sidebarProgress >= .5f
+                    sidebarVisible = shouldOpen
+                    setSidebarVisible(shouldOpen)
                     interceptingSwipe = false
                     swipeCandidate = false
+                    velocityTracker?.recycle()
+                    velocityTracker = null
                 }
                 MotionEvent.ACTION_CANCEL -> {
+                    val shouldOpen = sidebarProgress >= .5f
+                    sidebarVisible = shouldOpen
+                    setSidebarVisible(shouldOpen)
                     interceptingSwipe = false
                     swipeCandidate = false
+                    velocityTracker?.recycle()
+                    velocityTracker = null
                 }
             }
             return true
@@ -750,17 +981,13 @@ class MainActivity : Activity() {
                     if (selected != null) {
                         val latest = findThread(selected)
                         if (latest != null) {
-                            activeThread?.put("name", latest.optString("name"))
-                            activeThread?.put("preview", latest.optString("preview"))
-                            activeThread?.put("cwd", latest.optString("cwd"))
-                            activeThread?.put("status", latest.optJSONObject("status") ?: JSONObject())
-                            if (latest.optJSONObject("status")?.optString("type") == "active") running = true
+                            val current = activeThread ?: JSONObject().put("id", selected).also { activeThread = it }
+                            current.put("name", latest.optString("name"))
+                            current.put("preview", latest.optString("preview"))
+                            current.put("cwd", latest.optString("cwd"))
+                            latest.optJSONObject("status")?.let { current.put("status", it) }
+                            running = isThreadRunning(current)
                             renderHeader()
-                        } else {
-                            activeThreadId = null
-                            activeThread = null
-                            renderHeader()
-                            renderMessages(false)
                         }
                     } else if (showErrors && result.length() > 0) {
                         val first = (0 until result.length()).mapNotNull { result.optJSONObject(it) }
@@ -784,12 +1011,16 @@ class MainActivity : Activity() {
     private fun selectThread(thread: JSONObject) {
         val id = thread.optString("id")
         if (id.isBlank()) return
+        val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
         persistCurrentDraft()
         activeThreadId = id
-        activeThread = thread
+        activeThread = existingHistory ?: thread
+        historyLoadingThreadId = if ((activeThread?.optJSONArray("turns")?.length() ?: 0) > 0) null else id
+        historyLoadError = null
+        historySelectionGeneration += 1
         currentMode = thread.optString("engine", "codex")
         prefs.edit().putString(KEY_MODE, currentMode).putString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", id).apply()
-        running = thread.optJSONObject("status")?.optString("type") == "active"
+        running = isThreadRunning(activeThread ?: thread)
         pendingApproval = null
         queuedMessages = JSONArray()
         setSidebarVisible(false)
@@ -797,13 +1028,126 @@ class MainActivity : Activity() {
         renderSidebar()
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         renderMessages(true)
-        refreshActiveThread(true)
+        loadThreadHistoryCacheThenRefresh(id)
         refreshQueue(true)
         socket?.send(JSONObject().put("type", "thread.subscribe").put("thread_id", id).toString())
     }
 
+    private fun loadThreadHistoryCacheThenRefresh(threadId: String) {
+        val generation = historySelectionGeneration
+        io.execute {
+            val cached = readThreadHistoryCache(threadId)
+            handler.post {
+                if (activeThreadId != threadId || historySelectionGeneration != generation) return@post
+                val cachedThread = cached?.first
+                if (cachedThread != null) {
+                    if ((activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) activeThread = cachedThread
+                    cached.second?.takeIf { it.isNotBlank() }?.let { syncRevisions.putIfAbsent(threadId, it) }
+                    historyLoadingThreadId = null
+                    historyLoadError = null
+                    running = isThreadRunning(activeThread ?: cachedThread)
+                    renderHeader()
+                    renderMessages(false)
+                    refreshActiveThread(false)
+                } else {
+                    refreshActiveThread(true)
+                }
+            }
+        }
+    }
+
+    private fun historyCacheDirectory(): File = File(filesDir, "thread_history_cache_v1")
+
+    private fun historyCacheFile(threadId: String): File {
+        val digest = MessageDigest.getInstance("SHA-256").digest(threadId.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+        return File(historyCacheDirectory(), "$digest.json.gz")
+    }
+
+    private fun readThreadHistoryCache(threadId: String): Pair<JSONObject, String>? {
+        return try {
+            val file = historyCacheFile(threadId)
+            if (!file.isFile || file.length() <= 0L || file.length() > MAX_SINGLE_HISTORY_CACHE_BYTES) return null
+            val json = GZIPInputStream(FileInputStream(file)).use { input -> readHistoryCachePayload(input) } ?: return null
+            val wrapper = JSONObject(String(json, StandardCharsets.UTF_8))
+            val thread = wrapper.optJSONObject("thread") ?: return null
+            if (wrapper.optString("threadId") != threadId || thread.optString("id") != threadId || thread.optJSONArray("turns") == null) return null
+            file.setLastModified(System.currentTimeMillis())
+            thread to wrapper.optString("revision")
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun writeThreadHistoryCache(threadId: String, thread: JSONObject, revision: String?) {
+        try {
+            val directory = historyCacheDirectory()
+            if (!directory.exists() && !directory.mkdirs()) return
+            val file = historyCacheFile(threadId)
+            val temporary = File(directory, "${file.name}.tmp")
+            val threadSnapshot = JSONObject(thread.toString()).apply { remove("historySync") }
+            val wrapper = JSONObject()
+                .put("threadId", threadId)
+                .put("revision", revision.orEmpty())
+                .put("thread", threadSnapshot)
+            val payload = wrapper.toString().toByteArray(StandardCharsets.UTF_8)
+            if (payload.size > MAX_HISTORY_CACHE_JSON_BYTES) return
+            GZIPOutputStream(FileOutputStream(temporary)).use { output ->
+                output.write(payload)
+            }
+            if (temporary.length() <= 0L || temporary.length() > MAX_SINGLE_HISTORY_CACHE_BYTES) {
+                temporary.delete()
+                return
+            }
+            if (!temporary.renameTo(file)) {
+                file.delete()
+                if (!temporary.renameTo(file)) {
+                    temporary.delete()
+                    return
+                }
+            }
+            file.setLastModified(System.currentTimeMillis())
+            pruneThreadHistoryCache(file)
+        } catch (_: Exception) { }
+    }
+
+    private fun readHistoryCachePayload(input: InputStream): ByteArray? {
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(16 * 1024)
+        var total = 0
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) break
+            total += count
+            if (total > MAX_HISTORY_CACHE_JSON_BYTES) return null
+            output.write(buffer, 0, count)
+        }
+        return output.toByteArray()
+    }
+
+    private fun pruneThreadHistoryCache(current: File) {
+        val files = historyCacheDirectory().listFiles()?.filter { it.isFile && it.name.endsWith(".json.gz") }
+            ?.sortedByDescending { it.lastModified() } ?: return
+        var retainedCount = 0
+        var retainedBytes = 0L
+        files.forEach { file ->
+            val exceedsLimit = retainedCount >= MAX_CACHED_THREADS || retainedBytes + file.length() > MAX_TOTAL_HISTORY_CACHE_BYTES
+            if (exceedsLimit && file != current) {
+                file.delete()
+            } else {
+                retainedCount++
+                retainedBytes += file.length()
+            }
+        }
+    }
+
     private fun refreshActiveThread(showLoading: Boolean) {
         val threadId = activeThreadId ?: return
+        if (showLoading && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) {
+            historyLoadingThreadId = threadId
+            historyLoadError = null
+            renderMessages(false)
+        }
         if (!threadReadsInFlight.add(threadId)) {
             pendingThreadReads.add(threadId)
             return
@@ -821,11 +1165,15 @@ class MainActivity : Activity() {
                 val resolved = merged ?: response
                 val sync = resolved.optJSONObject("historySync") ?: response.optJSONObject("historySync")
                 val newRevision = sync?.optString("revision")?.takeIf { !it.isNullOrBlank() && it != "null" }
+                if (resolved.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
+                writeThreadHistoryCache(threadId, resolved, newRevision)
                 handler.post {
                     finishThreadRead(threadId)
                     if (activeThreadId != threadId) return@post
                     if (newRevision != null) syncRevisions[threadId] = newRevision
                     activeThread = resolved
+                    historyLoadingThreadId = null
+                    historyLoadError = null
                     running = isThreadRunning(resolved)
                     renderHeader()
                     renderMessages(!showLoading)
@@ -833,7 +1181,11 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 handler.post {
                     finishThreadRead(threadId)
-                    if (showLoading) showStatus(error.message ?: "读取对话失败")
+                    if (activeThreadId != threadId) return@post
+                    historyLoadingThreadId = null
+                    historyLoadError = error.message ?: "读取对话失败"
+                    if (showLoading) showStatus(historyLoadError!!)
+                    renderMessages(false)
                 }
             }
         }
@@ -928,11 +1280,32 @@ class MainActivity : Activity() {
             val turn = turns.optJSONObject(turnIndex) ?: continue
             val turnId = turn.optString("id")
             val items = turn.optJSONArray("items") ?: JSONArray()
+            var assistantInTurn: JSONObject? = null
             for (itemIndex in 0 until items.length()) {
                 val item = items.optJSONObject(itemIndex) ?: continue
                 when (normalizedType(item.optString("type"))) {
-                    "usermessage" -> messages += "user" to JSONObject(item.toString()).put("_turnId", turnId)
-                    "agentmessage" -> messages += "assistant" to JSONObject(item.toString()).put("_turnId", turnId).put("_duration", turn.optLong("durationMs", 0))
+                    "usermessage" -> {
+                        val hasImage = item.optJSONArray("content")?.let { content ->
+                            (0 until content.length()).any { content.optJSONObject(it)?.optString("type") in setOf("image", "localImage") }
+                        } == true
+                        if (messageText(item, "user").isNotBlank() || hasImage) {
+                            messages += "user" to JSONObject(item.toString()).put("_turnId", turnId)
+                        }
+                    }
+                    "agentmessage" -> {
+                        val text = messageText(item, "assistant")
+                        if (text.isNotBlank()) {
+                            val previous = assistantInTurn
+                            if (previous == null) {
+                                val message = JSONObject(item.toString()).put("_turnId", turnId).put("_duration", turn.optLong("durationMs", 0))
+                                assistantInTurn = message
+                                messages += "assistant" to message
+                            } else {
+                                val previousText = messageText(previous, "assistant")
+                                previous.put("text", listOf(previousText, text).filter { it.isNotBlank() }.joinToString("\n\n"))
+                            }
+                        }
+                    }
                     else -> operations += JSONObject(item.toString()).put("_turnId", turnId)
                 }
             }
@@ -942,11 +1315,36 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(36), dp(14), dp(30))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
-        } else if (messages.isEmpty() && thread != null && turns.length() == 0) {
-            messageList.addView(label(if (currentMode == "claude-code") "与 Claude Code 一起完成项目" else "与 Codex Remote 一起完成项目", 18, TEXT, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(dp(14), dp(36), dp(14), dp(30))
-            }, LinearLayout.LayoutParams(MATCH, WRAP))
+        } else if (messages.isEmpty() && activeThreadId != null) {
+            when {
+                historyLoadingThreadId == activeThreadId -> {
+                    messageList.addView(label("正在加载聊天记录…", 13, MUTED).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(dp(14), dp(40), dp(14), dp(30))
+                    }, LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+                !historyLoadError.isNullOrBlank() -> {
+                    val loadError = LinearLayout(this).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        setPadding(dp(18), dp(32), dp(18), dp(24))
+                    }
+                    loadError.addView(label("聊天记录暂时没有加载出来", 15, TEXT, true).apply { gravity = Gravity.CENTER }, widthWrap())
+                    loadError.addView(label(historyLoadError.orEmpty(), 11, MUTED).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(0, dp(6), 0, dp(12))
+                        maxLines = 4
+                    }, widthWrap())
+                    loadError.addView(actionButton("重试加载").apply { setOnClickListener { refreshActiveThread(true) } }, LinearLayout.LayoutParams(WRAP, dp(38)))
+                    messageList.addView(loadError, LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+                turns.length() == 0 -> {
+                    messageList.addView(label(if (currentMode == "claude-code") "与 Claude Code 一起完成项目" else "与 Codex Remote 一起完成项目", 18, TEXT, true).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(dp(14), dp(36), dp(14), dp(30))
+                    }, LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+            }
         }
 
         val operationsByTurn = operations.groupBy { it.optString("_turnId") }
@@ -995,7 +1393,7 @@ class MainActivity : Activity() {
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
-        if (running) {
+        if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
             messageList.addView(label("◌  ${activityLabel}", 12, ACCENT).apply {
                 setPadding(dp(12), dp(8), dp(12), dp(8))
             }, widthWrap())
@@ -1326,6 +1724,9 @@ class MainActivity : Activity() {
             activeThreadId = null
             activeThread = null
             queuedMessages = JSONArray()
+            historyLoadingThreadId = null
+            historyLoadError = null
+            historySelectionGeneration += 1
             running = false
             renderMessages(false)
             renderQueue()
@@ -1377,7 +1778,16 @@ class MainActivity : Activity() {
                 runApi({ RemoteApi(endpoint, token).delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }, {
                     if (activeThreadId == id) {
                         prefs.edit().remove("$KEY_ACTIVE_THREAD_PREFIX$currentMode").apply()
-                        activeThreadId = null; activeThread = null; running = false; renderMessages(false); renderHeader()
+                        activeThreadId = null
+                        activeThread = null
+                        historyLoadingThreadId = null
+                        historyLoadError = null
+                        historySelectionGeneration += 1
+                        queuedMessages = JSONArray()
+                        running = false
+                        renderMessages(false)
+                        renderQueue()
+                        renderHeader()
                     }
                     syncRevisions.remove(id)
                     refreshThreads(false)
@@ -1526,14 +1936,14 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val pathTitle = label("文件", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
-        header.addView(iconButton("↥", "返回上级目录") {
+        header.addView(iconButton("arrow_up", "返回上级目录") {
             val normalized = currentPath[0].trimEnd('/')
             currentPath[0] = normalized.substringBeforeLast('/', "")
             workspaceCurrentPath = currentPath[0]
             refreshDirectory()
         }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("＋", "新建文件或文件夹") { showCreateEntry(currentPath[0], ::refreshDirectory) }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("×", "关闭文件树") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("add", "新建文件或文件夹") { showCreateEntry(currentPath[0], ::refreshDirectory) }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("close", "关闭文件树") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         content.addView(header, widthWrap())
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
@@ -1695,7 +2105,7 @@ class MainActivity : Activity() {
         header.addView(label(path.substringAfterLast('/'), 13, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(34), 1f))
         val saveButton = smallButton("保存") { savePreviewFile(path, cwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }
         header.addView(saveButton)
-        header.addView(iconButton("×", "关闭文件预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         layout.addView(header, widthWrap())
         val scroll = ScrollView(this).apply {
             addView(LinearLayout(this@MainActivity).apply {
@@ -1755,7 +2165,7 @@ class MainActivity : Activity() {
             composerInput.append(value.takeLast(120_000))
             dialog.dismiss()
         })
-        header.addView(iconButton("×", "关闭终端") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("close", "关闭终端") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         shell.addView(header, widthWrap())
         terminalOutput = label("正在连接终端…", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226)).apply {
             typeface = Typeface.MONOSPACE
@@ -2096,7 +2506,15 @@ class MainActivity : Activity() {
             val thread = findThread(threadId)
             if (thread != null) selectThread(thread) else {
                 activeThreadId = threadId
-                refreshActiveThread(true)
+                activeThread = null
+                historyLoadingThreadId = threadId
+                historyLoadError = null
+                historySelectionGeneration += 1
+                queuedMessages = JSONArray()
+                running = false
+                renderMessages(false)
+                renderQueue()
+                loadThreadHistoryCacheThenRefresh(threadId)
             }
         }
     }
@@ -2238,11 +2656,38 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL
     }
 
-    private fun iconButton(value: String, description: String, action: () -> Unit): TextView = label(value, 18, SUBTLE, true).apply {
-        gravity = Gravity.CENTER
+    private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
+        setImageResource(iconResource(icon))
+        imageTintList = ColorStateList.valueOf(if (icon == "codex") ACCENT else if (icon == "claude") ACCENT_WARM else SUBTLE)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        setPadding(dp(9), dp(9), dp(9), dp(9))
         contentDescription = description
         background = rounded(Color.TRANSPARENT, dp(8))
+        isFocusable = true
+        isClickable = true
         setOnClickListener { action() }
+    }
+
+    private fun setBrandIcon(view: ImageView, engine: String) {
+        val claude = engine == "claude-code"
+        view.setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+        view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else ACCENT)
+    }
+
+    private fun iconResource(icon: String): Int = when (icon) {
+        "codex" -> R.drawable.ic_brand_codex
+        "claude" -> R.drawable.ic_brand_claude
+        "menu" -> R.drawable.ic_menu
+        "terminal" -> R.drawable.ic_terminal
+        "folder" -> R.drawable.ic_folder
+        "add" -> R.drawable.ic_add
+        "close" -> R.drawable.ic_close
+        "more" -> R.drawable.ic_more
+        "search" -> R.drawable.ic_search
+        "settings" -> R.drawable.ic_settings
+        "refresh" -> R.drawable.ic_refresh
+        "arrow_up" -> R.drawable.ic_arrow_up
+        else -> R.drawable.ic_add
     }
 
     private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
@@ -2294,6 +2739,10 @@ class MainActivity : Activity() {
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val KEY_LIGHT_THEME = "native_light_theme"
+        private const val MAX_CACHED_THREADS = 32
+        private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
+        private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
+        private const val MAX_HISTORY_CACHE_JSON_BYTES = 96 * 1024 * 1024
     }
 }
 
