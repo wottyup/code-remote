@@ -244,9 +244,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__entry--cut { opacity: .48; }
 .workspace-explorer__entry svg { flex: 0 0 auto; color: #9ba9d5; }
 .workspace-explorer__entry--directory svg { color: #c5a875; }
-.workspace-file-type-icon { position: relative; display: inline-grid; width: var(--workspace-file-icon-size); height: calc(var(--workspace-file-icon-size) + 1px); flex: 0 0 auto; place-items: end center; overflow: hidden; padding: 0 1px 2px; border: 1px solid currentColor; border-radius: 2px; background: color-mix(in srgb, currentColor 12%, transparent); color: #8b94a5; font: 800 6px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: -.08em; }
-.workspace-file-type-icon::before { position: absolute; top: -1px; right: -1px; width: 32%; height: 28%; border-bottom: 1px solid currentColor; border-left: 1px solid currentColor; background: color-mix(in srgb, currentColor 18%, #17191f); content: ''; }
-.workspace-file-type-icon > span { position: relative; max-width: 100%; overflow: hidden; text-overflow: clip; white-space: nowrap; }
+.workspace-file-type-icon { display: block; width: var(--workspace-file-icon-size); height: var(--workspace-file-icon-size); flex: 0 0 auto; overflow: visible; }
+.workspace-file-type-icon use { pointer-events: none; }
 .workspace-explorer__entry small { flex: 0 0 auto; margin-left: auto; color: #687181; font-size: calc(11px + var(--mobile-font-offset)); }
 .workspace-explorer__entry-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-explorer__load-more { display: flex; width: 100%; min-height: 29px; align-items: center; gap: 5px; border: 0; border-radius: 6px; background: transparent; color: #8993a3; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; }
@@ -1303,26 +1302,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light :is(.remote-shell *) .send-button:not(:disabled), .remote-shell--theme-light :is(.remote-shell *) .thread-rename-dialog__actions button:last-child { color: #fff; }
 .remote-shell--theme-light .workspace-file-preview__line-content { color: #000; }
 .remote-shell--theme-dark .workspace-file-preview__line-content { color: #fff; }
-.workspace-file-type-icon--archive { color: #d5a05a; }
-.workspace-file-type-icon--compiled { color: #82aef2; }
-.workspace-file-type-icon--config { color: #9aa4b8; }
-.workspace-file-type-icon--data { color: #d8ad54; }
-.workspace-file-type-icon--document { color: #7ca8df; }
-.workspace-file-type-icon--generic { color: #8b94a5; }
-.workspace-file-type-icon--image { color: #bb8bd8; }
-.workspace-file-type-icon--javascript { color: #d7ba4f; }
-.workspace-file-type-icon--markup { color: #df735d; }
-.workspace-file-type-icon--python { color: #60a5d2; }
-.workspace-file-type-icon--shell { color: #6eaf7f; }
-.workspace-file-type-icon--style { color: #5d98dc; }
-.workspace-file-type-icon--typescript { color: #5697db; }
-.remote-shell--theme-light .workspace-file-type-icon { background: color-mix(in srgb, currentColor 10%, #fff); }
-.remote-shell--theme-light .workspace-file-type-icon::before { background: color-mix(in srgb, currentColor 16%, #fff); }
-.remote-shell--theme-dark .workspace-file-type-icon::before { background: color-mix(in srgb, currentColor 18%, #17191f); }
-.remote-shell--theme-warm .workspace-file-type-icon { background: color-mix(in srgb, currentColor 10%, #fbf6ef); }
-.remote-shell--theme-warm .workspace-file-type-icon::before { background: color-mix(in srgb, currentColor 16%, #fbf6ef); }
-.remote-shell--theme-custom .workspace-file-type-icon { background: color-mix(in srgb, currentColor 12%, transparent); }
-.remote-shell--theme-custom .workspace-file-type-icon::before { background: color-mix(in srgb, currentColor 18%, var(--custom-theme-surface)); }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-comment, .hljs-quote, .hljs-doctag) { color: #6a737d; }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-meta-keyword) { color: #c6283b; }
 .remote-shell--theme-light .workspace-file-preview__line-content :is(.hljs-string, .hljs-regexp, .hljs-meta-string, .hljs-template-tag) { color: #0755a0; }

@@ -191,6 +191,144 @@ const specialNames: Record<string, WorkspaceFileType> = {
 const imageExtensions = new Set(['avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'webp'])
 const archiveExtensions = new Set(['7z', 'bz2', 'gz', 'rar', 'tar', 'tgz', 'xz', 'zip'])
 
+const iconsByLanguage: Record<string, string> = {
+  bash: 'file-type-shell',
+  c: 'file-type-c',
+  clojure: 'file-type-clojure',
+  cmake: 'file-type-cmake',
+  cpp: 'file-type-cpp',
+  csharp: 'file-type-csharp',
+  css: 'file-type-css',
+  dart: 'file-type-dartlang',
+  diff: 'file-type-diff',
+  dockerfile: 'file-type-docker',
+  dos: 'file-type-bat',
+  elixir: 'file-type-elixir',
+  erb: 'file-type-erb',
+  erlang: 'file-type-erlang',
+  fsharp: 'file-type-fsharp',
+  glsl: 'file-type-glsl',
+  go: 'file-type-go',
+  gradle: 'file-type-gradle',
+  graphql: 'file-type-graphql',
+  groovy: 'file-type-groovy',
+  handlebars: 'file-type-handlebars',
+  haskell: 'file-type-haskell',
+  ini: 'file-type-ini',
+  java: 'file-type-java',
+  javascript: 'file-type-js-official',
+  json: 'file-type-json-official',
+  kotlin: 'file-type-kotlin',
+  latex: 'file-type-tex',
+  less: 'file-type-less',
+  lisp: 'file-type-lisp',
+  lua: 'file-type-lua',
+  makefile: 'file-type-gnu',
+  markdown: 'file-type-markdown',
+  nginx: 'file-type-nginx',
+  nix: 'file-type-nix',
+  objectivec: 'file-type-objectivecpp',
+  perl: 'file-type-perl',
+  php: 'file-type-php',
+  powershell: 'file-type-powershell',
+  properties: 'file-type-config',
+  protobuf: 'file-type-protobuf',
+  python: 'file-type-python',
+  r: 'file-type-r',
+  ruby: 'file-type-ruby',
+  rust: 'file-type-rust',
+  scala: 'file-type-scala',
+  scheme: 'file-type-lisp',
+  scss: 'file-type-scss',
+  sql: 'file-type-sql',
+  swift: 'file-type-swift',
+  tcl: 'file-type-tcl',
+  typescript: 'file-type-typescript-official',
+  vbnet: 'file-type-vb',
+  vbscript: 'file-type-vb',
+  vim: 'file-type-vim',
+  wasm: 'file-type-wasm',
+  x86asm: 'file-type-assembly',
+  xml: 'file-type-xml',
+  yaml: 'file-type-yaml-official',
+}
+
+const iconsByExtension: Record<string, string> = {
+  bat: 'file-type-bat',
+  csv: 'file-type-csv',
+  json5: 'file-type-json5',
+  pdf: 'file-type-pdf',
+  svg: 'file-type-svg',
+  toml: 'file-type-toml',
+  txt: 'file-type-text',
+}
+
+const iconsByFilename: Record<string, string> = {
+  '.editorconfig': 'file-type-editorconfig',
+  '.gitattributes': 'file-type-git',
+  '.gitconfig': 'file-type-git',
+  '.gitignore': 'file-type-git',
+  '.npmrc': 'file-type-npm',
+  '.yarnrc': 'file-type-yarn',
+  'cargo.lock': 'file-type-cargo',
+  'cmakelists.txt': 'file-type-cmake',
+  'gradle.properties': 'file-type-gradle',
+  'gradle-wrapper.properties': 'file-type-gradle',
+  'gradlew': 'file-type-gradle',
+  'gradlew.bat': 'file-type-gradle',
+  'gnumakefile': 'file-type-gnu',
+  'makefile': 'file-type-gnu',
+  'package-lock.json': 'file-type-npm',
+  'package.json': 'file-type-npm',
+  'pnpm-lock.yaml': 'file-type-pnpm',
+  'yarn.lock': 'file-type-yarn',
+}
+
+const iconsByTone: Record<WorkspaceFileTone, string> = {
+  archive: 'file-type-zip',
+  compiled: 'default-file',
+  config: 'file-type-config',
+  data: 'file-type-json-official',
+  document: 'file-type-text',
+  generic: 'default-file',
+  image: 'file-type-image',
+  javascript: 'file-type-js-official',
+  markup: 'file-type-html',
+  python: 'file-type-python',
+  shell: 'file-type-shell',
+  style: 'file-type-css',
+  typescript: 'file-type-typescript-official',
+}
+
+export function workspaceFileIcon(path: string): string {
+  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
+  const namedIcon = iconsByFilename[filename]
+  if (namedIcon) return namedIcon
+  if (filename === 'agents.md') return 'file-type-agents'
+  if (filename === 'readme' || filename.startsWith('readme.')) return 'file-type-markdown'
+  if (filename.startsWith('tsconfig.') || filename === 'tsconfig') return 'file-type-tsconfig'
+  if (filename.startsWith('vite.config.')) return 'file-type-vite'
+  if (/^(build|settings)\.gradle(\.kts)?$/.test(filename)) return 'file-type-gradle'
+  if (filename === 'proguard-rules.pro') return 'file-type-java'
+  if (filename === 'dockerfile' || filename.startsWith('dockerfile.')) return 'file-type-docker'
+  if (filename.startsWith('.env')) return 'file-type-dotenv'
+  if (filename.startsWith('changelog') || filename.startsWith('license')) return 'file-type-markdown'
+
+  const extension = filename.includes('.') ? filename.split('.').at(-1) ?? '' : ''
+  const extensionIcon = iconsByExtension[extension]
+  if (extensionIcon) return extensionIcon
+
+  const known = typesByExtension[extension]
+  if (known?.language) {
+    const languageIcon = iconsByLanguage[known.language]
+    if (languageIcon) return languageIcon
+  }
+  if (known) return iconsByTone[known.tone]
+  if (imageExtensions.has(extension)) return 'file-type-image'
+  if (archiveExtensions.has(extension)) return 'file-type-zip'
+  return 'default-file'
+}
+
 export function workspaceFileType(path: string): WorkspaceFileType {
   const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
   const special = specialNames[filename]

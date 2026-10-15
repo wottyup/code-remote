@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react'
-import { workspaceFileType } from '../lib/workspaceFileTypes'
+import { workspaceFileIcon, workspaceFileType } from '../lib/workspaceFileTypes'
 
 interface WorkspaceFileTypeIconProps {
   path: string
@@ -8,14 +8,17 @@ interface WorkspaceFileTypeIconProps {
 
 export function WorkspaceFileTypeIcon({ path, size = 16 }: WorkspaceFileTypeIconProps) {
   const fileType = workspaceFileType(path)
+  const icon = workspaceFileIcon(path)
   return (
-    <span
-      className={`workspace-file-type-icon workspace-file-type-icon--${fileType.tone}`}
+    <svg
+      className="workspace-file-type-icon"
       style={{ '--workspace-file-icon-size': `${size}px` } as CSSProperties}
-      title={fileType.label}
+      viewBox="0 0 32 32"
+      focusable="false"
       aria-hidden="true"
     >
-      <span>{fileType.label}</span>
-    </span>
+      <title>{fileType.language ?? fileType.label}</title>
+      <use href={`/workspace-file-icons.svg#${icon}`} />
+    </svg>
   )
 }
