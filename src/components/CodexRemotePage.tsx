@@ -3093,6 +3093,14 @@ function RemoteChatPane({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const activeThreadId = remote.activeThread?.id
+  const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
+    ? remote.approval.params.threadId
+    : null
+  const approvalThread = approvalThreadId
+    ? remote.threads.find((thread) => thread.id === approvalThreadId)
+      ?? (remote.activeThread?.id === approvalThreadId ? remote.activeThread : null)
+    : null
+  const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? '其他对话' : null
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
   const visibleMessages = remote.messages.slice(visibleStartIndex)
@@ -3382,6 +3390,17 @@ function RemoteChatPane({
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
+              {approvalSource ? (
+                <button
+                  className="approval-card__source"
+                  type="button"
+                  onClick={() => {
+                    if (approvalThreadId && approvalThreadId !== activeThreadId) window.CodexRemoteOpenThread?.(approvalThreadId)
+                  }}
+                  disabled={approvalThreadId === activeThreadId}
+                  title={approvalThreadId === activeThreadId ? '来自当前对话' : '打开请求审批的对话'}
+                >来自：{approvalSource}</button>
+              ) : null}
               <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
               {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
               {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}

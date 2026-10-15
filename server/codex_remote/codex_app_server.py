@@ -969,12 +969,23 @@ class CodexAppServer:
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
 
     async def answer_server_request(self, request_id: str | int, decision: str) -> None:
-        if request_id not in self._server_requests:
-            raise CodexRuntimeError("该审批请求已过期或已处理")
         if decision not in {"accept", "decline", "cancel"}:
             raise CodexRuntimeError("不支持的审批操作")
-        self._server_requests.pop(request_id, None)
-        await self._write({"id": request_id, "result": {"decision": decision}})
+        request = self._server_requests.pop(request_id, None)
+        if request is None:
+            raise CodexRuntimeError("该审批请求已过期或已处理")
+        try:
+            await self._write({"id": request_id, "result": {"decision": decision}})
+        except Exception:
+            self._server_requests.setdefault(request_id, request)
+            raise
+        params = request.get("params") if isinstance(request, dict) else None
+        await self._emit({
+            "type": "server_request.resolved",
+            "request_id": request_id,
+            "decision": decision,
+            "threadId": params.get("threadId") if isinstance(params, dict) else None,
+        })
 
     async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self._raise_if_handed_off()
@@ -1677,12 +1688,22 @@ class CodexAppServer:
                     "error": {"code": -32601, "message": "This Codex Remote client does not support this request."},
                 })
                 return
-            self._server_requests[request_id] = message
+            request_params = message.get("params")
+            request_params = request_params if isinstance(request_params, dict) else {}
+            thread_id = request_params.get("threadId", request_params.get("thread_id"))
+            if not isinstance(thread_id, str):
+                turn_id = request_params.get("turnId", request_params.get("turn_id"))
+                if isinstance(turn_id, str):
+                    thread_id = next((candidate for candidate, active_turn_id in self._active_turn_ids.items()
+                                      if active_turn_id == turn_id), None)
+            if isinstance(thread_id, str) and request_params.get("threadId") != thread_id:
+                request_params = {**request_params, "threadId": thread_id}
+            self._server_requests[request_id] = {**message, "params": request_params}
             await self._emit({
                 "type": "server_request",
                 "request_id": request_id,
                 "method": method,
-                "params": message.get("params", {}),
+                "params": request_params,
             })
         else:
             params = message.get("params", {})

@@ -1,6 +1,6 @@
 {
   "name": "codex-remote",
-  "version": "0.16.0-dev.5",
+  "version": "0.16.0-dev.6",
   "private": true,
   "type": "module",
   "scripts": {

@@ -491,6 +491,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .loading-state { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100%; color: #9298a2; font-size: calc(13px + var(--mobile-font-offset)); }
 .approval-card { align-self: center; width: min(100%, 840px); margin: 0 auto; padding: 13px; border: 1px solid rgba(191, 147, 81, .4); border-radius: 10px; background: rgba(54, 42, 27, .3); color: #ddd0b8; }
 .approval-card__heading { display: flex; align-items: center; gap: 8px; color: #e0c18e; font-size: calc(13px + var(--mobile-font-offset)); }
+.approval-card__source { display: block; max-width: 100%; overflow: hidden; margin-top: 7px; padding: 0; border: 0; background: transparent; color: #b99c6d; cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.approval-card__source:hover:not(:disabled) { color: #edcd95; text-decoration: underline; }
+.approval-card__source:disabled { cursor: default; opacity: .76; }
 .approval-card p { margin: 8px 0; color: #b9ad99; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
 .approval-card code { display: block; overflow: auto; padding: 8px; border-radius: 6px; background: #141518; color: #ded5c6; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(12px + var(--mobile-font-offset)); white-space: pre-wrap; overflow-wrap: anywhere; }
 .approval-card small { display: block; margin-top: 6px; color: #968c7a; font-size: calc(11px + var(--mobile-font-offset)); }
@@ -1273,7 +1276,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .message-document { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .message-document strong, .remote-shell--theme-custom .message-document small { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .approval-card { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d9a441); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); }
-.remote-shell--theme-custom .approval-card__heading, .remote-shell--theme-custom .approval-card p, .remote-shell--theme-custom .approval-card small { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .approval-card__heading, .remote-shell--theme-custom .approval-card__source, .remote-shell--theme-custom .approval-card p, .remote-shell--theme-custom .approval-card small { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .approval-card code { border: 1px solid var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .approval-card__actions button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .approval-card__actions button:hover, .remote-shell--theme-custom .approval-card__actions .approval-card__accept { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }

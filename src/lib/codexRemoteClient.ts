@@ -155,6 +155,7 @@ export interface RemoteEvent {
   fallbackReason?: string | null
   error?: string | null
   request_id?: string | number
+  decision?: 'accept' | 'decline' | 'cancel'
   message?: string
 }
 

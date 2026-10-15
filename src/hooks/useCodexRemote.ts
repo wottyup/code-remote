@@ -3119,6 +3119,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError(event.message ?? 'Codex 请求失败')
       return
     }
+    if (event.type === 'server_request.resolved') {
+      const requestId = event.request_id
+      setApproval((current) => current && current.requestId === requestId ? null : current)
+      return
+    }
     if (event.type === 'turn.delivery') {
       const requestId = typeof event.request_id === 'string' ? event.request_id : null
       const delivery = requestId ? pendingTurnDeliveries.current.get(requestId) : undefined
@@ -3827,7 +3832,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     writerConflictRef.current = false
     setWriterConflict(false)
     activityItemId.current = null
-    setApproval(null)
     setLoadingHistory(!cachedThread)
     if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
 
@@ -3940,7 +3944,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
-      setApproval(null)
       setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
       setError(null)
       return thread
