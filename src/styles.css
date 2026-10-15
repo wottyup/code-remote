@@ -82,6 +82,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row--active { --thread-row-surface: linear-gradient(100deg, rgba(87, 100, 148, .28), rgba(41, 44, 53, .6)); border: 0 !important; background: var(--thread-row-surface); box-shadow: none; color: #f0f1f3; }
 .thread-row--active::before, .thread-row--active::after { display: none !important; content: none !important; }
 .thread-row--active > .engine-brand-icon { color: #d3d6dc; }
+.thread-row__icon { display: contents; }
 .thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
 .thread-row__copy strong { overflow: hidden; color: inherit; font-size: calc(13.5px + var(--mobile-font-offset)); font-weight: 520; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
@@ -110,6 +111,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .status-dot--handoff { background: #7aa8e6; box-shadow: 0 0 8px rgba(112, 163, 226, .42); }
 
 @media (min-width: 701px) and (pointer: fine) {
+  .thread-row__icon { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; margin-top: 0; border-radius: 6px; transition: background-color .16s ease, box-shadow .16s ease; }
+  .thread-row--active > .thread-row__icon { background: rgba(170, 186, 255, .15); box-shadow: 0 0 10px rgba(170, 186, 255, .12); }
+  .thread-row--active .thread-row__icon > .engine-brand-icon { color: #c4ceff; }
+  .remote-shell--theme-light .thread-row--active > .thread-row__icon { background: rgba(83, 103, 159, .12); box-shadow: none; }
+  .remote-shell--theme-light .thread-row--active .thread-row__icon > .engine-brand-icon { color: #53679f; }
+  .remote-shell--theme-warm .thread-row--active > .thread-row__icon { background: rgba(146, 114, 83, .13); box-shadow: none; }
+  .remote-shell--theme-warm .thread-row--active .thread-row__icon > .engine-brand-icon { color: #927253; }
+  .remote-shell--theme-custom .thread-row--active > .thread-row__icon { background: color-mix(in srgb, var(--custom-theme-text-color) 12%, transparent); box-shadow: none; }
+  .remote-shell--theme-custom .thread-row--active .thread-row__icon > .engine-brand-icon { color: var(--custom-theme-text-color); }
   .remote-sidebar__collapse { display: grid; }
   .remote-shell--sidebar-collapsed { grid-template-columns: 112px minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); }
   .remote-shell--sidebar-collapsed .remote-sidebar { padding-inline: 8px; }
