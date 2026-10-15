@@ -1247,7 +1247,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .attach-button--native:focus-within { border: 0; box-shadow: none; }
 .remote-shell--theme-custom .theme-color-input input, .remote-shell--theme-custom .theme-image-preview { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .theme-option:hover { border-color: var(--custom-theme-border); background: var(--custom-theme-active); }
-.remote-shell--theme-custom .workspace-file-preview__code, .remote-shell--theme-custom .workspace-file-preview__editor { background: var(--custom-theme-control); color: var(--custom-theme-text-color); -webkit-text-fill-color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .workspace-file-preview__code, .remote-shell--theme-custom .workspace-file-preview__editor { background: var(--custom-theme-control); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .workspace-file-preview__editor { -webkit-text-fill-color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-file-preview__line--added { background: color-mix(in srgb, var(--custom-theme-active) 68%, rgba(50, 118, 69, .3)); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-file-preview__line--deleted { background: color-mix(in srgb, var(--custom-theme-active) 68%, rgba(143, 57, 55, .3)); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .workspace-file-preview__line--hunk { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
@@ -1434,6 +1435,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .syntax-highlighted :is(.hljs-variable, .hljs-template-variable, .hljs-params, .hljs-subst) { color: var(--syntax-variable); }
 .syntax-highlighted :is(.hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-selector-pseudo) { color: var(--syntax-attribute); }
 .syntax-highlighted :is(.hljs-meta, .hljs-operator, .hljs-punctuation, .hljs-tag) { color: var(--syntax-punctuation); }
+.syntax-highlighted [class*="hljs-"] { -webkit-text-fill-color: currentColor; }
 .syntax-highlighted .hljs-name { color: var(--syntax-keyword); }
 .syntax-highlighted .hljs-code { color: var(--syntax-code); }
 .syntax-highlighted .hljs-link { color: var(--syntax-link); text-decoration: underline; }
