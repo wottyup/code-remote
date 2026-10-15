@@ -210,6 +210,26 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       send({ type: 'input', data })
     }
     const dataSubscription = terminal.onData(sendInput)
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown' || (!event.ctrlKey && !event.metaKey) || event.altKey) return true
+
+      const key = event.key.toLowerCase()
+      if (key === 'c' && terminal.hasSelection()) {
+        const selection = terminal.getSelection()
+        if (!selection) return true
+        event.preventDefault()
+        event.stopPropagation()
+        void copyTextToClipboard(selection).finally(() => terminal.focus())
+        return false
+      }
+
+      if (key === 'v') {
+        // Let the browser dispatch its native paste event to xterm's clipboard handler.
+        return false
+      }
+
+      return true
+    })
     sendControlInput.current = (code) => {
       if (code === 'Backspace') {
         sendInput('\x7f')
@@ -231,9 +251,9 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       return true
     }
     const handleContextMenu = (event: MouseEvent) => {
-      if (!terminal.hasSelection()) return
       event.preventDefault()
-      showContextMenu(event.clientX, event.clientY)
+      if (terminal.hasSelection()) showContextMenu(event.clientX, event.clientY)
+      else setContextMenu(null)
     }
     container.addEventListener('contextmenu', handleContextMenu)
 
