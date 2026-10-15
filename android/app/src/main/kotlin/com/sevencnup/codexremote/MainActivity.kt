@@ -25,8 +25,12 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewConfiguration
+import android.view.WindowInsets
+import android.view.WindowInsetsAnimation
 import android.view.Window
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -59,6 +63,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import kotlin.math.max
+import kotlin.math.abs
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
@@ -176,10 +181,17 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(true)
+            window.setDecorFitsSystemWindows(false)
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                window.isStatusBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
+            }
+        } else {
+            window.statusBarColor = DARK
+            window.navigationBarColor = DARK
         }
-        window.statusBarColor = DARK
-        window.navigationBarColor = DARK
         window.decorView.setBackgroundColor(DARK)
         window.decorView.systemUiVisibility = if (lightTheme) {
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
@@ -319,7 +331,7 @@ class MainActivity : Activity() {
             }
         }
         setContentView(root)
-        installImeInsets(root)
+        installWindowInsets(root)
     }
 
     private fun verifySavedConnection() {
@@ -360,13 +372,36 @@ class MainActivity : Activity() {
         handler.post(refreshRunnable)
     }
 
-    private fun installImeInsets(view: View) {
-        // The native EditText and ADJUST_RESIZE window handle IME geometry directly.
+    private fun installWindowInsets(view: View) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val update = { insets: WindowInsets ->
+            val systemBars = insets.getInsets(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+            )
+            val ime = insets.getInsets(WindowInsets.Type.ime())
+            val bottom = if (insets.isVisible(WindowInsets.Type.ime())) max(systemBars.bottom, ime.bottom) else systemBars.bottom
+            view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+        }
+        view.setOnApplyWindowInsetsListener { _, insets ->
+            update(insets)
+            insets
+        }
+        view.setWindowInsetsAnimationCallback(object : WindowInsetsAnimation.Callback(
+            WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE,
+        ) {
+            override fun onProgress(
+                insets: WindowInsets,
+                runningAnimations: MutableList<WindowInsetsAnimation>,
+            ): WindowInsets {
+                update(insets)
+                return insets
+            }
+        })
         view.requestApplyInsets()
     }
 
     private fun renderHome() {
-        root = FrameLayout(this).apply { setBackgroundColor(DARK) }
+        root = ChatRootLayout(this).apply { setBackgroundColor(DARK) }
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(DARK)
@@ -390,8 +425,8 @@ class MainActivity : Activity() {
         buildQueuePanel()
         buildComposer()
         buildSidebar()
-        installImeInsets(root)
         setContentView(root)
+        installWindowInsets(root)
         renderHeader()
         renderMessages(false)
         renderQueue()
@@ -402,11 +437,11 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(4), dp(8), dp(3))
+            setPadding(dp(10), dp(2), dp(8), dp(2))
             background = rounded(DARK, 0, BORDER, dp(1))
         }
         val menu = iconButton("☰", "打开对话列表") { setSidebarVisible(true) }
-        header.addView(menu, LinearLayout.LayoutParams(dp(34), dp(38)))
+        header.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
@@ -414,10 +449,10 @@ class MainActivity : Activity() {
         titleColumn.addView(path, widthWrap())
         header.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         modeButton = iconButton(if (currentMode == "codex") "◉" else "◈", "切换 Codex / Claude") { switchMode() }
-        header.addView(modeButton, LinearLayout.LayoutParams(dp(34), dp(38)))
-        header.addView(iconButton("▤", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(34), dp(38)))
-        header.addView(iconButton("▣", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(34), dp(38)))
-        page.addView(header, LinearLayout.LayoutParams(MATCH, dp(48)))
+        header.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("▤", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("▣", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        page.addView(header, LinearLayout.LayoutParams(MATCH, dp(44)))
     }
 
     private fun buildQueuePanel() {
@@ -436,7 +471,7 @@ class MainActivity : Activity() {
     private fun buildComposer() {
         val dock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(2), dp(12), dp(8))
+            setPadding(dp(12), dp(2), dp(12), dp(12))
             background = rounded(DARK, dp(18))
         }
         val composer = LinearLayout(this).apply {
@@ -467,27 +502,26 @@ class MainActivity : Activity() {
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, dp(3), 0, 0)
         }
-        footer.addView(iconButton("＋", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(34), dp(32)))
+        footer.addView(iconButton("＋", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val preferenceScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val preferenceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         modelButton = preferenceButton("模型") { showModelOptions() }
         effortButton = preferenceButton("思考") { showEffortOptions() }
         permissionButton = preferenceButton("权限") { showPermissionOptions() }
-        preferenceRow.addView(modelButton)
-        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(30)).apply { leftMargin = dp(4) })
-        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(30)).apply { leftMargin = dp(4) })
+        preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(40)))
+        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
+        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
-        footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(32), 1f))
+        footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
         sendButton = label("↑", 23, DARK, true).apply {
             gravity = Gravity.CENTER
             background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(9))
             setOnClickListener { if (running) interruptTurn() else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
-        footer.addView(sendButton, LinearLayout.LayoutParams(dp(36), dp(32)).apply { leftMargin = dp(5) })
-        composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(34)))
+        footer.addView(sendButton, LinearLayout.LayoutParams(dp(40), dp(38)).apply { leftMargin = dp(5) })
+        composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
         dock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(dock, LinearLayout.LayoutParams(MATCH, WRAP))
         renderAttachmentStrip()
@@ -504,8 +538,8 @@ class MainActivity : Activity() {
         }
         val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         heading.addView(label("对话", 17, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        heading.addView(iconButton("×", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        drawer.addView(heading, LinearLayout.LayoutParams(MATCH, dp(36)))
+        heading.addView(iconButton("×", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        drawer.addView(heading, LinearLayout.LayoutParams(MATCH, dp(40)))
         drawerSearch = editField("搜索聊天记录", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT).apply {
             setSingleLine(true)
             addTextChangedListener(SimpleTextWatcher { renderSidebar() })
@@ -602,6 +636,62 @@ class MainActivity : Activity() {
         drawer.visibility = if (visible) View.VISIBLE else View.GONE
         (drawer.tag as? View)?.visibility = if (visible) View.VISIBLE else View.GONE
         if (visible) renderSidebar()
+    }
+
+    private inner class ChatRootLayout(context: Context) : FrameLayout(context) {
+        private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
+        private var startX = 0f
+        private var startY = 0f
+        private var swipeCandidate = false
+        private var interceptingSwipe = false
+
+        override fun onInterceptTouchEvent(event: MotionEvent): Boolean {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startX = event.x
+                    startY = event.y
+                    swipeCandidate = if (sidebarVisible) {
+                        event.x < dp(300)
+                    } else {
+                        // Stay outside Android's reserved back-gesture strip.
+                        event.x in dp(24).toFloat()..dp(56).toFloat()
+                    }
+                    interceptingSwipe = false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (swipeCandidate && !interceptingSwipe) {
+                        val dx = event.x - startX
+                        val dy = event.y - startY
+                        val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.25f
+                        val opens = !sidebarVisible && dx > touchSlop
+                        val closes = sidebarVisible && dx < -touchSlop
+                        if (horizontal && (opens || closes)) {
+                            interceptingSwipe = true
+                            return true
+                        }
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> swipeCandidate = false
+            }
+            return interceptingSwipe || super.onInterceptTouchEvent(event)
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (!interceptingSwipe) return super.onTouchEvent(event)
+            when (event.actionMasked) {
+                MotionEvent.ACTION_UP -> {
+                    val dx = event.x - startX
+                    if (abs(dx) >= dp(56)) setSidebarVisible(dx > 0)
+                    interceptingSwipe = false
+                    swipeCandidate = false
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    interceptingSwipe = false
+                    swipeCandidate = false
+                }
+            }
+            return true
+        }
     }
 
     private fun refreshRuntime() {
@@ -2158,6 +2248,8 @@ class MainActivity : Activity() {
     private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
         setPadding(dp(7), 0, dp(7), 0)
+        minWidth = dp(44)
+        minHeight = dp(40)
         background = rounded(PANEL_INSET, dp(7))
         setOnClickListener { action() }
     }
