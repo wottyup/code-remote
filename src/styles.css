@@ -61,8 +61,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
 .remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior-x: contain; background: #101114; color: #e9ebef; }
 .remote-shell--android { padding-top: var(--native-status-bar-inset); }
-.remote-sidebar { z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 17px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
-.remote-sidebar__heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 35px; margin: 0 2px 18px; }
+.remote-sidebar { z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 10px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
+.remote-sidebar__heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 31px; margin: 0 2px 4px; }
 .remote-brand { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; color: #f0f1f4; letter-spacing: -.02em; }
 .remote-brand__mark, .pair-card__mark { display: grid; place-items: center; border: 1px solid #41444c; background: linear-gradient(145deg, #30333a, #191b20); color: #f6f7f9; font-weight: 700; }
 .remote-brand__mark { width: 27px; height: 27px; border-radius: 9px; box-shadow: 0 0 0 3px rgba(170, 186, 255, .05); font-size: calc(15px + var(--mobile-font-offset)); }
@@ -77,12 +77,20 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .engine-brand-icon--claude-code { --engine-brand-mask: url('/brands/claude.svg'); background-color: #d97757; }
 .remote-sidebar__close, .remote-sidebar__collapse, .menu-button { display: none; }
 .remote-sidebar__collapse { width: 28px; height: 28px; }
+.sidebar-search { display: flex; flex: 0 0 34px; align-items: center; gap: 8px; width: 100%; height: 34px; min-width: 0; margin: 0 0 4px; padding: 0 9px; border: 1px solid rgba(146, 157, 184, .17); border-radius: 9px; background: rgba(10, 12, 15, .48); color: #858b95; transition: border-color .16s ease, background-color .16s ease; }
+.sidebar-search:focus-within { border-color: rgba(170, 186, 255, .52); background: rgba(10, 12, 15, .7); }
+.sidebar-search > svg { flex: 0 0 auto; }
+.sidebar-search input { width: 100%; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: #e9ebef; font-size: calc(12px + var(--mobile-font-offset)); }
+.sidebar-search input::placeholder { color: #777e88; }
+.sidebar-search input:focus-visible { outline: none; }
+.sidebar-search button { display: grid; width: 22px; height: 24px; flex: 0 0 22px; place-items: center; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #858b95; cursor: pointer; }
+.sidebar-search button:hover { background: rgba(146, 157, 184, .12); color: #e9ebef; }
 .new-thread-control { flex: 0 0 40px; width: 100%; }
 .new-thread-button { display: flex; flex: 0 0 40px; align-items: center; gap: 9px; width: 100%; height: 40px; margin-top: 1px; padding: 0 11px; border: 1px solid rgba(170, 186, 255, .22); border-radius: 10px; background: linear-gradient(135deg, rgba(113, 129, 190, .2), rgba(48, 52, 66, .25)); color: #e1e3e8; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 560; text-align: left; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .05); }
 .new-thread-button__icon { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 6px; background: rgba(170, 186, 255, .15); color: #c4ceff; }
 .new-thread-button:hover:not(:disabled) { border-color: rgba(170, 186, 255, .5); background: linear-gradient(135deg, rgba(113, 129, 190, .3), rgba(48, 52, 66, .35)); }
 .new-thread-button:disabled { cursor: not-allowed; opacity: .48; }
-.thread-list-heading { display: flex; align-items: center; justify-content: space-between; margin: 25px 5px 7px; color: #777e88; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
+.thread-list-heading { display: flex; align-items: center; justify-content: space-between; margin: 7px 5px 5px; color: #777e88; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; letter-spacing: .09em; text-transform: uppercase; }
 .thread-list-heading > span { white-space: nowrap; }
 .thread-list-heading .icon-button { width: 25px; height: 25px; }
 .thread-list { display: grid; flex: 1 1 auto; align-content: start; gap: 3px; min-height: 0; overflow-y: auto; }
@@ -135,6 +143,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--sidebar-collapsed .remote-sidebar { padding-inline: 8px; }
   .remote-shell--sidebar-collapsed .remote-sidebar__heading { justify-content: space-between; }
   .remote-shell--sidebar-collapsed .remote-brand__copy { display: none; }
+  .remote-shell--sidebar-collapsed .sidebar-search { display: none; }
   .remote-shell--sidebar-collapsed .thread-list-heading { margin-inline: 2px; }
   .remote-shell--sidebar-collapsed .thread-row { gap: 7px; padding-inline: 7px; }
   .remote-shell--sidebar-collapsed .thread-row__copy small { display: none; }
@@ -761,8 +770,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell { display: block; position: relative; }
   .workspace-resize-handle { display: none; }
   .pane-close-button { display: none; }
-  .remote-shell--android .remote-sidebar { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
-  .remote-sidebar { position: fixed; z-index: 10; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(14px, env(safe-area-inset-top)); transform: translate3d(-105%, 0, 0); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); backface-visibility: hidden; will-change: transform; }
+  .remote-shell--android .remote-sidebar { padding-top: max(9px, calc(var(--native-status-bar-inset) + 8px)); }
+  .remote-sidebar { position: fixed; z-index: 10; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(9px, env(safe-area-inset-top)); transform: translate3d(-105%, 0, 0); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); backface-visibility: hidden; will-change: transform; }
+  .remote-sidebar__heading { min-height: 30px; margin-bottom: 3px; }
+  .sidebar-search { flex-basis: 32px; height: 32px; margin-bottom: 3px; }
+  .thread-list-heading { margin: 5px 5px 4px; }
   .remote-sidebar--open { transform: translate3d(0, 0, 0); }
   .remote-sidebar--dragging { transform: translate3d(var(--sidebar-drag-offset, -105%), 0, 0); transition: none; }
   .remote-shell--sidebar-dragging .sidebar-backdrop { transition: none; }
@@ -877,14 +889,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   :where(:root[data-touch-landscape="true"]) .file-change-card__path-mobile { display: block; }
   :where(:root[data-touch-landscape="true"]) .file-change-card__path-desktop { display: none; }
   :where(:root[data-touch-landscape="true"]) .remote-sidebar { min-height: 0; padding: 8px 8px 8px; }
-  :where(:root[data-touch-landscape="true"]) .remote-sidebar__heading { min-height: 29px; margin: 0 2px 8px; }
+  :where(:root[data-touch-landscape="true"]) .remote-sidebar__heading { min-height: 29px; margin: 0 2px 4px; }
+  :where(:root[data-touch-landscape="true"]) .sidebar-search { flex-basis: 30px; height: 30px; margin-bottom: 3px; }
   :where(:root[data-touch-landscape="true"]) .remote-brand { gap: 7px; }
   :where(:root[data-touch-landscape="true"]) .remote-brand__mark { width: 24px; height: 24px; border-radius: 7px; font-size: calc(14px + var(--mobile-font-offset)); }
   :where(:root[data-touch-landscape="true"]) .remote-brand__logo { width: 24px; height: 24px; flex-basis: 24px; }
   :where(:root[data-touch-landscape="true"]) .remote-brand__copy small { display: none; }
   :where(:root[data-touch-landscape="true"]) .new-thread-button { flex-basis: 34px; height: 34px; min-height: 34px; padding-inline: 8px; }
   :where(:root[data-touch-landscape="true"]) .new-thread-button__icon { width: 20px; height: 20px; }
-  :where(:root[data-touch-landscape="true"]) .thread-list-heading { margin: 10px 3px 5px; }
+  :where(:root[data-touch-landscape="true"]) .thread-list-heading { margin: 5px 3px 4px; }
   :where(:root[data-touch-landscape="true"]) .thread-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; }
   :where(:root[data-touch-landscape="true"]) .thread-row { min-height: 36px; padding: 6px 7px; }
   :where(:root[data-touch-landscape="true"]) .remote-sidebar__footer { min-height: 34px; margin-top: 4px; padding-top: 6px; }
@@ -917,6 +930,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 .remote-shell--theme-light { color-scheme: light; --pane-marquee-color: #171717; --line: #e4e4e4; --muted: #777; background: #fff; color: #202020; }
 .remote-shell--theme-light .remote-sidebar { border-color: #e4e4e4; background: #fff; }
+.remote-shell--theme-light .sidebar-search { border-color: #dedede; background: #f5f5f5; color: #737373; }
+.remote-shell--theme-light .sidebar-search:focus-within { border-color: #9ba7c5; background: #fff; }
+.remote-shell--theme-light .sidebar-search input { color: #202020; }
+.remote-shell--theme-light .sidebar-search input::placeholder { color: #8a8a8a; }
+.remote-shell--theme-light .sidebar-search button { color: #737373; }
+.remote-shell--theme-light .sidebar-search button:hover { background: #e9e9e9; color: #202020; }
 .remote-shell--theme-light .remote-pane-slot, .remote-shell--theme-light .remote-chat, .remote-shell--theme-light .remote-workspace, .remote-shell--theme-light .theme-settings-panel { background: #fff; }
 .remote-shell--theme-light .remote-chat__header, .remote-shell--theme-light .theme-settings-panel__header { border-color: #e8e8e8; background: #fff; }
 .remote-shell--theme-light .remote-brand__copy strong, .remote-shell--theme-light .remote-chat__title strong, .remote-shell--theme-light .theme-settings-panel__header h1, .remote-shell--theme-light .welcome-state h1 { color: #202020; }
@@ -1049,6 +1068,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 .remote-shell--theme-warm { color-scheme: light; --pane-marquee-color: #5a3b27; --line: #e8ded2; --muted: #88796a; background: #f3ebdf; color: #40362c; }
 .remote-shell--theme-warm .remote-sidebar { border-color: #e8ded2; background: #f8f1e8; }
+.remote-shell--theme-warm .sidebar-search { border-color: #e2d6c7; background: #f3eadd; color: #88796a; }
+.remote-shell--theme-warm .sidebar-search:focus-within { border-color: #b19578; background: #fffaf3; }
+.remote-shell--theme-warm .sidebar-search input { color: #46382c; }
+.remote-shell--theme-warm .sidebar-search input::placeholder { color: #9a8c7c; }
+.remote-shell--theme-warm .sidebar-search button { color: #88796a; }
+.remote-shell--theme-warm .sidebar-search button:hover { background: #e9dccb; color: #46382c; }
 .remote-shell--theme-warm .remote-chat, .remote-shell--theme-warm .remote-workspace, .remote-shell--theme-warm .theme-settings-panel { background: #fbf6ef; }
 .remote-shell--theme-warm .remote-chat__header, .remote-shell--theme-warm .theme-settings-panel__header { border-color: #eee3d7; background: rgba(255, 250, 243, .88); }
 .remote-shell--theme-warm .remote-brand__copy strong, .remote-shell--theme-warm .remote-chat__title strong, .remote-shell--theme-warm .theme-settings-panel__header h1, .remote-shell--theme-warm .welcome-state h1 { color: #46382c; }
@@ -1164,6 +1189,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 .remote-shell--theme-custom { --pane-marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background: transparent; }
 .remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .sidebar-search { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: color-mix(in srgb, var(--custom-theme-text-color) 65%, transparent); }
+.remote-shell--theme-custom .sidebar-search:focus-within { background: var(--custom-theme-surface); }
+.remote-shell--theme-custom .sidebar-search input { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .sidebar-search input::placeholder { color: color-mix(in srgb, var(--custom-theme-text-color) 55%, transparent); }
+.remote-shell--theme-custom .sidebar-search button { color: color-mix(in srgb, var(--custom-theme-text-color) 72%, transparent); }
+.remote-shell--theme-custom .sidebar-search button:hover { background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .remote-chat, .remote-shell--theme-custom .remote-workspace, .remote-shell--theme-custom .remote-pane-grid, .remote-shell--theme-custom .remote-pane-slot { border-color: var(--custom-theme-border); background: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; }
 .remote-shell--theme-custom .remote-chat__header, .remote-shell--theme-custom .theme-settings-panel__header { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); }
 .remote-shell--theme-custom :is(.remote-brand__copy strong, .remote-chat__title strong, .theme-settings-panel__header h1, .welcome-state h1, .theme-settings-card__heading h2, .theme-control-row strong, .theme-option strong) { color: var(--custom-theme-text-color); }

@@ -34,6 +34,7 @@ import {
   Quote,
   RefreshCw,
   RotateCcw,
+  Search,
   Scissors,
   Send,
   Settings2,
@@ -3500,6 +3501,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarSearch, setSidebarSearch] = useState('')
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
@@ -4656,6 +4658,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       const rightPinned = pinnedThreadIds.has(right.id)
       return Number(rightPinned) - Number(leftPinned)
     }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
+  const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
+  const visibleSidebarThreads = useMemo(() => normalizedSidebarSearch
+    ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
+      .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
+    : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
   const completedThread = findCompletedThread()
 
   return (
@@ -4681,17 +4688,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
-          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) setSidebarSearch(''); setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
+        <div className="sidebar-search">
+          <Search size={15} aria-hidden="true" />
+          <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />
+          {sidebarSearch ? <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => setSidebarSearch('')}><X size={14} /></button> : null}
+        </div>
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading"><span>{normalizedSidebarSearch ? '搜索结果' : sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
-          {sidebarThreads.map((thread) => {
+          {visibleSidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             const isPinned = pinnedThreadIds.has(thread.id)
@@ -4712,8 +4724,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               </button>
             )
           })}
-          {sidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
-          {remote0.loadingHistory && sidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
+          {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
