@@ -412,9 +412,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .operation-activity__text { display: block; min-width: 0; flex: 0 1 auto; overflow: hidden; background-image: linear-gradient(90deg, #7d8799 0%, #7d8799 38%, #f2f5ff 50%, #7d8799 62%, #7d8799 100%); background-position: 100% center; background-size: 220% 100%; background-clip: text; color: transparent; text-overflow: ellipsis; white-space: nowrap; -webkit-background-clip: text; -webkit-text-fill-color: transparent; animation: operation-activity-glow 2.6s linear infinite; }
 @keyframes operation-activity-glow { from { background-position: 100% center; } to { background-position: 0% center; } }
 @media (prefers-reduced-motion: reduce) { .operation-activity__text { animation: none; background-position: 50% center; } }
-.chat-message__content { min-width: 0; max-width: 100%; margin-top: 5px; color: #d5d8de; font: 14.5px/1.72 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(14.5px + var(--mobile-font-offset)); overflow-wrap: break-word; }
+.chat-message__content { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; margin-top: 5px; color: #d5d8de; font: 14.5px/1.72 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(14.5px + var(--mobile-font-offset)); overflow-wrap: break-word; }
 .chat-message__text { white-space: pre-wrap; }
-.activity-timeline { display: grid; min-width: 0; gap: 7px; margin-top: 5px; }
+.activity-timeline { display: grid; width: 100%; min-width: 0; max-width: 100%; gap: 7px; margin-top: 5px; }
 .activity-timeline > .chat-message__content { margin-top: 0; }
 .activity-timeline > .operation-log { width: 100%; margin: 0; }
 .operation-log { width: min(100%, 840px); margin: 10px auto 0; overflow: visible; border: 0; border-radius: 0; background: transparent; color: #aeb4c0; }
@@ -704,25 +704,29 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .workspace-resize-handle { display: none; }
   .pane-close-button { display: none; }
   .remote-shell--android .remote-sidebar { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
-  .remote-sidebar { position: fixed; z-index: 10; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); }
+  .remote-sidebar { position: fixed; z-index: 10; inset: 0 auto 0 0; width: min(67vw, 256px); padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(-105%); transition: transform .2s ease; box-shadow: 14px 0 40px rgba(0, 0, 0, .4); will-change: transform; }
   .remote-sidebar--open { transform: translateX(0); }
+  .remote-sidebar--dragging { transform: translateX(var(--sidebar-drag-offset, -105%)); transition: none; }
+  .remote-shell--sidebar-dragging .sidebar-backdrop { transition: none; }
+  .remote-shell--workspace-dragging .workspace-backdrop { transition: none; }
   .remote-sidebar__close, .menu-button { display: grid; }
-  .sidebar-backdrop { position: fixed; z-index: 9; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, .56); }
+  .sidebar-backdrop { position: fixed; z-index: 9; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, var(--sidebar-backdrop-opacity, .2)); }
   .remote-workspace { position: relative; width: 100%; height: 100%; }
   .remote-pane-grid { position: relative; z-index: 8; display: block; width: 100%; height: 100%; background: transparent; }
   .remote-pane-slot { width: 100%; height: 100%; }
   .remote-pane-slot:not(:has(.conversation-pane--selected)) { display: none; }
-  .workspace-explorer { position: fixed; z-index: 10; inset: 0 0 0 auto; display: grid; width: min(67vw, 256px); height: var(--app-viewport-height); min-height: 0; grid-column: auto; grid-row: auto; padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(105%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: -14px 0 40px rgba(0, 0, 0, .4); }
+  .workspace-explorer { position: fixed; z-index: 10; inset: 0 0 0 auto; display: grid; width: min(67vw, 256px); height: var(--app-viewport-height); min-height: 0; grid-column: auto; grid-row: auto; padding-top: max(14px, env(safe-area-inset-top)); transform: translateX(105%); visibility: hidden; transition: transform .2s ease, visibility 0s linear .2s; box-shadow: -14px 0 40px rgba(0, 0, 0, .4); touch-action: pan-y; }
   .remote-shell--android .workspace-explorer { padding-top: max(14px, calc(var(--native-status-bar-inset) + 14px)); }
   .workspace-file-preview__code, .workspace-file-preview__editor { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
   .workspace-explorer--mobile-open { transform: translateX(0); visibility: visible; transition: transform .2s ease; }
+  .workspace-explorer--dragging { transform: translateX(var(--workspace-drag-offset, 105%)); transition: none; }
   .workspace-explorer--mobile-open .workspace-explorer__close { display: grid; }
-  .workspace-backdrop { position: fixed; z-index: 9; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, .56); }
+  .workspace-backdrop { position: fixed; z-index: 9; inset: 0; display: block; border: 0; background: rgba(0, 0, 0, var(--workspace-backdrop-opacity, .2)); transition: background-color .2s ease; }
   .workspace-explorer__add { display: grid; width: 30px; height: 29px; flex: 0 0 30px; place-items: center; padding: 0; border: 0; border-radius: 6px; background: transparent; color: #aabaff; cursor: pointer; }
   .workspace-explorer__add:hover { border-color: rgba(170, 186, 255, .54); background: rgba(117, 135, 177, .16); color: #eef1f6; }
   .mobile-workspace-button { display: grid; }
   .theme-settings-panel { grid-column: auto; }
-  .remote-chat { position: relative; width: 100%; max-width: 100vw; height: 100%; grid-template-rows: 56px minmax(0, 1fr) auto auto auto; overflow-x: hidden; }
+  .remote-chat { position: relative; width: 100%; max-width: 100vw; height: 100%; grid-template-rows: 50px minmax(0, 1fr) auto auto auto; overflow-x: hidden; }
   .remote-chat__header { width: 100%; min-width: 0; padding: 0 16px; }
   .remote-chat__title-wrap { min-width: 0; flex: 1 1 auto; gap: 5px; overflow: hidden; }
   .remote-chat__title { min-width: 0; max-width: 100%; }
@@ -745,7 +749,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .chat-message { grid-template-columns: 25px minmax(0, 1fr); gap: 8px; }
   .chat-message__avatar { width: 24px; height: 24px; }
   .chat-message__content { font-size: calc(14px + var(--mobile-font-offset)); }
-  .chat-message__code { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
   .chat-message__code { white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
   .operation-log > summary, .operation-log > summary > small, .operation-log__content strong, .operation-log__item > small { font-size: calc(14px + var(--mobile-font-offset)); }
   .operation-log__content code { font-size: calc(13px + var(--mobile-font-offset)); }

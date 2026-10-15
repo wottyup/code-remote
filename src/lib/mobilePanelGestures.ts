@@ -15,7 +15,40 @@ export type MobilePanelGestureAction =
   | 'close-workspace'
   | 'close-global'
 
+const mobilePanelGestureThreshold = 44
 const mobileBackEdgeSize = 36
+const mobileSidebarClosedOffsetRatio = 1.05
+const mobileWorkspaceClosedOffsetRatio = 1.05
+const mobileSidebarBackdropMaxOpacity = 0.2
+
+export function mobileSidebarBackdropOpacity(visibleRatio: number) {
+  const ratio = Math.max(0, Math.min(1, visibleRatio))
+  return ratio * mobileSidebarBackdropMaxOpacity
+}
+
+export function mobileSidebarDragOffset(panelOpen: boolean, panelWidth: number, deltaX: number) {
+  const closedOffset = -Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio
+  const startOffset = panelOpen ? 0 : closedOffset
+  return Math.max(closedOffset, Math.min(0, startOffset + deltaX))
+}
+
+export function shouldOpenMobileSidebarAfterDrag(offset: number, panelWidth: number, action: MobilePanelGestureAction | null) {
+  if (action === 'open-sidebar') return true
+  if (action === 'close-sidebar') return false
+  return offset > -(Math.max(0, panelWidth) * mobileSidebarClosedOffsetRatio) / 2
+}
+
+export function mobileWorkspaceDragOffset(panelOpen: boolean, panelWidth: number, deltaX: number) {
+  const closedOffset = Math.max(0, panelWidth) * mobileWorkspaceClosedOffsetRatio
+  const startOffset = panelOpen ? 0 : closedOffset
+  return Math.max(0, Math.min(closedOffset, startOffset + deltaX))
+}
+
+export function shouldOpenMobileWorkspaceAfterDrag(offset: number, panelWidth: number, action: MobilePanelGestureAction | null) {
+  if (action === 'open-workspace') return true
+  if (action === 'close-workspace') return false
+  return offset < (Math.max(0, panelWidth) * mobileWorkspaceClosedOffsetRatio) / 2
+}
 
 export function beginMobilePanelGesture(
   x: number,
@@ -59,7 +92,7 @@ export function resolveMobilePanelGesture(
   start: MobilePanelGestureStart,
   endX: number,
   endY: number,
-  threshold = 64,
+  threshold = mobilePanelGestureThreshold,
 ): MobilePanelGestureAction | null {
   const deltaX = endX - start.x
   const deltaY = endY - start.y

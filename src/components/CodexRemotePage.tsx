@@ -45,7 +45,7 @@ import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
-import { beginMobileGlobalBackGesture, beginMobilePanelGesture, resolveMobilePanelGesture, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
+import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
@@ -1819,6 +1819,7 @@ interface WorkspaceExplorerProps {
   onInsertPath: (path: string, focus?: boolean) => void
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
+  mobileDragging: boolean
   onCloseMobile: () => void
 }
 
@@ -1928,7 +1929,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onCloseMobile }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2468,7 +2469,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const previewPortalTarget = previewContainerRef.current
   return (
     <>
-      <aside className={`workspace-explorer${mobileOpen ? ' workspace-explorer--mobile-open' : ''}`} aria-label="工作区文件资源管理器">
+      <aside className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
@@ -3072,9 +3073,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
+  const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -3129,6 +3132,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
+  const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
+  const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
@@ -3137,6 +3142,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const paneGrid = useRef<HTMLDivElement>(null)
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
+  const sidebarPanel = useRef<HTMLElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
   const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
@@ -3280,7 +3286,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
     if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) {
+      const previousStart = sidebarTouchStart.current
       sidebarTouchStart.current = null
+      if (sidebarDrag.current?.active) {
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+        setSidebarDragging(false)
+        setSidebarOpen(previousStart?.panelWasOpen ?? sidebarOpen)
+      }
+      if (workspaceDrag.current?.active) {
+        remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+        setWorkspaceDragging(false)
+        setWorkspaceOpen(previousStart?.panelWasOpen ?? workspaceOpen)
+      }
+      sidebarDrag.current = null
+      workspaceDrag.current = null
       return
     }
     const touch = event.touches[0]
@@ -3292,13 +3311,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       || workspacePreviewModeRef.current === 'mobile'
     if (globalOverlayOpen) {
       sidebarTouchStart.current = beginMobileGlobalBackGesture(touch.clientX, touch.clientY, window.innerWidth, true)
+      sidebarDrag.current = null
+      workspaceDrag.current = null
       return
     }
     const target = event.target
     const targetElement = target instanceof Element ? target : null
     const startedOnBackdrop = Boolean(targetElement?.closest('.sidebar-backdrop, .workspace-backdrop'))
     const startedInsideSidebar = sidebarOpen && Boolean(targetElement?.closest('.remote-sidebar'))
-    const startedInsideWorkspaceTree = workspaceOpen && Boolean(targetElement?.closest('.workspace-explorer__tree'))
     const startedOnInteractiveSurface = Boolean(targetElement?.closest([
       'button', 'input', 'textarea', 'select', '[contenteditable="true"]', '[role="button"]',
       '[role="dialog"]', '[role="menu"]', '[role="listbox"]',
@@ -3306,17 +3326,108 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       '.chat-overlay-backdrop', '.theme-settings-panel', '.thread-context-menu',
       '.thread-rename-backdrop', '.message-composer',
     ].join(', ')))
-    sidebarTouchStart.current = startedOnInteractiveSurface && !startedOnBackdrop && !startedInsideSidebar && !startedInsideWorkspaceTree
-      ? null
-      : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
+    const startedOnWorkspaceEntry = Boolean(targetElement?.closest('.workspace-explorer__entry'))
+    const startedInsideWorkspacePanel = workspaceOpen
+      && Boolean(targetElement?.closest('.workspace-explorer'))
+      && (!startedOnInteractiveSurface || startedOnWorkspaceEntry)
+    const start = startedInsideSidebar
+      ? { panel: 'sidebar' as const, x: touch.clientX, y: touch.clientY, panelWasOpen: true }
+      : startedInsideWorkspacePanel
+        ? { panel: 'workspace' as const, x: touch.clientX, y: touch.clientY, panelWasOpen: true }
+      : startedOnInteractiveSurface && !startedOnBackdrop
+        ? null
+        : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
+    sidebarTouchStart.current = start
+    sidebarDrag.current = start?.panel === 'sidebar'
+      ? {
+        panelWidth: Math.min(window.innerWidth * 0.67, 256),
+        offset: sidebarOpen ? 0 : -Math.min(window.innerWidth * 0.67, 256) * 1.05,
+        active: false,
+      }
+      : null
+    workspaceDrag.current = start?.panel === 'workspace'
+      ? {
+        panelWidth: Math.min(window.innerWidth * 0.67, 256),
+        offset: workspaceOpen ? 0 : Math.min(window.innerWidth * 0.67, 256) * 1.05,
+        active: false,
+      }
+      : null
+  }
+
+  function handleSidebarTouchMove(event: ReactTouchEvent<HTMLDivElement>) {
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
+    const start = sidebarTouchStart.current
+    const touch = event.touches[0]
+    if ((!drag && !workspace) || !start || !touch || event.touches.length !== 1) return
+
+    const deltaX = touch.clientX - start.x
+    const deltaY = touch.clientY - start.y
+    if ((!drag || !drag.active) && (!workspace || !workspace.active)) {
+      if (Math.abs(deltaX) < 8 || Math.abs(deltaX) < Math.abs(deltaY) * 1.2) return
+      if (drag) drag.active = true
+      if (workspace) workspace.active = true
+      if (drag) setSidebarDragging(true)
+      if (workspace) setWorkspaceDragging(true)
+    }
+
+    if (drag) {
+      drag.offset = mobileSidebarDragOffset(sidebarOpen, drag.panelWidth, deltaX)
+      sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', String(drag.offset) + 'px')
+      const visibleRatio = Math.max(0, Math.min(1, (drag.panelWidth + drag.offset) / drag.panelWidth))
+      remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+    }
+    if (workspace) {
+      workspace.offset = mobileWorkspaceDragOffset(workspaceOpen, workspace.panelWidth, deltaX)
+      remoteShell.current?.querySelector<HTMLElement>('.workspace-explorer')?.style.setProperty('--workspace-drag-offset', String(workspace.offset) + 'px')
+      const visibleRatio = Math.max(0, Math.min(1, 1 - workspace.offset / (workspace.panelWidth * 1.05)))
+      remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+    }
+    if (event.cancelable) event.preventDefault()
   }
 
   function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
     const start = sidebarTouchStart.current
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
     sidebarTouchStart.current = null
+    sidebarDrag.current = null
+    workspaceDrag.current = null
     const touch = event.changedTouches[0]
-    if (!start || !touch) return
+    if (!start || !touch) {
+      if (drag?.active) {
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+        setSidebarDragging(false)
+        setSidebarOpen(start?.panelWasOpen ?? sidebarOpen)
+      }
+      if (workspace?.active) {
+        remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+        setWorkspaceDragging(false)
+        setWorkspaceOpen(start?.panelWasOpen ?? workspaceOpen)
+      }
+      return
+    }
     const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
+    if (drag?.active) {
+      const shouldOpen = shouldOpenMobileSidebarAfterDrag(drag.offset, drag.panelWidth, action)
+      remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      if (shouldOpen) openSidebarPanel()
+      else setSidebarOpen(false)
+      window.requestAnimationFrame(() => setSidebarDragging(false))
+      if (event.cancelable) event.preventDefault()
+      return
+    }
+    if (workspace?.active) {
+      const shouldOpen = shouldOpenMobileWorkspaceAfterDrag(workspace.offset, workspace.panelWidth, action)
+      if (shouldOpen) openWorkspacePanel()
+      else setWorkspaceOpen(false)
+      window.requestAnimationFrame(() => {
+        setWorkspaceDragging(false)
+        window.requestAnimationFrame(() => remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity'))
+      })
+      if (event.cancelable) event.preventDefault()
+      return
+    }
     if (!action) return
     event.preventDefault()
     if (action === 'close-global') {
@@ -3329,6 +3440,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     else if (action === 'close-sidebar') setSidebarOpen(false)
     else if (action === 'open-workspace') openWorkspacePanel()
     else if (action === 'close-workspace') setWorkspaceOpen(false)
+  }
+
+  function handleSidebarTouchCancel() {
+    const start = sidebarTouchStart.current
+    sidebarTouchStart.current = null
+    const drag = sidebarDrag.current
+    const workspace = workspaceDrag.current
+    sidebarDrag.current = null
+    workspaceDrag.current = null
+    if (drag?.active) {
+      remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      setSidebarDragging(false)
+    }
+    if (workspace?.active) {
+      remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
+      setWorkspaceDragging(false)
+      setWorkspaceOpen(start?.panelWasOpen ?? workspaceOpen)
+    }
   }
 
   const activeThreadId = activeRemote.activeThread?.id
@@ -4012,11 +4141,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
+      onTouchMoveCapture={handleSidebarTouchMove}
       onTouchEndCapture={handleSidebarTouchEnd}
-      onTouchCancelCapture={() => { sidebarTouchStart.current = null }}
+      onTouchCancelCapture={handleSidebarTouchCancel}
     >
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
@@ -4028,7 +4158,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
       {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
-      <aside className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '')} aria-label="对话记录">
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
@@ -4072,8 +4202,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
       </aside>
 
-      {sidebarOpen ? <button className="sidebar-backdrop" type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
-      {workspaceOpen ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
+      {sidebarOpen || sidebarDragging ? <button className={'sidebar-backdrop' + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
@@ -4252,6 +4382,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onInsertPath={insertWorkspacePath}
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
+            mobileDragging={workspaceDragging}
             onCloseMobile={() => setWorkspaceOpen(false)}
           />
         </>
