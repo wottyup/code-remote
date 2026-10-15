@@ -1691,7 +1691,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
           onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
-          onPointerDown={() => window.CodexRemoteAndroid?.showKeyboard?.()}
+          onPointerDown={(event) => {
+            if (document.activeElement === event.currentTarget) {
+              window.CodexRemoteAndroid?.showKeyboard?.()
+            }
+          }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
           aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
           inputMode="text"
