@@ -633,6 +633,30 @@ export const codexRemoteClient = {
       body: JSON.stringify({ cwd, path, content, revision }),
     })
   },
+  createWorkspaceEntry(token: string, cwd: string | undefined, path: string, kind: CodexWorkspaceEntry['kind']) {
+    return request<CodexWorkspaceEntry>(token, '/api/v1/codex/workspace/entries', {
+      method: 'POST',
+      body: JSON.stringify({ cwd, path, kind }),
+    })
+  },
+  renameWorkspaceEntry(token: string, cwd: string | undefined, path: string, name: string) {
+    return request<{ oldPath: string; entry: CodexWorkspaceEntry }>(token, '/api/v1/codex/workspace/entry', {
+      method: 'PATCH',
+      body: JSON.stringify({ cwd, path, name }),
+    })
+  },
+  deleteWorkspaceEntries(token: string, cwd: string | undefined, paths: string[]) {
+    return request<{ deleted: string[] }>(token, '/api/v1/codex/workspace/delete', {
+      method: 'POST',
+      body: JSON.stringify({ cwd, paths }),
+    })
+  },
+  pasteWorkspaceEntries(token: string, cwd: string | undefined, paths: string[], destination: string, mode: 'copy' | 'move') {
+    return request<{ mode: 'copy' | 'move'; entries: CodexWorkspaceEntry[]; changedPaths: string[] }>(token, '/api/v1/codex/workspace/paste', {
+      method: 'POST',
+      body: JSON.stringify({ cwd, paths, destination, mode }),
+    })
+  },
   threads(token: string) {
     return shareRequest(threadListRequests, token, () => request<CodexThread[]>(token, '/api/v1/codex/threads').then((threads) =>
       uniqueThreads(threads).sort((left, right) => threadUpdatedAt(right) - threadUpdatedAt(left)),

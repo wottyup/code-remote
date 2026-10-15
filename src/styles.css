@@ -241,6 +241,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-explorer__entry { display: flex; width: 100%; min-width: 0; align-items: center; gap: 6px; min-height: 31px; padding-top: 0; padding-right: 7px; padding-bottom: 0; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #b7bdc9; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); text-align: left; }
 .workspace-explorer__entry:hover { border-color: rgba(146, 157, 184, .13); background: rgba(47, 52, 64, .66); color: #eef1f6; }
 .workspace-explorer__entry--selected { border-color: rgba(170, 186, 255, .38); background: rgba(80, 97, 157, .28); color: #eef1f6; }
+.workspace-explorer__entry--cut { opacity: .48; }
 .workspace-explorer__entry svg { flex: 0 0 auto; color: #9ba9d5; }
 .workspace-explorer__entry--directory svg { color: #c5a875; }
 .workspace-file-type-icon { position: relative; display: inline-grid; width: var(--workspace-file-icon-size); height: calc(var(--workspace-file-icon-size) + 1px); flex: 0 0 auto; place-items: end center; overflow: hidden; padding: 0 1px 2px; border: 1px solid currentColor; border-radius: 2px; background: color-mix(in srgb, currentColor 12%, transparent); color: #8b94a5; font: 800 6px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; letter-spacing: -.08em; }
@@ -284,7 +285,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-delete-dialog__title > svg { flex: 0 0 auto; color: #ef8589; }
 .thread-delete-dialog__thread { overflow: hidden; padding: 10px 11px; border: 1px solid rgba(224, 116, 121, .22); border-radius: 8px; background: rgba(84, 31, 36, .22); color: #f0d7d8; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 570; text-overflow: ellipsis; white-space: nowrap; }
 .thread-delete-dialog__actions button:last-child { border-color: rgba(234, 114, 120, .5); background: #a53f46; color: #fff; }
-.workspace-file-context-menu { z-index: 100; min-width: 176px; }
+.workspace-file-context-menu { z-index: 100; min-width: 176px; max-height: calc(100dvh - 16px); overflow-y: auto; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: calc(11px + var(--mobile-font-offset)); text-overflow: ellipsis; white-space: nowrap; }
 .workspace-file-context-menu--light { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 15px 38px rgba(0, 0, 0, .16); }
 .workspace-file-context-menu--light .workspace-file-context-menu__name { color: #737373; }
@@ -998,6 +999,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .thread-rename-dialog > input { border-color: #e0d2c0; background: #fffaf3; color: #4a392b; }
 .remote-shell--theme-warm .thread-rename-dialog__actions button { border-color: #e0d2c0; background: #f1e8dc; color: #6b5946; }
 .remote-shell--theme-warm .thread-rename-dialog__actions button:last-child { border-color: #987857; background: #927253; color: #fffaf3; }
+.remote-shell--theme-warm.thread-context-menu { border-color: #e0cfbb; background: rgba(255, 250, 243, .99); box-shadow: 0 15px 38px rgba(98, 75, 52, .18); }
+.remote-shell--theme-warm.thread-context-menu button { color: #624d3b; }
+.remote-shell--theme-warm.thread-context-menu button:hover:not(:disabled) { background: #f2e5d5; color: #4a392b; }
+.remote-shell--theme-warm.thread-context-menu .workspace-file-context-menu__name { color: #8b735d; }
 .remote-shell--theme-warm .thread-completion-toast { border-color: #c7ddc7; background: rgba(255, 250, 244, .97); color: #4b6048; box-shadow: 0 18px 45px rgba(93, 73, 50, .14); }
 .remote-shell--theme-warm .thread-completion-toast__open:hover, .remote-shell--theme-warm .thread-completion-toast__close:hover { background: #eef5e9; }
 .remote-shell--theme-warm .thread-completion-toast__icon { border-color: #afcfac; background: #e5f0df; color: #5c8354; }

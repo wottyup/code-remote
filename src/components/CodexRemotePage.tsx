@@ -11,12 +11,15 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
+  ClipboardPaste,
   Copy,
   Download,
   Eye,
+  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   ImagePlus,
   Link2,
   LoaderCircle,
@@ -30,6 +33,7 @@ import {
   Quote,
   RefreshCw,
   RotateCcw,
+  Scissors,
   Send,
   Settings2,
   ShieldCheck,
@@ -304,6 +308,22 @@ function workspaceParentPath(path: string) {
   if (lastSeparator < 0) return path
   if (lastSeparator === 0) return normalized[0]
   return normalized.slice(0, lastSeparator)
+}
+
+function workspaceRelativeParentPath(path: string) {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const separator = normalized.lastIndexOf('/')
+  return separator < 0 ? '' : normalized.slice(0, separator)
+}
+
+function workspaceRelativeChildPath(parent: string, name: string) {
+  return parent ? `${parent.replace(/\/+$/, '')}/${name}` : name
+}
+
+function workspacePathIsWithin(path: string, parent: string) {
+  const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const normalizedParent = parent.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`)
 }
 
 function workspaceFileReference(cwd: string | undefined, path: string) {
@@ -1846,6 +1866,24 @@ interface WorkspaceSelectionContextMenu {
   y: number
 }
 
+interface WorkspaceEntryContextMenu {
+  entry: CodexWorkspaceEntry
+  paths: string[]
+  x: number
+  y: number
+  root?: boolean
+}
+
+interface WorkspaceClipboard {
+  mode: 'copy' | 'move'
+  paths: string[]
+}
+
+type WorkspaceMutationDialog =
+  | { action: 'create'; kind: CodexWorkspaceEntry['kind']; parentPath: string; value: string }
+  | { action: 'rename'; entry: CodexWorkspaceEntry; value: string }
+  | { action: 'delete'; paths: string[] }
+
 function selectedCodeFromPreview(root: HTMLElement) {
   const selection = window.getSelection()
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null
@@ -1936,9 +1974,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
-  const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
+  const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
+  const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
+  const [mutationSaving, setMutationSaving] = useState(false)
+  const [mutationError, setMutationError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
@@ -1966,9 +2008,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
 
   const directoryKey = (path: string) => path || '.'
-  const closePreview = useCallback(() => {
-    if (previewSaving) return
-    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
+  const clearPreview = useCallback(() => {
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
@@ -1982,7 +2022,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewCopied(false)
     setPreviewEditContent(null)
     onPreviewStateChange(false)
-  }, [onPreviewStateChange, previewDirty, previewSaving])
+  }, [onPreviewStateChange])
+  const closePreview = useCallback(() => {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
+    clearPreview()
+  }, [clearPreview, previewDirty, previewSaving])
+  const forceClosePreview = useCallback(() => {
+    if (previewSaving) return
+    clearPreview()
+  }, [clearPreview, previewSaving])
 
   useEffect(() => {
     if (!previewPath) return
@@ -2171,6 +2220,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
       setLoadingPaths({})
       setSelectedPaths([])
       setContextMenu(null)
+      setWorkspaceClipboard(null)
+      setMutationDialog(null)
+      setMutationError(null)
       setError(null)
       if (browsingRoot) void loadDirectory('')
       if (previewDirty) pendingPreviewScopeReset.current = true
@@ -2230,6 +2282,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     }
   }, [contextMenu, selectionContextMenu])
 
+  useEffect(() => {
+    if (!mutationDialog) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || mutationSaving) return
+      setMutationDialog(null)
+      setMutationError(null)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [mutationDialog, mutationSaving])
+
   useLayoutEffect(() => {
     const current = selectionContextMenu
     const menu = selectionContextMenuElement.current
@@ -2263,16 +2326,176 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
-    const menuWidth = entry.kind === 'directory' ? 236 : 176
-    const menuHeight = entry.kind === 'directory' ? 116 : 72
+    const menuWidth = 244
+    const menuHeight = entry.kind === 'directory' ? 350 : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
-    const paths = (selectedPaths.includes(entry.path) ? selectedPaths : [entry.path])
-      .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(browsingRoot, path)))
-    if (paths.length === 0 && entry.kind !== 'directory') return
+    const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
     setSelectedPaths(paths)
     setSelectionContextMenu(null)
     setContextMenu({ entry, paths, x, y })
+  }
+
+  function openRootContextMenu(clientX: number, clientY: number) {
+    if (!browsingRoot) return
+    const menuWidth = 244
+    const menuHeight = 220
+    const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8))
+    const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8))
+    const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
+    setSelectedPaths([])
+    setSelectionContextMenu(null)
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
+  }
+
+  function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest('.workspace-explorer__entry')) return
+    event.preventDefault()
+    event.stopPropagation()
+    openRootContextMenu(event.clientX, event.clientY)
+  }
+
+  function openRootMenuFromButton(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    openRootContextMenu(bounds.right, bounds.bottom + 4)
+  }
+
+  function startWorkspaceCreate(kind: CodexWorkspaceEntry['kind']) {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory') return
+    setMutationDialog({ action: 'create', kind, parentPath: contextMenu.entry.path, value: '' })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceRename() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length !== 1) return
+    setMutationDialog({ action: 'rename', entry: contextMenu.entry, value: contextMenu.entry.name })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceDelete() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setMutationDialog({ action: 'delete', paths: contextMenu.paths })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function closeWorkspaceMutation() {
+    if (mutationSaving) return
+    setMutationDialog(null)
+    setMutationError(null)
+  }
+
+  function rememberWorkspaceEntries(mode: WorkspaceClipboard['mode']) {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setWorkspaceClipboard({ mode, paths: contextMenu.paths })
+    setContextMenu(null)
+    setError(null)
+  }
+
+  function pruneWorkspacePaths(paths: string[]) {
+    const affected = (path: string) => paths.some((parent) => workspacePathIsWithin(path, parent))
+    setExpanded((current) => Object.fromEntries(Object.entries(current).filter(([path]) => !affected(path))))
+    setDirectories((current) => Object.fromEntries(Object.entries(current).filter(([path]) => path === '.' || !affected(path))))
+    setSelectedPaths((current) => current.filter((path) => !affected(path)))
+  }
+
+  function previewUsesWorkspacePath(paths: string[]) {
+    return Boolean(previewPath
+      && (previewCwd ?? browsingRoot) === browsingRoot
+      && paths.some((path) => workspacePathIsWithin(previewPath, path)))
+  }
+
+  async function refreshWorkspaceDirectories(paths: string[]) {
+    await Promise.all([...new Set(paths)].map((path) => loadDirectory(path)))
+  }
+
+  async function submitWorkspaceMutation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!mutationDialog || mutationSaving || !browsingRoot) return
+    const affectedPreviewPaths = mutationDialog.action === 'rename'
+      ? [mutationDialog.entry.path]
+      : mutationDialog.action === 'delete' ? mutationDialog.paths : []
+    if (affectedPreviewPaths.length > 0 && previewUsesWorkspacePath(affectedPreviewPaths)) {
+      if (previewSaving) {
+        setMutationError('文件正在保存，请稍后再操作')
+        return
+      }
+      if (previewDirty && !window.confirm('当前预览有未保存修改，继续会放弃这些修改。确定继续吗？')) return
+    }
+    setMutationSaving(true)
+    setMutationError(null)
+    try {
+      if (mutationDialog.action === 'create') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写名称')
+        const entry = await codexRemoteClient.createWorkspaceEntry(
+          token,
+          browsingRoot,
+          workspaceRelativeChildPath(mutationDialog.parentPath, name),
+          mutationDialog.kind,
+        )
+        await refreshWorkspaceDirectories([mutationDialog.parentPath])
+        setSelectedPaths([entry.path])
+      } else if (mutationDialog.action === 'rename') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写新名称')
+        const result = await codexRemoteClient.renameWorkspaceEntry(token, browsingRoot, mutationDialog.entry.path, name)
+        const oldPath = result.oldPath
+        if (previewUsesWorkspacePath([oldPath])) forceClosePreview()
+        pruneWorkspacePaths([oldPath])
+        if (workspaceClipboard?.paths.some((path) => workspacePathIsWithin(path, oldPath))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories([workspaceRelativeParentPath(oldPath)])
+        setSelectedPaths([result.entry.path])
+      } else {
+        const paths = mutationDialog.paths
+        await codexRemoteClient.deleteWorkspaceEntries(token, browsingRoot, paths)
+        if (previewUsesWorkspacePath(paths)) forceClosePreview()
+        pruneWorkspacePaths(paths)
+        if (workspaceClipboard?.paths.some((path) => paths.some((parent) => workspacePathIsWithin(path, parent)))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories(paths.map(workspaceRelativeParentPath))
+      }
+      setMutationDialog(null)
+      setError(null)
+    } catch (reason) {
+      setMutationError(reason instanceof Error ? reason.message : '文件操作失败')
+    } finally {
+      setMutationSaving(false)
+    }
+  }
+
+  async function pasteWorkspaceEntries() {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory' || !workspaceClipboard || !browsingRoot) return
+    const destination = contextMenu.entry.path
+    const clipboard = workspaceClipboard
+    if (clipboard.mode === 'move' && previewUsesWorkspacePath(clipboard.paths)) {
+      if (previewSaving) {
+        setContextMenu(null)
+        setError('文件正在保存，请稍后再移动')
+        return
+      }
+      if (previewDirty && !window.confirm('当前预览有未保存修改，移动会放弃这些修改。确定继续吗？')) return
+    }
+    setContextMenu(null)
+    setError(null)
+    try {
+      const result = await codexRemoteClient.pasteWorkspaceEntries(token, browsingRoot, clipboard.paths, destination, clipboard.mode)
+      const changedPaths = result.changedPaths ?? clipboard.paths
+      if (clipboard.mode === 'move') {
+        if (previewUsesWorkspacePath(changedPaths)) forceClosePreview()
+        pruneWorkspacePaths(changedPaths)
+        setWorkspaceClipboard(null)
+      }
+      await refreshWorkspaceDirectories([
+        destination,
+        ...(clipboard.mode === 'move' ? changedPaths.map(workspaceRelativeParentPath) : []),
+      ])
+      setSelectedPaths(result.entries.map((entry) => entry.path))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '粘贴失败')
+    }
   }
 
   async function bindDirectoryToCurrentThread() {
@@ -2375,7 +2598,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           <Fragment key={entry.path}>
           <div className="workspace-explorer__entry-row">
             <button
-              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
+              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}${workspaceClipboard?.mode === 'move' && workspaceClipboard.paths.some((path) => workspacePathIsWithin(entry.path, path)) ? ' workspace-explorer__entry--cut' : ''}`}
               type="button"
               style={{ paddingLeft: `${10 + depth * 14}px` }}
               title={entry.path}
@@ -2473,6 +2696,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
+            <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
             <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
@@ -2495,7 +2719,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           </div>
         </div>
         <div className="workspace-explorer__body">
-          <div className="workspace-explorer__tree">
+          <div className="workspace-explorer__tree" onContextMenu={handleRootContextMenu}>
             {!browsingRoot ? <p className="workspace-explorer__empty">还没有聊天工作目录，可以输入服务端路径打开文件夹。</p> : null}
             {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
             {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
@@ -2503,7 +2727,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
             {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
           </div>
         </div>
-        <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
+        <footer className="workspace-explorer__footer">{workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : 'Ctrl/⌘ 多选后可批量复制、剪切或删除'}</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
@@ -2603,17 +2827,78 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-context-menu workspace-file-context-menu${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div className={`thread-context-menu workspace-file-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
+          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button> : null}
+          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button> : null}
           {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
           {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
+          {!contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {contextMenu.entry.kind === 'directory' && workspaceClipboard ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button className="thread-context-menu__danger" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+        </div>,
+        document.body,
+      ) : null}
+      {mutationDialog && typeof document !== 'undefined' ? createPortal(
+        <div className={`thread-rename-backdrop remote-shell--theme-${theme}`} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeWorkspaceMutation() }}>
+          <form className={`thread-rename-dialog workspace-mutation-dialog${mutationDialog.action === 'delete' ? ' thread-delete-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="workspace-mutation-title" onSubmit={(event) => { void submitWorkspaceMutation(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              {mutationDialog.action === 'delete' ? (
+                <>
+                  <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="workspace-mutation-title">删除所选内容</h2></div>
+                  <p>将永久删除所选内容，非空文件夹也会一并删除。此操作无法恢复。</p>
+                </>
+              ) : (
+                <>
+                  <h2 id="workspace-mutation-title">{mutationDialog.action === 'rename' ? '重命名' : mutationDialog.kind === 'directory' ? '新建文件夹' : '新建文件'}</h2>
+                  <p>{mutationDialog.action === 'rename' ? '请输入新的文件或文件夹名称。' : `将在 ${mutationDialog.parentPath || '当前根目录'} 中创建。`}</p>
+                </>
+              )}
+            </div>
+            {mutationDialog.action === 'delete' ? (
+              <div className="thread-delete-dialog__thread" title={mutationDialog.paths.join('\n')}>{mutationDialog.paths.length === 1 ? mutationDialog.paths[0] : `${mutationDialog.paths[0]} 等 ${mutationDialog.paths.length} 项`}</div>
+            ) : (
+              <>
+                <label htmlFor="workspace-mutation-input">名称</label>
+                <input
+                  id="workspace-mutation-input"
+                  type="text"
+                  value={mutationDialog.value}
+                  maxLength={255}
+                  autoComplete="off"
+                  autoFocus
+                  disabled={mutationSaving}
+                  aria-describedby={mutationError ? 'workspace-mutation-error' : undefined}
+                  onFocus={(event) => {
+                    if (mutationDialog.action !== 'rename') return
+                    const dot = event.currentTarget.value.lastIndexOf('.')
+                    event.currentTarget.setSelectionRange(0, dot > 0 ? dot : event.currentTarget.value.length)
+                  }}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    setMutationDialog((current) => current && current.action !== 'delete' ? { ...current, value } : current)
+                    setMutationError(null)
+                  }}
+                />
+              </>
+            )}
+            {mutationError ? <p className="thread-rename-dialog__error" id="workspace-mutation-error" role="alert">{mutationError}</p> : null}
+            <div className={`thread-rename-dialog__actions${mutationDialog.action === 'delete' ? ' thread-delete-dialog__actions' : ''}`}>
+              <button type="button" onClick={closeWorkspaceMutation} disabled={mutationSaving}>取消</button>
+              <button type="submit" disabled={mutationSaving || (mutationDialog.action !== 'delete' && !mutationDialog.value.trim())}>
+                {mutationSaving ? <><LoaderCircle className="spin" size={14} />处理中</> : mutationDialog.action === 'delete' ? <><Trash2 size={14} />确认删除</> : '确定'}
+              </button>
+            </div>
+          </form>
         </div>,
         document.body,
       ) : null}
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
         <div
           ref={selectionContextMenuElement}
-          className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
+          className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
           style={{ left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
