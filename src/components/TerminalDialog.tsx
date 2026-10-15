@@ -1,12 +1,18 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { Clipboard, Copy, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, Copy, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
 const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
+const terminalDirectionKeys = [
+  { label: '向左', data: '\x1b[D', icon: ArrowLeft },
+  { label: '向上', data: '\x1b[A', icon: ArrowUp },
+  { label: '向下', data: '\x1b[B', icon: ArrowDown },
+  { label: '向右', data: '\x1b[C', icon: ArrowRight },
+]
 
 interface TerminalDialogProps {
   token: string
@@ -82,6 +88,38 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const sendInput = useRef<(data: string) => void>(() => {})
+  const directionRepeatDelay = useRef<number | undefined>(undefined)
+  const directionRepeatInterval = useRef<number | undefined>(undefined)
+  const directionPointer = useRef<number | null>(null)
+
+  const stopDirectionRepeat = () => {
+    if (directionRepeatDelay.current !== undefined) window.clearTimeout(directionRepeatDelay.current)
+    if (directionRepeatInterval.current !== undefined) window.clearInterval(directionRepeatInterval.current)
+    directionRepeatDelay.current = undefined
+    directionRepeatInterval.current = undefined
+    directionPointer.current = null
+  }
+
+  const beginDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>, data: string) => {
+    event.preventDefault()
+    event.stopPropagation()
+    stopDirectionRepeat()
+    const pointerId = event.pointerId
+    directionPointer.current = pointerId
+    event.currentTarget.setPointerCapture(pointerId)
+    sendInput.current(data)
+    directionRepeatDelay.current = window.setTimeout(() => {
+      directionRepeatDelay.current = undefined
+      if (directionPointer.current !== pointerId) return
+      directionRepeatInterval.current = window.setInterval(() => sendInput.current(data), 80)
+    }, 360)
+  }
+
+  const endDirectionRepeat = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (directionPointer.current !== event.pointerId) return
+    stopDirectionRepeat()
+  }
 
   useEffect(() => {
     const container = screen.current
@@ -169,6 +207,13 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       }
       send({ type: 'input', data })
     })
+    sendInput.current = (data) => {
+      if (!ready) {
+        pendingInput.push(data)
+        return
+      }
+      send({ type: 'input', data })
+    }
     const showContextMenu = (clientX: number, clientY: number) => {
       const selectedText = terminal.getSelection()
       if (!selectedText) return false
@@ -260,19 +305,27 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         for (const data of pendingInput.splice(0)) send({ type: 'input', data })
         fitAndResize()
       } else if (payload.type === 'error') {
+        stopDirectionRepeat()
         setStatus('disconnected')
         terminal.writeln(`\r\n\x1b[31m${payload.message || '无法启动终端。'}\x1b[0m`)
       } else if (payload.type === 'exit') {
         exited = true
+        stopDirectionRepeat()
         setStatus('exited')
         terminal.writeln('\r\n\x1b[90m[终端会话已结束]\x1b[0m')
       }
     })
     socket.addEventListener('close', () => {
-      if (!disposed && ready && !exited) setStatus('disconnected')
+      if (!disposed && ready && !exited) {
+        stopDirectionRepeat()
+        setStatus('disconnected')
+      }
     })
     socket.addEventListener('error', () => {
-      if (!disposed) setStatus('disconnected')
+      if (!disposed) {
+        stopDirectionRepeat()
+        setStatus('disconnected')
+      }
     })
 
     if (!window.matchMedia('(pointer: coarse)').matches) terminal.focus()
@@ -289,6 +342,8 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
       clearLongPress()
+      stopDirectionRepeat()
+      sendInput.current = () => {}
       dataSubscription.dispose()
       send({ type: 'close' })
       socket.close()
@@ -313,6 +368,29 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       onPanelPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
+      footer={(
+        <div className="terminal-dialog__navigation" role="group" aria-label="终端方向键">
+          {terminalDirectionKeys.map(({ label, data, icon: DirectionIcon }) => (
+            <button
+              className="terminal-dialog__navigation-button"
+              type="button"
+              key={label}
+              disabled={status !== 'connected'}
+              aria-label={`终端${label}`}
+              title={`终端${label}，长按连续输入`}
+              onPointerDown={(event) => beginDirectionRepeat(event, data)}
+              onPointerUp={endDirectionRepeat}
+              onPointerCancel={endDirectionRepeat}
+              onPointerLeave={endDirectionRepeat}
+              onLostPointerCapture={endDirectionRepeat}
+              onClick={(event) => { if (event.detail === 0) sendInput.current(data) }}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              <DirectionIcon size={18} aria-hidden="true" />
+            </button>
+          ))}
+        </div>
+      )}
       header={(
         <div className="terminal-dialog__title">
           <TerminalIcon size={16} aria-hidden="true" />
