@@ -3085,11 +3085,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const changeModel = useCallback((model: string) => updateComposerPreferences({ model }), [updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences({ effort }), [updateComposerPreferences])
-  const changeApprovalPolicy = useCallback(async (approvalPolicy: CodexApprovalPolicy) => {
-    const updated = activeThreadId ? await (remotes[selectedPaneIndex] ?? remote0).updateApprovalPolicy(approvalPolicy) : true
-    if (!updated) return
+  const changeApprovalPolicy = useCallback((approvalPolicy: CodexApprovalPolicy) => {
     updateComposerPreferences({ approvalPolicy })
-  }, [activeThreadId, remote0, remotes, selectedPaneIndex, updateComposerPreferences])
+  }, [updateComposerPreferences])
 
   useEffect(() => {
     saveComposerPreferences(defaultComposerPreferences)

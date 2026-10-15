@@ -746,9 +746,6 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         }
 
         async def request(method: str, params: dict[str, Any]) -> dict[str, Any]:
-            if method == "thread/resume":
-                self.assertEqual(params, {"threadId": "thread-id"})
-                return {"thread": {"id": "thread-id", "cwd": str(Path.cwd())}}
             if method == "thread/settings/update":
                 self.assertEqual(params, {"threadId": "thread-id", **expected})
                 await app_server._handle_message({
@@ -764,10 +761,7 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, expected)
         self.assertEqual(app_server._thread_approval_policies["thread-id"], "never")
-        self.assertEqual(
-            [call.args[0] for call in app_server.request.await_args_list],
-            ["thread/resume", "thread/settings/update"],
-        )
+        app_server.request.assert_awaited_once()
 
     async def test_update_thread_approval_policy_skips_resume_for_a_loaded_thread(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
