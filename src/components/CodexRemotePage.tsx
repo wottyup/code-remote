@@ -1903,7 +1903,16 @@ interface WorkspaceExplorerProps {
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   mobileDragging: boolean
+  onOpenMobile: () => void
   onCloseMobile: () => void
+  panelRef: RefObject<HTMLElement | null>
+}
+
+interface WorkspaceExplorerViewState {
+  directories: Record<string, CodexWorkspaceTree>
+  expanded: Record<string, boolean>
+  selectedPaths: string[]
+  scrollTop: number
 }
 
 interface WorkspacePreviewRequest {
@@ -2030,7 +2039,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2066,12 +2075,29 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const handledPreviewRequest = useRef(0)
   const previousScopeKey = useRef<string | null>(null)
   const pendingPreviewScopeReset = useRef(false)
+  const restoreMobilePanelAfterPreview = useRef(false)
+  const treeElement = useRef<HTMLDivElement>(null)
+  const viewStateCache = useRef(new Map<string, WorkspaceExplorerViewState>())
+  const pendingScrollRestore = useRef<number | null>(null)
   const browsingRoot = manualRoot || cwd
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
   const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
+  const currentViewState = useRef({ directories, expanded, selectedPaths })
+  currentViewState.current = { directories, expanded, selectedPaths }
 
   const directoryKey = (path: string) => path || '.'
+  const rememberViewState = useCallback((key: string, state: WorkspaceExplorerViewState) => {
+    viewStateCache.current.delete(key)
+    viewStateCache.current.set(key, state)
+    while (viewStateCache.current.size > 16) {
+      const oldestKey = viewStateCache.current.keys().next().value
+      if (oldestKey === undefined) break
+      viewStateCache.current.delete(oldestKey)
+    }
+  }, [])
   const clearPreview = useCallback(() => {
+    const shouldRestoreMobilePanel = restoreMobilePanelAfterPreview.current
+    restoreMobilePanelAfterPreview.current = false
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
@@ -2085,7 +2111,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewCopied(false)
     setPreviewEditContent(null)
     onPreviewStateChange(false)
-  }, [onPreviewStateChange])
+    if (shouldRestoreMobilePanel) onOpenMobile()
+  }, [onOpenMobile, onPreviewStateChange])
   const closePreview = useCallback(() => {
     if (previewSaving) return
     if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
@@ -2148,10 +2175,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
     if (mobileDialog && mobileOpen) {
-      const workspaceButton = previewContainerRef.current?.querySelector<HTMLButtonElement>('.conversation-pane--selected .mobile-workspace-button')
-      const composer = document.querySelector<HTMLTextAreaElement>('.message-composer textarea')
-      const returnFocus = workspaceButton?.getClientRects().length ? workspaceButton : composer
-      if (returnFocus) previewReturnFocus.current = returnFocus
+      restoreMobilePanelAfterPreview.current = true
       onCloseMobile()
     }
     onPreviewStateChange(true, closePreview)
@@ -2275,13 +2299,23 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   useEffect(() => {
     const scopeChanged = previousScopeKey.current !== scopeKey
     if (scopeChanged) {
+      restoreMobilePanelAfterPreview.current = false
+      const previousKey = previousScopeKey.current
+      if (previousKey) {
+        rememberViewState(previousKey, {
+          ...currentViewState.current,
+          scrollTop: treeElement.current?.scrollTop ?? viewStateCache.current.get(previousKey)?.scrollTop ?? 0,
+        })
+      }
       previousScopeKey.current = scopeKey
       requestGeneration.current += 1
       previewRequestGeneration.current += 1
-      setDirectories({})
-      setExpanded({})
+      const restoredView = viewStateCache.current.get(scopeKey)
+      pendingScrollRestore.current = restoredView?.scrollTop ?? null
+      setDirectories(restoredView?.directories ?? {})
+      setExpanded(restoredView?.expanded ?? {})
       setLoadingPaths({})
-      setSelectedPaths([])
+      setSelectedPaths(restoredView?.selectedPaths ?? [])
       setContextMenu(null)
       setWorkspaceClipboard(null)
       setMutationDialog(null)
@@ -2305,7 +2339,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewCopied(false)
     pendingPreviewScopeReset.current = false
     onPreviewStateChange(false)
-  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, scopeKey])
+  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, rememberViewState, scopeKey])
+
+  useLayoutEffect(() => {
+    if (!mobileOpen) return
+    const tree = treeElement.current
+    const restoredView = viewStateCache.current.get(scopeKey)
+    const scrollTop = pendingScrollRestore.current ?? restoredView?.scrollTop
+    if (!tree || scrollTop === undefined) return
+    tree.scrollTop = scrollTop
+    pendingScrollRestore.current = null
+  }, [directories, mobileOpen, scopeKey])
 
   useEffect(() => {
     if (!manualRoot) setRootInput(cwd ?? '')
@@ -2755,7 +2799,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const previewPortalTarget = previewContainerRef.current
   return (
     <>
-      <aside className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+      <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
@@ -2782,7 +2826,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           </div>
         </div>
         <div className="workspace-explorer__body">
-          <div className="workspace-explorer__tree" onContextMenu={handleRootContextMenu}>
+          <div
+            ref={treeElement}
+            className="workspace-explorer__tree"
+            onContextMenu={handleRootContextMenu}
+            onScroll={(event) => {
+              rememberViewState(scopeKey, {
+                ...currentViewState.current,
+                scrollTop: event.currentTarget.scrollTop,
+              })
+            }}
+          >
             {!browsingRoot ? <p className="workspace-explorer__empty">还没有聊天工作目录，可以输入服务端路径打开文件夹。</p> : null}
             {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
             {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
@@ -3487,6 +3541,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
+  const panelDragFrame = useRef<number | null>(null)
+  const pendingPanelDragStyles = useRef<{
+    sidebarOffset?: number
+    sidebarBackdropOpacity?: number
+    workspaceOffset?: number
+    workspaceBackdropOpacity?: number
+  } | null>(null)
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
@@ -3496,11 +3557,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
   const sidebarPanel = useRef<HTMLElement>(null)
+  const workspacePanel = useRef<HTMLElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
   const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    if (panelDragFrame.current !== null) window.cancelAnimationFrame(panelDragFrame.current)
+  }, [])
 
   const notifySystemOnce = useCallback((eventKey: string, title: string, body: string, threadId: string) => {
     if (!themePreferences.systemNotificationsEnabled || notifiedSystemEvents.current.has(eventKey)) return false
@@ -3637,7 +3703,36 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }
 
+  function applyPendingPanelDragStyles() {
+    const pending = pendingPanelDragStyles.current
+    pendingPanelDragStyles.current = null
+    if (!pending) return
+    if (pending.sidebarOffset !== undefined) sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', `${pending.sidebarOffset}px`)
+    if (pending.sidebarBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(pending.sidebarBackdropOpacity))
+    if (pending.workspaceOffset !== undefined) workspacePanel.current?.style.setProperty('--workspace-drag-offset', `${pending.workspaceOffset}px`)
+    if (pending.workspaceBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(pending.workspaceBackdropOpacity))
+  }
+
+  function cancelPanelDragFrame(flush = false) {
+    if (panelDragFrame.current !== null) {
+      window.cancelAnimationFrame(panelDragFrame.current)
+      panelDragFrame.current = null
+    }
+    if (flush) applyPendingPanelDragStyles()
+    else pendingPanelDragStyles.current = null
+  }
+
+  function schedulePanelDragStyles(styles: NonNullable<typeof pendingPanelDragStyles.current>) {
+    pendingPanelDragStyles.current = styles
+    if (panelDragFrame.current !== null) return
+    panelDragFrame.current = window.requestAnimationFrame(() => {
+      panelDragFrame.current = null
+      applyPendingPanelDragStyles()
+    })
+  }
+
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
+    cancelPanelDragFrame()
     if (!isMobileLayout() || event.touches.length !== 1) {
       const previousStart = sidebarTouchStart.current
       sidebarTouchStart.current = null
@@ -3726,20 +3821,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
     if (drag) {
       drag.offset = mobileSidebarDragOffset(sidebarOpen, drag.panelWidth, deltaX)
-      sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', String(drag.offset) + 'px')
       const visibleRatio = Math.max(0, Math.min(1, (drag.panelWidth + drag.offset) / drag.panelWidth))
-      remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+      schedulePanelDragStyles({
+        sidebarOffset: drag.offset,
+        sidebarBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
     }
     if (workspace) {
       workspace.offset = mobileWorkspaceDragOffset(workspaceOpen, workspace.panelWidth, deltaX)
-      remoteShell.current?.querySelector<HTMLElement>('.workspace-explorer')?.style.setProperty('--workspace-drag-offset', String(workspace.offset) + 'px')
       const visibleRatio = Math.max(0, Math.min(1, 1 - workspace.offset / (workspace.panelWidth * 1.05)))
-      remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+      schedulePanelDragStyles({
+        workspaceOffset: workspace.offset,
+        workspaceBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
     }
     if (event.cancelable) event.preventDefault()
   }
 
   function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    cancelPanelDragFrame(true)
     const start = sidebarTouchStart.current
     const drag = sidebarDrag.current
     const workspace = workspaceDrag.current
@@ -3796,6 +3896,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   function handleSidebarTouchCancel() {
+    cancelPanelDragFrame()
     const start = sidebarTouchStart.current
     sidebarTouchStart.current = null
     const drag = sidebarDrag.current
@@ -4782,7 +4883,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
             mobileDragging={workspaceDragging}
+            onOpenMobile={openWorkspacePanel}
             onCloseMobile={() => setWorkspaceOpen(false)}
+            panelRef={workspacePanel}
           />
         </>
       )}
