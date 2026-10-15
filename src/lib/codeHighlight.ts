@@ -35,6 +35,89 @@ const batchWithStrings: LanguageFn = (highlighter) => {
   }
 }
 
+const jsonWithComments: LanguageFn = (highlighter) => ({
+  name: 'JSON with comments and JSON5',
+  contains: [
+    highlighter.C_LINE_COMMENT_MODE,
+    highlighter.C_BLOCK_COMMENT_MODE,
+    {
+      className: 'attr',
+      begin: /(?:[A-Za-z_$][\w$-]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?=\s*:)/,
+      relevance: 0,
+    },
+    {
+      className: 'string',
+      begin: /"/,
+      end: /"/,
+      contains: [highlighter.BACKSLASH_ESCAPE],
+      relevance: 0,
+    },
+    {
+      className: 'string',
+      begin: /'/,
+      end: /'/,
+      contains: [highlighter.BACKSLASH_ESCAPE],
+      relevance: 0,
+    },
+    {
+      className: 'literal',
+      begin: /\b(?:true|false|null|undefined)\b/,
+      relevance: 0,
+    },
+    {
+      className: 'number',
+      begin: /[+-]?(?:0[xX][\da-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|Infinity|NaN)\b/,
+      relevance: 0,
+    },
+    { className: 'punctuation', begin: /[{}\[\],:]/, relevance: 0 },
+  ],
+})
+
+const toml: LanguageFn = (highlighter) => ({
+  name: 'TOML',
+  contains: [
+    highlighter.HASH_COMMENT_MODE,
+    { className: 'section', begin: /^\s*\[\[/, end: /\]\]/, relevance: 0 },
+    { className: 'section', begin: /^\s*\[/, end: /\]/, relevance: 0 },
+    {
+      className: 'attr',
+      begin: /^[\t ]*(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|"(?:\\.|[^"\\])*"|'[^']*')(?=[\t ]*=)/,
+      relevance: 0,
+    },
+    { className: 'string', begin: /"""/, end: /"""/, contains: [highlighter.BACKSLASH_ESCAPE], relevance: 0 },
+    { className: 'string', begin: /'''/, end: /'''/, relevance: 0 },
+    { className: 'string', begin: /"/, end: /"/, contains: [highlighter.BACKSLASH_ESCAPE], relevance: 0 },
+    { className: 'string', begin: /'/, end: /'/, relevance: 0 },
+    { className: 'literal', begin: /\b(?:true|false)\b/, relevance: 0 },
+    {
+      className: 'number',
+      begin: /\b\d{4}-\d\d-\d\d(?:[Tt ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)?\b/,
+      relevance: 0,
+    },
+    highlighter.C_NUMBER_MODE,
+    { className: 'punctuation', begin: /[=,.{}\[\]]/, relevance: 0 },
+  ],
+})
+
+const proguard: LanguageFn = (highlighter) => ({
+  name: 'ProGuard',
+  case_insensitive: true,
+  contains: [
+    highlighter.HASH_COMMENT_MODE,
+    highlighter.QUOTE_STRING_MODE,
+    { className: 'meta-keyword', begin: /^\s*-[A-Za-z][\w-]*/, relevance: 0 },
+    {
+      className: 'keyword',
+      begin: /\b(?:class|interface|enum|extends|implements|public|protected|private|static|final|abstract|native|synchronized|volatile|transient|strictfp|annotation)\b/,
+      relevance: 0,
+    },
+    { className: 'built_in', begin: /\b(?:void|boolean|byte|char|short|int|long|float|double)\b/, relevance: 0 },
+    { className: 'title', begin: /(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*(?=\s*(?:\(|\{|;))/, relevance: 0 },
+    highlighter.C_NUMBER_MODE,
+    { className: 'punctuation', begin: /[{}()[\],;:*?=]/, relevance: 0 },
+  ],
+})
+
 const languages = {
   bash,
   c,
@@ -50,14 +133,18 @@ const languages = {
   java,
   javascript,
   json,
+  json5: jsonWithComments,
+  jsonc: jsonWithComments,
   kotlin,
   makefile,
   markdown,
   php,
   powershell,
   python,
+  proguard,
   rust,
   sql,
+  toml,
   typescript,
   xml,
   yaml,
@@ -103,6 +190,54 @@ const lazyLanguages: Record<string, () => Promise<{ default: LanguageFn }>> = {
   vim: () => import('highlight.js/lib/languages/vim'),
   wasm: () => import('highlight.js/lib/languages/wasm'),
   x86asm: () => import('highlight.js/lib/languages/x86asm'),
+}
+
+const languageAliases: Record<string, string> = {
+  asm: 'x86asm',
+  batch: 'dos',
+  bat: 'dos',
+  csharp: 'csharp',
+  'c#': 'csharp',
+  'c++': 'cpp',
+  cxx: 'cpp',
+  fish: 'bash',
+  gql: 'graphql',
+  h: 'c',
+  hpp: 'cpp',
+  html: 'xml',
+  htm: 'xml',
+  js: 'javascript',
+  jsx: 'javascript',
+  javascriptreact: 'javascript',
+  jsonl: 'json',
+  ndjson: 'json',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  md: 'markdown',
+  mdx: 'markdown',
+  objc: 'objectivec',
+  'objective-c': 'objectivec',
+  ps1: 'powershell',
+  py: 'python',
+  rb: 'ruby',
+  rs: 'rust',
+  sh: 'bash',
+  shell: 'bash',
+  ts: 'typescript',
+  tsx: 'typescript',
+  typescriptreact: 'typescript',
+  yml: 'yaml',
+  zsh: 'bash',
+}
+
+const plainLanguageHints = new Set(['plain', 'plaintext', 'text', 'txt', 'none'])
+
+function normalizeLanguageHint(languageHint: string | undefined): { language: string | null; plainText: boolean } | null {
+  if (!languageHint) return null
+  const name = languageHint.trim().toLowerCase().replace(/^language-/, '').split(/[\s,]+/, 1)[0]
+  if (!name) return null
+  if (plainLanguageHints.has(name)) return { language: null, plainText: true }
+  return { language: languageAliases[name] ?? name, plainText: false }
 }
 
 async function ensureLanguage(language: string) {
@@ -204,17 +339,21 @@ function highlightedLines(markup: string, content: string): HighlightedCodeSegme
   return lines
 }
 
-export async function highlightCodeLines(path: string, content: string): Promise<HighlightedCodeSegment[][]> {
+export async function highlightCodeLines(path: string, content: string, languageHint?: string, allowAutoDetection = true): Promise<HighlightedCodeSegment[][]> {
   const fileType = workspaceFileType(path)
-  if (fileType.language && await ensureLanguage(fileType.language)) {
+  const normalizedHint = normalizeLanguageHint(languageHint)
+  if (normalizedHint?.plainText) return plainTextLines(content)
+  const language = normalizedHint?.language ?? fileType.language
+  if (language && await ensureLanguage(language)) {
     try {
-      const result = hljs.highlight(content, { language: fileType.language, ignoreIllegals: true })
+      const result = hljs.highlight(content, { language, ignoreIllegals: true })
       return highlightedLines(result.value, content)
     } catch {
       return plainTextLines(content)
     }
   }
 
+  if (!allowAutoDetection) return plainTextLines(content)
   if (!content.trim() || fileType.plainText) return plainTextLines(content)
 
   try {

@@ -1408,3 +1408,96 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .message-composer__footer :is(.composer-menu__trigger, .send-button, .stop-button):is(:hover, :active) { background: transparent; }
 .message-composer__footer .image-input { -webkit-appearance: none; appearance: none; -webkit-tap-highlight-color: transparent; }
+
+/* One complete Highlight.js palette for file previews and chat code fences. */
+.syntax-highlighted {
+  --syntax-comment: #8b9b77;
+  --syntax-keyword: #c678dd;
+  --syntax-string: #98c379;
+  --syntax-number: #d19a66;
+  --syntax-title: #61afef;
+  --syntax-type: #56b6c2;
+  --syntax-variable: #e06c75;
+  --syntax-attribute: #e5c07b;
+  --syntax-punctuation: #aab2bf;
+  --syntax-code: #e5c07b;
+  --syntax-link: #56b6c2;
+  --syntax-added: #8dcc98;
+  --syntax-deleted: #e8847d;
+}
+.syntax-highlighted :is(.hljs-comment, .hljs-quote, .hljs-doctag, .hljs-formula) { color: var(--syntax-comment); font-style: italic; }
+.syntax-highlighted :is(.hljs-keyword, .hljs-selector-tag, .hljs-literal, .hljs-meta-keyword) { color: var(--syntax-keyword); }
+.syntax-highlighted :is(.hljs-string, .hljs-regexp, .hljs-meta-string, .hljs-template-tag) { color: var(--syntax-string); }
+.syntax-highlighted :is(.hljs-number, .hljs-symbol, .hljs-bullet) { color: var(--syntax-number); }
+.syntax-highlighted :is(.hljs-title, .hljs-section, .hljs-function) { color: var(--syntax-title); }
+.syntax-highlighted :is(.hljs-built_in, .hljs-type) { color: var(--syntax-type); }
+.syntax-highlighted :is(.hljs-variable, .hljs-template-variable, .hljs-params, .hljs-subst) { color: var(--syntax-variable); }
+.syntax-highlighted :is(.hljs-attr, .hljs-attribute, .hljs-property, .hljs-selector-attr, .hljs-selector-class, .hljs-selector-id, .hljs-selector-pseudo) { color: var(--syntax-attribute); }
+.syntax-highlighted :is(.hljs-meta, .hljs-operator, .hljs-punctuation, .hljs-tag) { color: var(--syntax-punctuation); }
+.syntax-highlighted .hljs-name { color: var(--syntax-keyword); }
+.syntax-highlighted .hljs-code { color: var(--syntax-code); }
+.syntax-highlighted .hljs-link { color: var(--syntax-link); text-decoration: underline; }
+.syntax-highlighted .hljs-addition { color: var(--syntax-added); }
+.syntax-highlighted .hljs-deletion { color: var(--syntax-deleted); }
+.syntax-highlighted .hljs-strong { font-weight: 700; }
+.syntax-highlighted .hljs-emphasis { font-style: italic; }
+.remote-shell--theme-light .syntax-highlighted {
+  --syntax-comment: #6a737d;
+  --syntax-keyword: #c6283b;
+  --syntax-string: #0755a0;
+  --syntax-number: #0065b3;
+  --syntax-title: #6f42c1;
+  --syntax-type: #087e8b;
+  --syntax-variable: #bd4d00;
+  --syntax-attribute: #9a6700;
+  --syntax-punctuation: #59616d;
+  --syntax-code: #9a6700;
+  --syntax-link: #005cc5;
+  --syntax-added: #22863a;
+  --syntax-deleted: #cb2431;
+}
+.remote-shell--theme-dark .syntax-highlighted {
+  --syntax-comment: #91a37b;
+  --syntax-keyword: #d98bed;
+  --syntax-string: #a2cf82;
+  --syntax-number: #e0a674;
+  --syntax-title: #71b8fa;
+  --syntax-type: #67c4cf;
+  --syntax-variable: #ec7f88;
+  --syntax-attribute: #e9c77f;
+  --syntax-punctuation: #a7afbd;
+  --syntax-code: #e9c77f;
+  --syntax-link: #67c4cf;
+  --syntax-added: #8dcc98;
+  --syntax-deleted: #e8847d;
+}
+.remote-shell--theme-warm .syntax-highlighted {
+  --syntax-comment: #8b7355;
+  --syntax-keyword: #ad4a2c;
+  --syntax-string: #547a49;
+  --syntax-number: #9a5b22;
+  --syntax-title: #416d8c;
+  --syntax-type: #397b7c;
+  --syntax-variable: #a76c2f;
+  --syntax-attribute: #a76c2f;
+  --syntax-punctuation: #76634e;
+  --syntax-code: #9a5b22;
+  --syntax-link: #397b7c;
+  --syntax-added: #4c7a42;
+  --syntax-deleted: #b5463d;
+}
+.remote-shell--theme-custom .syntax-highlighted {
+  --syntax-comment: #a6d189;
+  --syntax-keyword: #cba6f7;
+  --syntax-string: #a6e3a1;
+  --syntax-number: #fab387;
+  --syntax-title: #89b4fa;
+  --syntax-type: #94e2d5;
+  --syntax-variable: #fab387;
+  --syntax-attribute: #f9e2af;
+  --syntax-punctuation: #bac2de;
+  --syntax-code: #f9e2af;
+  --syntax-link: #89b4fa;
+  --syntax-added: #a6e3a1;
+  --syntax-deleted: #f38ba8;
+}

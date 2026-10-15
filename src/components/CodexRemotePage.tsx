@@ -2810,14 +2810,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
                   return (
                     <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} data-file-line={diffLine.newLine ?? diffLine.oldLine ?? ''} data-diff-kind={diffLine.kind} key={`diff-${index}`}>
                       <span className="workspace-file-preview__line-number" aria-hidden="true">{diffLine.newLine ?? diffLine.oldLine ?? ''}</span>
-                      <span className="workspace-file-preview__line-content">{diffLine.kind !== 'deleted' && highlightedLine?.length
+                      <span className="workspace-file-preview__line-content syntax-highlighted">{diffLine.kind !== 'deleted' && highlightedLine?.length
                         ? highlightedLine.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
                         : content || ' '}</span>
                     </span>
                   )
                 })
                 : previewLines.map((line, index) => (
-                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
+                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content syntax-highlighted">{highlightedPreviewLines[index]?.length
                     ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
                     : line || ' '}</span></span>
                 ))}</code></pre>
@@ -4889,7 +4889,25 @@ function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy =
 
 function CodeBlock({ value, language, showCopy = true }: { value: string; language?: string; showCopy?: boolean }) {
   const [copied, setCopied] = useState(false)
+  const [highlighted, setHighlighted] = useState<{
+    value: string
+    language?: string
+    lines: Array<Array<{ text: string; className: string }>>
+  } | null>(null)
   const resetTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    let cancelled = false
+    setHighlighted(null)
+    void import('../lib/codeHighlight').then(({ highlightCodeLines }) => highlightCodeLines('', value, language, false)).then((lines) => {
+      if (!cancelled) setHighlighted({ value, language, lines })
+    }).catch(() => {
+      if (!cancelled) setHighlighted(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [value, language])
 
   useEffect(() => () => {
     if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
@@ -4902,9 +4920,20 @@ function CodeBlock({ value, language, showCopy = true }: { value: string; langua
     resetTimer.current = window.setTimeout(() => setCopied(false), 1600)
   }
 
+  const highlightedLines = highlighted?.value === value && highlighted.language === language ? highlighted.lines : null
+
   return (
     <pre className="chat-message__code">
-      <code data-language={language}>{value}</code>
+      <code className="syntax-highlighted" data-language={language}>{highlightedLines
+        ? highlightedLines.map((line, lineIndex) => (
+          <Fragment key={lineIndex}>
+            {line.length > 0
+              ? line.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+              : ' '}
+            {lineIndex < highlightedLines.length - 1 ? '\n' : null}
+          </Fragment>
+        ))
+        : value}</code>
       {showCopy ? <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
         {copied ? <Check size={13} /> : <Copy size={13} />}
         {copied ? '已复制' : '复制'}
