@@ -8,6 +8,7 @@ export interface ThemePreferences {
   customTextColor: string
   customBackgroundTransparency: number
   fontSizeAdjustment: number
+  systemNotificationsEnabled: boolean
   customBackgroundImage?: string
 }
 
@@ -20,6 +21,7 @@ const defaultThemePreferences: ThemePreferences = {
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
   fontSizeAdjustment: 0,
+  systemNotificationsEnabled: false,
 }
 
 export function normalizeHexColor(value: unknown, fallback: string) {
@@ -59,6 +61,7 @@ export function readThemePreferences(): ThemePreferences {
       customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
       customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
       fontSizeAdjustment: normalizeFontSizeAdjustment(parsed.fontSizeAdjustment),
+      systemNotificationsEnabled: parsed.systemNotificationsEnabled === true,
       ...(customBackgroundImage ? { customBackgroundImage } : {}),
     }
   } catch {

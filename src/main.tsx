@@ -8,21 +8,56 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
   useEffect(() => {
     let frame: number | undefined
     let settleTimer: number | undefined
+    let checkingForUpdate = false
+    let lastUpdateCheckAt = 0
+    const assetSignature = (root: ParentNode, baseUrl: string) => Array.from(
+      root.querySelectorAll('link[rel="stylesheet"][href], script[type="module"][src]'),
+      (element) => {
+        const reference = element.getAttribute(element.tagName === 'LINK' ? 'href' : 'src')
+        return reference ? new URL(reference, baseUrl).href : ''
+      },
+    ).filter(Boolean).sort().join('\n')
+    const loadedAssetSignature = assetSignature(document, window.location.href)
+    const checkForUpdate = async () => {
+      if (!('CodexRemoteAndroid' in window) || document.hidden || checkingForUpdate) return
+      const now = Date.now()
+      if (now - lastUpdateCheckAt < 1_000) return
+      lastUpdateCheckAt = now
+      checkingForUpdate = true
+      try {
+        const response = await fetch(window.location.href, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'text/html' },
+        })
+        if (!response.ok) return
+        const html = new DOMParser().parseFromString(await response.text(), 'text/html')
+        const latestAssetSignature = assetSignature(html, response.url || window.location.href)
+        if (loadedAssetSignature && latestAssetSignature && latestAssetSignature !== loadedAssetSignature) {
+          window.location.reload()
+        }
+      } catch {
+        // A failed update check must not interfere with the existing chat.
+      } finally {
+        checkingForUpdate = false
+      }
+    }
     const syncViewportHeight = () => {
       const viewport = window.visualViewport
       const layoutHeight = Math.round(window.innerHeight)
       const visualHeight = Math.round(viewport?.height ?? layoutHeight)
-      // Android WebView can keep the layout viewport at its full height while
-      // panning the visual viewport above the keyboard. Using only
-      // visualViewport.height in that state shortens the app twice and leaves
-      // a blank area between the composer and the keyboard. Keep the layout
-      // bottom when the native bridge is present; regular mobile browsers
-      // still follow their resized visual viewport.
       const nativeBridge = 'CodexRemoteAndroid' in window
       const offsetTop = Math.max(0, viewport?.offsetTop ?? 0)
       const pannedVisualBottom = Math.round(visualHeight + offsetTop)
+      const focusedComposer = document.activeElement instanceof HTMLElement
+        && document.activeElement.matches('.message-composer textarea, .message-composer input:not([type="file"]), .message-composer [contenteditable="true"]')
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
-      const height = nativeViewportIsPanned ? Math.max(layoutHeight, pannedVisualBottom) : visualHeight
+      const browserViewportIsPanned = !nativeBridge && focusedComposer && offsetTop > 1
+      const height = nativeViewportIsPanned
+        ? Math.max(layoutHeight, pannedVisualBottom)
+        : browserViewportIsPanned
+          ? pannedVisualBottom
+          : visualHeight
       const composerBottomInset = window.CodexRemoteAndroid?.getComposerBottomInsetDp?.() ?? 0
       if (Number.isFinite(composerBottomInset) && composerBottomInset >= 0) {
         document.documentElement.style.setProperty('--native-composer-bottom-inset', `${composerBottomInset}px`)
@@ -49,23 +84,34 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       })
     }
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') scheduleViewportSync()
+      if (document.visibilityState !== 'visible') return
+      scheduleViewportSync()
+      void checkForUpdate()
     }
+    const handleAppResume = () => { void checkForUpdate() }
     const viewport = window.visualViewport
     scheduleViewportSync()
     window.addEventListener('resize', scheduleViewportSync)
     window.addEventListener('orientationchange', scheduleViewportSync)
     window.addEventListener('pageshow', scheduleViewportSync)
+    window.addEventListener('codex-remote:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
+    document.addEventListener('focusin', scheduleViewportSync)
+    document.addEventListener('focusout', scheduleViewportSync)
     viewport?.addEventListener('resize', scheduleViewportSync)
+    viewport?.addEventListener('scroll', scheduleViewportSync)
     return () => {
       if (frame !== undefined) window.cancelAnimationFrame(frame)
       if (settleTimer !== undefined) window.clearTimeout(settleTimer)
       window.removeEventListener('resize', scheduleViewportSync)
       window.removeEventListener('orientationchange', scheduleViewportSync)
       window.removeEventListener('pageshow', scheduleViewportSync)
+      window.removeEventListener('codex-remote:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
+      document.removeEventListener('focusin', scheduleViewportSync)
+      document.removeEventListener('focusout', scheduleViewportSync)
       viewport?.removeEventListener('resize', scheduleViewportSync)
+      viewport?.removeEventListener('scroll', scheduleViewportSync)
     }
   }, [])
   return <>{children}</>

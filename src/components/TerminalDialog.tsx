@@ -12,7 +12,6 @@ interface TerminalDialogProps {
   token: string
   threadId?: string
   cwd?: string
-  showCloseButton: boolean
   onClose: () => void
   onInsertText: (value: string) => void
 }
@@ -78,7 +77,7 @@ function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clie
   return terminal.hasSelection()
 }
 
-export function TerminalDialog({ token, threadId, cwd, showCloseButton, onClose, onInsertText }: TerminalDialogProps) {
+export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
@@ -309,7 +308,7 @@ export function TerminalDialog({ token, threadId, cwd, showCloseButton, onClose,
       ariaLabel="本机终端"
       backdropLabel="关闭本机终端"
       onClose={onClose}
-      showCloseButton={showCloseButton}
+      showCloseButton={false}
       className="terminal-dialog"
       onPanelPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)

@@ -1,18 +1,28 @@
 package com.sevencnup.codexremote;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
+import android.app.PendingIntent;
 import android.content.ActivityNotFoundException;
 import android.content.ClipboardManager;
 import android.content.ClipData;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
@@ -31,6 +41,7 @@ import android.webkit.WebViewClient;
 import android.webkit.JavascriptInterface;
 import android.webkit.ConsoleMessage;
 import android.util.Log;
+import org.json.JSONObject;
 import android.window.OnBackInvokedCallback;
 import android.window.OnBackInvokedDispatcher;
 import android.widget.Button;
@@ -49,11 +60,14 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
-    private static final String APP_VERSION = "0.0.89";
+    private static final String APP_VERSION = BuildConfig.VERSION_NAME;
     private static final long WEBVIEW_LOAD_TIMEOUT_MS = 20000;
     private static final int FILE_CHOOSER_REQUEST_CODE = 4101;
+    private static final int NOTIFICATION_PERMISSION_REQUEST_CODE = 4102;
     private static final String PREFS_NAME = "codex_remote_mobile";
     private static final String ENDPOINT_KEY = "endpoint";
+    private static final String NOTIFICATION_CHANNEL_ID = "codex_remote_updates";
+    private static final String EXTRA_NOTIFICATION_THREAD_ID = "notification_thread_id";
     private static final int DARK = Color.rgb(16, 17, 20);
     private static final int PANEL = Color.rgb(23, 25, 30);
     private static final int TEXT = Color.rgb(239, 241, 246);
@@ -61,6 +75,13 @@ public class MainActivity extends Activity {
     private static final int ACCENT = Color.rgb(170, 186, 255);
 
     private final ExecutorService networkExecutor = Executors.newSingleThreadExecutor();
+    private final Handler connectionHandler = new Handler(Looper.getMainLooper());
+    private final Runnable connectionRecovery = this::recoverWebConnection;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
+    private boolean activityResumed;
+    private boolean autoRestoreSavedEndpoint;
+    private int connectionCheckGeneration;
     private SharedPreferences preferences;
     private FrameLayout root;
     private WebView webView;
@@ -73,7 +94,9 @@ public class MainActivity extends Activity {
     private Runnable webViewReadyCheck;
     private long webViewLoadStartedAt;
     private boolean webViewLoadFailed;
+    private boolean webViewPageFinished;
     private String activeEndpoint;
+    private volatile String pendingNotificationThreadId;
     private boolean checking;
     private boolean handlingBack;
     private int navigationBarInsetPx;
@@ -85,6 +108,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        captureNotificationNavigation(getIntent());
         configureSystemBars();
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
         preferences = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
@@ -92,9 +116,25 @@ public class MainActivity extends Activity {
         showConnector(preferences.getString(ENDPOINT_KEY, ""), null);
 
         String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
+        registerNetworkRecovery();
         if (savedEndpoint != null && !savedEndpoint.isBlank()) {
+            autoRestoreSavedEndpoint = true;
             checkAndOpen(savedEndpoint, true);
         }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        captureNotificationNavigation(intent);
+        dispatchPendingNotificationNavigation();
+    }
+
+    private void captureNotificationNavigation(Intent intent) {
+        if (intent == null) return;
+        String threadId = intent.getStringExtra(EXTRA_NOTIFICATION_THREAD_ID);
+        if (threadId != null && !threadId.isBlank()) pendingNotificationThreadId = threadId;
     }
 
     private int dp(float value) {
@@ -120,6 +160,7 @@ public class MainActivity extends Activity {
     private void showConnector(String initialEndpoint, String errorMessage) {
         disposeWebView();
         checking = false;
+        autoRestoreSavedEndpoint = false;
         root = new FrameLayout(this);
         root.setBackgroundColor(DARK);
         applySystemBarInsets(root, false, false);
@@ -188,7 +229,10 @@ public class MainActivity extends Activity {
         connectButton.setTextColor(Color.rgb(25, 26, 30));
         connectButton.setAllCaps(false);
         connectButton.setBackgroundColor(Color.rgb(228, 229, 232));
-        connectButton.setOnClickListener(view -> checkAndOpen(endpointInput.getText().toString(), false));
+        connectButton.setOnClickListener(view -> {
+            autoRestoreSavedEndpoint = false;
+            checkAndOpen(endpointInput.getText().toString(), false);
+        });
         LinearLayout.LayoutParams buttonParams = widthParams(dp(48));
         buttonParams.bottomMargin = dp(12);
         page.addView(connectButton, buttonParams);
@@ -197,7 +241,7 @@ public class MainActivity extends Activity {
         endpointStatus.setLineSpacing(0, 1.3f);
         page.addView(endpointStatus, widthParams(dp(44)));
 
-        TextView hint = text("电脑和手机需要在同一个局域网。启动网页服务后，终端会显示匹配码。", 10, Color.rgb(126, 132, 144));
+        TextView hint = text("手机需要能通过局域网或远程隧道访问电脑。启动网页服务后，终端会显示匹配码。", 10, Color.rgb(126, 132, 144));
         hint.setLineSpacing(0, 1.3f);
         LinearLayout.LayoutParams hintParams = widthParams(dp(42));
         hintParams.topMargin = dp(24);
@@ -235,6 +279,7 @@ public class MainActivity extends Activity {
         }
 
         checking = true;
+        final int checkGeneration = ++connectionCheckGeneration;
         if (connectButton != null) {
             connectButton.setEnabled(false);
             connectButton.setText("检测中…");
@@ -246,13 +291,27 @@ public class MainActivity extends Activity {
 
         networkExecutor.execute(() -> {
             String failure = null;
-            try {
-                checkEndpoint(endpoint);
-            } catch (IOException | IllegalArgumentException error) {
-                failure = error.getMessage() == null ? "无法连接到电脑网页服务。" : error.getMessage();
+            for (int attempt = 0; attempt < 3; attempt++) {
+                if (Thread.currentThread().isInterrupted()) return;
+                try {
+                    checkEndpoint(endpoint);
+                    failure = null;
+                    break;
+                } catch (IOException | IllegalArgumentException error) {
+                    failure = error.getMessage() == null ? "无法连接到电脑网页服务。" : error.getMessage();
+                    if (attempt < 2) {
+                        try {
+                            Thread.sleep(750L * (attempt + 1));
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
+                    }
+                }
             }
             String resultFailure = failure;
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || checkGeneration != connectionCheckGeneration) return;
                 checking = false;
                 if (resultFailure == null) {
                     activeEndpoint = endpoint;
@@ -265,7 +324,7 @@ public class MainActivity extends Activity {
                     connectButton.setText("检测并连接");
                 }
                 if (endpointStatus != null) {
-                    endpointStatus.setText(resultFailure + "\n请确认电脑服务已启动、端口为 4173，且手机和电脑在同一局域网。 ");
+                    endpointStatus.setText(resultFailure + "\n请确认地址和端口正确，且手机的局域网或远程隧道已连接。 ");
                     endpointStatus.setTextColor(Color.rgb(226, 154, 158));
                 }
             });
@@ -279,8 +338,8 @@ public class MainActivity extends Activity {
         // Some tunnels close that short response early and report a misleading
         // "unexpected end of stream" even though the server is healthy.
         connection.setRequestMethod("HEAD");
-        connection.setConnectTimeout(4500);
-        connection.setReadTimeout(4500);
+        connection.setConnectTimeout(6000);
+        connection.setReadTimeout(6000);
         connection.setInstanceFollowRedirects(true);
         connection.setUseCaches(false);
         connection.setRequestProperty("User-Agent", "CodexRemoteAndroid/" + APP_VERSION);
@@ -319,9 +378,9 @@ public class MainActivity extends Activity {
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
         settings.setLoadsImagesAutomatically(true);
-        // The UI is served by the computer's Vite server. Never reuse an old
-        // cached CSS/JS bundle after the web project has been rebuilt.
-        settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        // HTML revalidates and production assets carry content hashes. Honor
+        // their HTTP cache headers so a weak connection can reuse the assets.
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         webView.setBackgroundColor(DARK);
         webView.addJavascriptInterface(new AndroidBridge(), "CodexRemoteAndroid");
@@ -355,8 +414,16 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 if (view != webView) return;
+                webViewPageFinished = false;
                 updateWebViewStatus("正在加载电脑网页…", false);
                 startWebViewReadyCheck(view);
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                if (view != webView) return;
+                webViewPageFinished = true;
+                dispatchPendingNotificationNavigation();
             }
 
             @Override
@@ -393,9 +460,8 @@ public class MainActivity extends Activity {
                 0,
                 1));
         addWebViewStatusOverlay(root, endpoint);
-        // Keep the WebView from reusing an older index.html or module bundle.
         startWebViewReadyCheck(webView);
-        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION) + "&cacheBust=" + System.currentTimeMillis());
+        webView.loadUrl(endpoint + "/?codexRemoteMobile=" + Uri.encode(APP_VERSION));
     }
 
     private void startWebViewReadyCheck(WebView view) {
@@ -520,6 +586,95 @@ public class MainActivity extends Activity {
         return uri == null ? null : new Uri[]{uri};
     }
 
+    private boolean hasNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            return false;
+        }
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager != null && manager.areNotificationsEnabled();
+    }
+
+    private void dispatchNotificationPermissionResult(boolean granted) {
+        WebView current = webView;
+        if (current == null) return;
+        String script = "window.dispatchEvent(new CustomEvent('codex-remote-notification-permission',{detail:{granted:" + granted + "}}));";
+        current.post(() -> {
+            if (current == webView) current.evaluateJavascript(script, null);
+        });
+    }
+
+    private void dispatchPendingNotificationNavigation() {
+        String threadId = pendingNotificationThreadId;
+        WebView current = webView;
+        if (threadId == null || current == null || !webViewPageFinished) return;
+        String quotedThreadId = JSONObject.quote(threadId);
+        String script = "window.__codexRemotePendingThreadId=" + quotedThreadId + ";"
+                + "if(typeof window.CodexRemoteOpenThread==='function'){"
+                + "const threadId=window.__codexRemotePendingThreadId;"
+                + "delete window.__codexRemotePendingThreadId;"
+                + "window.CodexRemoteOpenThread(threadId);"
+                + "}true;";
+        current.evaluateJavascript(script, result -> {
+            if ("true".equals(result) && threadId.equals(pendingNotificationThreadId)) {
+                pendingNotificationThreadId = null;
+            }
+        });
+    }
+
+    private void postSystemNotification(String title, String body, String threadId, String eventKey) {
+        if (!hasNotificationPermission() || activityResumed) return;
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null) return;
+
+        NotificationChannel channel = new NotificationChannel(
+                NOTIFICATION_CHANNEL_ID,
+                "Codex Remote",
+                NotificationManager.IMPORTANCE_DEFAULT);
+        channel.setDescription("Codex 回复完成和待批准提醒");
+        manager.createNotificationChannel(channel);
+
+        int notificationId = (threadId + ":" + eventKey).hashCode() & 0x7fffffff;
+        if (notificationId == 0) notificationId = 1;
+        Intent openApp = new Intent(this, MainActivity.class);
+        openApp.setAction(getPackageName() + ".NOTIFICATION." + eventKey);
+        openApp.putExtra(EXTRA_NOTIFICATION_THREAD_ID, threadId);
+        openApp.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        PendingIntent contentIntent = PendingIntent.getActivity(
+                this,
+                notificationId,
+                openApp,
+                PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
+
+        String safeTitle = title == null || title.isBlank() ? "Codex Remote" : title.trim();
+        String safeBody = body == null || body.isBlank() ? "Codex 有一条更新。" : body.trim();
+        if (safeTitle.length() > 90) safeTitle = safeTitle.substring(0, 87) + "…";
+        if (safeBody.length() > 180) safeBody = safeBody.substring(0, 177) + "…";
+        Notification notification = new Notification.Builder(this, NOTIFICATION_CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.ic_dialog_info)
+                .setColor(ACCENT)
+                .setContentTitle(safeTitle)
+                .setContentText(safeBody)
+                .setStyle(new Notification.BigTextStyle().bigText(safeBody))
+                .setContentIntent(contentIntent)
+                .setAutoCancel(true)
+                .setOnlyAlertOnce(true)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .build();
+        try {
+            manager.notify(notificationId, notification);
+        } catch (SecurityException error) {
+            Log.w("CodexRemoteNotifications", "Unable to post system notification", error);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NOTIFICATION_PERMISSION_REQUEST_CODE) return;
+        dispatchNotificationPermissionResult(hasNotificationPermission());
+    }
+
     private final class AndroidBridge {
         @JavascriptInterface
         public int getStatusBarInsetDp() {
@@ -529,6 +684,44 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public int getComposerBottomInsetDp() {
             return composerBottomInsetDp;
+        }
+
+        @JavascriptInterface
+        public boolean hasNotificationPermission() {
+            return MainActivity.this.hasNotificationPermission();
+        }
+
+        @JavascriptInterface
+        public boolean isAppInBackground() {
+            return !activityResumed;
+        }
+
+        @JavascriptInterface
+        public void requestNotificationPermission() {
+            runOnUiThread(() -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                        && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(
+                            new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                            NOTIFICATION_PERMISSION_REQUEST_CODE);
+                } else {
+                    dispatchNotificationPermissionResult(hasNotificationPermission());
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public boolean showSystemNotification(String title, String body, String threadId, String eventKey) {
+            if (activityResumed || !hasNotificationPermission()) return false;
+            runOnUiThread(() -> postSystemNotification(title, body, threadId, eventKey));
+            return true;
+        }
+
+        @JavascriptInterface
+        public String consumeNotificationThreadId() {
+            String threadId = pendingNotificationThreadId;
+            pendingNotificationThreadId = null;
+            return threadId;
         }
 
         @JavascriptInterface
@@ -626,8 +819,87 @@ public class MainActivity extends Activity {
         handleBackNavigation();
     }
 
+    private void registerNetworkRecovery() {
+        connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+        if (connectivityManager == null) return;
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(Network network) {
+                connectionHandler.post(MainActivity.this::scheduleConnectionRecovery);
+            }
+
+            @Override
+            public void onLost(Network network) {
+                connectionHandler.post(MainActivity.this::scheduleConnectionRecovery);
+            }
+        };
+        try {
+            connectivityManager.registerDefaultNetworkCallback(networkCallback);
+        } catch (RuntimeException error) {
+            networkCallback = null;
+        }
+    }
+
+    private void scheduleConnectionRecovery() {
+        if (!activityResumed || isFinishing() || isDestroyed()) return;
+        connectionHandler.removeCallbacks(connectionRecovery);
+        connectionHandler.postDelayed(connectionRecovery, 500);
+    }
+
+    private void recoverWebConnection() {
+        if (!activityResumed || isFinishing() || isDestroyed()) return;
+        if (webView != null) {
+            if (webViewStatus != null && webViewLoadFailed) {
+                // Retry only a page that never finished loading. An existing
+                // chat keeps its draft, scroll position and local caches.
+                webView.reload();
+            } else {
+                webView.evaluateJavascript("window.dispatchEvent(new Event('codex-remote:resume'));", null);
+            }
+            return;
+        }
+        String savedEndpoint = preferences.getString(ENDPOINT_KEY, "");
+        if (autoRestoreSavedEndpoint && !checking && savedEndpoint != null && !savedEndpoint.isBlank()
+                && endpointInput != null && savedEndpoint.equals(endpointInput.getText().toString().trim())) {
+            checkAndOpen(savedEndpoint, true);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        activityResumed = true;
+        if (webView != null) {
+            webView.onResume();
+            if (webViewStatus != null && !webViewLoadFailed) startWebViewReadyCheck(webView);
+        }
+        scheduleConnectionRecovery();
+    }
+
+    @Override
+    protected void onPause() {
+        activityResumed = false;
+        connectionHandler.removeCallbacks(connectionRecovery);
+        stopWebViewReadyCheck();
+        if (webView != null) {
+            webView.evaluateJavascript("window.dispatchEvent(new Event('codex-remote-app-background'));", null);
+            webView.onPause();
+        }
+        super.onPause();
+    }
+
     @Override
     protected void onDestroy() {
+        activityResumed = false;
+        connectionHandler.removeCallbacksAndMessages(null);
+        if (connectivityManager != null && networkCallback != null) {
+            try {
+                connectivityManager.unregisterNetworkCallback(networkCallback);
+            } catch (RuntimeException ignored) {
+                // The OS may already have released the callback.
+            }
+            networkCallback = null;
+        }
         unregisterBackNavigationCallback();
         disposeWebView();
         networkExecutor.shutdownNow();
@@ -635,6 +907,7 @@ public class MainActivity extends Activity {
     }
 
     private void disposeWebView() {
+        connectionCheckGeneration++;
         stopWebViewReadyCheck();
         if (pendingFileChooser != null) {
             pendingFileChooser.onReceiveValue(null);
@@ -645,6 +918,7 @@ public class MainActivity extends Activity {
             webView.destroy();
             webView = null;
         }
+        webViewPageFinished = false;
         webViewStatus = null;
         webViewRetryButton = null;
         webViewChangeEndpointButton = null;

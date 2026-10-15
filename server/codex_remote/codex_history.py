@@ -173,6 +173,16 @@ class CodexHistoryStore:
         self._path_index = None
         self._index_entries = None
 
+    def thread_revision(self, thread_id: str) -> str | None:
+        path = self._load_path_index().get(thread_id)
+        if path is None:
+            return None
+        try:
+            info = path.stat()
+        except OSError:
+            return None
+        return f"{info.st_mtime_ns}:{info.st_size}"
+
     def delete_thread(self, thread_id: str) -> bool:
         path = self._load_path_index().get(thread_id)
         if path is None:

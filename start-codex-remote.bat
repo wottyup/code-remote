@@ -27,7 +27,7 @@ echo Web: http://localhost:4173
 echo Close this window to stop the service.
 echo.
 
-call "%PNPM_CMD%" dev
+call "%PNPM_CMD%" start
 set "EXIT_CODE=%ERRORLEVEL%"
 
 if not "%EXIT_CODE%"=="0" (

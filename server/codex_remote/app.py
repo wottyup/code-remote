@@ -24,10 +24,13 @@ from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from watchfiles import awatch
 
+from .browser_history_sync import BrowserHistorySync
+from .browser_payload import browser_event, browser_thread, browser_thread_summary
 from .codex_app_server import (
     ApprovalPolicy,
     CodexAppServer,
@@ -561,6 +564,59 @@ def workspace_file_preview(base: Path, relative_path: str) -> dict[str, str | in
     }
 
 
+def workspace_image_preview(base: Path, relative_path: str, managed_image_root: Path | None = None) -> dict[str, str | int]:
+    if not relative_path or len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效或过长")
+    is_absolute = relative_path.startswith(("/", "\\")) or (len(relative_path) > 1 and relative_path[1] == ":")
+    if is_absolute:
+        try:
+            candidate = Path(relative_path).expanduser().resolve()
+            allowed_root = managed_image_root.resolve() if managed_image_root is not None else None
+            if allowed_root is None:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
+            candidate.relative_to(allowed_root)
+        except HTTPException:
+            raise
+        except (OSError, RuntimeError, ValueError) as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的图片") from error
+    else:
+        normalized_parts = relative_path.replace("\\", "/").split("/")
+        if any(part in {"", ".", ".."} for part in normalized_parts):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效")
+        candidate = workspace_path(base, relative_path)
+    media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
+    if media_type is None:
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
+    try:
+        if not candidate.is_file():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
+        size = candidate.stat().st_size
+        if size > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
+        with candidate.open("rb") as file:
+            content = file.read(MAX_IMAGE_BYTES + 1)
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该图片") from error
+    if len(content) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
+    signatures = {
+        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
+        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
+        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
+        "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
+    }
+    if not signatures.get(media_type, False):
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件内容不是有效的受支持图片")
+    return {
+        "path": candidate.relative_to(base).as_posix() if candidate.is_relative_to(base) else candidate.name,
+        "mediaType": media_type,
+        "data": base64.b64encode(content).decode("ascii"),
+        "size": len(content),
+    }
+
+
 def workspace_file_save(base: Path, relative_path: str, content: str, expected_revision: str) -> dict[str, str | int | bool]:
     current = workspace_file_preview(base, relative_path)
     current_revision = current["revision"]
@@ -972,13 +1028,15 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.9.3-dev.5", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.12.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
+    browser_history_sync = BrowserHistorySync()
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[],
@@ -1057,6 +1115,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_file_preview(base, path)
 
+    @app.get("/api/v1/codex/workspace/image")
+    async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return workspace_image_preview(base, path, image_directory)
+
     @app.post("/api/v1/codex/workspace/file")
     async def save_workspace_file(request: WorkspaceFileSaveRequest) -> dict[str, str | int | bool]:
         base = workspace_base_for_cwd(app_server.workspace, request.cwd)
@@ -1070,7 +1133,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             result = []
             for thread in threads:
                 thread_id = thread.get("id")
-                result.append({**thread, "cwd": workspaces[thread_id]} if isinstance(thread_id, str) and thread_id in workspaces else thread)
+                summary = browser_thread_summary(thread)
+                if isinstance(thread_id, str):
+                    revision = app_server.thread_history_revision(thread_id)
+                    if revision is not None:
+                        summary["historyRevision"] = revision
+                    if thread_id in workspaces:
+                        summary["cwd"] = workspaces[thread_id]
+                result.append(summary)
             return result
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -1121,13 +1191,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.get("/api/v1/codex/threads/{thread_id}")
-    async def read_thread(thread_id: str) -> dict[str, Any]:
+    async def read_thread(thread_id: str, since: str | None = None) -> dict[str, Any]:
         try:
-            thread = await app_server.read_thread(thread_id)
+            # Capture before reading: a concurrent append must leave this
+            # response stale, rather than claiming to contain the new data.
+            revision = app_server.thread_history_revision(thread_id)
+            thread = browser_thread(await app_server.read_thread(thread_id))
+            if revision is not None:
+                thread["historyRevision"] = revision
             bound_cwd = shared_state.thread_workspace(thread_id)
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
-            return enrich_thread_images(thread, image_directory)
+            return enrich_thread_images(browser_history_sync.response(thread, since), image_directory)
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -1443,26 +1518,25 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid pairing token or protocol")
             return
 
+        filter_thread = "thread_id" in hello
+        subscribed_thread_id = hello.get("thread_id") if isinstance(hello.get("thread_id"), str) else None
         queue = await app_server.subscribe()
-        try:
-            runtime_status = await app_server.connect()
-        except CodexRuntimeError as error:
-            runtime_status = app_server.status()
-            runtime_status["error"] = str(error)
-        try:
-            await websocket.send_json({"type": "connection", **runtime_status})
-        except WebSocketDisconnect:
-            app_server.unsubscribe(queue)
-            return
+        send_lock = asyncio.Lock()
+        tasks: list[asyncio.Task[None]] = []
+
+        async def send_event(event: dict[str, Any]) -> None:
+            async with send_lock:
+                await websocket.send_json(event)
 
         async def send_events() -> None:
             while True:
-                event = await queue.get()
-                if isinstance(event, dict) and event.get("method") in {"item/started", "item/completed"}:
+                event = browser_event(await queue.get(), thread_id=subscribed_thread_id, filter_thread=filter_thread)
+                if event is None:
+                    continue
+                if event.get("method") in {"item/started", "item/completed"}:
                     params = event.get("params")
                     item = params.get("item") if isinstance(params, dict) else None
-                    item_type = item.get("type") if isinstance(item, dict) else None
-                    if isinstance(item_type, str) and item_type.replace("-", "").replace("_", "").lower() == "usermessage":
+                    if isinstance(item, dict):
                         event = {
                             **event,
                             "params": {
@@ -1470,12 +1544,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                                 "item": enrich_user_message_item(item, image_directory),
                             },
                         }
-                await websocket.send_json(event)
+                await send_event(event)
 
-        writer = asyncio.create_task(send_events())
-        try:
+        async def receive_events() -> None:
+            nonlocal subscribed_thread_id, filter_thread
             while True:
                 payload = await websocket.receive_json()
+                if isinstance(payload, dict) and payload.get("type") == "ping":
+                    ping_id = payload.get("id")
+                    if isinstance(ping_id, str) and 0 < len(ping_id) <= 64:
+                        await send_event({"type": "pong", "id": ping_id})
+                    continue
+                if isinstance(payload, dict) and payload.get("type") == "thread.subscribe":
+                    requested_thread_id = payload.get("thread_id")
+                    if requested_thread_id is None or (isinstance(requested_thread_id, str) and len(requested_thread_id) <= 512):
+                        subscribed_thread_id = requested_thread_id
+                        filter_thread = True
+                    continue
                 if not isinstance(payload, dict) or payload.get("type") != "approval.response":
                     with suppress(WebSocketDisconnect):
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
@@ -1489,14 +1574,30 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 try:
                     await app_server.answer_server_request(request_id, decision)
                 except CodexRuntimeError as error:
-                    await websocket.send_json({"type": "error", "message": str(error)})
-        except WebSocketDisconnect:
+                    await send_event({"type": "error", "message": str(error)})
+
+        try:
+            try:
+                runtime_status = await app_server.connect()
+            except CodexRuntimeError as error:
+                runtime_status = app_server.status()
+                runtime_status["error"] = str(error)
+            await send_event({"type": "connection", **runtime_status, "threadSubscriptions": True, "heartbeats": True})
+            tasks = [asyncio.create_task(send_events()), asyncio.create_task(receive_events())]
+            # A failed writer must also release its reader and subscription.
+            # Otherwise a dead browser can keep accumulating queued events.
+            done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                await task
+        except (WebSocketDisconnect, OSError, RuntimeError, ValueError):
             pass
         finally:
-            writer.cancel()
-            with suppress(asyncio.CancelledError, Exception):
-                await writer
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             app_server.unsubscribe(queue)
+            with suppress(WebSocketDisconnect, RuntimeError, OSError):
+                await websocket.close()
 
     @app.websocket("/api/v1/codex/terminal")
     async def terminal_websocket(websocket: WebSocket) -> None:

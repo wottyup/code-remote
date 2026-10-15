@@ -17,7 +17,7 @@ import {
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
 import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
-import { canUseCachedThreadHistory } from '../lib/threadHistoryPolicy'
+import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/threadHistoryPolicy'
 import { deleteThreadHistoryCache, readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
@@ -36,13 +36,26 @@ export interface CodexActivity {
 
 export type CodexOperationStatus = 'running' | 'completed' | 'failed' | 'stopped'
 
+export interface CodexOperationStep {
+  label: string
+  detail?: string
+  path?: string
+}
+
 export interface CodexOperation {
   id: string
   kind: 'command' | 'file' | 'search' | 'tool'
   label: string
   detail?: string
+  steps?: CodexOperationStep[]
+  paths?: string[]
+  imagePath?: string
   status: CodexOperationStatus
 }
+
+export type CodexActivityTimelineEntry =
+  | { type: 'message'; itemId: string; length: number }
+  | { type: 'operation'; itemId: string; operationId: string }
 
 export interface CodexThreadCompletion {
   threadId: string
@@ -108,6 +121,7 @@ interface PendingTurnDelivery {
 
 type FileChangesByTurn = Record<string, CodexFileChange[]>
 type OperationsByTurn = Record<string, CodexOperation[]>
+type ActivityTimelineByTurn = Record<string, CodexActivityTimelineEntry[]>
 type QueuedMessagesByThread = Record<string, QueuedTurnPayload[]>
 
 const emptyQueuedMessages: QueuedTurnMessage[] = []
@@ -151,6 +165,7 @@ interface ThreadCacheEntry {
   messages: CodexMessage[]
   fileChangesByTurn: FileChangesByTurn
   operationsByTurn: OperationsByTurn
+  activityTimelineByTurn: ActivityTimelineByTurn
   running: boolean
   turnId: string | null
   characters: number
@@ -165,6 +180,8 @@ interface PersistedThreadCacheSnapshot {
 export interface UseCodexRemoteOptions {
   /** Keep the existing single-pane conversation in localStorage. */
   persistActiveThread?: boolean
+  /** Restore a pane-specific conversation without replacing the primary thread. */
+  initialThreadId?: string | null
   /** Keep the socket and background requests closed while a pane is hidden. */
   enabled?: boolean
   /** Keep list/model/history warm-up work in the primary controller only. */
@@ -244,6 +261,7 @@ function compactThread(thread: CodexThread): CodexThread {
     ...(thread.preview !== undefined ? { preview: thread.preview } : {}),
     ...(thread.cwd !== undefined ? { cwd: thread.cwd } : {}),
     ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+    ...(thread.historyRevision !== undefined ? { historyRevision: thread.historyRevision } : {}),
     ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
     ...(thread.status !== undefined ? { status: thread.status } : {}),
   }
@@ -292,6 +310,17 @@ function cachedHistoryCharacters(messages: CodexMessage[]) {
   return messages.reduce((total, message) => total + cachedMessageCharacters(message), 0)
 }
 
+function isActivityTimelineByTurn(value: unknown): value is ActivityTimelineByTurn {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  return Object.values(value as Record<string, unknown>).every((entries) => Array.isArray(entries) && entries.every((entry) => {
+    if (!entry || typeof entry !== 'object') return false
+    const record = entry as Record<string, unknown>
+    return record.type === 'message'
+      ? typeof record.itemId === 'string' && typeof record.length === 'number' && Number.isFinite(record.length) && record.length >= 0
+      : record.type === 'operation' && typeof record.itemId === 'string' && typeof record.operationId === 'string'
+  }))
+}
+
 function isThreadCacheEntry(value: unknown, threadId: string): value is ThreadCacheEntry {
   if (!value || typeof value !== 'object') return false
   const entry = value as Record<string, unknown>
@@ -321,6 +350,7 @@ function isThreadCacheEntry(value: unknown, threadId: string): value is ThreadCa
     && messagesValid
     && entry.fileChangesByTurn && typeof entry.fileChangesByTurn === 'object' && !Array.isArray(entry.fileChangesByTurn)
     && entry.operationsByTurn && typeof entry.operationsByTurn === 'object' && !Array.isArray(entry.operationsByTurn)
+    && (entry.activityTimelineByTurn === undefined || isActivityTimelineByTurn(entry.activityTimelineByTurn))
     && typeof entry.running === 'boolean'
     && (entry.turnId === null || typeof entry.turnId === 'string')
     && typeof entry.characters === 'number' && Number.isFinite(entry.characters) && entry.characters >= 0
@@ -336,14 +366,18 @@ function threadTimestamp(thread: CodexThread) {
 }
 
 function threadIsRunning(thread: CodexThread) {
-  return thread.status?.type === 'inProgress' || thread.status?.type === 'running'
+  return ['active', 'inProgress', 'running', 'started'].includes(thread.status?.type ?? '')
 }
 
 function cachedHistoryMatchesThreadMetadata(entry: ThreadCacheEntry, latestThread: CodexThread | undefined, metadataLoaded: boolean, hasQueuedMessages: boolean) {
-  return canUseCachedThreadHistory({
+  const activityTimelineIsMissing = Object.entries(entry.operationsByTurn).some(([turnId, operations]) => (
+    operations.length > 0 && !(entry.activityTimelineByTurn[turnId]?.length)
+  ))
+  return !activityTimelineIsMissing && canUseCachedThreadHistory({
     complete: entry.complete,
     running: entry.running,
     updatedAt: entry.thread.updatedAt,
+    historyRevision: entry.thread.historyRevision,
   }, latestThread, metadataLoaded, hasQueuedMessages)
 }
 
@@ -694,6 +728,7 @@ function sameActiveThread(left: CodexThread | null, right: CodexThread) {
     && left.preview === right.preview
     && left.cwd === right.cwd
     && left.updatedAt === right.updatedAt
+    && left.historyRevision === right.historyRevision
     && left.createdAt === right.createdAt
     && left.status?.type === right.status?.type
 }
@@ -903,6 +938,7 @@ function activityForItem(value: unknown): CodexActivity {
 const maxOperationsPerTurn = 80
 const maxOperationHistoryTurns = 30
 const maxOperationDetailCharacters = 220
+const maxActivityTimelineEntriesPerTurn = 240
 
 function normalizedOperationStatus(value: unknown, fallback: CodexOperationStatus = 'completed'): CodexOperationStatus {
   if (typeof value !== 'string') return fallback
@@ -932,13 +968,45 @@ function operationPaths(value: unknown, depth = 0): string[] {
   if (depth > 4 || !value || typeof value !== 'object') return []
   const paths: string[] = []
   for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
-    if (/^(?:path|filepath|file_path|filename|target_path|source_path)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
+    if (/^(?:path|filepath|file_path|filename|target_path|source_path|imagepath|image_path|imagefile|image_file)$/i.test(key) && typeof entry === 'string' && entry.trim()) {
       paths.push(entry.trim())
     } else if (entry && typeof entry === 'object') {
       paths.push(...operationPaths(entry, depth + 1))
     }
   }
   return [...new Set(paths)].slice(0, 8)
+}
+
+function commandActionSteps(value: unknown): CodexOperationStep[] {
+  if (!Array.isArray(value)) return []
+  return value.slice(0, 8).flatMap((entry): CodexOperationStep[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const action = entry as Record<string, unknown>
+    const type = typeof action.type === 'string' ? action.type.replace(/[-_]/g, '').toLowerCase() : ''
+    const name = typeof action.name === 'string' ? action.name.trim() : ''
+    const path = typeof action.path === 'string' ? action.path.trim() : ''
+    const query = typeof action.query === 'string' ? action.query.trim() : ''
+    const basename = (path: string) => path.replace(/\\/g, '/').split('/').filter(Boolean).at(-1) ?? path
+
+    if (type === 'read') {
+      const detail = safeOperationDetail(name || basename(path))
+      return [{ label: '读取', ...(detail ? { detail } : {}), ...(path ? { path } : {}) }]
+    }
+    if (type === 'listfiles') {
+      const detail = safeOperationDetail(path || name)
+      return [{ label: '列出文件', ...(detail ? { detail } : {}) }]
+    }
+    if (type === 'search') {
+      const detail = safeOperationDetail([query, path].filter(Boolean).join(' · '))
+      return [{ label: '搜索', ...(detail ? { detail } : {}) }]
+    }
+    return []
+  })
+}
+
+function commandPathTargets(command: string) {
+  const paths = [...command.matchAll(/(?:^|[\s"'`])((?:\.\.?\/|\/)?(?:[\w@.+-]+\/)*[\w@.+-]+\.[A-Za-z0-9_-]{1,16})(?=$|[\s"'`|;&)])/g)]
+  return [...new Set(paths.map((match) => match[1]))].slice(0, 8)
 }
 
 function operationForItem(value: unknown, statusOverride?: CodexOperationStatus): CodexOperation | null {
@@ -951,15 +1019,19 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
 
   if (itemType === 'commandexecution') {
     const command = typeof item.command === 'string' ? item.command.replace(/\s+/g, ' ').trim() : ''
+    const steps = commandActionSteps(item.commandActions ?? item.command_actions)
     const knownCommand = command.match(/(?:^|[\s"'|;&])(?:\/[\w.\/-]+\/)?(rg|grep|find|fd|ag|ack|cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])/i)?.[1]?.toLowerCase() ?? ''
     const isSearch = /^(?:rg|grep|find|fd|ag|ack)$/.test(knownCommand)
     const isRead = /^(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)$/.test(knownCommand)
     const detail = safeOperationDetail(command)
+    const paths = isSearch || isRead ? commandPathTargets(command) : []
     return {
       id,
       kind: isSearch ? 'search' : isRead ? 'file' : 'command',
       label: isSearch ? '搜索文件' : isRead ? '查看文件' : '执行命令',
       ...(detail ? { detail } : {}),
+      ...(paths.length > 0 ? { paths } : {}),
+      ...(steps.length > 0 ? { steps } : {}),
       status,
     }
   }
@@ -974,7 +1046,7 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     return { id, kind: 'file', label: '修改文件', ...(detail ? { detail } : {}), status }
   }
 
-  if (itemType === 'mcpToolCall' || itemType === 'dynamicToolCall' || itemType === 'collabAgentToolCall') {
+  if (itemType === 'mcptoolcall' || itemType === 'dynamictoolcall' || itemType === 'collabagenttoolcall') {
     const tool = [item.server, item.tool, item.name]
       .filter((part): part is string => typeof part === 'string' && part.trim().length > 0)
       .join(' · ')
@@ -987,12 +1059,19 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     const toolType = tool.toLowerCase()
     const isSearch = /search|find|grep|query/.test(toolType)
     const isFile = /read|file|directory|folder|list/.test(toolType)
-    const label = isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
+    const skillName = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)
+      ? ['skill', 'skill_name', 'skillName'].map((key) => (parsedArgs as Record<string, unknown>)[key])
+        .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
+      : undefined
+    const isSkill = /skill/.test(toolType)
+    const label = isSkill ? '读取技能' : isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
     const pathSummary = paths.length > 0
       ? `${paths.slice(0, 3).join('、')}${paths.length > 3 ? ` 等 ${paths.length} 个路径` : ''}`
       : ''
-    const detail = safeOperationDetail([tool, pathSummary].filter(Boolean).join(' · '))
-    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), status }
+    const detail = safeOperationDetail(isSkill
+      ? skillName?.trim() || tool
+      : [tool, pathSummary].filter(Boolean).join(' · '))
+    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), ...(paths.length > 0 ? { paths } : {}), status }
   }
 
   if (itemType === 'websearch') {
@@ -1001,7 +1080,11 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     return { id, kind: 'search', label: '搜索资料', ...(detail ? { detail } : {}), status }
   }
 
-  if (itemType === 'imageview') return { id, kind: 'tool', label: '查看图片', status }
+  if (itemType === 'imageview') {
+    const imagePath = operationPaths(item)[0]
+    const detail = safeOperationDetail(imagePath ?? '')
+    return { id, kind: 'tool', label: '查看图片', ...(imagePath ? { imagePath } : {}), ...(detail ? { detail } : {}), status }
+  }
   if (itemType === 'imagegeneration') return { id, kind: 'tool', label: '生成图片', status }
   if (itemType === 'subagentactivity') return { id, kind: 'tool', label: '运行子任务', status }
   return null
@@ -1012,7 +1095,11 @@ function upsertTurnOperation(current: CodexOperation[], operation: CodexOperatio
   for (const item of operation) {
     const index = next.findIndex((entry) => entry.id === item.id)
     if (index < 0) next = [...next, item]
-    else if (next[index] !== item) next = next.map((entry, entryIndex) => entryIndex === index ? item : entry)
+    else if (next[index] !== item) {
+      const previous = next[index]
+      const merged = !item.steps?.length && previous.steps?.length ? { ...item, steps: previous.steps } : item
+      next = next.map((entry, entryIndex) => entryIndex === index ? merged : entry)
+    }
   }
   return next.length > maxOperationsPerTurn ? next.slice(-maxOperationsPerTurn) : next
 }
@@ -1030,7 +1117,15 @@ function withTurnOperation(current: OperationsByTurn, turnId: string, operation:
 function mergeOperationsByTurn(current: OperationsByTurn, incoming: OperationsByTurn): OperationsByTurn {
   let merged = incoming
   for (const [turnId, operations] of Object.entries(current)) {
-    const next = upsertTurnOperation(merged[turnId] ?? [], operations)
+    const historical = merged[turnId] ?? []
+    const cachedWithHistoricalSteps = operations.map((operation) => {
+      if (operation.steps?.length) return operation
+      const historicalOperation = historical.find((entry) => entry.id === operation.id)
+      return historicalOperation?.steps?.length
+        ? { ...operation, steps: historicalOperation.steps }
+        : operation
+    })
+    const next = upsertTurnOperation(historical, cachedWithHistoricalSteps)
     if (merged === incoming) merged = { ...incoming }
     merged[turnId] = next
   }
@@ -1056,6 +1151,93 @@ function operationsFromThread(thread: { turns?: unknown[] }): OperationsByTurn {
   }, {})
 }
 
+function assistantItemText(value: unknown) {
+  if (typeof value === 'string') return value
+  if (!Array.isArray(value)) return ''
+  return value.map((part) => {
+    if (!part || typeof part !== 'object') return ''
+    const text = (part as Record<string, unknown>).text
+    return typeof text === 'string' ? text : ''
+  }).join('')
+}
+
+function activityTimelineEntryKey(entry: CodexActivityTimelineEntry) {
+  return entry.type === 'message' ? `message:${entry.itemId}` : `operation:${entry.operationId}`
+}
+
+function withTurnActivityEntry(
+  current: ActivityTimelineByTurn,
+  turnId: string,
+  incoming: CodexActivityTimelineEntry,
+) {
+  const commit = (entries: CodexActivityTimelineEntry[]) => {
+    const next = { ...current, [turnId]: entries }
+    const turnIds = Object.keys(next)
+    return turnIds.length > maxOperationHistoryTurns
+      ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, next[id]]))
+      : next
+  }
+  const previous = current[turnId] ?? []
+  const key = activityTimelineEntryKey(incoming)
+  const index = previous.findIndex((entry) => activityTimelineEntryKey(entry) === key)
+  if (index >= 0) {
+    const old = previous[index]
+    const nextEntry = old.type === 'message' && incoming.type === 'message'
+      ? { ...old, length: Math.max(old.length, incoming.length) }
+      : incoming
+    if (old.type === nextEntry.type
+      && (old.type === 'message' && nextEntry.type === 'message' && old.length === nextEntry.length
+        || old.type === 'operation' && nextEntry.type === 'operation' && old.itemId === nextEntry.itemId)) return current
+    return commit(previous.map((entry, entryIndex) => entryIndex === index ? nextEntry : entry))
+  }
+  const entries = [...previous, incoming]
+  return commit(entries.length > maxActivityTimelineEntriesPerTurn
+    ? entries.slice(-maxActivityTimelineEntriesPerTurn)
+    : entries)
+}
+
+function mergeActivityTimelineByTurn(incoming: ActivityTimelineByTurn, current: ActivityTimelineByTurn, preserveTurnId: string | null = null): ActivityTimelineByTurn {
+  let merged: ActivityTimelineByTurn = { ...incoming }
+  const canRetainAllCurrent = Object.keys(incoming).length === 0
+  for (const [turnId, entries] of Object.entries(current)) {
+    if (!merged[turnId] && !canRetainAllCurrent && turnId !== preserveTurnId) continue
+    for (const entry of entries) {
+      merged = withTurnActivityEntry(merged, turnId, entry)
+    }
+  }
+  const turnIds = Object.keys(merged)
+  return turnIds.length > maxOperationHistoryTurns
+    ? Object.fromEntries(turnIds.slice(-maxOperationHistoryTurns).map((id) => [id, merged[id]]))
+    : merged
+}
+
+function activityTimelineFromThread(thread: { turns?: unknown[] }): ActivityTimelineByTurn {
+  const turns = Array.isArray(thread.turns) ? thread.turns.slice(-maxOperationHistoryTurns) : []
+  return turns.reduce<ActivityTimelineByTurn>((groups, turnValue, turnIndex) => {
+    if (!turnValue || typeof turnValue !== 'object') return groups
+    const turn = turnValue as Record<string, unknown>
+    const turnId = typeof turn.id === 'string' ? turn.id : `history-turn-${turnIndex}`
+    const items = Array.isArray(turn.items) ? turn.items : []
+    let timeline: CodexActivityTimelineEntry[] = []
+    for (const [itemIndex, itemValue] of items.entries()) {
+      if (!itemValue || typeof itemValue !== 'object') continue
+      const item = itemValue as Record<string, unknown>
+      const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      const itemId = typeof item.id === 'string' && item.id ? item.id : `history-${turnId}-${itemIndex}`
+      if (itemType === 'agentmessage') {
+        const length = assistantItemText(item.text).length
+        if (length > 0) timeline.push({ type: 'message', itemId, length })
+        continue
+      }
+      const operation = operationForItem(item)
+      if (operation) timeline.push({ type: 'operation', itemId, operationId: operation.id })
+    }
+    if (timeline.length > maxActivityTimelineEntriesPerTurn) timeline = timeline.slice(-maxActivityTimelineEntriesPerTurn)
+    if (timeline.length > 0) groups[turnId] = timeline
+    return groups
+  }, {})
+}
+
 function finishTurnOperations(current: OperationsByTurn, turnId: string, status: CodexOperationStatus): OperationsByTurn {
   const operations = current[turnId]
   if (!operations?.some((operation) => operation.status === 'running')) return current
@@ -1071,7 +1253,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const loadThreads = options.loadThreads ?? true
   const loadModels = options.loadModels ?? true
   const prefetchHistory = options.prefetchHistory ?? false
-  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : null)
+  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : options.initialThreadId?.trim() || null)
   const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)
@@ -1086,9 +1268,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null),
   )
   const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
+  const activeThreadRef = useRef(activeThread)
+  activeThreadRef.current = activeThread
   const messagesRef = useRef(messages)
   messagesRef.current = messages
   const [isRunning, setIsRunning] = useState(false)
+  const isRunningRef = useRef(isRunning)
+  isRunningRef.current = isRunning
   // This is intentionally state as well as a ref: the ref lets socket events
   // make immediate decisions, while the state tells the UI which turn is not
   // finished yet so in-progress file changes can be shown beside its reply.
@@ -1099,6 +1285,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [activity, setActivity] = useState<CodexActivity | null>(null)
   const [fileChangesByTurn, setFileChangesByTurn] = useState<FileChangesByTurn>({})
   const [operationsByTurn, setOperationsByTurn] = useState<OperationsByTurn>({})
+  const [activityTimelineByTurn, setActivityTimelineByTurn] = useState<ActivityTimelineByTurn>({})
   const [writerConflict, setWriterConflict] = useState(false)
   const [updatingApprovalPolicy, setUpdatingApprovalPolicy] = useState(false)
   const [loadingHistory, setLoadingHistory] = useState(() => initialActiveThreadId !== null)
@@ -1131,6 +1318,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const historyReadSequence = useRef(0)
   const activityItemId = useRef<string | null>(null)
   const operationsByTurnRef = useRef<OperationsByTurn>({})
+  const activityTimelineByTurnRef = useRef<ActivityTimelineByTurn>({})
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantTurnId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
@@ -1149,6 +1337,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const threadListLoadedRef = useRef(false)
   const threadListFetchedAtRef = useRef(0)
   const threadListRequest = useRef<Promise<CodexThread[] | null> | null>(null)
+  const pendingThreadHistoryRefresh = useRef(new Set<string>())
   const prefetchingThreadIds = useRef(new Set<string>())
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
@@ -1165,6 +1354,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const editingQueuedMessageByThread = useRef<Record<string, string>>({})
   const editingQueuedMessageThreadById = useRef(new Map<string, string>())
   const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
+
+  useEffect(() => {
+    socketRef.current?.subscribeThread(activeThread?.id ?? null)
+  }, [activeThread?.id])
 
   const publishServerQueue = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
     serverQueuedMessagesByThreadRef.current = { ...serverQueuedMessagesByThreadRef.current, [threadId]: queue }
@@ -1518,7 +1711,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [writePersistentThreadCacheEntry])
 
-  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Partial<Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn' | 'operationsByTurn' | 'complete'>>) => {
+  const cacheThreadSnapshot = useCallback((thread: CodexThread, nextMessages: CodexMessage[], state?: Partial<Pick<ThreadCacheEntry, 'running' | 'turnId' | 'fileChangesByTurn' | 'operationsByTurn' | 'activityTimelineByTurn' | 'complete'>>) => {
     if (deletedThreadIds.current.has(thread.id)) return
     const characters = cachedHistoryCharacters(nextMessages)
     const cache = threadHistoryCache.current
@@ -1528,6 +1721,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       messages: nextMessages,
       fileChangesByTurn: state?.fileChangesByTurn ?? previous?.fileChangesByTurn ?? {},
       operationsByTurn: state?.operationsByTurn ?? previous?.operationsByTurn ?? {},
+      activityTimelineByTurn: state?.activityTimelineByTurn ?? previous?.activityTimelineByTurn ?? {},
       running: state?.running ?? previous?.running ?? threadIsRunning(thread),
       turnId: state?.turnId ?? previous?.turnId ?? null,
       characters,
@@ -1554,6 +1748,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const entry = snapshot.entry
     const restored: ThreadCacheEntry = {
       ...entry,
+      activityTimelineByTurn: entry.activityTimelineByTurn ?? {},
       thread: compactThread(entry.thread),
       characters: cachedHistoryCharacters(entry.messages),
       complete: true,
@@ -1565,6 +1760,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       turnId: restored.turnId,
       fileChangesByTurn: restored.fileChangesByTurn,
       operationsByTurn: restored.operationsByTurn,
+      activityTimelineByTurn: restored.activityTimelineByTurn,
       complete: true,
     })
     return threadHistoryCache.current.get(threadId) ?? restored
@@ -1572,27 +1768,57 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const commitTurnOperation = useCallback((threadId: string | null, turnId: string | null, operation: CodexOperation) => {
     if (!threadId || !turnId) return
+    const timelineEntry: CodexActivityTimelineEntry = { type: 'operation', itemId: operation.id, operationId: operation.id }
     if (threadId === activeThreadId.current) {
       const next = withTurnOperation(operationsByTurnRef.current, turnId, operation)
+      const nextTimeline = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, timelineEntry)
       operationsByTurnRef.current = next
+      activityTimelineByTurnRef.current = nextTimeline
       setOperationsByTurn(next)
+      setActivityTimelineByTurn(nextTimeline)
       const cached = threadHistoryCache.current.get(threadId)
       if (cached) cacheThreadSnapshot(cached.thread, cached.messages, {
         running: cached.running,
         turnId: cached.turnId,
         fileChangesByTurn: cached.fileChangesByTurn,
         operationsByTurn: next,
+        activityTimelineByTurn: nextTimeline,
       })
       return
     }
     const cached = threadHistoryCache.current.get(threadId)
     if (!cached) return
     const next = withTurnOperation(cached.operationsByTurn, turnId, operation)
+    const nextTimeline = withTurnActivityEntry(cached.activityTimelineByTurn, turnId, timelineEntry)
     cacheThreadSnapshot(cached.thread, cached.messages, {
       running: cached.running,
       turnId: cached.turnId,
       fileChangesByTurn: cached.fileChangesByTurn,
       operationsByTurn: next,
+      activityTimelineByTurn: nextTimeline,
+    })
+  }, [cacheThreadSnapshot])
+
+  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number) => {
+    if (!threadId || !turnId || !itemId) return
+    const entry: CodexActivityTimelineEntry = { type: 'message', itemId, length }
+    if (threadId === activeThreadId.current) {
+      const next = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, entry)
+      if (next === activityTimelineByTurnRef.current) return
+      activityTimelineByTurnRef.current = next
+      setActivityTimelineByTurn(next)
+      return
+    }
+    const cached = threadHistoryCache.current.get(threadId)
+    if (!cached) return
+    const next = withTurnActivityEntry(cached.activityTimelineByTurn, turnId, entry)
+    if (next === cached.activityTimelineByTurn) return
+    cacheThreadSnapshot(cached.thread, cached.messages, {
+      running: cached.running,
+      turnId: cached.turnId,
+      fileChangesByTurn: cached.fileChangesByTurn,
+      operationsByTurn: cached.operationsByTurn,
+      activityTimelineByTurn: next,
     })
   }, [cacheThreadSnapshot])
 
@@ -1650,6 +1876,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
       const cachedThread = cache.get(thread.id)
       const loadedMessages = preserveCurrentImages(messagesFromThread(loadedThread), cachedThread?.messages ?? [])
+      const activityTimeline = mergeActivityTimelineByTurn(
+        activityTimelineFromThread(loadedThread),
+        cachedThread?.activityTimelineByTurn ?? {},
+        cachedThread?.running ? cachedThread.turnId : null,
+      )
       cacheThreadSnapshot(loadedThread, loadedMessages, {
         ...latestTurnState(loadedThread),
         complete: true,
@@ -1662,6 +1893,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           operationsFromThread(loadedThread),
           cachedThread?.operationsByTurn ?? {},
         ),
+        activityTimelineByTurn: activityTimeline,
       })
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
@@ -1762,6 +1994,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     setFileChangesByTurn({})
     operationsByTurnRef.current = {}
     setOperationsByTurn({})
+    activityTimelineByTurnRef.current = {}
+    setActivityTimelineByTurn({})
     writerConflictRef.current = false
     setWriterConflict(false)
     activityItemId.current = null
@@ -1777,7 +2011,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [])
 
   const refreshThreads = useCallback(async () => {
-    if (!loadThreads || handedOffRef.current) return null
+    if (handedOffRef.current) return null
     if (threadListRequest.current) return threadListRequest.current
     const request = (async () => {
       try {
@@ -1785,7 +2019,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         threadListRef.current = next
         threadListLoadedRef.current = true
         threadListFetchedAtRef.current = Date.now()
-        setThreads(next)
+        if (loadThreads) setThreads(next)
         scheduleThreadPrefetch(next)
         return next
       } catch (reason) {
@@ -1883,11 +2117,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     revision = historyRevision.current,
     silent = false,
     preserveRunningTurnId: string | null = null,
+    snapshot?: CodexThreadDetails,
   ) => {
     if (handedOffRef.current) return false
     const readSequence = ++historyReadSequence.current
     try {
-      const thread = await codexRemoteClient.readThread(token, threadId)
+      const thread = snapshot ?? await codexRemoteClient.readThread(token, threadId)
       if (activeThreadId.current !== threadId || revision !== historyRevision.current || readSequence !== historyReadSequence.current) return false
       if (persistActiveThread) persistActiveThreadId(thread.id)
       setActiveThread((current) => sameActiveThread(current, thread) ? current : thread)
@@ -1922,6 +2157,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         operationsFromThread(thread),
         thread.id === activeThreadId.current ? operationsByTurnRef.current : currentOperations,
       )
+      const historicalActivityTimelineByTurn = mergeActivityTimelineByTurn(
+        activityTimelineFromThread(thread),
+        thread.id === activeThreadId.current
+          ? activityTimelineByTurnRef.current
+          : threadHistoryCache.current.get(thread.id)?.activityTimelineByTurn ?? {},
+        preserveRunningTurnId ?? snapshotTurnState.turnId ?? activeTurnId.current,
+      )
       if (persistActiveThread) persistActiveThreadCache(thread, messagesWithLocalTiming)
       const historyTurnState = snapshotTurnState
       const preserveStartedTurn = preserveRunningTurnId !== null && activeTurnId.current === preserveRunningTurnId
@@ -1945,6 +2187,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         complete: true,
         fileChangesByTurn: historicalFileChangesByTurn,
         operationsByTurn: historicalOperationsByTurn,
+        activityTimelineByTurn: historicalActivityTimelineByTurn,
       })
       setMessages((current) => {
         const remainingLocalMessages = deliveredQueuedIds.size > 0
@@ -1966,6 +2209,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setFileChangesByTurn(historicalFileChangesByTurn)
       operationsByTurnRef.current = historicalOperationsByTurn
       setOperationsByTurn(historicalOperationsByTurn)
+      activityTimelineByTurnRef.current = historicalActivityTimelineByTurn
+      setActivityTimelineByTurn(historicalActivityTimelineByTurn)
       setActiveTurnId(running ? latestTurnId : null)
       if (running) startTurnTimerForTurn(latestTurnId, historyTurnState.startedAt)
       else {
@@ -2022,16 +2267,60 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [cacheThreadSnapshot, finishTurnTimer, onUnauthorized, persistActiveThread, reconcileQueuedHistory, resetStreamingAssistant, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, token, updateQueuedMessages])
 
-  const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string) => {
+  const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string, recoverImages = false) => {
     if (!threadId || threadId !== activeThreadId.current) return
     if ([...pendingTurnDeliveries.current.values()].some((delivery) => delivery.threadId === threadId)) return
     const cachedMessages = threadHistoryCache.current.get(threadId)?.messages ?? []
-    if (messageItemId && (messagesRef.current.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId)
+    if (!recoverImages && messageItemId && (messagesRef.current.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId)
       || cachedMessages.some((message) => message.id === messageItemId || message.sourceItemId === messageItemId))) return
     if (!messageItemId && turnId && messagesRef.current.some((message) => message.role === 'user' && message.turnId === turnId)) return
     const revision = ++historyRevision.current
     void loadThread(threadId, revision, true, turnId)
   }, [loadThread])
+
+  const applyActiveThreadMetadata = useCallback((latestThread: CodexThread) => {
+    if (!latestThread.id || latestThread.id !== activeThreadId.current) return
+    setActiveThread((current) => {
+      if (!current || current.id !== latestThread.id) return current
+      const merged = { ...current, ...latestThread }
+      const currentTimestamp = threadTimestamp(current)
+      const latestTimestamp = threadTimestamp(latestThread)
+      if (currentTimestamp > latestTimestamp && current.updatedAt !== undefined) {
+        merged.updatedAt = current.updatedAt
+      }
+      return sameActiveThread(current, merged) ? current : merged
+    })
+  }, [])
+
+  const refreshActiveThreadIfChanged = useCallback(async () => {
+    const threadId = activeThreadId.current
+    if (handedOffRef.current) return
+    const nextThreads = await refreshThreads()
+    if (!threadId || !nextThreads || activeThreadId.current !== threadId) return
+    const latestThread = nextThreads.find((thread) => thread.id === threadId)
+    if (!latestThread) return
+
+    const cached = threadHistoryCache.current.get(threadId)
+    const locallyRunning = isRunningRef.current || activeTurnId.current !== null
+    const serverIdle = ['idle', 'completed', 'interrupted', 'failed'].includes(latestThread.status?.type ?? '')
+    if (locallyRunning && !serverIdle) return
+    if (threadIsRunning(latestThread)) {
+      pendingThreadHistoryRefresh.current.add(threadId)
+      return
+    }
+
+    const currentThread = cached?.thread ?? (activeThreadRef.current?.id === threadId ? activeThreadRef.current : null)
+    const needsHistoryRefresh = (locallyRunning && serverIdle)
+      || pendingThreadHistoryRefresh.current.has(threadId)
+      || !currentThread
+      || threadHistoryVersionChanged(currentThread, latestThread)
+    if (needsHistoryRefresh) {
+      const loaded = await loadThread(threadId, historyRevision.current, true)
+      if (loaded) pendingThreadHistoryRefresh.current.delete(threadId)
+    } else {
+      applyActiveThreadMetadata(latestThread)
+    }
+  }, [applyActiveThreadMetadata, loadThread, refreshThreads])
 
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
@@ -2042,6 +2331,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       turnId: activeTurnId.current,
       fileChangesByTurn,
       operationsByTurn,
+      activityTimelineByTurn: activityTimelineByTurnRef.current,
     })
   }, [activeThread, cacheThreadSnapshot, fileChangesByTurn, isRunning, messages, operationsByTurn])
 
@@ -2594,7 +2884,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     restoringThreadId.current = threadId
     if (messagesRef.current.length === 0) setLoadingHistory(true)
     try {
-      if (loadThreads) await refreshThreads()
+      await refreshThreads()
       let cached = threadHistoryCache.current.get(threadId) ?? null
       if (!cached?.complete) cached = await restorePersistentThreadCache(threadId) ?? cached
       if (activeThreadId.current !== threadId) return
@@ -2607,6 +2897,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         setFileChangesByTurn(cached.fileChangesByTurn)
         operationsByTurnRef.current = cached.operationsByTurn
         setOperationsByTurn(cached.operationsByTurn)
+        activityTimelineByTurnRef.current = cached.activityTimelineByTurn
+        setActivityTimelineByTurn(cached.activityTimelineByTurn)
         setIsRunning(Boolean(cached.running || (latestThread && threadIsRunning(latestThread))))
         setActiveTurnId(cached.running ? cached.turnId : null)
         setLoadingHistory(false)
@@ -2632,7 +2924,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       restoringThreadId.current = null
       if (activeThreadId.current === threadId) setLoadingHistory(false)
     }
-  }, [loadThread, loadThreads, refreshThreads, restorePersistentThreadCache, setActiveTurnId])
+  }, [loadThread, refreshThreads, restorePersistentThreadCache, setActiveTurnId])
 
   const verifyQueuedThreadAndAdvance = useCallback(async (threadId: string) => {
     if (handedOffRef.current || !queuedMessagesByThreadRef.current[threadId]?.length) return false
@@ -2644,7 +2936,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         && threadHasAnotherActiveController(threadId, queueControllerId.current)) return false
       if (!queuedMessagesByThreadRef.current[threadId]?.length) return false
       if (activeThreadId.current === threadId) {
-        await loadThread(threadId, historyRevision.current, true)
+        await loadThread(threadId, historyRevision.current, true, null, thread)
         return false
       }
       const historyMessages = messagesFromThread(thread)
@@ -2691,13 +2983,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
     if (event.type === 'threads.changed') {
-      void refreshThreads()
-      if (activeThreadId.current && writerRefreshTimer.current === undefined) {
-        writerRefreshTimer.current = window.setTimeout(() => {
-          writerRefreshTimer.current = undefined
-          if (activeThreadId.current) void loadThread(activeThreadId.current, historyRevision.current, true)
-        }, 700)
-      }
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = window.setTimeout(() => {
+        writerRefreshTimer.current = undefined
+        void refreshActiveThreadIfChanged()
+      }, 1000)
       return
     }
     if (event.type === 'connection') {
@@ -2896,7 +3186,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       startTurnTimerForTurn(turnId, startedAt)
       setActivity({ label: interruptRequestedThreadId.current === turnThreadId ? '正在停止…' : '正在思考' })
       activityItemId.current = null
-      if (turnThreadId) refreshThreadForRemoteMessage(turnThreadId, turnId)
       return
     }
     if (event.method === 'turn/completed') {
@@ -2969,8 +3258,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // the optimistic queued user message while its new turn is starting.
       if (queuedThreadId && canReleaseQueue && !needsHistoryCheck) void startNextQueuedMessage(queuedThreadId)
       if (refreshThreadId) {
-        void refreshThreads()
-        void loadThread(refreshThreadId, refreshRevision)
+        pendingThreadHistoryRefresh.current.delete(refreshThreadId)
+        void refreshThreads().then((nextThreads) => {
+          if (!nextThreads || activeThreadId.current !== refreshThreadId || historyRevision.current !== refreshRevision) return
+          const latestThread = nextThreads.find((thread) => thread.id === refreshThreadId)
+          if (latestThread) applyActiveThreadMetadata(latestThread)
+        })
+        if (needsHistoryCheck) void loadThread(refreshThreadId, refreshRevision, true)
       }
       return
     }
@@ -3013,6 +3307,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             const next = insertRemoteUserMessage(current, remoteUserMessage)
             return sameMessages(current, next) ? current : next
           })
+        }
+        const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
+          if (!part || typeof part !== 'object') return false
+          const content = part as Record<string, unknown>
+          return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
+        })
+        if (hasUnresolvedImages && !pendingLocalDelivery) {
+          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
         } else if (!remoteUserMessage) {
           refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
         }
@@ -3020,6 +3322,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem(item, 'running')
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
+      if (itemType === 'agentmessage' && turnId && typeof item?.id === 'string') {
+        commitTurnActivityMessage(activeThreadId.current, turnId, item.id, assistantItemText(item.text).length)
+      }
       activityItemId.current = typeof item?.id === 'string' ? item.id : null
       setIsRunning(true)
       startTurnTimerForTurn(turnId)
@@ -3059,6 +3364,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       const part = streamingAssistantParts.current.get(itemId) ?? ''
       streamingAssistantParts.current.set(itemId, part + delta)
+      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length)
       const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       activityItemId.current = itemId
@@ -3076,6 +3382,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       const itemId = typeof item?.id === 'string' ? item.id : null
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'agentmessage' && itemId && turnId) {
+        const text = assistantItemText(item?.text)
+        commitTurnActivityMessage(activeThreadId.current, turnId, itemId, text.length || streamingAssistantParts.current.get(itemId)?.length || 0)
+      }
       if (itemType !== 'agentmessage') {
         if (itemId && activityItemId.current === itemId) {
           activityItemId.current = null
@@ -3095,7 +3405,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshActiveThreadIfChanged, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -3107,6 +3417,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     let disposed = false
     let retryTimer: number | undefined
+    let stableTimer: number | undefined
     let retryDelay = 500
     let socketGeneration = 0
 
@@ -3127,10 +3438,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           setConnectionState('disconnected')
           return
         }
+        const wasConnected = connectionRef.current === 'connected'
         setConnectionState(nextState)
-        if (nextState !== 'connected') resumedThreadId.current = null
+        if (nextState !== 'connected') {
+          resumedThreadId.current = null
+          if (stableTimer !== undefined) window.clearTimeout(stableTimer)
+          stableTimer = undefined
+        }
         if (nextState === 'connected') {
-          retryDelay = 500
+          if (wasConnected) return
+          stableTimer = window.setTimeout(() => { retryDelay = 500 }, 30_000)
           void restoreActiveThread()
           if (loadThreads) void refreshThreads()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
@@ -3138,15 +3455,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           retryTimer = window.setTimeout(() => {
             retryTimer = undefined
             connect()
-          }, retryDelay)
+          }, Math.round(retryDelay * (0.8 + Math.random() * 0.4)))
           retryDelay = Math.min(10_000, retryDelay * 2)
         }
-      })
+      }, activeThreadId.current)
     }
     reconnectRef.current = connect
 
     let wasHidden = document.visibilityState === 'hidden'
     let lastBackgroundReconnectAt = 0
+    let lastRecoveryAt = 0
+    let recoveryInFlight = false
     const resumeFromBackground = (force = false) => {
       if (disposed || handedOffRef.current) return
       // Mobile browsers can fire visibilitychange and pageshow back-to-back.
@@ -3159,6 +3478,33 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       retryDelay = 500
       connect(force)
     }
+    const recoverConnection = async () => {
+      if (disposed || handedOffRef.current || document.hidden || recoveryInFlight) return
+      const now = Date.now()
+      if (now - lastRecoveryAt < 800) return
+      lastRecoveryAt = now
+      const socket = socketRef.current
+      if (!socket || connectionRef.current !== 'connected') {
+        resumeFromBackground(true)
+        return
+      }
+      recoveryInFlight = true
+      const generation = socketGeneration
+      try {
+        const healthy = await socket.checkConnection()
+        if (disposed || generation !== socketGeneration || socketRef.current !== socket || document.visibilityState === 'hidden') return
+        if (!healthy) {
+          resumeFromBackground(true)
+          return
+        }
+        const threadId = activeThreadId.current
+        const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
+        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current) void restoreActiveThread()
+        else void refreshActiveThreadIfChanged()
+      } finally {
+        recoveryInFlight = false
+      }
+    }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         wasHidden = true
@@ -3166,25 +3512,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       if (!wasHidden) return
       wasHidden = false
-      if (loadThreads) void refreshThreads()
-      const threadId = activeThreadId.current
-      const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
-      // Android WebViews can leave a socket marked "connected" after the app
-      // was backgrounded. Re-read only when a queue is waiting, so a missed
-      // turn/completed event cannot strand its next message.
-      if (connectionRef.current === 'connected') {
-        if (hasQueuedMessages) void restoreActiveThread()
-        return
-      }
-      resumeFromBackground()
+      void recoverConnection()
     }
     const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) resumeFromBackground(true)
+      if (event.persisted) void recoverConnection()
     }
-    const handleOnline = () => resumeFromBackground(true)
+    const handleOnline = () => { void recoverConnection() }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('online', handleOnline)
+    window.addEventListener('codex-remote:resume', handleOnline)
 
     void (async () => {
       try {
@@ -3218,6 +3555,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       disposed = true
       socketGeneration += 1
       if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      if (stableTimer !== undefined) window.clearTimeout(stableTimer)
       if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
       writerRefreshTimer.current = undefined
       if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
@@ -3232,29 +3570,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('online', handleOnline)
+      window.removeEventListener('codex-remote:resume', handleOnline)
     }
-  }, [enabled, loadModels, loadThreads, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
-
-  useEffect(() => {
-    if (!enabled) return
-    let disposed = false
-    let timer: number | undefined
-    const reconcileHistory = async () => {
-      try {
-        const threadId = activeThreadId.current
-        if (threadId && !handedOffRef.current && document.visibilityState === 'visible') {
-          await loadThread(threadId, historyRevision.current, true)
-        }
-      } finally {
-        if (!disposed) timer = window.setTimeout(reconcileHistory, 4000)
-      }
-    }
-    timer = window.setTimeout(reconcileHistory, 4000)
-    return () => {
-      disposed = true
-      if (timer !== undefined) window.clearTimeout(timer)
-    }
-  }, [enabled, loadThread])
+  }, [enabled, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
   const selectThread = useCallback(async (thread: CodexThread) => {
     if (handedOffRef.current) return
@@ -3293,6 +3611,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           messages: persistedCache.messages,
           fileChangesByTurn: {},
           operationsByTurn: {},
+          activityTimelineByTurn: {},
           running: false,
           turnId: null,
           characters: cachedHistoryCharacters(persistedCache.messages),
@@ -3301,6 +3620,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         cacheThreadSnapshot(persistedCache.thread, persistedCache.messages, {
           fileChangesByTurn: {},
           operationsByTurn: {},
+          activityTimelineByTurn: {},
           running: false,
           turnId: null,
           complete: false,
@@ -3316,6 +3636,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setFileChangesByTurn(entry.fileChangesByTurn)
       operationsByTurnRef.current = entry.operationsByTurn
       setOperationsByTurn(entry.operationsByTurn)
+      activityTimelineByTurnRef.current = entry.activityTimelineByTurn
+      setActivityTimelineByTurn(entry.activityTimelineByTurn)
       setIsRunning(cachedRunning)
       setActiveTurnId(cachedRunning ? entry.turnId : null)
       setLoadingHistory(false)
@@ -3328,6 +3650,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setFileChangesByTurn({})
       operationsByTurnRef.current = {}
       setOperationsByTurn({})
+      activityTimelineByTurnRef.current = {}
+      setActivityTimelineByTurn({})
       setIsRunning(threadIsRunning(thread))
       setActiveTurnId(null)
     }
@@ -3443,6 +3767,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setFileChangesByTurn({})
       operationsByTurnRef.current = {}
       setOperationsByTurn({})
+      activityTimelineByTurnRef.current = {}
+      setActivityTimelineByTurn({})
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
@@ -3615,7 +3941,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             }
             setQueueRecoveryReadyThreadId(running ? null : thread.id)
             setError(null)
-            void loadThread(thread.id, ++historyRevision.current, true)
+            void loadThread(thread.id, ++historyRevision.current, true, null, recoveredThread)
             void refreshThreads()
             return true
           }
@@ -3783,6 +4109,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     activity,
     fileChangesByTurn,
     operationsByTurn,
+    activityTimelineByTurn,
     writerConflict,
     handedOff,
     handoffInProgress,

@@ -1,5 +1,5 @@
 [Unit]
-Description=Codex Remote development service
+Description=Codex Remote service
 After=network-online.target
 After=codex-remote-tmux.service
 Requires=codex-remote-tmux.service
@@ -15,7 +15,8 @@ EnvironmentFile=-/etc/codex-remote.env
 Environment=HOME=/root
 Environment=CODEX_REMOTE_WORKSPACE=/code
 Environment=PATH=/usr/local/lib/node-v24.19.0-linux-x64/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/bin/node /code/codex-remote/scripts/dev.mjs
+ExecStartPre=/usr/local/bin/node /code/codex-remote/node_modules/vite/bin/vite.js build /code/codex-remote
+ExecStart=/usr/local/bin/node /code/codex-remote/scripts/dev.mjs --production
 Restart=always
 RestartSec=3
 KillMode=control-group
