@@ -12,6 +12,8 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     let frame: number | undefined
     let settleTimer: number | undefined
     let keyboardTransitionTimer: number | undefined
+    let nativeLayoutHeight: number | undefined
+    let nativeLayoutWidth = Math.round(window.innerWidth)
     let checkingForUpdate = false
     let lastUpdateCheckAt = 0
     const editingInput = () => document.activeElement instanceof HTMLElement
@@ -77,8 +79,23 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
         && document.activeElement.matches('.message-composer textarea, .message-composer input:not([type="file"]), .message-composer [contenteditable="true"]')
       const nativeViewportIsPanned = nativeBridge && offsetTop > 1
       const browserViewportIsPanned = !nativeBridge && focusedComposer && offsetTop > 1
+      if (nativeKeyboardInsetAvailable) {
+        const layoutWidth = Math.round(window.innerWidth)
+        if (layoutWidth !== nativeLayoutWidth) {
+          nativeLayoutWidth = layoutWidth
+          nativeLayoutHeight = undefined
+        }
+        if (nativeKeyboardInset === 0 && !editingInput()) {
+          nativeLayoutHeight = layoutHeight
+        } else {
+          // WebView can briefly report an innerHeight that already excludes the
+          // IME while the native bridge reports the full IME inset. Retain the
+          // pre-keyboard height so that inset is never subtracted twice.
+          nativeLayoutHeight = Math.max(nativeLayoutHeight ?? 0, layoutHeight)
+        }
+      }
       const height = nativeKeyboardInsetAvailable
-        ? Math.max(160, layoutHeight - nativeKeyboardInset)
+        ? Math.max(160, (nativeLayoutHeight ?? layoutHeight) - nativeKeyboardInset)
         : nativeViewportIsPanned
           ? Math.max(layoutHeight, pannedVisualBottom)
           : browserViewportIsPanned
@@ -114,10 +131,24 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     }
     const handleVisibilityChange = () => {
       if (document.visibilityState !== 'visible') return
+      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
       scheduleViewportSync()
       void checkForUpdate()
     }
-    const handleAppResume = () => { void checkForUpdate() }
+    const handleAppResume = () => {
+      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
+      scheduleViewportSync()
+      void checkForUpdate()
+    }
+    const handlePageShow = () => {
+      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) <= 0) nativeLayoutHeight = undefined
+      scheduleViewportSync()
+    }
+    const handleOrientationChange = () => {
+      nativeLayoutHeight = undefined
+      nativeLayoutWidth = Math.round(window.innerWidth)
+      scheduleViewportSync()
+    }
     const handleFocusChange = (event: FocusEvent) => {
       if (event.target instanceof HTMLElement && event.target.matches('.message-composer textarea')) markKeyboardTransition()
       scheduleViewportSync()
@@ -129,9 +160,9 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
     const viewport = window.visualViewport
     scheduleViewportSync()
     window.addEventListener('resize', scheduleViewportSync)
-    window.addEventListener('orientationchange', scheduleViewportSync)
-    window.screen.orientation?.addEventListener('change', scheduleViewportSync)
-    window.addEventListener('pageshow', scheduleViewportSync)
+    window.addEventListener('orientationchange', handleOrientationChange)
+    window.screen.orientation?.addEventListener('change', handleOrientationChange)
+    window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('codex-remote:resume', handleAppResume)
     document.addEventListener('visibilitychange', handleVisibilityChange)
     document.addEventListener('focusin', handleFocusChange)
@@ -145,9 +176,9 @@ function MobileViewportGuard({ children }: { children: ReactNode }) {
       if (keyboardTransitionTimer !== undefined) window.clearTimeout(keyboardTransitionTimer)
       delete document.documentElement.dataset.keyboardTransition
       window.removeEventListener('resize', scheduleViewportSync)
-      window.removeEventListener('orientationchange', scheduleViewportSync)
-      window.screen.orientation?.removeEventListener('change', scheduleViewportSync)
-      window.removeEventListener('pageshow', scheduleViewportSync)
+      window.removeEventListener('orientationchange', handleOrientationChange)
+      window.screen.orientation?.removeEventListener('change', handleOrientationChange)
+      window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('codex-remote:resume', handleAppResume)
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       document.removeEventListener('focusin', handleFocusChange)
