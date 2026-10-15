@@ -752,6 +752,21 @@ public class MainActivity extends Activity {
         }
 
         @JavascriptInterface
+        public String readClipboardText() {
+            try {
+                ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                if (clipboard == null || !clipboard.hasPrimaryClip()) return null;
+                ClipData primaryClip = clipboard.getPrimaryClip();
+                if (primaryClip == null || primaryClip.getItemCount() == 0) return null;
+                CharSequence value = primaryClip.getItemAt(0).coerceToText(MainActivity.this);
+                return value == null ? "" : value.toString();
+            } catch (RuntimeException error) {
+                Log.w("CodexRemoteWebView", "Unable to read from the system clipboard", error);
+                return null;
+            }
+        }
+
+        @JavascriptInterface
         public void changeEndpoint() {
             runOnUiThread(() -> showConnector(activeEndpoint, null));
         }

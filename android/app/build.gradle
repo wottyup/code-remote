@@ -11,7 +11,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 128
-        versionName '0.16.0-dev.13'
+        versionName '0.17.0-dev.1'
     }
 
     buildFeatures {

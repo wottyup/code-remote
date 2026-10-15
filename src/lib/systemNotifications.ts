@@ -1,6 +1,7 @@
 export interface AndroidNotificationBridge {
   changeEndpoint?: () => void
   copyToClipboard?: (text: string) => boolean
+  readClipboardText?: () => string | null
   getComposerBottomInsetDp?: () => number
   getKeyboardInsetDp?: () => number
   getStatusBarInsetDp?: () => number
