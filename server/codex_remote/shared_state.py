@@ -6,7 +6,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
@@ -309,7 +308,6 @@ class SharedQueueService:
         self._locks: dict[str, asyncio.Lock] = {}
         self._runner: asyncio.Task[None] | None = None
         self._listener: asyncio.Task[None] | None = None
-        self._submit_can_steer = os.name == "nt"
         self._closed = False
 
     def _lock(self, thread_id: str) -> asyncio.Lock:
@@ -453,9 +451,7 @@ class SharedQueueService:
             try:
                 if self.codex.handed_off:
                     return False
-                return await self._send_now(
-                    thread_id, payload["id"], allow_steer=self._submit_can_steer, require_head=True,
-                )
+                return await self._send_now(thread_id, payload["id"], allow_steer=False, require_head=True)
             except CodexRuntimeError:
                 await self._block(thread_id, "暂时无法确认 Codex 状态，连接恢复后自动发送")
                 return False

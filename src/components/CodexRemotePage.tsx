@@ -3302,10 +3302,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     if (workspace?.active) {
       const shouldOpen = shouldOpenMobileWorkspaceAfterDrag(workspace.offset, workspace.panelWidth, action)
-      remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity')
       if (shouldOpen) openWorkspacePanel()
       else setWorkspaceOpen(false)
-      window.requestAnimationFrame(() => setWorkspaceDragging(false))
+      window.requestAnimationFrame(() => {
+        setWorkspaceDragging(false)
+        window.requestAnimationFrame(() => remoteShell.current?.style.removeProperty('--workspace-backdrop-opacity'))
+      })
       if (event.cancelable) event.preventDefault()
       return
     }
