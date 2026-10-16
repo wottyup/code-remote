@@ -2025,7 +2025,7 @@ class MainActivity : Activity() {
         val text = if (currentMode == "claude-code") {
             "与 Claude Code 完成一个伟大项目"
         } else {
-            "与 Codex Remote 完成一个伟大项目"
+            "与 Codex 完成一个伟大项目"
         }
         welcomeTitleView.visibility = View.VISIBLE
         welcomeTitleView.contentDescription = text
