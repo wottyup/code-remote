@@ -18,6 +18,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -46,6 +47,8 @@ import android.widget.HorizontalScrollView
 import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.PopupWindow
+import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
@@ -117,10 +120,19 @@ class MainActivity : Activity() {
     private var foreground = false
     private var sidebarVisible = false
     private var sidebarProgress = 0f
+    private var sidebarRenderDirty = true
+    private var sidebarGestureActive = false
     private var sidebarAnimator: ValueAnimator? = null
     private var workspaceVisible = false
     private var workspaceProgress = 0f
+    private var workspaceLoadedPath: String? = null
+    private var workspaceLoadingPath: String? = null
     private var workspaceAnimator: ValueAnimator? = null
+    private var settingsOverlay: View? = null
+    private var settingsDialog: AlertDialog? = null
+    private var settingsNotificationButton: TextView? = null
+    private var notificationPermissionRequestedFromSettings = false
+    private var preferencePopup: PopupWindow? = null
     private var workspaceOverlay: FrameLayout? = null
     private var workspacePanel: LinearLayout? = null
     private var workspaceScrim: View? = null
@@ -272,6 +284,9 @@ class MainActivity : Activity() {
     @Deprecated("Native back handling is kept compatible with Android versions supported by this app")
     override fun onBackPressed() {
         when {
+            settingsDialog?.isShowing == true -> settingsDialog?.dismiss()
+            preferencePopup?.isShowing == true -> preferencePopup?.dismiss()
+            settingsOverlay != null -> closeSettings()
             terminalDialog?.isShowing == true && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
                 val input = terminalDraftInput
@@ -418,6 +433,8 @@ class MainActivity : Activity() {
         workspacePanel = null
         workspaceScrim = null
         workspaceLoader = null
+        workspaceLoadedPath = null
+        workspaceLoadingPath = null
         syncRevisions.clear()
         renderHome()
         refreshRuntime()
@@ -504,7 +521,7 @@ class MainActivity : Activity() {
         renderHeader()
         renderMessages(false)
         renderQueue()
-        renderSidebar()
+        renderSidebar(force = true)
     }
 
     private fun buildHeader() {
@@ -653,7 +670,7 @@ class MainActivity : Activity() {
             background = null
             setPadding(0, 0, 0, 0)
             imeOptions = EditorInfo.IME_ACTION_SEARCH
-            addTextChangedListener(SimpleTextWatcher { renderSidebar() })
+            addTextChangedListener(SimpleTextWatcher { renderSidebar(force = true) })
         }
         searchBox.addView(drawerSearch, LinearLayout.LayoutParams(0, MATCH, 1f))
         searchBox.addView(iconButton("close", "清除搜索") { drawerSearch.setText("") }.apply {
@@ -719,9 +736,10 @@ class MainActivity : Activity() {
         root.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
         val drawerWidth = min(dp(304), (resources.displayMetrics.widthPixels * .82f).toInt()).coerceAtLeast(dp(260))
         root.addView(drawer, FrameLayout.LayoutParams(drawerWidth, MATCH, Gravity.START))
+        drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         drawer.translationX = -drawerWidth.toFloat()
         drawer.tag = scrim
-        renderSidebar()
+        renderSidebar(force = true)
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
@@ -768,8 +786,14 @@ class MainActivity : Activity() {
         thread.optString("preview"),
     ).firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
 
-    private fun renderSidebar() {
+    private fun renderSidebar(force: Boolean = false) {
         if (!::drawerThreads.isInitialized) return
+        if (!force && !sidebarRenderDirty) return
+        if (sidebarGestureActive || sidebarAnimator?.isRunning == true) {
+            sidebarRenderDirty = true
+            return
+        }
+        sidebarRenderDirty = false
         drawerThreads.removeAllViews()
         val query = if (::drawerSearch.isInitialized) drawerSearch.text.toString().trim().lowercase(Locale.ROOT) else ""
         val filtered = mutableListOf<JSONObject>()
@@ -852,13 +876,7 @@ class MainActivity : Activity() {
                 drawer.visibility = View.GONE
                 (drawer.tag as? View)?.visibility = View.GONE
             }
-            drawer.setLayerType(View.LAYER_TYPE_NONE, null)
-            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
             return
-        }
-        if (visible || sidebarProgress > .001f) {
-            drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         if (visible) {
             drawer.visibility = View.VISIBLE
@@ -874,9 +892,8 @@ class MainActivity : Activity() {
                         drawer.visibility = View.GONE
                         (drawer.tag as? View)?.visibility = View.GONE
                     }
-                    drawer.setLayerType(View.LAYER_TYPE_NONE, null)
-                    (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
                     sidebarAnimator = null
+                    if (sidebarRenderDirty && !sidebarGestureActive) renderSidebar(force = true)
                 }
             })
             start()
@@ -970,15 +987,13 @@ class MainActivity : Activity() {
                 workspaceAnimator = null
                 if (opens) prepareWorkspaceForGesture()
             } else {
+                sidebarGestureActive = true
                 sidebarAnimator?.cancel()
                 sidebarAnimator = null
                 if (opens) {
                     drawer.visibility = View.VISIBLE
                     (drawer.tag as? View)?.visibility = View.VISIBLE
-                    renderSidebar()
                 }
-                drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-                (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
             }
 
             val cancel = MotionEvent.obtain(event)
@@ -1025,6 +1040,8 @@ class MainActivity : Activity() {
                 }
                 sidebarVisible = shouldOpen
                 setSidebarVisible(shouldOpen)
+                sidebarGestureActive = false
+                if (sidebarAnimator == null && sidebarRenderDirty) renderSidebar(force = true)
             }
             clearSwipeTracking()
         }
@@ -1062,7 +1079,7 @@ class MainActivity : Activity() {
                 handler.post {
                     pinnedThreadIds.clear()
                     for (index in 0 until result.length()) pinnedThreadIds += result.optString(index)
-                    renderSidebar()
+                    renderSidebar(force = true)
                 }
             } catch (_: Exception) { }
         }
@@ -1090,7 +1107,7 @@ class MainActivity : Activity() {
                 val result = RemoteApi(endpoint, token).getArray("/api/v1/codex/threads")
                 handler.post {
                     threads = result
-                    renderSidebar()
+                    renderSidebar(force = true)
                     val selected = activeThreadId
                     if (selected != null) {
                         val latest = findThread(selected)
@@ -1139,7 +1156,7 @@ class MainActivity : Activity() {
         queuedMessages = JSONArray()
         setSidebarVisible(false)
         renderHeader()
-        renderSidebar()
+        renderSidebar(force = true)
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         renderMessages(true)
         loadThreadHistoryCacheThenRefresh(id)
@@ -1956,7 +1973,7 @@ class MainActivity : Activity() {
             renderHeader()
         }
         if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
-        renderSidebar()
+        renderSidebar(force = true)
         showToast(if (currentMode == "codex") "Codex 对话" else "Claude Code 对话")
     }
 
@@ -1989,7 +2006,7 @@ class MainActivity : Activity() {
         val pinned = id in pinnedThreadIds
         runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(id)}/pin", JSONObject().put("pinned", !pinned)) }, {
             if (pinned) pinnedThreadIds.remove(id) else pinnedThreadIds.add(id)
-            renderSidebar()
+            renderSidebar(force = true)
         })
     }
 
@@ -2058,8 +2075,8 @@ class MainActivity : Activity() {
                 if (value.isBlank()) null else value to model.optString("displayName").ifBlank { value }
             }
         } else listOf("default" to "本机默认模型", "opus" to "Claude Opus", "sonnet" to "Claude Sonnet", "fable" to "Claude Fable")
-        val choices = listOf("默认" to "default") + values
-        showChoiceDialog("模型", choices, preference(if (currentMode == "codex") "model" else "claudeModel")) { selected ->
+        val choices = listOf("default" to "默认") + values
+        showChoicePopup(modelButton, "模型", choices, preference(if (currentMode == "codex") "model" else "claudeModel") ?: "default") { selected ->
             savePreference(if (currentMode == "codex") "model" else "claudeModel", selected.takeIf { it != "default" })
             if (currentMode == "codex") savePreference("effort", modelDefaultEffort(selected))
         }
@@ -2078,27 +2095,81 @@ class MainActivity : Activity() {
             } else listOf("minimal" to "最小", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高")
         } else listOf("default" to "本机默认", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高", "max" to "最大")
         val key = if (currentMode == "codex") "effort" else "claudeEffort"
-        showChoiceDialog("思考等级", listOf("default" to "默认") + choices, preference(key)) { savePreference(key, it.takeIf { value -> value != "default" }) }
+        showChoicePopup(effortButton, "思考等级", listOf("default" to "默认") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
     }
 
     private fun showPermissionOptions() {
         if (currentMode == "codex") {
-            showChoiceDialog("授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
+            showChoicePopup(permissionButton, "授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
                 savePreference("approvalPolicy", it)
                 val threadId = activeThreadId
                 if (threadId != null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", it)) })
             }
         } else {
-            showChoiceDialog("权限模式", listOf(
+            showChoicePopup(permissionButton, "权限模式", listOf(
                 "default" to "本机默认权限", "manual" to "手动确认", "acceptEdits" to "自动接受编辑",
                 "auto" to "自动模式", "dontAsk" to "不询问（拒绝需授权操作）", "plan" to "计划模式",
             ), preference("claudePermissionMode") ?: "default") { savePreference("claudePermissionMode", it) }
         }
     }
 
-    private fun showChoiceDialog(title: String, choices: List<Pair<String, String>>, selected: String?, onChoice: (String) -> Unit) {
-        val names = choices.map { if (it.first == selected) "✓  ${it.second}" else it.second }.toTypedArray()
-        AlertDialog.Builder(this).setTitle(title).setItems(names) { _, which -> choices.getOrNull(which)?.let { onChoice(it.first) } }.show()
+    private fun showChoicePopup(anchor: View, title: String, choices: List<Pair<String, String>>, selected: String?, onChoice: (String) -> Unit) {
+        preferencePopup?.dismiss()
+        val maxHeight = min(dp(320), (root.height - dp(24)).coerceAtLeast(dp(180)))
+        val menuHeight = min(dp(48) + choices.size * dp(44), maxHeight)
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = rounded(PANEL, dp(14))
+        }
+        menu.addView(label(title, 11, MUTED, true).apply {
+            setPadding(dp(10), dp(4), dp(10), dp(9))
+        }, LinearLayout.LayoutParams(MATCH, WRAP))
+        val options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        choices.forEach { (value, name) ->
+            val isSelected = value == selected
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(10), dp(5), dp(10), dp(5))
+                minimumHeight = dp(42)
+                background = if (isSelected) rounded(PANEL_INSET, dp(9)) else ColorDrawable(Color.TRANSPARENT)
+                isClickable = true
+                isFocusable = false
+                setOnClickListener {
+                    preferencePopup?.dismiss()
+                    onChoice(value)
+                }
+            }
+            row.addView(label(name, 13, if (isSelected) TEXT else SUBTLE, isSelected).apply {
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (isSelected) row.addView(label("✓", 16, ACCENT, true), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
+            options.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
+        }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
+        menu.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        val popup = PopupWindow(menu, min(dp(280), (root.width - dp(24)).coerceAtLeast(dp(220))), menuHeight, true).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isOutsideTouchable = true
+            isClippingEnabled = true
+            setOnDismissListener { if (preferencePopup === this) preferencePopup = null }
+        }
+        preferencePopup = popup
+        val anchorLocation = IntArray(2)
+        val rootLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        root.getLocationOnScreen(rootLocation)
+        val popupWidth = min(dp(280), (root.width - dp(24)).coerceAtLeast(dp(220)))
+        val popupX = (anchorLocation[0] - rootLocation[0]).coerceIn(dp(12), (root.width - popupWidth - dp(12)).coerceAtLeast(dp(12)))
+        val popupY = (anchorLocation[1] - rootLocation[1] - menuHeight - dp(8)).coerceAtLeast(dp(8))
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, popupX, popupY)
     }
 
     private fun modelDefaultEffort(modelName: String): String? {
@@ -2109,22 +2180,269 @@ class MainActivity : Activity() {
     }
 
     private fun showSettings() {
-        val choices = arrayOf("调整字体大小", "浅色 / 深色主题", "更改电脑地址", "解除配对")
-        AlertDialog.Builder(this).setTitle("设置").setItems(choices) { _, which ->
-            when (which) {
-                0 -> showFontSizeDialog()
-                1 -> {
-                    prefs.edit().putBoolean(KEY_LIGHT_THEME, !lightTheme).apply()
-                    recreate()
-                }
-                2 -> showConnectionPage()
-                3 -> AlertDialog.Builder(this).setMessage("解除本机配对？").setNegativeButton("取消", null).setPositiveButton("解除") { _, _ ->
-                    runApi({ RemoteApi(endpoint, token).post("/api/v1/unpair") }, {
-                        prefs.edit().remove(KEY_TOKEN).apply(); token = ""; socket?.close(1000, "unpaired"); showConnectionPage()
-                    })
-                }.show()
+        if (settingsOverlay != null) return
+        if (sidebarVisible) setSidebarVisible(false)
+
+        val overlay = FrameLayout(this).apply {
+            setBackgroundColor(DARK)
+            elevation = dp(16).toFloat()
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(DARK)
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(14), dp(4), dp(14), dp(4))
+        }
+        header.addView(iconButton("close", "返回聊天") { closeSettings() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
+        titleCopy.addView(label("设置", 17, TEXT, true), widthWrap())
+        titleCopy.addView(label("偏好保存在本机", 10, MUTED), widthWrap())
+        header.addView(titleCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(56)))
+
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            setPadding(dp(14), dp(5), dp(14), dp(18))
+        }
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        scroll.addView(content, LinearLayout.LayoutParams(MATCH, WRAP))
+        layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        overlay.addView(layout, FrameLayout.LayoutParams(MATCH, MATCH))
+        root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+        settingsOverlay = overlay
+
+        fun section(title: String, description: String): LinearLayout {
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(14), dp(13), dp(14), dp(12))
+                background = rounded(PANEL, dp(14), BORDER, dp(1))
             }
-        }.show()
+            card.addView(label(title, 14, TEXT, true), widthWrap())
+            card.addView(label(description, 11, MUTED).apply {
+                setPadding(0, dp(4), 0, dp(10))
+                setLineSpacing(dp(1).toFloat(), 1.1f)
+            }, widthWrap())
+            content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(10) })
+            return card
+        }
+
+        val appearance = section("外观", "选择主题，调整聊天内容的阅读大小。")
+        listOf(
+            Triple(true, "浅色主题", "明亮背景"),
+            Triple(false, "深色主题", "低光环境"),
+        ).forEach { (theme, title, description) ->
+            val selected = lightTheme == theme
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(11), dp(8), dp(11), dp(8))
+                background = rounded(if (selected) PANEL_INSET else Color.TRANSPARENT, dp(10))
+                isClickable = true
+                isFocusable = false
+                setOnClickListener { applyThemeFromSettings(theme) }
+            }
+            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            copy.addView(label(title, 13, TEXT, selected), widthWrap())
+            copy.addView(label(description, 10, MUTED), widthWrap())
+            row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+            row.addView(label(if (selected) "✓" else "", 16, ACCENT, true).apply {
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(26), WRAP))
+            appearance.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
+        }
+
+        val display = section("显示", "设置聊天文字大小，范围为 12 至 20 级。")
+        val sizeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val sizeLabel = label("${prefs.getInt(KEY_FONT_SIZE, 14)} 级", 13, ACCENT, true)
+        sizeRow.addView(label("聊天字体", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+        sizeRow.addView(sizeLabel, LinearLayout.LayoutParams(WRAP, WRAP))
+        display.addView(sizeRow, widthWrap())
+        val fontSeek = SeekBar(this).apply {
+            max = 8
+            progress = (prefs.getInt(KEY_FONT_SIZE, 14).coerceIn(12, 20) - 12)
+            progressTintList = ColorStateList.valueOf(ACCENT)
+            thumbTintList = ColorStateList.valueOf(ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+            contentDescription = "聊天字体大小"
+        }
+        fontSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                sizeLabel.text = "${progress + 12} 级"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+            override fun onStopTrackingTouch(seekBar: SeekBar) {
+                prefs.edit().putInt(KEY_FONT_SIZE, seekBar.progress + 12).apply()
+                renderMessages(false)
+            }
+        })
+        display.addView(fontSeek, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(2) })
+
+        val notifications = section("系统通知", "应用在后台时提醒回复完成；通知不包含聊天正文。")
+        val notificationRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+            isClickable = true
+            isFocusable = false
+            setOnClickListener { toggleSystemNotifications() }
+        }
+        notificationRow.addView(label("回复与审批提醒", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+        settingsNotificationButton = label("", 12, ACCENT, true).apply { gravity = Gravity.CENTER; minWidth = dp(72) }
+        notificationRow.addView(settingsNotificationButton, LinearLayout.LayoutParams(dp(72), WRAP))
+        notifications.addView(notificationRow, LinearLayout.LayoutParams(MATCH, dp(40)))
+        refreshSettingsNotificationControl()
+
+        val connection = section("连接", "连接到运行 Codex Remote 的电脑。")
+        connection.addView(label(if (runtime.optBoolean("connected", false)) "电脑服务已连接" else "电脑服务等待连接", 12, if (runtime.optBoolean("connected", false)) ACCENT else MUTED, true), widthWrap())
+        connection.addView(label(endpoint, 11, MUTED).apply {
+            setPadding(0, dp(5), 0, dp(7))
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setTextIsSelectable(true)
+        }, widthWrap())
+        connection.addView(settingsActionRow("更改电脑地址", "输入新地址和电脑端匹配码") {
+            showChangeConnectionDialog()
+        }, widthWrap())
+
+        val account = section("本机配对", "管理本机保存的电脑连接凭据。")
+        account.addView(settingsActionRow("解除配对", "清除此设备保存的配对信息") {
+            val dialog = AlertDialog.Builder(this).setMessage("解除本机配对？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("解除") { _, _ ->
+                    runApi({ RemoteApi(endpoint, token).post("/api/v1/unpair") }, {
+                        closeSettings()
+                        prefs.edit().remove(KEY_TOKEN).apply()
+                        token = ""
+                        socket?.close(1000, "unpaired")
+                        showConnectionPage()
+                    })
+                }.create()
+            settingsDialog = dialog
+            dialog.setOnDismissListener { if (settingsDialog === dialog) settingsDialog = null }
+            dialog.show()
+        }, widthWrap())
+    }
+
+    private fun closeSettings() {
+        val overlay = settingsOverlay ?: return
+        if (::root.isInitialized) root.removeView(overlay)
+        settingsOverlay = null
+        settingsNotificationButton = null
+    }
+
+    private fun settingsActionRow(title: String, description: String, action: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(2), dp(7), dp(2), dp(7))
+        isClickable = true
+        isFocusable = false
+        setOnClickListener { action() }
+        val copy = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(label(title, 12, SUBTLE, true), widthWrap())
+        copy.addView(label(description, 10, MUTED), widthWrap())
+        addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        addView(label("›", 20, MUTED).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(24), WRAP))
+    }
+
+    private fun applyThemeFromSettings(useLightTheme: Boolean) {
+        if (lightTheme == useLightTheme) return
+        val draft = composerInput.text.toString()
+        persistCurrentDraft()
+        prefs.edit().putBoolean(KEY_LIGHT_THEME, useLightTheme).apply()
+        closeSettings()
+        sidebarAnimator?.cancel()
+        sidebarVisible = false
+        sidebarProgress = 0f
+        sidebarRenderDirty = true
+        workspaceOverlay?.visibility = View.GONE
+        workspaceOverlay = null
+        workspacePanel = null
+        workspaceScrim = null
+        workspaceLoader = null
+        workspaceLoadedPath = null
+        workspaceLoadingPath = null
+        renderHome()
+        composerInput.setText(draft)
+        showSettings()
+    }
+
+    private fun refreshSettingsNotificationControl() {
+        settingsNotificationButton?.apply {
+            text = if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) "已开启" else "已关闭"
+            setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) ACCENT else MUTED)
+        }
+    }
+
+    private fun toggleSystemNotifications() {
+        val enabled = prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)
+        if (enabled) {
+            prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false).apply()
+            refreshSettingsNotificationControl()
+            showToast("系统通知已关闭")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            notificationPermissionRequestedFromSettings = true
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
+            return
+        }
+        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true).apply()
+        refreshSettingsNotificationControl()
+        showToast("系统通知已开启")
+    }
+
+    private fun showChangeConnectionDialog() {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), 0)
+        }
+        val address = editField("电脑网页地址", endpoint, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
+        val code = editField("电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
+        form.addView(label("电脑网页地址", 11, SUBTLE, true), widthWrap())
+        form.addView(address, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
+        form.addView(label("匹配码", 11, SUBTLE, true), widthWrap())
+        form.addView(code, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4) })
+        val dialog = AlertDialog.Builder(this).setTitle("更改电脑地址").setView(form)
+            .setNegativeButton("取消", null).setPositiveButton("连接", null).create()
+        settingsDialog = dialog
+        dialog.setOnDismissListener { if (settingsDialog === dialog) settingsDialog = null }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val normalized = try { RemoteApi.normalizeEndpoint(address.text.toString()) }
+                catch (error: Exception) { showToast(error.message ?: "电脑地址无效"); return@setOnClickListener }
+                val pairingCode = code.text.toString().trim()
+                if (pairingCode.isBlank()) { showToast("请输入电脑端匹配码"); return@setOnClickListener }
+                val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
+                button.isEnabled = false
+                button.text = "正在连接…"
+                io.execute {
+                    try {
+                        val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
+                        val newToken = paired.getString("token")
+                        handler.post {
+                            dialog.dismiss()
+                            endpoint = normalized
+                            token = newToken
+                            prefs.edit().putString(KEY_ENDPOINT, endpoint).putString(KEY_TOKEN, token).apply()
+                            closeSettings()
+                            openChatHome()
+                        }
+                    } catch (error: Exception) {
+                        handler.post {
+                            button.isEnabled = true
+                            button.text = "连接"
+                            showToast(error.message ?: "连接失败，请检查地址和匹配码")
+                        }
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     private fun reconnect() {
@@ -2174,6 +2492,7 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(9), dp(12), dp(8))
             background = rounded(PANEL, dp(16), BORDER, dp(1))
             elevation = dp(4).toFloat()
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, Gravity.END))
 
@@ -2218,6 +2537,8 @@ class MainActivity : Activity() {
         workspaceLoader = { requestedPath ->
             val path = requestedPath.trim('/')
             workspaceCurrentPath = path
+            workspaceLoadedPath = null
+            workspaceLoadingPath = path
             pathTitle.text = path.ifBlank {
                 activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
                     ?: runtime.optString("workspace", "工作区")
@@ -2241,6 +2562,8 @@ class MainActivity : Activity() {
                     val tree = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/tree$query")
                     handler.post {
                         if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
+                        workspaceLoadedPath = path
+                        workspaceLoadingPath = null
                         workspaceRootPath = tree.optString("cwd")
                         pathTitle.text = tree.optString("cwd") + if (path.isBlank()) "" else "/$path"
                         entries.removeAllViews()
@@ -2299,6 +2622,8 @@ class MainActivity : Activity() {
                 } catch (error: Exception) {
                     handler.post {
                         if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
+                        workspaceLoadedPath = path
+                        workspaceLoadingPath = null
                         entries.removeAllViews()
                         entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply {
                             setPadding(dp(8), dp(12), dp(8), dp(12))
@@ -2311,6 +2636,7 @@ class MainActivity : Activity() {
     }
 
     private fun prepareWorkspaceForGesture() {
+        val needsInitialLoad = workspaceLoadedPath != workspaceCurrentPath && workspaceLoadingPath != workspaceCurrentPath
         if (sidebarVisible) {
             sidebarAnimator?.cancel()
             sidebarAnimator = null
@@ -2318,15 +2644,17 @@ class MainActivity : Activity() {
             updateSidebarProgress(0f)
             drawer.visibility = View.GONE
             (drawer.tag as? View)?.visibility = View.GONE
-            drawer.setLayerType(View.LAYER_TYPE_NONE, null)
-            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
         }
         ensureWorkspaceBrowser()
         workspaceVisible = true
         workspaceOverlay?.visibility = View.VISIBLE
-        workspacePanel?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        workspaceScrim?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        workspaceLoader?.invoke(workspaceCurrentPath)
+        if (needsInitialLoad) {
+            workspaceOverlay?.postDelayed({
+                if (workspaceVisible && workspaceLoadedPath != workspaceCurrentPath && workspaceLoadingPath != workspaceCurrentPath) {
+                    workspaceLoader?.invoke(workspaceCurrentPath)
+                }
+            }, 220L)
+        }
         updateWorkspaceProgress(workspaceProgress)
     }
 
@@ -2336,10 +2664,6 @@ class MainActivity : Activity() {
             if (sidebarVisible) setSidebarVisible(false)
             workspaceOverlay?.visibility = View.VISIBLE
         }
-        if (visible || workspaceProgress > .001f) {
-            workspacePanel?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-            workspaceScrim?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        }
         workspaceVisible = visible
         workspaceAnimator?.cancel()
         val start = workspaceProgress
@@ -2347,8 +2671,6 @@ class MainActivity : Activity() {
         if (start == target) {
             updateWorkspaceProgress(target)
             if (!visible) workspaceOverlay?.visibility = View.GONE
-            workspacePanel?.setLayerType(View.LAYER_TYPE_NONE, null)
-            workspaceScrim?.setLayerType(View.LAYER_TYPE_NONE, null)
             return
         }
         workspaceAnimator = ValueAnimator.ofFloat(start, target).apply {
@@ -2358,8 +2680,6 @@ class MainActivity : Activity() {
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     if (!workspaceVisible && workspaceProgress <= .001f) workspaceOverlay?.visibility = View.GONE
-                    workspacePanel?.setLayerType(View.LAYER_TYPE_NONE, null)
-                    workspaceScrim?.setLayerType(View.LAYER_TYPE_NONE, null)
                     workspaceAnimator = null
                 }
             })
@@ -2944,6 +3264,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSystemNotification(threadId: String) {
+        if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) return
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             handler.post { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS) }
             return
@@ -2964,6 +3285,16 @@ class MainActivity : Activity() {
         manager.notify(threadId.hashCode(), notification.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title)
             .setContentText("有一条新的回复。打开查看对话。")
             .setContentIntent(pending).setAutoCancel(true).build())
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQUEST_NOTIFICATIONS || !notificationPermissionRequestedFromSettings) return
+        notificationPermissionRequestedFromSettings = false
+        val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, granted).apply()
+        refreshSettingsNotificationControl()
+        showToast(if (granted) "系统通知已开启" else "未获得通知权限")
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -3129,7 +3460,10 @@ class MainActivity : Activity() {
         scaleType = ImageView.ScaleType.FIT_CENTER
         setPadding(dp(9), dp(9), dp(9), dp(9))
         contentDescription = description
-        background = rounded(Color.TRANSPARENT, dp(8))
+        background = ColorDrawable(Color.TRANSPARENT)
+        foreground = null
+        stateListAnimator = null
+        setDefaultFocusHighlightEnabled(false)
         isFocusable = true
         isClickable = true
         setOnClickListener { action() }
@@ -3162,7 +3496,10 @@ class MainActivity : Activity() {
         setPadding(dp(7), 0, dp(7), 0)
         minWidth = dp(44)
         minHeight = dp(40)
-        background = null
+        background = ColorDrawable(Color.TRANSPARENT)
+        foreground = null
+        stateListAnimator = null
+        setDefaultFocusHighlightEnabled(false)
         setOnClickListener { action() }
     }
 
@@ -3206,6 +3543,7 @@ class MainActivity : Activity() {
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val KEY_LIGHT_THEME = "native_light_theme"
+        private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
         private const val MAX_CACHED_THREADS = 32
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
         private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
