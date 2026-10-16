@@ -3536,6 +3536,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], initialEngine: initialPaneLayout.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], initialEngine: initialPaneLayout.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
+  const remotesRef = useRef(remotes)
+  remotesRef.current = remotes
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
 
@@ -4590,7 +4592,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   const sendComposerMessage = useCallback(async (input: ComposerSendInput) => {
-    const target = remotes[selectedPaneIndex] ?? remote0
+    const target = remotesRef.current[selectedPaneIndex] ?? remotesRef.current[0]
+    if (!target) return false
     const preferences = temporaryPreferences ? savedComposerPreferences : composerPreferencesFrom(input)
     let submittedPreferencesScope = preferencesScope
     const sent = await target.sendMessage({
@@ -4619,7 +4622,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       })
     }
     return sent
-  }, [preferencesScope, rememberThreadComposerPreferences, remote0, remote1, remote2, remote3, remote4, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
+  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
