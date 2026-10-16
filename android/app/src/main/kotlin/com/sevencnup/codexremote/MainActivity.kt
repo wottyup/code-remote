@@ -290,7 +290,7 @@ class MainActivity : Activity() {
     private var token = ""
     private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
     private val connectionProfiles = mutableListOf<ConnectionProfile>()
-    private val connectionDraftFiles = mutableMapOf<String, MutableList<JSONObject>>()
+    private val draftFilesByScope = mutableMapOf<String, MutableList<JSONObject>>()
     private var activeConnectionId = ""
     @Volatile private var connectionGeneration = 0L
     @Volatile private var backgroundThreadDirty = false
@@ -378,6 +378,7 @@ class MainActivity : Activity() {
     private var terminalImeVisible = false
     private var terminalImeHiddenUntil = 0L
     private var attachRequestActive = false
+    private var attachmentPickerScope: String? = null
     private var restoreImeAfterAttachment = false
     private val deliveredQueueIds = mutableSetOf<String>()
     private var workspaceCurrentPath = ""
@@ -618,8 +619,7 @@ class MainActivity : Activity() {
             workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
             queueEditItem != null -> finishQueueEdit(false)
-            activeThreadId != null -> showConfirmDialog("关闭应用", "要关闭 Codex Remote 吗？", "关闭") { finish() }
-            else -> super.onBackPressed()
+            else -> moveTaskToBack(true)
         }
     }
 
@@ -688,12 +688,13 @@ class MainActivity : Activity() {
             return
         }
         persistCurrentDraft()
-        if (activeConnectionId.isNotBlank()) connectionDraftFiles[activeConnectionId] = selectedFiles.toMutableList()
         connectionGeneration++
         activeConnectionId = profile.id
         endpoint = profile.endpoint
         token = profile.token
-        selectedFiles = connectionDraftFiles[profile.id]?.toMutableList() ?: mutableListOf()
+        activeThreadId = null
+        activeThread = null
+        selectedFiles = draftFilesByScope[draftStorageKey()]?.toMutableList() ?: mutableListOf()
         persistConnectionProfiles()
         closeSettings()
         pinnedThreadIds.clear()
@@ -1669,24 +1670,6 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
             row.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
-            if (pinnedThreadIds.contains(id)) {
-                row.addView(ImageView(this).apply {
-                    setImageResource(R.drawable.ic_pin)
-                    imageTintList = ColorStateList.valueOf(MUTED)
-                    contentDescription = "已置顶"
-                }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(5); rightMargin = dp(3) })
-            }
-            val moreButton = sidebarIconButton("more", "对话操作") { }
-            moreButton.setImageResource(R.drawable.ic_sidebar_more)
-            moreButton.setPadding(dp(2), dp(2), dp(2), dp(2))
-            moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
-            row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
-            row.post {
-                val hit = android.graphics.Rect()
-                moreButton.getHitRect(hit)
-                hit.inset(-dp(6), -dp(6))
-                row.touchDelegate = android.view.TouchDelegate(hit, moreButton)
-            }
             row.setOnClickListener { selectThread(thread) }
             row.setOnLongClickListener { showThreadActions(row, thread); true }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
@@ -2059,6 +2042,7 @@ class MainActivity : Activity() {
         renderHeader()
         renderSidebar(force = true)
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
+        restoreCurrentDraftFiles()
         renderMessages(true)
         if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
         refreshQueue(true)
@@ -3557,35 +3541,54 @@ class MainActivity : Activity() {
         val requestId = UUID.randomUUID().toString()
         val payload = queuedPayload(text, requestId)
         val outgoingFiles = selectedFiles.toList()
+        val outgoingScope = draftStorageKey()
+        val sendConnection = connectionGeneration
+        val sendEndpoint = endpoint
+        val sendToken = token
+        val sendMode = currentMode
         (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(composerInput.windowToken, 0)
         composerInput.setText("")
         selectedFiles.clear()
+        draftFilesByScope.remove(outgoingScope)
         renderAttachmentStrip()
         if (threadId == null) {
             io.execute {
                 try {
-                    val created = RemoteApi(endpoint, token).post("/api/v1/codex/threads", JSONObject()
-                        .put("engine", currentMode)
+                    val created = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/threads", JSONObject()
+                        .put("engine", sendMode)
                         .put("request_id", requestId)
-                        .putOpt("model", preference("model"))
-                        .putOpt("approval_policy", if (currentMode == "codex") preference("approvalPolicy") else null))
+                        .putOpt("model", payload.optString(if (sendMode == "codex") "model" else "claudeModel").takeIf { it.isNotBlank() })
+                        .putOpt("approval_policy", if (sendMode == "codex") payload.optString("approvalPolicy") else null))
                     handler.post {
-                        threads = JSONArray().put(created).also { old ->
-                            for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
+                        if (sendConnection == connectionGeneration) {
+                            threads = JSONArray().put(created).also { old ->
+                                for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
+                            }
+                            if (draftStorageKey() == outgoingScope) selectThread(created)
                         }
-                        selectThread(created)
-                        submitPayload(created.optString("id"), payload, outgoingFiles)
+                        submitPayload(created.optString("id"), payload, outgoingFiles, outgoingScope, sendConnection, sendEndpoint, sendToken)
                     }
                 } catch (error: Exception) {
                     handler.post {
-                        composerInput.setText(text)
-                        selectedFiles.addAll(0, outgoingFiles)
-                        renderAttachmentStrip()
+                        restoreFailedMessage(outgoingScope, text, outgoingFiles)
                         showStatus(error.message ?: "新建对话失败")
                     }
                 }
             }
-        } else submitPayload(threadId, payload, outgoingFiles)
+        } else submitPayload(threadId, payload, outgoingFiles, outgoingScope, sendConnection, sendEndpoint, sendToken)
+    }
+
+    private fun restoreFailedMessage(scope: String, text: String, files: List<JSONObject>) {
+        val stored = draftFilesByScope[scope]?.toMutableList() ?: mutableListOf()
+        stored.addAll(0, files)
+        if (stored.isNotEmpty()) draftFilesByScope[scope] = stored
+        if (draftStorageKey() == scope && ::composerInput.isInitialized) {
+            if (composerInput.text.isBlank()) composerInput.setText(text)
+            selectedFiles = stored.toMutableList()
+            renderAttachmentStrip()
+        } else if (prefs.getString(scope, "").isNullOrBlank()) {
+            prefs.edit().putString(scope, text).apply()
+        }
     }
 
     private fun queuedPayload(text: String, id: String, files: List<JSONObject> = selectedFiles): JSONObject {
@@ -3624,36 +3627,33 @@ class MainActivity : Activity() {
         return payload
     }
 
-    private fun submitPayload(threadId: String, payload: JSONObject, outgoingFiles: List<JSONObject>) {
-        val oldSelected = activeThreadId
-        setSendBusy(true)
+    private fun submitPayload(threadId: String, payload: JSONObject, outgoingFiles: List<JSONObject>,
+                              outgoingScope: String, sendConnection: Long, sendEndpoint: String, sendToken: String) {
+        if (sendConnection == connectionGeneration) setSendBusy(true)
         io.execute {
             try {
-                val response = RemoteApi(endpoint, token).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
+                val response = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
                 handler.post {
-                    val sentText = payload.optString("text")
-                    if (sentText.isNotBlank() && ::composerInput.isInitialized && composerInput.text.toString().trim() == sentText) {
-                        composerInput.setText("")
-                    }
-                    if (activeThreadId == oldSelected || activeThreadId == threadId) {
+                    if (sendConnection != connectionGeneration) return@post
+                    if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
+                    if (activeThreadId == threadId) {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
+                        queuedMessages = withoutDeliveredQueueItems(response.optJSONArray("queue") ?: JSONArray())
+                        renderQueue()
+                        refreshActiveThread(false)
                     }
-                    if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
-                    queuedMessages = withoutDeliveredQueueItems(response.optJSONArray("queue") ?: JSONArray())
                     pausedThreadKeys.remove(threadTitleKey(threadId))
-                    renderQueue()
                     setSendBusy(false)
-                    refreshActiveThread(false)
                     refreshThreads(false)
                 }
             } catch (error: Exception) {
                 handler.post {
-                    if (::composerInput.isInitialized && composerInput.text.isBlank()) composerInput.setText(payload.optString("text"))
-                    selectedFiles.addAll(0, outgoingFiles)
-                    renderAttachmentStrip()
-                    showStatus(error.message ?: "发送失败")
-                    setSendBusy(false)
+                    restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    if (sendConnection == connectionGeneration) {
+                        showStatus(error.message ?: "发送失败")
+                        setSendBusy(false)
+                    }
                 }
             }
         }
@@ -3905,6 +3905,7 @@ class MainActivity : Activity() {
             renderHeader()
         }
         if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
+        restoreCurrentDraftFiles()
         renderSidebar(force = true)
         showModeSwitchNotice(previousMode, currentMode)
     }
@@ -3962,11 +3963,14 @@ class MainActivity : Activity() {
                     historySelectionGeneration += 1
                     queuedMessages = JSONArray()
                     running = false
+                    selectedFiles.clear()
+                    renderAttachmentStrip()
                     renderMessages(false)
                     renderQueue()
                     renderHeader()
                 }
                 syncRevisions.remove(id)
+                draftFilesByScope.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 displayedThreadTitles.remove(threadTitleKey(id))
                 pausedThreadKeys.remove(threadTitleKey(id))
                 refreshThreads(false)
@@ -3997,8 +4001,18 @@ class MainActivity : Activity() {
 
     private fun draftStorageKey(): String = connectionScopedKey("draft_${currentMode}_${activeThreadId ?: "new"}")
 
+    private fun restoreCurrentDraftFiles() {
+        selectedFiles = draftFilesByScope[draftStorageKey()]?.toMutableList() ?: mutableListOf()
+        renderAttachmentStrip()
+    }
+
     private fun persistCurrentDraft() {
-        if (::composerInput.isInitialized && queueEditItem == null) prefs.edit().putString(draftStorageKey(), composerInput.text.toString()).apply()
+        if (::composerInput.isInitialized && queueEditItem == null) {
+            val scope = draftStorageKey()
+            prefs.edit().putString(scope, composerInput.text.toString()).apply()
+            if (selectedFiles.isEmpty()) draftFilesByScope.remove(scope)
+            else draftFilesByScope[scope] = selectedFiles.toMutableList()
+        }
     }
 
     private fun savePreference(key: String, value: String?) {
@@ -4903,7 +4917,7 @@ class MainActivity : Activity() {
         val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
         showConfirmDialog("删除连接", "从本机删除“${profile.name}”的连接配置？", "删除", destructive = true) {
             connectionProfiles.removeAll { it.id == profileId }
-            connectionDraftFiles.remove(profileId)
+            draftFilesByScope.keys.removeAll { it.startsWith("${profileId}_draft_") }
             if (profileId == activeConnectionId) {
                 val next = connectionProfiles.firstOrNull { it.token.isNotBlank() } ?: connectionProfiles.firstOrNull()
                 if (next != null) switchConnection(next.id)
@@ -6183,6 +6197,7 @@ class MainActivity : Activity() {
 
     private fun chooseAttachment() {
         if (attachRequestActive) return
+        attachmentPickerScope = draftStorageKey()
         restoreImeAfterAttachment = imeInsetVisible && ::composerInput.isInitialized && composerInput.hasFocus()
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
@@ -6191,6 +6206,7 @@ class MainActivity : Activity() {
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         try { startActivityForResult(intent, REQUEST_ATTACH) } catch (_: Exception) {
+            attachmentPickerScope = null
             restoreImeAfterAttachment = false
             showToast("没有可用的文件选择器")
         }
@@ -6212,10 +6228,12 @@ class MainActivity : Activity() {
             return
         }
         if (requestCode != REQUEST_ATTACH) return
+        val pickerScope = attachmentPickerScope ?: draftStorageKey()
+        attachmentPickerScope = null
         val restoreKeyboard = restoreImeAfterAttachment
         restoreImeAfterAttachment = false
         if (restoreKeyboard && ::composerInput.isInitialized) composerInput.postDelayed({
-            if (!isFinishing && !isDestroyed && settingsOverlay == null && !sidebarVisible) {
+            if (!isFinishing && !isDestroyed && settingsOverlay == null && !sidebarVisible && draftStorageKey() == pickerScope) {
                 composerInput.requestFocus()
                 (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
                     ?.showSoftInput(composerInput, InputMethodManager.SHOW_IMPLICIT)
@@ -6225,16 +6243,25 @@ class MainActivity : Activity() {
         val uris = mutableListOf<Uri>()
         data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri }
         if (uris.isEmpty()) data.data?.let(uris::add)
-        processAttachments(uris)
+        processAttachments(uris, pickerScope)
     }
 
-    private fun processAttachments(uris: List<Uri>) {
+    private fun processAttachments(uris: List<Uri>, scope: String) {
         if (uris.isEmpty()) return
         attachRequestActive = true
         io.execute {
             try {
                 val result = uris.map { readAttachment(it) }
-                handler.post { selectedFiles.addAll(result); attachRequestActive = false; renderAttachmentStrip() }
+                handler.post {
+                    if (draftStorageKey() == scope) {
+                        selectedFiles.addAll(result)
+                        renderAttachmentStrip()
+                    }
+                    val stored = draftFilesByScope[scope]?.toMutableList() ?: mutableListOf()
+                    stored.addAll(result)
+                    draftFilesByScope[scope] = stored
+                    attachRequestActive = false
+                }
             } catch (error: Exception) {
                 handler.post { attachRequestActive = false; showStatus(error.message ?: "读取附件失败") }
             }
