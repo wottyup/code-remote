@@ -983,7 +983,7 @@ class MainActivity : Activity() {
         brandCopy.addView(label("Codex Remote", 15, TEXT, true), widthWrap())
         brandCopy.addView(label("对话工作台", 10, MUTED), widthWrap())
         brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        brand.addView(iconButton("close", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(38), dp(38)))
+        brand.addView(sidebarIconButton("close", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(38), dp(38)))
         drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
 
         val searchBox = LinearLayout(this).apply {
@@ -993,7 +993,7 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
         }
         val searchIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_search)
+            setImageResource(R.drawable.ic_sidebar_search)
             imageTintList = ColorStateList.valueOf(MUTED)
             contentDescription = "搜索"
         }
@@ -1012,7 +1012,7 @@ class MainActivity : Activity() {
             addTextChangedListener(SimpleTextWatcher { renderSidebar(force = true) })
         }
         searchBox.addView(drawerSearch, LinearLayout.LayoutParams(0, MATCH, 1f))
-        searchBox.addView(iconButton("close", "清除搜索") { drawerSearch.setText("") }.apply {
+        searchBox.addView(sidebarIconButton("close", "清除搜索") { drawerSearch.setText("") }.apply {
             setPadding(dp(10), dp(10), dp(10), dp(10))
             visibility = View.GONE
             tag = "sidebar_search_clear"
@@ -1032,7 +1032,7 @@ class MainActivity : Activity() {
             setOnClickListener { createThread() }
         }
         sidebarNewThreadIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_add)
+            setImageResource(R.drawable.ic_sidebar_add)
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
         sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
@@ -1047,7 +1047,7 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, 0, 0)
         }
         recentHeading.addView(label("最近对话", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
-        recentHeading.addView(iconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
+        recentHeading.addView(sidebarIconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
         drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(8) })
         val threadScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -1145,9 +1145,9 @@ class MainActivity : Activity() {
         contentDescription = title
         setOnClickListener { action() }
         addView(ImageView(this@MainActivity).apply {
-            setImageResource(iconResource(icon))
+            setImageResource(sidebarIconResource(icon))
             imageTintList = ColorStateList.valueOf(SUBTLE)
-        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
+        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(7) })
         addView(label(title, 11, SUBTLE, true), widthWrap())
     }
 
@@ -1265,7 +1265,7 @@ class MainActivity : Activity() {
                     contentDescription = "已置顶"
                 }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5); rightMargin = dp(3) })
             }
-            val moreButton = iconButton("more", "对话操作") { }
+            val moreButton = sidebarIconButton("more", "对话操作") { }
             moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
             row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
             row.setOnClickListener { selectThread(thread) }
@@ -3878,16 +3878,16 @@ class MainActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
         header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
-        val refreshButton = iconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
+        val refreshButton = sidebarIconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
         header.addView(refreshButton, LinearLayout.LayoutParams(dp(32), dp(32)))
-        val createButton = iconButton("add", "新建文件或文件夹") { }
+        val createButton = sidebarIconButton("add", "新建文件或文件夹") { }
         createButton.setOnClickListener { showCreateEntry(createButton, workspaceCurrentPath) { workspaceRefresher?.invoke(workspaceCurrentPath) } }
         header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(sidebarIconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
         panel.addView(header, widthWrap())
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val parentButton = iconButton("back", "返回上级目录") { handleWorkspaceBack() }
+        val parentButton = sidebarIconButton("back", "返回上级目录") { handleWorkspaceBack() }
         pathNavigation.addView(parentButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         val pathInput = editField("输入路径", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
             setSingleLine(true)
@@ -3900,7 +3900,7 @@ class MainActivity : Activity() {
             }
         }
         pathNavigation.addView(pathInput, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(2) })
-        pathNavigation.addView(iconButton("open", "跳转到输入路径") {
+        pathNavigation.addView(sidebarIconButton("open", "跳转到输入路径") {
             (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(pathInput.windowToken, 0)
             workspacePathNavigate?.invoke(pathInput.text.toString())
         }, LinearLayout.LayoutParams(dp(32), dp(32)))
@@ -4007,7 +4007,7 @@ class MainActivity : Activity() {
                 )
                 val fullPath = absolutePath(relativePath)
                 if (fullPath.isNotBlank() && !composerInput.text.toString().contains(fullPath)) {
-                    row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
+                    row.addView(sidebarIconButton("add", "加入输入框 ${entry.optString("name")}") {
                         insertWorkspacePathIntoComposer(fullPath)
                     }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { leftMargin = dp(2) })
                 }
@@ -5536,6 +5536,23 @@ class MainActivity : Activity() {
         isFocusable = true
         isClickable = true
         setOnClickListener { action() }
+    }
+
+    private fun sidebarIconButton(icon: String, description: String, action: () -> Unit): ImageButton =
+        iconButton(icon, description, action).apply {
+            setImageResource(sidebarIconResource(icon))
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+            tooltipText = description
+        }
+
+    private fun sidebarIconResource(icon: String): Int = when (icon) {
+        "add" -> R.drawable.ic_sidebar_add
+        "back" -> R.drawable.ic_sidebar_back
+        "open" -> R.drawable.ic_sidebar_open
+        "close" -> R.drawable.ic_sidebar_close
+        "search" -> R.drawable.ic_sidebar_search
+        "settings" -> R.drawable.ic_sidebar_settings
+        else -> iconResource(icon)
     }
 
     private fun setBrandIcon(view: ImageView, engine: String) {
