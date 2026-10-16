@@ -309,6 +309,7 @@ class MainActivity : Activity() {
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
     private var running = false
+    private val pausedThreadKeys = mutableSetOf<String>()
     @Volatile private var foreground = false
     private var sidebarVisible = false
     private var sidebarProgress = 0f
@@ -430,6 +431,7 @@ class MainActivity : Activity() {
     private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
     private lateinit var sidebarBrandMark: ImageView
     private lateinit var sendButton: TextView
+    private lateinit var pauseButton: TextView
     private lateinit var modelButton: TextView
     private lateinit var effortButton: TextView
     private lateinit var permissionButton: TextView
@@ -1145,7 +1147,7 @@ class MainActivity : Activity() {
         completionNotice.addView(brand, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
         val thread = findThread(threadId)
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        copy.addView(label(thread?.let(::threadTitle)?.let { "“$it”已完成回复" } ?: "另一模式的对话已完成回复", 12, TEXT, true), widthWrap())
+        copy.addView(label(thread?.let(::threadTitle)?.let { "“$it”${tr("已完成回复")}" } ?: tr("另一模式的对话已完成回复"), 12, TEXT, true, translateUi = false), widthWrap())
         copy.addView(label("${if (engine == "claude-code") "Claude Code" else "Codex"} 已完成 · 点击查看", 10, MUTED), widthWrap())
         completionNotice.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
         completionNotice.addView(ImageView(this).apply {
@@ -1301,11 +1303,22 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
+        pauseButton = label("Ⅱ", 16, SUBTLE, true).apply {
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = rounded(PANEL_INSET, dp(15))
+            setOnClickListener { if (running) interruptTurn() else continueInterruptedTurn() }
+            visibility = View.GONE
+        }
+        footer.addView(pauseButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
+            leftMargin = dp(4)
+            gravity = Gravity.CENTER_VERTICAL
+        })
         sendButton = label("↑", 18, DARK, true).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
             background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
-            setOnClickListener { if (queueEditItem != null) finishQueueEdit(true) else if (running) interruptTurn() else sendCurrentMessage() }
+            setOnClickListener { if (queueEditItem != null) finishQueueEdit(true) else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
         footer.addView(sendButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
@@ -1356,7 +1369,7 @@ class MainActivity : Activity() {
         }
         searchBox.addView(searchIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
         drawerSearch = EditText(this).apply {
-            hint = "搜索聊天记录"
+            hint = tr("搜索聊天记录")
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
             setSingleLine(true)
             textSize = adjustedTextSize(13)
@@ -1508,19 +1521,22 @@ class MainActivity : Activity() {
         val actionColor = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else SUBTLE
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
-        setPadding(dp(9), 0, dp(7), 0)
+        setPadding(dp(4), 0, dp(4), 0)
         background = rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
         isFocusable = true
-        contentDescription = title
+        contentDescription = tr(title)
         setOnClickListener { action() }
         val iconView = ImageView(this@MainActivity).apply {
             setImageResource(sidebarIconResource(icon))
             imageTintList = ColorStateList.valueOf(actionColor)
         }
-        val labelView = label(title, 11, actionColor, true)
+        val labelView = label(title, 11, actionColor, true).apply {
+            setSingleLine(true)
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         sidebarActionAccentViews += iconView to labelView
-        addView(iconView, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(7) })
+        addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(4) })
         addView(labelView, widthWrap())
     }
 
@@ -1540,7 +1556,7 @@ class MainActivity : Activity() {
             ?: runtime.optString("workspace", "本机项目")
         statusView.visibility = if (runtime.optBoolean("connected", false)) View.GONE else View.VISIBLE
         statusView.text = runtime.optString("error").takeIf { it.isNotBlank() && it != "null" }
-            ?: if (runtime.optBoolean("available", false)) "Codex 已连接" else "正在连接 Codex…"
+            ?: tr(if (runtime.optBoolean("available", false)) "Codex 已连接" else "正在连接 Codex…")
         statusView.setTextColor(if (runtime.optBoolean("connected", false)) MUTED else WARNING)
         updateSendButton()
         updateComposerPreferences()
@@ -1645,7 +1661,7 @@ class MainActivity : Activity() {
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
             val title = threadTitle(thread)
-            val titleView = label(title, 13, if (selected) TEXT else SUBTLE, selected).apply {
+            val titleView = label(title, 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
@@ -1675,6 +1691,12 @@ class MainActivity : Activity() {
     private fun setSidebarVisible(visible: Boolean) {
         if (!::drawer.isInitialized) return
         val host = sidebarHost ?: return
+        if (visible && (imeInsetVisible || window.currentFocus is EditText)) {
+            val focused = window.currentFocus
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow((focused ?: composerInput).windowToken, 0)
+            parkActivityInputFocus()
+        }
         if (visible && workspaceVisible) setWorkspaceVisible(false)
         sidebarVisible = visible
         if (visible) renderSidebar()
@@ -2410,10 +2432,11 @@ class MainActivity : Activity() {
             "与 Codex 完成一个伟大项目"
         }
         welcomeTitleView.visibility = View.VISIBLE
-        welcomeTitleView.contentDescription = text
-        if (!welcomeAnimationActive || welcomeAnimationText != text) {
+        val localizedText = tr(text)
+        welcomeTitleView.contentDescription = localizedText
+        if (!welcomeAnimationActive || welcomeAnimationText != localizedText) {
             handler.removeCallbacks(welcomeTypingRunnable)
-            welcomeAnimationText = text
+            welcomeAnimationText = localizedText
             welcomeCharacterIndex = 0
             welcomeCaretBlinkCount = 0
             welcomeCaretVisible = true
@@ -2699,7 +2722,7 @@ class MainActivity : Activity() {
                 val contentColor = if (role == "user") {
                     if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT
                 } else TEXT
-                val content = label(text.ifBlank { "（附件消息）" }, 14, contentColor).apply {
+                val content = label(text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -2799,7 +2822,7 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank()) continue
-                    val content = label(text, 14, TEXT).apply {
+                    val content = label(text, 14, TEXT, translateUi = false).apply {
                         setTextIsSelectable(true)
                         setLineSpacing(dp(2).toFloat(), 1.08f)
                         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -2908,7 +2931,7 @@ class MainActivity : Activity() {
             copy.addView(label(operationLabel(operation), 12, TEXT, true), widthWrap())
             val paths = operationPaths(operation)
             val detail = operationDetail(operation, paths)
-            if (detail.isNotBlank()) copy.addView(label(detail, 10, MUTED).apply {
+            if (detail.isNotBlank()) copy.addView(label(detail, 10, MUTED, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
@@ -3326,7 +3349,7 @@ class MainActivity : Activity() {
                         addRule(RelativeLayout.ALIGN_PARENT_END)
                         addRule(RelativeLayout.CENTER_VERTICAL)
                     })
-                    line.addView(label(item.path, 11, ACCENT).apply {
+                    line.addView(label(item.path, 11, ACCENT, translateUi = false).apply {
                         maxLines = 1
                         ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                     }, RelativeLayout.LayoutParams(MATCH, dp(22)).apply {
@@ -3380,7 +3403,7 @@ class MainActivity : Activity() {
         }
         box.addView(label("需要批准", 13, WARNING, true), widthWrap())
         val params = approval.optJSONObject("params") ?: JSONObject()
-        box.addView(label(params.optString("reason").ifBlank { params.optString("command") }.ifBlank { "Codex 请求执行一项需要批准的操作。" }, 12, TEXT).apply {
+        box.addView(label(params.optString("reason").ifBlank { params.optString("command") }.ifBlank { tr("Codex 请求执行一项需要批准的操作。") }, 12, TEXT, translateUi = false).apply {
             setPadding(0, dp(5), 0, dp(7)); setTextIsSelectable(true)
         }, widthWrap())
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
@@ -3423,7 +3446,7 @@ class MainActivity : Activity() {
                 background = rounded(PANEL_INSET, dp(9))
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
-            card.addView(label("${index + 1}.  ${text.ifBlank { "（附件消息）" }}", 12, TEXT).apply {
+            card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, TEXT, translateUi = false).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val images = item.optJSONArray("images")
@@ -3458,9 +3481,15 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, dp(44), 1f))
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
-            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
-            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
-            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply {
+                setImageResource(R.drawable.ic_queue_edit)
+            }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
+            controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
+                setImageResource(R.drawable.ic_queue_send)
+            }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
+            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply {
+                setImageResource(R.drawable.ic_queue_delete)
+            }, LinearLayout.LayoutParams(dp(44), dp(44)))
             details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
             card.addView(details, LinearLayout.LayoutParams(MATCH, dp(44)))
             queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
@@ -3530,10 +3559,10 @@ class MainActivity : Activity() {
         } else submitPayload(threadId, payload)
     }
 
-    private fun queuedPayload(text: String, id: String): JSONObject {
+    private fun queuedPayload(text: String, id: String, files: List<JSONObject> = selectedFiles): JSONObject {
         val images = JSONArray()
         val documents = JSONArray()
-        selectedFiles.forEach { file ->
+        files.forEach { file ->
             if (file.optString("kind") == "image") images.put(JSONObject()
                 .put("name", file.optString("name"))
                 .put("mediaType", file.optString("mediaType"))
@@ -3582,6 +3611,7 @@ class MainActivity : Activity() {
                         renderHeader()
                     }
                     queuedMessages = response.optJSONArray("queue") ?: JSONArray()
+                    pausedThreadKeys.remove(threadTitleKey(threadId))
                     selectedFiles.clear()
                     renderAttachmentStrip()
                     renderQueue()
@@ -3607,25 +3637,73 @@ class MainActivity : Activity() {
     private fun updateSendButton() {
         if (!::sendButton.isInitialized) return
         val editingQueue = queueEditItem != null
-        val pausing = running && !editingQueue
         sendButton.isEnabled = !sendBusy
-        sendButton.text = if (sendBusy) "…" else if (editingQueue) "✓" else if (pausing) "Ⅱ" else "↑"
-        sendButton.contentDescription = when {
+        sendButton.text = if (sendBusy) "…" else if (editingQueue) "✓" else "↑"
+        sendButton.contentDescription = tr(when {
             editingQueue -> "确认修改排队消息"
-            pausing -> "暂停回复"
             else -> "发送消息"
+        })
+        sendButton.setTextColor(DARK)
+        sendButton.background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+        if (::pauseButton.isInitialized) {
+            val canContinue = activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true
+            pauseButton.visibility = if (!editingQueue && (running || canContinue)) View.VISIBLE else View.GONE
+            pauseButton.text = if (running) "Ⅱ" else "▶"
+            pauseButton.contentDescription = tr(if (running) "暂停当前回复" else "继续回复：发送续写请求")
+            pauseButton.isEnabled = !sendBusy
         }
-        sendButton.setTextColor(if (pausing) TEXT else DARK)
-        sendButton.background = rounded(if (pausing) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
     private fun interruptTurn() {
         val threadId = activeThreadId ?: return
+        if (sendBusy) return
+        val key = threadTitleKey(threadId)
+        val api = RemoteApi(endpoint, token)
+        setSendBusy(true)
         io.execute {
             try {
-                RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/interrupt", JSONObject())
-                handler.post { showStatus("已发送暂停请求"); running = false; renderHeader() }
-            } catch (error: Exception) { handler.post { showStatus(error.message ?: "暂停失败") } }
+                api.post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/interrupt", JSONObject())
+                handler.post {
+                    pausedThreadKeys += key
+                    if (activeThreadId == threadId && threadTitleKey(threadId) == key) {
+                        showStatus("已停止当前回复；点继续会发送续写请求")
+                        running = false
+                        setSendBusy(false)
+                        renderHeader()
+                        refreshActiveThread(false)
+                    } else setSendBusy(false)
+                }
+            } catch (error: Exception) { handler.post { setSendBusy(false); showStatus(error.message ?: "暂停失败") } }
+        }
+    }
+
+    private fun continueInterruptedTurn() {
+        val threadId = activeThreadId ?: return
+        val key = threadTitleKey(threadId)
+        if (key !in pausedThreadKeys) return
+        val text = if (appLanguage == "en")
+            "Continue the interrupted reply from where it stopped. Do not repeat earlier content. Keep the conversation's language."
+        else "请继续刚才被中断的回复，从停止处接着回答，避免重复已经说过的内容，并保持原对话语言。"
+        val payload = queuedPayload(text, UUID.randomUUID().toString(), emptyList())
+        val api = RemoteApi(endpoint, token)
+        setSendBusy(true)
+        io.execute {
+            try {
+                val response = api.post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
+                handler.post {
+                    pausedThreadKeys.remove(key)
+                    setSendBusy(false)
+                    if (activeThreadId == threadId && threadTitleKey(threadId) == key) {
+                        queuedMessages = response.optJSONArray("queue") ?: JSONArray()
+                        running = response.optBoolean("sent", false)
+                        renderQueue()
+                        renderHeader()
+                        refreshActiveThread(false)
+                    }
+                }
+            } catch (error: Exception) {
+                handler.post { setSendBusy(false); showStatus(error.message ?: "继续回复失败") }
+            }
         }
     }
 
@@ -3662,7 +3740,7 @@ class MainActivity : Activity() {
                             selectedFiles.add(shallowCopyObject(document).put("kind", "document"))
                         }
                     }
-                    composerInput.hint = "编辑排队消息…"
+                    composerInput.hint = tr("编辑排队消息…")
                     queueEditBar.visibility = View.VISIBLE
                     renderAttachmentStrip()
                     updateComposerPreferences()
@@ -3718,7 +3796,7 @@ class MainActivity : Activity() {
                     composerInput.setText(queueEditDraft)
                     selectedFiles = queueEditDraftFiles
                     queueEditDraftFiles = mutableListOf()
-                    composerInput.hint = "发送消息…"
+                    composerInput.hint = tr("发送消息…")
                     queueEditBar.visibility = View.GONE
                     renderAttachmentStrip()
                     updateComposerPreferences()
@@ -3860,6 +3938,7 @@ class MainActivity : Activity() {
                 }
                 syncRevisions.remove(id)
                 displayedThreadTitles.remove(threadTitleKey(id))
+                pausedThreadKeys.remove(threadTitleKey(id))
                 refreshThreads(false)
             })
         }
@@ -3871,12 +3950,12 @@ class MainActivity : Activity() {
         val effortKey = if (currentMode == "codex") "effort" else "claudeEffort"
         val selectedModel = preference(modelKey)
         val modelLabel = if (currentMode == "codex") modelLabel(selectedModel) else claudeModelLabel(selectedModel)
-        modelButton.text = modelLabel
-        effortButton.text = effortLabel(preference(effortKey))
-        permissionButton.text = when (currentMode) {
+        modelButton.text = tr(modelLabel)
+        effortButton.text = tr(effortLabel(preference(effortKey)))
+        permissionButton.text = tr(when (currentMode) {
             "codex" -> approvalLabel(preference("approvalPolicy"))
             else -> claudePermissionLabel(preference("claudePermissionMode"))
-        }
+        })
     }
 
     private fun preference(key: String): String? {
@@ -4315,6 +4394,35 @@ class MainActivity : Activity() {
             fontSeek.setPadding(0, dp(10), 0, dp(10))
         })
 
+        val languageSection = section("语言", "选择 APP 界面使用的语言；聊天和文件内容保持原文。")
+        listOf("zh" to "简体中文", "en" to "English").forEach { (code, title) ->
+            val selected = appLanguage == code
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), 0, dp(12), 0)
+                background = rounded(if (selected) colorWithAlpha(settingsAccent, .16f) else PANEL_INSET, dp(9))
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    if (appLanguage != code) {
+                        prefs.edit().putString(KEY_APP_LANGUAGE, code).apply()
+                        rerenderAppKeepSettings()
+                    }
+                }
+            }
+            row.addView(label(title, 13, if (selected) settingsAccent else TEXT, selected), LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (selected) row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_check)
+                imageTintList = ColorStateList.valueOf(settingsAccent)
+                contentDescription = tr("已选择")
+            }, LinearLayout.LayoutParams(dp(18), dp(18)))
+            languageSection.addView(row, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(5) })
+        }
+
+        val about = section("关于与更新", "手动检查项目公开发布的 Android 版本。")
+        about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
+
         val notifications = section("系统通知", "应用在后台时提醒回复完成；通知不包含聊天正文。")
         val notificationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4350,8 +4458,8 @@ class MainActivity : Activity() {
                 contentDescription = if (selected) "当前连接 ${profile.name}" else "切换到 ${profile.name}"
                 setOnClickListener { switchConnection(profile.id) }
             }
-            copy.addView(label(if (selected) "${profile.name} · 当前" else profile.name, 12, if (selected) ACCENT else TEXT, selected), widthWrap())
-            copy.addView(label(profile.endpoint, 10, MUTED).apply {
+            copy.addView(label(if (selected) "${profile.name} · ${tr("当前")}" else profile.name, 12, if (selected) ACCENT else TEXT, selected, translateUi = false), widthWrap())
+            copy.addView(label(profile.endpoint, 10, MUTED, translateUi = false).apply {
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, dp(42), 1f))
@@ -4387,6 +4495,67 @@ class MainActivity : Activity() {
         settingsOverlay = null
         settingsScroll = null
         settingsNotificationButton = null
+    }
+
+    private fun checkForUpdates() {
+        showToast(tr("正在检查更新…"))
+        io.execute {
+            try {
+                val client = socketClient.newBuilder().callTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build()
+                val request = Request.Builder()
+                    .url("https://api.github.com/repos/sevencnup/wotty-codex-remote/releases?per_page=30")
+                    .header("Accept", "application/vnd.github+json")
+                    .header("User-Agent", "CAR-Android/${BuildConfig.VERSION_NAME}")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
+                    val releases = JSONArray(response.body?.string().orEmpty())
+                    val candidates = (0 until releases.length()).mapNotNull { releases.optJSONObject(it) }
+                        .filter { !it.optBoolean("draft", false) }
+                        .mapNotNull { release ->
+                            val tag = release.optString("tag_name")
+                            if (parseAppVersion(tag) == null) null else tag to release.optString("html_url")
+                        }
+                    val latest = candidates.maxWithOrNull { a, b -> compareAppVersions(a.first, b.first) }
+                    handler.post {
+                        if (isFinishing || isDestroyed) return@post
+                        when {
+                            latest == null -> showToast(tr("尚无公开发布的 Android 版本"))
+                            compareAppVersions(latest.first, BuildConfig.VERSION_NAME) <= 0 -> showToast(tr("当前已是最新发布版本"))
+                            else -> showConfirmDialog(
+                                tr("发现新版本"),
+                                tr("发现版本 ${latest.first}。打开发布页面查看安装包？"),
+                                tr("查看发布页"),
+                            ) {
+                                val url = latest.second
+                                if (url.startsWith("https://github.com/")) {
+                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                                }
+                            }
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                handler.post { if (!isFinishing && !isDestroyed) showToast(tr("检查更新失败，请稍后重试")) }
+            }
+        }
+    }
+
+    private fun parseAppVersion(value: String): List<Int>? {
+        val match = Regex("^v?(\\d+)\\.(\\d+)\\.(\\d+)(?:-(dev|beta)\\.(\\d+))?$").matchEntire(value) ?: return null
+        val stage = when (match.groupValues[4]) { "dev" -> 0; "beta" -> 1; else -> 2 }
+        return listOf(match.groupValues[1].toInt(), match.groupValues[2].toInt(), match.groupValues[3].toInt(), stage,
+            match.groupValues[5].toIntOrNull() ?: 0)
+    }
+
+    private fun compareAppVersions(left: String, right: String): Int {
+        val a = parseAppVersion(left) ?: return -1
+        val b = parseAppVersion(right) ?: return 1
+        for (index in a.indices) {
+            val difference = a[index].compareTo(b[index])
+            if (difference != 0) return difference
+        }
+        return 0
     }
 
     private fun settingsActionRow(title: String, description: String, action: () -> Unit): View = LinearLayout(this).apply {
@@ -4565,7 +4734,7 @@ class MainActivity : Activity() {
 
     private fun refreshSettingsNotificationControl() {
         settingsNotificationButton?.apply {
-            text = if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) "已开启" else "已关闭"
+            text = tr(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) "已开启" else "已关闭")
             setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) ACCENT else MUTED)
         }
     }
@@ -4616,8 +4785,8 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            row.addView(label(if (selected) "${profile.name} · 当前" else profile.name, 12, if (selected) ACCENT else TEXT, selected), widthWrap())
-            row.addView(label(profile.endpoint, 10, MUTED).apply {
+            row.addView(label(if (selected) "${profile.name} · ${tr("当前")}" else profile.name, 12, if (selected) ACCENT else TEXT, selected, translateUi = false), widthWrap())
+            row.addView(label(profile.endpoint, 10, MUTED, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
@@ -4955,7 +5124,7 @@ class MainActivity : Activity() {
                     imageTintList = if (isDirectory) ColorStateList.valueOf(ACCENT) else null
                     contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
                 }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
-                row.addView(label(entry.optString("name"), 13, TEXT).apply {
+                row.addView(label(entry.optString("name"), 13, TEXT, translateUi = false).apply {
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                 }, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -5415,7 +5584,7 @@ class MainActivity : Activity() {
             imageTintList = null
             contentDescription = fileGlyph(entry.path)
         }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(7) })
-        header.addView(label(entry.path.substringAfterLast('/'), 13, TEXT, true).apply {
+        header.addView(label(entry.path.substringAfterLast('/'), 13, TEXT, true, translateUi = false).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, dp(34), 1f))
@@ -5522,7 +5691,7 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label(path.substringAfterLast('/'), 13, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(34), 1f))
+        header.addView(label(path.substringAfterLast('/'), 13, TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(34), 1f))
         val saveButton = smallButton("保存") { savePreviewFile(requestPath, effectiveCwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }.apply {
             visibility = View.GONE
         }
@@ -6126,6 +6295,7 @@ class MainActivity : Activity() {
         when (method) {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
+                if (eventThread != null) handler.post { pausedThreadKeys.remove(threadTitleKey(eventThread)) }
                 if (eventThread == activeThreadId) {
                     running = true
                     if (foreground) handler.post { renderHeader(); renderMessages(false) }
@@ -6268,13 +6438,14 @@ class MainActivity : Activity() {
     private fun showStatus(message: String) {
         if (::statusView.isInitialized) {
             statusView.visibility = View.VISIBLE
-            statusView.text = message
+            val displayMessage = tr(message)
+            statusView.text = displayMessage
             statusView.setTextColor(WARNING)
-            handler.postDelayed({ if (::statusView.isInitialized && statusView.text == message && runtime.optBoolean("connected", false)) statusView.visibility = View.GONE }, 5000)
+            handler.postDelayed({ if (::statusView.isInitialized && statusView.text == displayMessage && runtime.optBoolean("connected", false)) statusView.visibility = View.GONE }, 5000)
         } else showToast(message)
     }
 
-    private fun showToast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun showToast(message: String) = Toast.makeText(this, tr(message), Toast.LENGTH_SHORT).show()
 
     private fun <T> runApi(block: () -> T, success: (T) -> Unit = {}, failure: (Throwable) -> Unit = { showStatus(it.message ?: "请求失败") }) {
         io.execute {
@@ -6414,7 +6585,7 @@ class MainActivity : Activity() {
                     setPadding(dp(9), dp(3), dp(7), dp(3))
                     background = rounded(PANEL_INSET, dp(8))
                 }
-                chip.addView(label(file.optString("name"), 10, SUBTLE).apply {
+                chip.addView(label(file.optString("name"), 10, SUBTLE, translateUi = false).apply {
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
                 }, LinearLayout.LayoutParams(dp(150), WRAP))
@@ -6539,7 +6710,7 @@ class MainActivity : Activity() {
     }
 
     private fun editField(hintText: String, value: String, inputTypeValue: Int): EditText = EditText(this).apply {
-        hint = hintText
+        hint = tr(hintText)
         setText(value)
         inputType = inputTypeValue
         setTextColor(TEXT)
@@ -6550,8 +6721,12 @@ class MainActivity : Activity() {
         background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(9), BORDER, dp(1))
     }
 
-    private fun label(value: String, size: Int, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
-        text = value
+    private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
+
+    private fun tr(value: String): String = if (appLanguage == "en") UiEnglish.translate(value) else value
+
+    private fun label(value: String, size: Int, color: Int, bold: Boolean = false, translateUi: Boolean = true): TextView = TextView(this).apply {
+        text = if (translateUi) tr(value) else value
         textSize = adjustedTextSize(size)
         setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
@@ -6568,7 +6743,7 @@ class MainActivity : Activity() {
         })
         scaleType = ImageView.ScaleType.FIT_CENTER
         setPadding(dp(9), dp(9), dp(9), dp(9))
-        contentDescription = description
+        contentDescription = tr(description)
         background = ColorDrawable(Color.TRANSPARENT)
         foreground = null
         stateListAnimator = null
@@ -6666,7 +6841,7 @@ class MainActivity : Activity() {
     }
 
     private fun actionButton(value: String): Button = Button(this).apply {
-        text = value
+        text = tr(value)
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
         setTextColor(DARK)
@@ -6831,6 +7006,7 @@ class MainActivity : Activity() {
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val KEY_LIGHT_THEME = "native_light_theme"
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
+        private const val KEY_APP_LANGUAGE = "native_app_language"
         private const val KEY_WORKSPACE_EXPLORER_ROOT = "native_workspace_explorer_root"
         private const val TAG_INSET_CONTENT = "inset_content"
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
