@@ -71,6 +71,10 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.util.LruCache
+import io.noties.markwon.Markwon
+import io.noties.markwon.AbstractMarkwonPlugin
+import io.noties.markwon.core.MarkwonTheme
+import io.noties.markwon.ext.tables.TablePlugin
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -1563,9 +1567,9 @@ class MainActivity : Activity() {
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
         val actionColor = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else SUBTLE
-        orientation = LinearLayout.HORIZONTAL
+        orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
-        setPadding(dp(4), 0, dp(4), 0)
+        setPadding(dp(1), dp(2), dp(1), dp(2))
         background = rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
         isFocusable = true
@@ -1578,10 +1582,11 @@ class MainActivity : Activity() {
         val labelView = label(title, 11, actionColor, true).apply {
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.END
+            gravity = Gravity.CENTER
         }
         sidebarActionAccentViews += iconView to labelView
-        addView(iconView, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(4) })
-        addView(labelView, widthWrap())
+        addView(iconView, LinearLayout.LayoutParams(dp(17), dp(17)))
+        addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
     }
 
     private fun renderHeader() {
@@ -2976,15 +2981,16 @@ class MainActivity : Activity() {
                 val contentColor = if (role == "user") {
                     if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT
                 } else TEXT
-                val content = label(text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
+                val content = label(if (role == "assistant") "" else text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
                     setTextIsSelectable(true)
-                    setLineSpacing(dp(2).toFloat(), 1.08f)
+                    setLineSpacing(dp(if (role == "assistant") 3 else 2).toFloat(), if (role == "assistant") 1.15f else 1.08f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                     setHorizontallyScrolling(false)
                     breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                     maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
+                if (role == "assistant") assistantMarkdown.setMarkdown(content, text.ifBlank { tr("（附件消息）") })
                 val contentWidth = if (role == "user") {
                     val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
                     naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
@@ -3187,6 +3193,38 @@ class MainActivity : Activity() {
     private val activityLabel: String
         get() = if (socketConnected) "正在思考…" else "正在等待连接…"
 
+    private var assistantMarkdownAppearance = ""
+    private var assistantMarkdownCache: Markwon? = null
+    private val assistantMarkdown: Markwon
+        get() {
+            val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT"
+            assistantMarkdownCache?.takeIf { assistantMarkdownAppearance == appearance }?.let { return it }
+            return Markwon.builder(this)
+                .usePlugin(object : AbstractMarkwonPlugin() {
+                    override fun configureTheme(builder: MarkwonTheme.Builder) {
+                        builder.linkColor(ACCENT)
+                            .blockMargin(dp(10))
+                            .blockQuoteColor(MUTED)
+                            .blockQuoteWidth(dp(2))
+                            .codeTextColor(TEXT)
+                            .codeBlockTextColor(TEXT)
+                            .codeBackgroundColor(PANEL_INSET)
+                            .codeBlockBackgroundColor(PANEL_INSET)
+                            .codeBlockMargin(dp(8))
+                            .headingBreakHeight(dp(4))
+                    }
+                })
+                .usePlugin(TablePlugin.create { table ->
+                    table.tableCellPadding(dp(7))
+                        .tableBorderColor(BORDER)
+                        .tableBorderWidth(dp(1))
+                        .tableHeaderRowBackgroundColor(PANEL_INSET)
+                        .tableOddRowBackgroundColor(PANEL)
+                        .tableEvenRowBackgroundColor(PANEL_INSET)
+                })
+                .build().also { assistantMarkdownCache = it; assistantMarkdownAppearance = appearance }
+        }
+
     private fun addAssistantTimeline(container: LinearLayout, message: JSONObject, maximumWidth: Int) {
         val timeline = message.optJSONArray("_activityTimeline") ?: return
         val pendingOperations = mutableListOf<JSONObject>()
@@ -3205,15 +3243,16 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank()) continue
-                    val content = label(text, 14, TEXT, translateUi = false).apply {
+                    val content = label("", 14, TEXT, translateUi = false).apply {
                         setTextIsSelectable(true)
-                        setLineSpacing(dp(2).toFloat(), 1.08f)
+                        setLineSpacing(dp(3).toFloat(), 1.15f)
                         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                         setHorizontallyScrolling(false)
                         breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
                         hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                         maxWidth = maximumWidth
                     }
+                    assistantMarkdown.setMarkdown(content, text)
                     container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
                 "operation" -> block.optJSONObject("item")?.let(pendingOperations::add)
@@ -3879,14 +3918,17 @@ class MainActivity : Activity() {
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
             controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply {
                 setImageResource(R.drawable.ic_queue_edit)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
                 setImageResource(R.drawable.ic_queue_send)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply {
                 setImageResource(R.drawable.ic_queue_delete)
+                setPadding(dp(12), dp(12), dp(12), dp(12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
             details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
