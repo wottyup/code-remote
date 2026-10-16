@@ -110,7 +110,7 @@ class MainActivity : Activity() {
     private val DARK: Int get() = when (themeName) {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
-        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), (100 - prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0)).coerceIn(0, 100) / 100f)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), (100 - backgroundTransparency()) / 100f)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
@@ -261,6 +261,8 @@ class MainActivity : Activity() {
     private var workspacePathInput: EditText? = null
     private var themeBackgroundPickerActive = false
     private var previewFontAdjustment: Int? = null
+    private var previewBackgroundTransparency: Int? = null
+    private var themeBackgroundImageView: ImageView? = null
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
     private val historyMemoryCache = object : LinkedHashMap<String, JSONObject>(12, .75f, true) {
@@ -1315,6 +1317,7 @@ class MainActivity : Activity() {
         private var startProgress = 0f
         private var swipeTarget: String? = null
         private var interceptingSwipe = false
+        private var selectableTextGesture = false
         private var velocityTracker: VelocityTracker? = null
 
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -1324,11 +1327,11 @@ class MainActivity : Activity() {
                     startY = event.y
                     velocityTracker?.recycle()
                     velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                    selectableTextGesture = touchesSelectableText(event.x, event.y)
                     swipeTarget = when {
-                        // Settings controls and text editing need the full touch
-                        // sequence. Cancelling their MOVE events breaks SeekBar
-                        // dragging and can drop the composer's cursor/selection.
-                        settingsOverlay != null || isInteractiveTouchTarget(event.x, event.y) -> null
+                        // Keep controls that need uninterrupted drags. Ordinary
+                        // chat text and clickable rows can still begin a horizontal swipe.
+                        settingsOverlay != null || isGestureProtectedTouchTarget(event.x, event.y) -> null
                         sidebarVisible || sidebarProgress > .02f -> if (event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))) "sidebar" else null
                         workspaceVisible || workspaceProgress > .02f -> "workspace"
                         !isChatSwipeOrigin(event.y) -> null
@@ -1370,6 +1373,7 @@ class MainActivity : Activity() {
 
         private fun beginSwipeIfNeeded(event: MotionEvent): Boolean {
             val target = swipeTarget ?: return false
+            if (selectableTextGesture && event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()) return false
             val dx = event.x - startX
             val dy = event.y - startY
             val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.25f
@@ -1448,34 +1452,42 @@ class MainActivity : Activity() {
         private fun clearSwipeTracking() {
             interceptingSwipe = false
             swipeTarget = null
+            selectableTextGesture = false
             velocityTracker?.recycle()
             velocityTracker = null
         }
 
-        private fun isInteractiveTouchTarget(x: Float, y: Float): Boolean {
-            fun deepest(view: View, localX: Float, localY: Float): View? {
-                if (view.visibility != View.VISIBLE || localX < 0f || localY < 0f ||
-                    localX >= view.width || localY >= view.height
-                ) return null
-                if (view is ViewGroup) {
-                    for (index in view.childCount - 1 downTo 0) {
-                        val child = view.getChildAt(index)
-                        val childX = localX + view.scrollX - child.left - child.translationX
-                        val childY = localY + view.scrollY - child.top - child.translationY
-                        deepest(child, childX, childY)?.let { return it }
-                    }
-                }
-                return view
-            }
-
-            var target = deepest(this, x, y)
+        private fun isGestureProtectedTouchTarget(x: Float, y: Float): Boolean {
+            var target = deepestTouchTarget(this, x, y)
             while (target != null && target !== this) {
-                if (target is EditText || target is SeekBar || target is HorizontalScrollView ||
-                    target.isClickable || target.isLongClickable
-                ) return true
+                if (target is EditText || target is SeekBar || target is HorizontalScrollView) return true
                 target = target.parent as? View
             }
             return false
+        }
+
+        private fun touchesSelectableText(x: Float, y: Float): Boolean {
+            var target = deepestTouchTarget(this, x, y)
+            while (target != null && target !== this) {
+                if (target is TextView && target.isTextSelectable) return true
+                target = target.parent as? View
+            }
+            return false
+        }
+
+        private fun deepestTouchTarget(view: View, localX: Float, localY: Float): View? {
+            if (view.visibility != View.VISIBLE || localX < 0f || localY < 0f ||
+                localX >= view.width || localY >= view.height
+            ) return null
+            if (view is ViewGroup) {
+                for (index in view.childCount - 1 downTo 0) {
+                    val child = view.getChildAt(index)
+                    val childX = localX + view.scrollX - child.left - child.translationX
+                    val childY = localY + view.scrollY - child.top - child.translationY
+                    deepestTouchTarget(child, childX, childY)?.let { return it }
+                }
+            }
+            return view
         }
 
         private fun isChatSwipeOrigin(y: Float): Boolean = y >= dp(48) && y <= height - dp(145)
@@ -3571,11 +3583,18 @@ class MainActivity : Activity() {
                 contentDescription = "背景透明度"
             }
             transparencySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) { transparencyLabel.text = "$progress%" }
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
+                    transparencyLabel.text = "$progress%"
+                    if (fromUser) {
+                        previewBackgroundTransparency = progress
+                        updateCustomThemeBackgroundPreview()
+                    }
+                }
                 override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
                 override fun onStopTrackingTouch(seekBar: SeekBar) {
                     prefs.edit().putInt(KEY_BACKGROUND_TRANSPARENCY, seekBar.progress).apply()
-                    rerenderAppKeepSettings()
+                    previewBackgroundTransparency = null
+                    updateCustomThemeBackgroundPreview()
                 }
             })
             transparencyRow.addView(transparencySeek, LinearLayout.LayoutParams(MATCH, dp(38)))
@@ -5660,6 +5679,16 @@ class MainActivity : Activity() {
         Color.parseColor(prefs.getString(key, fallback) ?: fallback)
     }.getOrElse { Color.parseColor(fallback) }
 
+    private fun backgroundTransparency(): Int =
+        (previewBackgroundTransparency ?: prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0)).coerceIn(0, 100)
+
+    private fun updateCustomThemeBackgroundPreview() {
+        if (themeName != "custom") return
+        if (::root.isInitialized) root.setBackgroundColor(DARK)
+        if (::headerView.isInitialized) headerView.setBackgroundColor(DARK)
+        themeBackgroundImageView?.alpha = (100 - backgroundTransparency()) / 100f
+    }
+
     private fun colorWithAlpha(color: Int, opacity: Float): Int = Color.argb(
         (Color.alpha(color) * opacity.coerceIn(0f, 1f)).toInt(),
         Color.red(color),
@@ -5668,6 +5697,7 @@ class MainActivity : Activity() {
     )
 
     private fun installThemeBackground(target: FrameLayout) {
+        themeBackgroundImageView = null
         if (themeName != "custom") {
             target.setBackgroundColor(DARK)
             return
@@ -5676,13 +5706,14 @@ class MainActivity : Activity() {
         val storedUri = prefs.getString(KEY_CUSTOM_BACKGROUND_IMAGE, null).orEmpty()
         if (storedUri.isBlank()) return
         val image = runCatching { decodeThemeBackground(Uri.parse(storedUri)) }.getOrNull() ?: return
-        val opacity = (100 - prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0)).coerceIn(0, 100) / 100f
+        val opacity = (100 - backgroundTransparency()) / 100f
         val imageView = ImageView(this).apply {
             setImageBitmap(image)
             scaleType = ImageView.ScaleType.CENTER_CROP
             alpha = opacity
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
+        themeBackgroundImageView = imageView
         target.addView(imageView, FrameLayout.LayoutParams(MATCH, MATCH))
     }
 
