@@ -696,6 +696,7 @@ class MainActivity : Activity() {
         connectionGeneration++
         sidebarSelectionMode = false
         selectedSidebarThreadIds.clear()
+        setSendBusy(false)
         activeConnectionId = profile.id
         endpoint = profile.endpoint
         token = profile.token
@@ -1726,6 +1727,7 @@ class MainActivity : Activity() {
         val selected = bulkSelectedThreads()
         if (selected.isEmpty()) return
         val ids = selected.map { it.optString("id") }
+        val selectedMode = currentMode
         showConfirmDialog("批量删除聊天", "删除选中的 ${ids.size} 个聊天？此操作无法撤销。", "删除", destructive = true) {
             val generation = connectionGeneration
             val api = RemoteApi(endpoint, token)
@@ -1746,8 +1748,8 @@ class MainActivity : Activity() {
                         syncRevisions.remove(id)
                         displayedThreadTitles.remove(threadTitleKey(id))
                         pausedThreadKeys.remove(threadTitleKey(id))
-                        draftFilesByScope.remove(connectionScopedKey("draft_${currentMode}_$id"))
-                        pendingUserMessages.remove(connectionScopedKey("draft_${currentMode}_$id"))
+                        draftFilesByScope.remove(connectionScopedKey("draft_${selectedMode}_$id"))
+                        pendingUserMessages.remove(connectionScopedKey("draft_${selectedMode}_$id"))
                     }
                     if (activeThreadId?.let { it in removed } == true) {
                         prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
@@ -3025,7 +3027,7 @@ class MainActivity : Activity() {
             .put("_matchText", payload.optString("requestText").trim())
             .put("_imageCount", files.count { it.optString("kind") == "image" })
             .put("_knownUserIds", knownIds).put("_pending", true)
-            .put("_pendingState", "发送中…").put("_animate", true)
+            .put("_pendingState", "发送中…").put("_accepted", false).put("_animate", true)
         pendingUserMessages.getOrPut(scope) { mutableListOf() }.add(item)
         if (draftStorageKey() == scope) appendPendingBubble(item)
     }
@@ -3079,6 +3081,7 @@ class MainActivity : Activity() {
         val claimed = mutableSetOf<String>()
         val realUsers = messages.filter { it.first == "user" }.map { it.second }
         val remaining = pending.filterNot { local ->
+            if (!local.optBoolean("_accepted", false)) return@filterNot false
             val known = local.optJSONArray("_knownUserIds")
             realUsers.any { real ->
                 val id = real.optString("id")
@@ -3104,6 +3107,14 @@ class MainActivity : Activity() {
     private fun removePendingUserMessage(scope: String, requestId: String) {
         pendingUserMessages[scope]?.removeAll { it.optString("id") == requestId }
         if (pendingUserMessages[scope]?.isEmpty() == true) pendingUserMessages.remove(scope)
+        if (draftStorageKey() == scope) renderMessages(false)
+    }
+
+    private fun markPendingUserMessageAccepted(scope: String, requestId: String) {
+        pendingUserMessages[scope]?.firstOrNull { it.optString("id") == requestId }?.apply {
+            put("_accepted", true)
+            put("_pendingState", "同步中…")
+        }
         if (draftStorageKey() == scope) renderMessages(false)
     }
 
@@ -3843,7 +3854,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendCurrentMessage() {
-        if (queueEditPending) return
+        if (queueEditPending || sendBusy) return
         if (queueEditItem != null) { finishQueueEdit(true); return }
         android.view.inputmethod.BaseInputConnection.removeComposingSpans(composerInput.text)
         val text = composerInput.text.toString().trim()
@@ -3857,6 +3868,7 @@ class MainActivity : Activity() {
         val sendEndpoint = endpoint
         val sendToken = token
         val sendMode = currentMode
+        setSendBusy(true)
         (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(composerInput.windowToken, 0)
         composerInput.setText("")
         selectedFiles.clear()
@@ -3886,6 +3898,7 @@ class MainActivity : Activity() {
                     handler.post {
                         removePendingUserMessage(outgoingScope, requestId)
                         restoreFailedMessage(outgoingScope, text, outgoingFiles)
+                        if (sendConnection == connectionGeneration) setSendBusy(false)
                         showStatus(error.message ?: "新建对话失败")
                     }
                 }
@@ -3950,6 +3963,7 @@ class MainActivity : Activity() {
                 val response = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
                 handler.post {
                     if (!response.optBoolean("sent", false)) removePendingUserMessage(outgoingScope, payload.optString("id"))
+                    else markPendingUserMessageAccepted(outgoingScope, payload.optString("id"))
                     if (sendConnection != connectionGeneration) return@post
                     if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
                     if (activeThreadId == threadId) {
