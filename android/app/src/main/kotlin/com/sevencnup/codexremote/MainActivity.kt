@@ -348,6 +348,7 @@ class MainActivity : Activity() {
     private var queueEditThreadId: String? = null
     private var queueEditOwnerId: String? = null
     private var queueEditPending = false
+    private var sendBusy = false
     private var queueEditDraft = ""
     private var queueEditDraftFiles = mutableListOf<JSONObject>()
     private val queueEditPreferences = mutableMapOf<String, String?>()
@@ -914,7 +915,7 @@ class MainActivity : Activity() {
                     else -> terminalImeHiddenUntil
                 }
                 terminalImeVisible = terminalKeyboardVisible
-                if (keyboardVisible && imeFollowMessageBottom) {
+                if (keyboardJustOpened && imeFollowMessageBottom) {
                     scheduleImeMessageBottomFollow()
                 } else if (!keyboardVisible) {
                     imeFollowMessageBottom = false
@@ -944,7 +945,10 @@ class MainActivity : Activity() {
             override fun onEnd(animation: WindowInsetsAnimation) {
                 if ((animation.typeMask and WindowInsets.Type.ime()) != 0) {
                     imeAnimationDepth = (imeAnimationDepth - 1).coerceAtLeast(0)
-                    if (imeAnimationDepth == 0) view.rootWindowInsets?.let(update)
+                    if (imeAnimationDepth == 0) {
+                        view.rootWindowInsets?.let(update)
+                        if (imeInsetVisible && imeFollowMessageBottom) scheduleImeMessageBottomFollow()
+                    }
                 }
             }
         })
@@ -1526,10 +1530,7 @@ class MainActivity : Activity() {
         statusView.text = runtime.optString("error").takeIf { it.isNotBlank() && it != "null" }
             ?: if (runtime.optBoolean("available", false)) "Codex 已连接" else "正在连接 Codex…"
         statusView.setTextColor(if (runtime.optBoolean("connected", false)) MUTED else WARNING)
-        sendButton.text = if (running) "Ⅱ" else "↑"
-        sendButton.contentDescription = if (running) "暂停回复" else "发送消息"
-        sendButton.setTextColor(if (running) TEXT else DARK)
-        sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+        updateSendButton()
         updateComposerPreferences()
     }
 
@@ -3396,6 +3397,22 @@ class MainActivity : Activity() {
             card.addView(label("${index + 1}.  ${text.ifBlank { "（附件消息）" }}", 12, TEXT).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
+            val images = item.optJSONArray("images")
+            if (images != null && images.length() > 0) {
+                val previews = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+                for (imageIndex in 0 until images.length()) {
+                    val image = images.optJSONObject(imageIndex) ?: continue
+                    previews.addView(queuedImageThumbnail(image), LinearLayout.LayoutParams(dp(48), dp(48)).apply {
+                        rightMargin = dp(5)
+                    })
+                }
+                val imageScroll = HorizontalScrollView(this).apply {
+                    isHorizontalScrollBarEnabled = false
+                    overScrollMode = View.OVER_SCROLL_NEVER
+                    addView(previews, FrameLayout.LayoutParams(WRAP, MATCH))
+                }
+                card.addView(imageScroll, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(5) })
+            }
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
             val rawEffort = item.optString(if (claudeQueueItem) "claudeEffort" else "effort")
@@ -3419,6 +3436,36 @@ class MainActivity : Activity() {
             card.addView(details, LinearLayout.LayoutParams(MATCH, dp(28)))
             queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         }
+    }
+
+    private fun queuedImageThumbnail(file: JSONObject): ImageView {
+        val encoded = file.optString("data")
+        val cacheKey = "attachment:${file.optString("name")}:${encoded.length}:${encoded.take(40).hashCode()}"
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = rounded(PANEL, dp(8), BORDER, dp(1))
+            setImageResource(android.R.drawable.ic_menu_gallery)
+            imageTintList = ColorStateList.valueOf(MUTED)
+            clipToOutline = true
+            contentDescription = file.optString("name").ifBlank { "排队图片" }
+            tag = cacheKey
+        }
+        fun display(bitmap: Bitmap) {
+            image.imageTintList = null
+            image.setImageBitmap(bitmap)
+            image.setOnClickListener { showImageDialog(bitmap) }
+        }
+        messageImageCache.get(cacheKey)?.let { display(it); return image }
+        io.execute {
+            val bitmap = runCatching {
+                decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), 160)
+            }.getOrNull()
+            if (bitmap != null) handler.post {
+                messageImageCache.put(cacheKey, bitmap)
+                if (image.tag == cacheKey && image.parent != null) display(bitmap)
+            }
+        }
+        return image
     }
 
     private fun sendCurrentMessage() {
@@ -3510,9 +3557,9 @@ class MainActivity : Activity() {
                     selectedFiles.clear()
                     renderAttachmentStrip()
                     renderQueue()
+                    setSendBusy(false)
                     refreshActiveThread(false)
                     refreshThreads(false)
-                    if (!response.optBoolean("sent", false)) showToast("已加入排队")
                 }
             } catch (error: Exception) {
                 handler.post {
@@ -3525,10 +3572,23 @@ class MainActivity : Activity() {
     }
 
     private fun setSendBusy(busy: Boolean) {
+        sendBusy = busy
+        updateSendButton()
+    }
+
+    private fun updateSendButton() {
         if (!::sendButton.isInitialized) return
-        sendButton.isEnabled = !busy
-        sendButton.text = if (busy) "…" else if (queueEditItem != null) "✓" else if (running) "Ⅱ" else "↑"
-        sendButton.contentDescription = if (queueEditItem != null) "保存排队消息" else "发送消息"
+        val editingQueue = queueEditItem != null
+        val pausing = running && !editingQueue
+        sendButton.isEnabled = !sendBusy
+        sendButton.text = if (sendBusy) "…" else if (editingQueue) "✓" else if (pausing) "Ⅱ" else "↑"
+        sendButton.contentDescription = when {
+            editingQueue -> "确认修改排队消息"
+            pausing -> "暂停回复"
+            else -> "发送消息"
+        }
+        sendButton.setTextColor(if (pausing) TEXT else DARK)
+        sendButton.background = rounded(if (pausing) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
     private fun interruptTurn() {
@@ -5831,7 +5891,7 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val result = uris.map { readAttachment(it) }
-                handler.post { selectedFiles.addAll(result); attachRequestActive = false; renderAttachmentStrip(); showToast("已添加 ${result.size} 个附件") }
+                handler.post { selectedFiles.addAll(result); attachRequestActive = false; renderAttachmentStrip() }
             } catch (error: Exception) {
                 handler.post { attachRequestActive = false; showStatus(error.message ?: "读取附件失败") }
             }
