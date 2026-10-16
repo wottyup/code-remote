@@ -1618,16 +1618,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 
 .welcome-state__cursor { display: inline-block; min-width: .52em; }
-.remote-chat--claude .chat-message--user .chat-message__body { border: 0; background: rgba(217, 119, 87, .32); }
-.remote-chat--claude .chat-message--user .chat-message__content { color: #fff3ee; }
-.remote-shell--theme-light .remote-chat--claude .chat-message--user .chat-message__body,
-.remote-shell--theme-warm .remote-chat--claude .chat-message--user .chat-message__body { background: rgba(217, 119, 87, .28); }
-.remote-shell--theme-light .remote-chat--claude .chat-message--user .chat-message__content,
-.remote-shell--theme-warm .remote-chat--claude .chat-message--user .chat-message__content { color: #553126; }
-.remote-shell--theme-custom .remote-chat--claude .chat-message--user .chat-message__content { color: var(--custom-theme-text-color); }
+.remote-shell .remote-chat--claude .chat-message--user .chat-message__body { border: 0; background: #6d4539; }
+.remote-shell .remote-chat--claude .chat-message--user .chat-message__content { color: #fff3ee; }
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #c8d0ff; }
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #ee8c6d; }
-.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body { border: 0; background: #c8d0ff; }
+.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body { border: 0; background: #a0a6ca; }
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__content { color: #242a3e; }
 .remote-shell--claude-mode .new-thread-button { border-color: rgba(238, 140, 109, .5); background: linear-gradient(135deg, rgba(238, 140, 109, .24), rgba(238, 140, 109, .12)); }
 .remote-shell--claude-mode .new-thread-button__icon { background: rgba(238, 140, 109, .18); color: #ee8c6d; }
