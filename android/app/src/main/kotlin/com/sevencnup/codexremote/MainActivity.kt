@@ -1674,11 +1674,19 @@ class MainActivity : Activity() {
                     setImageResource(R.drawable.ic_pin)
                     imageTintList = ColorStateList.valueOf(MUTED)
                     contentDescription = "已置顶"
-                }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5); rightMargin = dp(3) })
+                }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(5); rightMargin = dp(3) })
             }
             val moreButton = sidebarIconButton("more", "对话操作") { }
+            moreButton.setImageResource(R.drawable.ic_sidebar_more)
+            moreButton.setPadding(dp(2), dp(2), dp(2), dp(2))
             moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
-            row.addView(moreButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+            row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
+            row.post {
+                val hit = android.graphics.Rect()
+                moreButton.getHitRect(hit)
+                hit.inset(-dp(6), -dp(6))
+                row.touchDelegate = android.view.TouchDelegate(hit, moreButton)
+            }
             row.setOnClickListener { selectThread(thread) }
             row.setOnLongClickListener { showThreadActions(row, thread); true }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
@@ -4465,9 +4473,6 @@ class MainActivity : Activity() {
             languageSection.addView(row, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(5) })
         }
 
-        val about = section("关于与更新", "手动检查项目公开发布的 Android 版本。")
-        about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
-
         val notifications = section("系统通知", "应用在后台时提醒回复完成；通知不包含聊天正文。")
         val notificationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4531,6 +4536,16 @@ class MainActivity : Activity() {
                 })
             }
         }, widthWrap())
+        val about = section("关于", "项目介绍、源代码与更新。")
+        about.addView(label("Code Agent Remote", 13, TEXT, true), widthWrap())
+        about.addView(label("在手机上连接本机的代码助手，查看对话、文件和终端。", 11, MUTED).apply {
+            setPadding(0, dp(4), 0, dp(5))
+        }, widthWrap())
+        val projectUrl = "https://github.com/sevencnup/wotty-codex-remote"
+        about.addView(settingsActionRow("GitHub 项目地址", projectUrl) {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(projectUrl)))
+        }, widthWrap())
+        about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
         if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
     }
 
