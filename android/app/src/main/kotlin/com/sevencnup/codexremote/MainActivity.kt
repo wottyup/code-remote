@@ -3,7 +3,6 @@ package com.sevencnup.codexremote
 import android.animation.ValueAnimator
 import android.Manifest
 import android.app.Activity
-import android.app.AlertDialog
 import android.app.Dialog
 import android.app.Notification
 import android.app.NotificationChannel
@@ -48,6 +47,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.RelativeLayout
 import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
@@ -128,8 +128,12 @@ class MainActivity : Activity() {
     private var workspaceLoadedPath: String? = null
     private var workspaceLoadingPath: String? = null
     private var workspaceAnimator: ValueAnimator? = null
+    private var workspaceGestureActive = false
+    private var workspacePendingRender: (() -> Unit)? = null
+    private var messageRenderDeferred = false
+    private var deferredMessageScrollToEnd = false
     private var settingsOverlay: View? = null
-    private var settingsDialog: AlertDialog? = null
+    private var settingsDialog: Dialog? = null
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
@@ -142,6 +146,7 @@ class MainActivity : Activity() {
     private var historySelectionGeneration = 0L
     private var queueExpanded = false
     private var expandedOperationIds = mutableSetOf<String>()
+    private var fullyExpandedOperationIds = mutableSetOf<String>()
     private var selectedFiles = mutableListOf<JSONObject>()
     private var workspaceClipboard = mutableListOf<String>()
     private var workspaceClipboardMode = "copy"
@@ -153,7 +158,9 @@ class MainActivity : Activity() {
     private var terminalDialog: Dialog? = null
     private var terminalSocket: WebSocket? = null
     private var terminalOutput: TextView? = null
+    private var terminalStatusView: TextView? = null
     private var terminalDraftInput: EditText? = null
+    private var terminalScreen = TerminalScreenBuffer(88, 26)
     @Volatile private var terminalReady = false
     private var terminalImeVisible = false
     private var terminalImeHiddenUntil = 0L
@@ -162,6 +169,10 @@ class MainActivity : Activity() {
     private var workspaceRootPath = ""
     private var claudeAvailable = false
     private var claudeStatusMessage = "Claude Code 不可用"
+    private var systemInsetLeft = 0
+    private var systemInsetTop = 0
+    private var systemInsetRight = 0
+    private var systemInsetBottom = 0
 
     private lateinit var root: FrameLayout
     private lateinit var page: LinearLayout
@@ -170,7 +181,7 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var messageScroll: ScrollView
     private lateinit var messageList: LinearLayout
-    private lateinit var scrollToBottomButton: TextView
+    private lateinit var scrollToBottomButton: ImageButton
     private lateinit var queuePanel: LinearLayout
     private lateinit var queueContent: LinearLayout
     private lateinit var composerInput: EditText
@@ -298,11 +309,7 @@ class MainActivity : Activity() {
             terminalDialog?.isShowing == true -> terminalDialog?.dismiss()
             workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
-            activeThreadId != null -> AlertDialog.Builder(this)
-                .setMessage("要关闭 Codex Remote 吗？")
-                .setNegativeButton("继续使用", null)
-                .setPositiveButton("关闭") { _, _ -> finish() }
-                .show()
+            activeThreadId != null -> showConfirmDialog("关闭应用", "要关闭 Codex Remote 吗？", "关闭") { finish() }
             else -> super.onBackPressed()
         }
     }
@@ -435,6 +442,8 @@ class MainActivity : Activity() {
         workspaceLoader = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
+        workspaceGestureActive = false
+        workspacePendingRender = null
         syncRevisions.clear()
         renderHome()
         refreshRuntime()
@@ -447,7 +456,7 @@ class MainActivity : Activity() {
         handler.post(refreshRunnable)
     }
 
-    private fun installWindowInsets(view: View) {
+    private fun installWindowInsets(view: View, content: View? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
         val update = { insets: WindowInsets ->
             val systemBars = insets.getInsets(
@@ -455,7 +464,17 @@ class MainActivity : Activity() {
             )
             val ime = insets.getInsets(WindowInsets.Type.ime())
             val bottom = if (insets.isVisible(WindowInsets.Type.ime())) max(systemBars.bottom, ime.bottom) else systemBars.bottom
-            view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+            if (content == null) {
+                view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+            } else {
+                systemInsetLeft = systemBars.left
+                systemInsetTop = systemBars.top
+                systemInsetRight = systemBars.right
+                systemInsetBottom = systemBars.bottom
+                view.setPadding(0, 0, 0, 0)
+                content.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+                updateInsetAwareOverlays()
+            }
         }
         view.setOnApplyWindowInsetsListener { _, insets ->
             update(insets)
@@ -473,6 +492,29 @@ class MainActivity : Activity() {
             }
         })
         view.requestApplyInsets()
+    }
+
+    private fun updateInsetAwareOverlays() {
+        if (::drawer.isInitialized) {
+            drawer.setPadding(
+                dp(14) + systemInsetLeft,
+                dp(8) + systemInsetTop,
+                dp(14),
+                dp(8) + systemInsetBottom,
+            )
+        }
+        workspacePanel?.setPadding(
+            dp(12),
+            dp(4) + systemInsetTop,
+            dp(12) + systemInsetRight,
+            dp(4) + systemInsetBottom,
+        )
+        (settingsOverlay?.findViewWithTag<View>(TAG_INSET_CONTENT))?.setPadding(
+            systemInsetLeft,
+            systemInsetTop,
+            systemInsetRight,
+            systemInsetBottom,
+        )
     }
 
     private fun renderHome() {
@@ -499,13 +541,14 @@ class MainActivity : Activity() {
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
         val chatArea = FrameLayout(this).apply { clipChildren = false }
         chatArea.addView(messageScroll, FrameLayout.LayoutParams(MATCH, MATCH))
-        scrollToBottomButton = label("↓", 21, TEXT, true).apply {
-            gravity = Gravity.CENTER
+        scrollToBottomButton = iconButton("chevron_down", "回到底部") {
+            messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
+        }.apply {
+            imageTintList = ColorStateList.valueOf(TEXT)
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             background = rounded(PANEL, dp(21), BORDER, dp(1))
             elevation = dp(3).toFloat()
-            contentDescription = "回到底部"
             visibility = View.GONE
-            setOnClickListener { messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) } }
         }
         chatArea.addView(scrollToBottomButton, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.END or Gravity.BOTTOM).apply {
             rightMargin = dp(16)
@@ -517,7 +560,8 @@ class MainActivity : Activity() {
         buildComposer()
         buildSidebar()
         setContentView(root)
-        installWindowInsets(root)
+        installWindowInsets(root, page)
+        root.post { if (::root.isInitialized && workspaceOverlay == null) ensureWorkspaceBrowser() }
         renderHeader()
         renderMessages(false)
         renderQueue()
@@ -739,6 +783,7 @@ class MainActivity : Activity() {
         drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         drawer.translationX = -drawerWidth.toFloat()
         drawer.tag = scrim
+        updateInsetAwareOverlays()
         renderSidebar(force = true)
     }
 
@@ -855,9 +900,11 @@ class MainActivity : Activity() {
                 }, widthWrap())
             }
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
-            row.addView(iconButton("more", "对话操作") { showThreadActions(thread) }, LinearLayout.LayoutParams(dp(32), dp(32)))
+            val moreButton = iconButton("more", "对话操作") { }
+            moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
+            row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
             row.setOnClickListener { selectThread(thread) }
-            row.setOnLongClickListener { showThreadActions(thread); true }
+            row.setOnLongClickListener { showThreadActions(row, thread); true }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         }
     }
@@ -894,6 +941,7 @@ class MainActivity : Activity() {
                     }
                     sidebarAnimator = null
                     if (sidebarRenderDirty && !sidebarGestureActive) renderSidebar(force = true)
+                    flushDeferredMessageRender()
                 }
             })
             start()
@@ -983,8 +1031,10 @@ class MainActivity : Activity() {
 
             interceptingSwipe = true
             if (target == "workspace") {
+                workspaceAnimator?.removeAllListeners()
                 workspaceAnimator?.cancel()
                 workspaceAnimator = null
+                workspaceGestureActive = true
                 if (opens) prepareWorkspaceForGesture()
             } else {
                 sidebarGestureActive = true
@@ -1042,6 +1092,7 @@ class MainActivity : Activity() {
                 setSidebarVisible(shouldOpen)
                 sidebarGestureActive = false
                 if (sidebarAnimator == null && sidebarRenderDirty) renderSidebar(force = true)
+                if (sidebarAnimator == null) flushDeferredMessageRender()
             }
             clearSwipeTracking()
         }
@@ -1401,14 +1452,21 @@ class MainActivity : Activity() {
 
     private fun renderMessages(scrollToEnd: Boolean) {
         if (!::messageList.isInitialized) return
+        if (sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) {
+            messageRenderDeferred = true
+            deferredMessageScrollToEnd = deferredMessageScrollToEnd || scrollToEnd
+            return
+        }
         val wasNearEnd = messageScroll.scrollY + messageScroll.height >= messageList.height - dp(120)
         messageList.removeAllViews()
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
         val messages = mutableListOf<Pair<String, JSONObject>>()
+        val turnsById = mutableMapOf<String, JSONObject>()
         for (turnIndex in 0 until turns.length()) {
             val turn = turns.optJSONObject(turnIndex) ?: continue
             val turnId = turn.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: "history-turn-$turnIndex"
+            turnsById[turnId] = turn
             val items = turn.optJSONArray("items") ?: JSONArray()
             var assistantInTurn: JSONObject? = null
             for (itemIndex in 0 until items.length()) {
@@ -1442,6 +1500,7 @@ class MainActivity : Activity() {
                             message.put("text", listOf(previousText, text).filter { it.isNotBlank() }.distinct().joinToString("\n\n"))
                         }
                     }
+                    "reasoning", "plan" -> Unit
                     else -> {
                         val operation = JSONObject(item.toString()).put("_turnId", turnId).put("_activityIndex", itemIndex)
                         val assistantTimeline = assistantInTurn?.optJSONArray("_activityTimeline")
@@ -1494,6 +1553,7 @@ class MainActivity : Activity() {
 
         val lastAssistantByTurn = messages.filter { it.first == "assistant" }.groupBy { it.second.optString("_turnId") }
             .mapValues { (_, values) -> values.lastOrNull()?.second }
+        val renderedFileChangeTurns = mutableSetOf<String>()
         var messageIndex = 0
         while (messageIndex < messages.size) {
             val (role, item) = messages[messageIndex]
@@ -1507,6 +1567,9 @@ class MainActivity : Activity() {
                     messageIndex++
                 }
                 addOperationLog(turnId, groupedOperations)
+                if (lastAssistantByTurn[turnId] == null && renderedFileChangeTurns.add(turnId)) {
+                    addFileChangeSummary(fileChangesForTurn(turnId, turnsById[turnId], thread))
+                }
                 continue
             }
             val viewportWidth = messageScroll.width.takeIf { it > 0 }
@@ -1558,24 +1621,25 @@ class MainActivity : Activity() {
 
             val turnId = item.optString("_turnId")
             if (role == "assistant" && lastAssistantByTurn[turnId] === item) {
-                val workspaceChanges = thread?.optJSONObject("codexRemoteWorkspaceChanges")
-                val rawChanges = workspaceChanges?.opt(turnId)
-                val fileChanges = when {
-                    rawChanges is JSONArray -> JSONObject().put("changes", rawChanges)
-                    rawChanges is JSONObject && rawChanges.optJSONArray("changes") != null -> rawChanges
-                    rawChanges is JSONObject -> JSONObject().put("changes", JSONArray().put(rawChanges))
-                    else -> null
-                }
-                if (fileChanges != null) addFileChangeSummary(fileChanges)
+                renderedFileChangeTurns.add(turnId)
+                addFileChangeSummary(fileChangesForTurn(turnId, turnsById[turnId], thread))
             }
             messageIndex++
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
-            messageList.addView(label("◌  ${activityLabel}", 12, ACCENT).apply {
+            val activity = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), dp(8), dp(12), dp(8))
-            }, widthWrap())
+            }
+            activity.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_progress)
+                imageTintList = ColorStateList.valueOf(ACCENT)
+            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(7) })
+            activity.addView(label(activityLabel, 12, ACCENT), widthWrap())
+            messageList.addView(activity, widthWrap())
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.fullScroll(View.FOCUS_DOWN)
@@ -1640,38 +1704,155 @@ class MainActivity : Activity() {
         } ?: "empty"
         val logId = "$turnId:$operationKey"
         val expanded = logId in expandedOperationIds
-        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val header = label("${if (expanded) "⌃" else "⌄"}  操作记录 · ${operations.size}", 12, MUTED, true).apply {
-            setPadding(dp(8), dp(5), dp(8), dp(5))
-            maxWidth = maximumWidth
+        val showAll = logId in fullyExpandedOperationIds
+        val failed = operations.count { normalizedOperationStatus(it) == "failed" }
+        val runningCount = operations.count { normalizedOperationStatus(it) == "running" }
+        val statusText = when {
+            runningCount > 0 -> "$runningCount 项进行中"
+            failed > 0 -> "$failed 项失败"
+            else -> "${operations.size} 项完成"
+        }
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(1), dp(2), dp(2))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(2))
             setOnClickListener {
                 if (expanded) expandedOperationIds.remove(logId) else expandedOperationIds.add(logId)
                 renderMessages(false)
             }
         }
-        container.addView(header, LinearLayout.LayoutParams(WRAP, WRAP))
+        header.addView(ImageView(this).apply {
+            setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            imageTintList = ColorStateList.valueOf(MUTED)
+        }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
+        header.addView(label("操作记录", 12, SUBTLE, true), LinearLayout.LayoutParams(WRAP, dp(25)))
+        header.addView(label(statusText, 11, if (failed > 0) ERROR else MUTED).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(0, dp(25), 1f))
+        container.addView(header, LinearLayout.LayoutParams(maximumWidth, WRAP))
         if (!expanded) return container
-        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(2), 0, dp(5)) }
-        operations.forEach { operation ->
-            val kind = operation.optString("type").replace(Regex("([a-z])([A-Z])"), "$1 $2")
-            val detail = operation.optString("command").ifBlank { operation.optString("description") }
-                .ifBlank { operation.optString("path") }.ifBlank { kind }
-            list.addView(label("•  $detail", 11, SUBTLE).apply {
-                setPadding(0, dp(3), 0, dp(3)); setTextIsSelectable(true); maxWidth = (maximumWidth - dp(12)).coerceAtLeast(dp(120))
-            }, LinearLayout.LayoutParams(WRAP, WRAP))
-            val changes = operation.optJSONArray("changes")
-            if (changes != null) for (index in 0 until changes.length()) {
-                val change = changes.optJSONObject(index) ?: continue
-                val path = change.optString("path").ifBlank { change.optString("filePath") }
-                if (path.isNotBlank()) list.addView(label("  ${change.optString("kind", "修改")} · $path", 11, ACCENT).apply {
-                    setPadding(0, dp(2), 0, dp(3))
-                    maxWidth = (maximumWidth - dp(12)).coerceAtLeast(dp(120))
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, 0, dp(3)) }
+        val visibleOperations = if (showAll) operations else operations.take(8)
+        visibleOperations.forEach { operation ->
+            val status = normalizedOperationStatus(operation)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.TOP
+                setPadding(0, dp(3), 0, dp(3))
+            }
+            row.addView(ImageView(this).apply {
+                setImageResource(when (status) {
+                    "failed" -> R.drawable.ic_alert
+                    "running" -> R.drawable.ic_progress
+                    "stopped" -> R.drawable.ic_stop
+                    else -> R.drawable.ic_check
+                })
+                imageTintList = ColorStateList.valueOf(when (status) {
+                    "failed" -> ERROR
+                    "running" -> ACCENT
+                    "stopped" -> WARNING
+                    else -> if (lightTheme) Color.rgb(52, 132, 75) else Color.rgb(119, 174, 132)
+                })
+            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { topMargin = dp(3); rightMargin = dp(7) })
+            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            copy.addView(label(operationLabel(operation), 12, TEXT, true), widthWrap())
+            val detail = operationDetail(operation)
+            if (detail.isNotBlank()) copy.addView(label(detail, 10, MUTED).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
+            }, widthWrap())
+            val paths = operationPaths(operation)
+            if (paths.isNotEmpty()) {
+                val path = paths.first()
+                copy.addView(label("打开 · ${path.substringAfterLast('/')}", 10, ACCENT).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                     setOnClickListener { showFilePreview(path, null) }
-                }, LinearLayout.LayoutParams(WRAP, WRAP))
+                }, widthWrap())
+            }
+            row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+            list.addView(row, LinearLayout.LayoutParams(maximumWidth - dp(7), WRAP))
+        }
+        if (!showAll && operations.size > visibleOperations.size) {
+            list.addView(label("查看其余 ${operations.size - visibleOperations.size} 项", 11, ACCENT, true).apply {
+                setPadding(dp(21), dp(4), 0, dp(4))
+                setOnClickListener {
+                    fullyExpandedOperationIds.add(logId)
+                    renderMessages(false)
+                }
+            }, widthWrap())
+        }
+        container.addView(list, LinearLayout.LayoutParams(maximumWidth, WRAP))
+        return container
+    }
+
+    private fun normalizedOperationStatus(operation: JSONObject): String {
+        val status = operation.optString("status").replace("-", "").replace("_", "").lowercase(Locale.ROOT)
+        return when (status) {
+            "inprogress", "running", "started" -> "running"
+            "failed", "error" -> "failed"
+            "interrupted", "cancelled", "canceled", "declined" -> "stopped"
+            else -> "completed"
+        }
+    }
+
+    private fun operationLabel(operation: JSONObject): String {
+        val type = normalizedType(operation.optString("type"))
+        if (type == "commandexecution") {
+            val command = operation.optString("command")
+            return when {
+                Regex("(?:^|\\s)(?:rg|grep|find|fd)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "搜索文件"
+                Regex("(?:^|\\s)(?:cat|head|tail|sed|less|bat)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "查看文件"
+                else -> "执行命令"
             }
         }
-        container.addView(list, LinearLayout.LayoutParams(WRAP, WRAP))
-        return container
+        return when (type) {
+            "filechange" -> "修改文件"
+            "mcptoolcall", "dynamictoolcall" -> "调用工具"
+            "collabagenttoolcall", "subagentactivity" -> "运行子任务"
+            "websearch" -> "搜索资料"
+            "imageview" -> "查看图片"
+            "imagegeneration" -> "生成图片"
+            "reasoning" -> "思考"
+            "plan" -> "整理计划"
+            else -> operation.optString("description").ifBlank { "处理任务" }
+        }
+    }
+
+    private fun operationDetail(operation: JSONObject): String {
+        val type = normalizedType(operation.optString("type"))
+        val raw = when (type) {
+            "commandexecution" -> operation.optString("command")
+            "websearch" -> operation.optString("query")
+            "filechange" -> operationPaths(operation).take(3).joinToString("、")
+            else -> listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"), operation.optString("path"))
+                .firstOrNull { it.isNotBlank() }.orEmpty()
+        }
+        return raw.replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+            .let { if (it.length > 120) it.take(119) + "…" else it }
+    }
+
+    private fun operationPaths(value: Any?, depth: Int = 0, output: LinkedHashSet<String> = linkedSetOf()): List<String> {
+        if (depth > 4 || value == null || output.size >= 8) return output.toList()
+        when (value) {
+            is JSONObject -> {
+                val keys = value.keys()
+                while (keys.hasNext() && output.size < 8) {
+                    val key = keys.next()
+                    val entry = value.opt(key)
+                    if (key.matches(Regex("(?i)^(path|filepath|file_path|filename|target_path|source_path|imagepath|image_path)$")) && entry is String && entry.isNotBlank()) {
+                        output += entry.trim()
+                    } else if (entry is JSONObject || entry is JSONArray) operationPaths(entry, depth + 1, output)
+                }
+            }
+            is JSONArray -> for (index in 0 until value.length()) operationPaths(value.opt(index), depth + 1, output)
+        }
+        return output.toList()
     }
 
     private fun addMessageImages(container: LinearLayout, item: JSONObject) {
@@ -1694,31 +1875,168 @@ class MainActivity : Activity() {
                     setImageBitmap(bitmap)
                     scaleType = ImageView.ScaleType.CENTER_CROP
                     background = rounded(USER_BUBBLE, dp(8))
-                    setOnClickListener {
-                        val full = ImageView(this@MainActivity).apply { setImageBitmap(bitmap); adjustViewBounds = true; scaleType = ImageView.ScaleType.FIT_CENTER }
-                        AlertDialog.Builder(this@MainActivity).setView(full).setPositiveButton("关闭", null).show()
-                    }
+                    setOnClickListener { showImageDialog(bitmap) }
                 }
                 container.addView(image, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
             } catch (_: Exception) { }
         }
     }
 
-    private fun addFileChangeSummary(changes: JSONObject) {
-        val entries = changes.optJSONArray("changes") ?: JSONArray()
-        if (entries.length() == 0) return
+    private fun showImageDialog(bitmap: android.graphics.Bitmap) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val frame = FrameLayout(this).apply { background = rounded(PANEL, dp(14), BORDER, dp(1)) }
+        frame.addView(ImageView(this).apply {
+            setImageBitmap(bitmap)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        frame.addView(iconButton("close", "关闭图片") { dialog.dismiss() }.apply {
+            background = rounded(PANEL_INSET, dp(18))
+        }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(8) })
+        dialog.setContentView(frame)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(MATCH, (resources.displayMetrics.heightPixels * .82f).toInt())
+            setGravity(Gravity.CENTER)
+        }
+    }
+
+    private data class FileChangeEntry(
+        val path: String,
+        val additions: Int = 0,
+        val deletions: Int = 0,
+        val kind: String = "",
+    )
+
+    private fun fileChangesForTurn(turnId: String, turn: JSONObject?, thread: JSONObject?): List<FileChangeEntry> {
+        val merged = linkedMapOf<String, FileChangeEntry>()
+        val items = turn?.optJSONArray("items") ?: JSONArray()
+        for (itemIndex in 0 until items.length()) {
+            val item = items.optJSONObject(itemIndex) ?: continue
+            if (normalizedType(item.optString("type")) != "filechange") continue
+            parseFileChanges(item.opt("changes")).forEach { merged[it.path] = it }
+        }
+        val workspaceValue = thread?.optJSONObject("codexRemoteWorkspaceChanges")?.opt(turnId)
+        val workspaceChanges = when (workspaceValue) {
+            is JSONObject -> workspaceValue.opt("changes") ?: workspaceValue
+            else -> workspaceValue
+        }
+        parseFileChanges(workspaceChanges).forEach { incoming ->
+            val previous = merged[incoming.path]
+            merged[incoming.path] = if (previous == null) incoming else previous.copy(
+                additions = if (previous.additions > 0 || previous.deletions > 0) previous.additions else incoming.additions,
+                deletions = if (previous.additions > 0 || previous.deletions > 0) previous.deletions else incoming.deletions,
+                kind = previous.kind.ifBlank { incoming.kind },
+            )
+        }
+        return merged.values.toList()
+    }
+
+    private fun parseFileChanges(value: Any?): List<FileChangeEntry> {
+        val raw = mutableListOf<Any?>()
+        when (value) {
+            is JSONArray -> for (index in 0 until value.length()) raw += value.opt(index)
+            is JSONObject -> {
+                val looksLikeEntry = value.has("path") || value.has("filePath") || value.has("filename")
+                if (looksLikeEntry) raw += value
+                else {
+                    val keys = value.keys()
+                    while (keys.hasNext()) {
+                        val path = keys.next()
+                        val detail = value.opt(path)
+                        raw += if (detail is JSONObject) JSONObject(detail.toString()).putIfAbsentCompat("path", path) else JSONObject().put("path", path)
+                    }
+                }
+            }
+            is String -> raw += value
+        }
+        return raw.mapNotNull { entry ->
+            if (entry is String) return@mapNotNull entry.takeIf { it.isNotBlank() }?.let(::FileChangeEntry)
+            val item = entry as? JSONObject ?: return@mapNotNull null
+            val path = listOf("path", "filePath", "filename", "move_path", "movePath")
+                .map { key -> item.optString(key) }.firstOrNull { it.isNotBlank() } ?: return@mapNotNull null
+            val diff = listOf("diff", "patch", "unified_diff", "unifiedDiff").map { key -> item.optString(key) }.firstOrNull { it.isNotBlank() }.orEmpty()
+            val additions = if (item.has("additions")) item.optInt("additions") else diff.lineSequence().count { it.startsWith("+") && !it.startsWith("+++") }
+            val deletions = if (item.has("deletions")) item.optInt("deletions") else diff.lineSequence().count { it.startsWith("-") && !it.startsWith("---") }
+            FileChangeEntry(path, additions.coerceAtLeast(0), deletions.coerceAtLeast(0), item.optString("kind").ifBlank { item.optString("type") })
+        }
+    }
+
+    private fun addFileChangeSummary(entries: List<FileChangeEntry>) {
+        if (entries.isEmpty()) return
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(7), dp(10), dp(7))
-            background = rounded(if (lightTheme) Color.rgb(232, 242, 233) else Color.rgb(24, 28, 27), dp(10), if (lightTheme) Color.rgb(188, 211, 190) else Color.rgb(45, 62, 51), dp(1))
+            setPadding(dp(5), dp(5), dp(5), dp(5))
         }
-        card.addView(label("已编辑文件 · ${entries.length()}", 12, TEXT, true), widthWrap())
-        for (index in 0 until entries.length()) {
-            val item = entries.optJSONObject(index) ?: continue
-            val path = item.optString("path").ifBlank { item.optString("filePath") }
-            if (path.isBlank()) continue
-            val line = label("•  $path", 11, ACCENT).apply { setPadding(0, dp(4), 0, 0); setOnClickListener { showFilePreview(path, null) } }
-            card.addView(line, widthWrap())
+        val totalAdditions = entries.sumOf { it.additions }
+        val totalDeletions = entries.sumOf { it.deletions }
+        val heading = RelativeLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val headingIcon = ImageView(this).apply {
+            id = View.generateViewId()
+            setImageResource(R.drawable.ic_edit)
+            imageTintList = ColorStateList.valueOf(MUTED)
+        }
+        heading.addView(headingIcon, RelativeLayout.LayoutParams(dp(15), dp(15)).apply {
+            addRule(RelativeLayout.ALIGN_PARENT_START)
+            addRule(RelativeLayout.CENTER_VERTICAL)
+        })
+        val headingStats = LinearLayout(this).apply {
+            id = View.generateViewId()
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            if (totalAdditions > 0) addView(label("+$totalAdditions", 11, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
+            if (totalDeletions > 0) addView(label("-$totalDeletions", 11, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
+                setPadding(dp(7), 0, 0, 0)
+            }, LinearLayout.LayoutParams(WRAP, MATCH))
+        }
+        heading.addView(headingStats, RelativeLayout.LayoutParams(WRAP, dp(25)).apply {
+            addRule(RelativeLayout.ALIGN_PARENT_END)
+            addRule(RelativeLayout.CENTER_VERTICAL)
+        })
+        heading.addView(label("最近编辑文件 · ${entries.size}", 12, SUBTLE, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, RelativeLayout.LayoutParams(MATCH, dp(25)).apply {
+            addRule(RelativeLayout.END_OF, headingIcon.id)
+            addRule(RelativeLayout.START_OF, headingStats.id)
+            marginStart = dp(6)
+            marginEnd = dp(8)
+        })
+        card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(25)))
+        entries.take(8).forEach { item ->
+            val line = RelativeLayout(this).apply {
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(21), dp(3), 0, dp(3))
+                setOnClickListener { showFilePreview(item.path, null) }
+            }
+            val stats = LinearLayout(this).apply {
+                id = View.generateViewId()
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                if (item.additions > 0) addView(label("+${item.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
+                if (item.deletions > 0) addView(label("-${item.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
+                    setPadding(dp(6), 0, 0, 0)
+                }, LinearLayout.LayoutParams(WRAP, MATCH))
+            }
+            line.addView(stats, RelativeLayout.LayoutParams(WRAP, dp(22)).apply {
+                addRule(RelativeLayout.ALIGN_PARENT_END)
+                addRule(RelativeLayout.CENTER_VERTICAL)
+            })
+            line.addView(label(item.path, 11, ACCENT).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            }, RelativeLayout.LayoutParams(MATCH, dp(22)).apply {
+                addRule(RelativeLayout.ALIGN_PARENT_START)
+                addRule(RelativeLayout.START_OF, stats.id)
+                marginEnd = if (item.additions > 0 || item.deletions > 0) dp(8) else 0
+            })
+            card.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
+        }
+        if (entries.size > 8) {
+            card.addView(label("另外 ${entries.size - 8} 个文件", 10, MUTED).apply { setPadding(dp(21), dp(3), 0, 0) }, widthWrap())
         }
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
     }
@@ -1753,10 +2071,10 @@ class MainActivity : Activity() {
         queuePanel.visibility = View.VISIBLE
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         header.addView(label("排队消息 · $count", 12, SUBTLE, true), LinearLayout.LayoutParams(0, dp(28), 1f))
-        header.addView(label(if (queueExpanded) "⌃" else "⌄", 15, MUTED).apply {
-            gravity = Gravity.CENTER
-            setOnClickListener { queueExpanded = !queueExpanded; renderQueue() }
-        }, LinearLayout.LayoutParams(dp(28), dp(28)))
+        header.addView(iconButton(if (queueExpanded) "chevron_up" else "chevron_down", if (queueExpanded) "收起排队消息" else "展开排队消息") {
+            queueExpanded = !queueExpanded
+            renderQueue()
+        }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(28), dp(28)))
         queuePanel.addView(header, widthWrap())
         queueContent.removeAllViews()
         queueContent.visibility = if (queueExpanded) View.VISIBLE else View.GONE
@@ -1773,9 +2091,9 @@ class MainActivity : Activity() {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-            controls.addView(smallButton("✎") { editQueuedMessage(item) }, LinearLayout.LayoutParams(WRAP, dp(29)).apply { rightMargin = dp(4) })
-            controls.addView(smallButton("↑") { sendQueuedNow(item) }, LinearLayout.LayoutParams(WRAP, dp(29)).apply { rightMargin = dp(4) })
-            controls.addView(smallButton("×") { removeQueuedMessage(item) }, LinearLayout.LayoutParams(WRAP, dp(29)))
+            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)).apply { rightMargin = dp(4) })
+            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)).apply { rightMargin = dp(4) })
+            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)))
             card.addView(controls, LinearLayout.LayoutParams(MATCH, dp(30)).apply { topMargin = dp(4) })
             queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
         }
@@ -1893,25 +2211,27 @@ class MainActivity : Activity() {
     }
 
     private fun editQueuedMessage(item: JSONObject) {
-        val input = EditText(this).apply { setText(item.optString("text")); minLines = 3; maxLines = 8 }
-        AlertDialog.Builder(this).setTitle("修改排队消息").setView(input)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("确定") { _, _ ->
-                val threadId = activeThreadId ?: return@setPositiveButton
-                val ownerId = "android-${UUID.randomUUID()}"
-                val updated = JSONObject(item.toString()).put("text", input.text.toString()).put("requestText", input.text.toString())
-                io.execute {
-                    try {
-                        val api = RemoteApi(endpoint, token)
-                        val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
-                        val ownerBody = JSONObject().put("message_id", item.optString("id")).put("owner_id", ownerId)
-                        api.post("$base/edit/begin", ownerBody)
-                        api.post("$base/edit/update", updated)
-                        api.post("$base/edit/end", ownerBody)
-                        handler.post { refreshQueue(false) }
-                    } catch (error: Exception) { handler.post { showStatus(error.message ?: "修改排队消息失败"); refreshQueue(false) } }
-                }
-            }.show()
+        val input = editField("排队消息", item.optString("text"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
+            minLines = 3
+            maxLines = 8
+        }
+        showInputDialog("修改排队消息", input, "确定") {
+            val threadId = activeThreadId ?: return@showInputDialog false
+            val ownerId = "android-${UUID.randomUUID()}"
+            val updated = JSONObject(item.toString()).put("text", input.text.toString()).put("requestText", input.text.toString())
+            io.execute {
+                try {
+                    val api = RemoteApi(endpoint, token)
+                    val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
+                    val ownerBody = JSONObject().put("message_id", item.optString("id")).put("owner_id", ownerId)
+                    api.post("$base/edit/begin", ownerBody)
+                    api.post("$base/edit/update", updated)
+                    api.post("$base/edit/end", ownerBody)
+                    handler.post { refreshQueue(false) }
+                } catch (error: Exception) { handler.post { showStatus(error.message ?: "修改排队消息失败"); refreshQueue(false) } }
+            }
+            true
+        }
     }
 
     private fun sendQueuedNow(item: JSONObject) = queueAction("send-now", item) { refreshActiveThread(false) }
@@ -1977,28 +2297,34 @@ class MainActivity : Activity() {
         showToast(if (currentMode == "codex") "Codex 对话" else "Claude Code 对话")
     }
 
-    private fun showThreadActions(thread: JSONObject) {
-        val actions = arrayOf("打开", "重命名", "固定 / 取消固定", "删除")
-        AlertDialog.Builder(this).setTitle(thread.optString("name").ifBlank { "对话操作" }).setItems(actions) { _, which ->
+    private fun showThreadActions(anchor: View, thread: JSONObject) {
+        val actions = listOf(
+            MenuAction("打开", "open"),
+            MenuAction("重命名", "edit"),
+            MenuAction(if (pinnedThreadIds.contains(thread.optString("id"))) "取消固定" else "固定", "pin"),
+            MenuAction("删除", "delete", destructive = true),
+        )
+        showActionPopup(anchor, threadTitle(thread), actions) { which ->
             when (which) {
                 0 -> selectThread(thread)
                 1 -> renameThread(thread)
                 2 -> togglePin(thread)
                 3 -> deleteThread(thread)
             }
-        }.show()
+        }
     }
 
     private fun renameThread(thread: JSONObject) {
-        val input = EditText(this).apply { setText(thread.optString("name").ifBlank { thread.optString("preview") }); setSingleLine(true) }
-        AlertDialog.Builder(this).setTitle("聊天名称").setView(input).setNegativeButton("取消", null)
-            .setPositiveButton("保存") { _, _ ->
-                val name = input.text.toString().trim()
-                runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(thread.optString("id"))}/name", JSONObject().put("name", name)) }, {
-                    refreshThreads(false)
-                    if (activeThreadId == thread.optString("id")) { activeThread?.put("name", name); renderHeader() }
-                })
-            }.show()
+        val input = editField("聊天名称", thread.optString("name").ifBlank { thread.optString("preview") }, InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+        showInputDialog("聊天名称", input, "保存") {
+            val name = input.text.toString().trim()
+            if (name.isBlank()) return@showInputDialog false
+            runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(thread.optString("id"))}/name", JSONObject().put("name", name)) }, {
+                refreshThreads(false)
+                if (activeThreadId == thread.optString("id")) { activeThread?.put("name", name); renderHeader() }
+            })
+            true
+        }
     }
 
     private fun togglePin(thread: JSONObject) {
@@ -2011,28 +2337,26 @@ class MainActivity : Activity() {
     }
 
     private fun deleteThread(thread: JSONObject) {
-        AlertDialog.Builder(this).setMessage("删除这个聊天？")
-            .setNegativeButton("取消", null)
-            .setPositiveButton("删除") { _, _ ->
-                val id = thread.optString("id")
-                runApi({ RemoteApi(endpoint, token).delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }, {
-                    if (activeThreadId == id) {
-                        prefs.edit().remove("$KEY_ACTIVE_THREAD_PREFIX$currentMode").apply()
-                        activeThreadId = null
-                        activeThread = null
-                        historyLoadingThreadId = null
-                        historyLoadError = null
-                        historySelectionGeneration += 1
-                        queuedMessages = JSONArray()
-                        running = false
-                        renderMessages(false)
-                        renderQueue()
-                        renderHeader()
-                    }
-                    syncRevisions.remove(id)
-                    refreshThreads(false)
-                })
-            }.show()
+        showConfirmDialog("删除聊天", "删除“${threadTitle(thread)}”？此操作无法撤销。", "删除", destructive = true) {
+            val id = thread.optString("id")
+            runApi({ RemoteApi(endpoint, token).delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }, {
+                if (activeThreadId == id) {
+                    prefs.edit().remove("$KEY_ACTIVE_THREAD_PREFIX$currentMode").apply()
+                    activeThreadId = null
+                    activeThread = null
+                    historyLoadingThreadId = null
+                    historyLoadError = null
+                    historySelectionGeneration += 1
+                    queuedMessages = JSONArray()
+                    running = false
+                    renderMessages(false)
+                    renderQueue()
+                    renderHeader()
+                }
+                syncRevisions.remove(id)
+                refreshThreads(false)
+            })
+        }
     }
 
     private fun updateComposerPreferences() {
@@ -2115,15 +2439,15 @@ class MainActivity : Activity() {
 
     private fun showChoicePopup(anchor: View, title: String, choices: List<Pair<String, String>>, selected: String?, onChoice: (String) -> Unit) {
         preferencePopup?.dismiss()
-        val maxHeight = min(dp(320), (root.height - dp(24)).coerceAtLeast(dp(180)))
-        val menuHeight = min(dp(48) + choices.size * dp(44), maxHeight)
+        val maxHeight = min(dp(244), (root.height - dp(20)).coerceAtLeast(dp(142)))
+        val menuHeight = min(dp(32) + choices.size * dp(32), maxHeight)
         val menu = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-            background = rounded(PANEL, dp(14))
+            setPadding(dp(5), dp(4), dp(5), dp(4))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
         }
         menu.addView(label(title, 11, MUTED, true).apply {
-            setPadding(dp(10), dp(4), dp(10), dp(9))
+            setPadding(dp(7), 0, dp(7), dp(3))
         }, LinearLayout.LayoutParams(MATCH, WRAP))
         val options = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         choices.forEach { (value, name) ->
@@ -2131,9 +2455,9 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(10), dp(5), dp(10), dp(5))
-                minimumHeight = dp(42)
-                background = if (isSelected) rounded(PANEL_INSET, dp(9)) else ColorDrawable(Color.TRANSPARENT)
+                setPadding(dp(8), dp(1), dp(8), dp(1))
+                minimumHeight = dp(30)
+                background = if (isSelected) rounded(PANEL_INSET, dp(7)) else ColorDrawable(Color.TRANSPARENT)
                 isClickable = true
                 isFocusable = false
                 setOnClickListener {
@@ -2141,12 +2465,16 @@ class MainActivity : Activity() {
                     onChoice(value)
                 }
             }
-            row.addView(label(name, 13, if (isSelected) TEXT else SUBTLE, isSelected).apply {
+            row.addView(label(name, 12, if (isSelected) TEXT else SUBTLE, isSelected).apply {
                 maxLines = 2
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
-            if (isSelected) row.addView(label("✓", 16, ACCENT, true), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(8) })
-            options.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
+            if (isSelected) row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_check)
+                imageTintList = ColorStateList.valueOf(ACCENT)
+                contentDescription = "已选择"
+            }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { leftMargin = dp(6) })
+            options.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         }
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -2154,7 +2482,7 @@ class MainActivity : Activity() {
             addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         menu.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        val popup = PopupWindow(menu, min(dp(280), (root.width - dp(24)).coerceAtLeast(dp(220))), menuHeight, true).apply {
+        val popup = PopupWindow(menu, min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210))), menuHeight, true).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             elevation = dp(12).toFloat()
             isOutsideTouchable = true
@@ -2166,10 +2494,123 @@ class MainActivity : Activity() {
         val rootLocation = IntArray(2)
         anchor.getLocationOnScreen(anchorLocation)
         root.getLocationOnScreen(rootLocation)
-        val popupWidth = min(dp(280), (root.width - dp(24)).coerceAtLeast(dp(220)))
-        val popupX = (anchorLocation[0] - rootLocation[0]).coerceIn(dp(12), (root.width - popupWidth - dp(12)).coerceAtLeast(dp(12)))
-        val popupY = (anchorLocation[1] - rootLocation[1] - menuHeight - dp(8)).coerceAtLeast(dp(8))
+        val popupWidth = min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210)))
+        val popupX = (anchorLocation[0] - rootLocation[0]).coerceIn(dp(10), (root.width - popupWidth - dp(10)).coerceAtLeast(dp(10)))
+        val popupY = (anchorLocation[1] - rootLocation[1] - menuHeight - dp(5)).coerceAtLeast(dp(6))
         popup.showAtLocation(root, Gravity.TOP or Gravity.START, popupX, popupY)
+    }
+
+    private data class MenuAction(val title: String, val icon: String, val destructive: Boolean = false)
+
+    private fun showActionPopup(anchor: View, title: String, actions: List<MenuAction>, onChoice: (Int) -> Unit) {
+        preferencePopup?.dismiss()
+        val popupWidth = min(dp(244), (root.width - dp(20)).coerceAtLeast(dp(204)))
+        val estimatedHeight = dp(36) + actions.size * dp(38) + dp(10)
+        val menu = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(5), dp(6), dp(5))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            addView(label(title, 11, MUTED, true).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(9), dp(2), dp(9), dp(5))
+            }, LinearLayout.LayoutParams(MATCH, dp(31)))
+        }
+        actions.forEachIndexed { index, action ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(9), 0, dp(9), 0)
+                background = ColorDrawable(Color.TRANSPARENT)
+                isClickable = true
+                isFocusable = false
+                contentDescription = action.title
+                setOnClickListener {
+                    preferencePopup?.dismiss()
+                    onChoice(index)
+                }
+            }
+            row.addView(ImageView(this).apply {
+                setImageResource(iconResource(action.icon))
+                imageTintList = ColorStateList.valueOf(if (action.destructive) ERROR else SUBTLE)
+            }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(9) })
+            row.addView(label(action.title, 12, if (action.destructive) ERROR else TEXT), LinearLayout.LayoutParams(0, WRAP, 1f))
+            menu.addView(row, LinearLayout.LayoutParams(MATCH, dp(38)))
+        }
+        val popup = PopupWindow(menu, popupWidth, WRAP, true).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isOutsideTouchable = true
+            isClippingEnabled = true
+            setOnDismissListener { if (preferencePopup === this) preferencePopup = null }
+        }
+        preferencePopup = popup
+        val anchorLocation = IntArray(2)
+        val rootLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        root.getLocationOnScreen(rootLocation)
+        val x = (anchorLocation[0] - rootLocation[0] + anchor.width - popupWidth)
+            .coerceIn(dp(10), (root.width - popupWidth - dp(10)).coerceAtLeast(dp(10)))
+        val above = anchorLocation[1] - rootLocation[1] - estimatedHeight - dp(4)
+        val below = anchorLocation[1] - rootLocation[1] + anchor.height + dp(4)
+        val y = (if (above >= dp(8)) above else below)
+            .coerceIn(dp(8), (root.height - estimatedHeight - dp(8)).coerceAtLeast(dp(8)))
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, x, y)
+    }
+
+    private fun showInputDialog(title: String, input: EditText, positiveLabel: String, onPositive: () -> Boolean) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(15), dp(18), dp(12))
+            background = rounded(PANEL, dp(14), BORDER, dp(1))
+        }
+        card.addView(label(title, 15, TEXT, true), widthWrap())
+        card.addView(input, LinearLayout.LayoutParams(MATCH, if (input.minLines > 1) dp(112) else dp(46)).apply { topMargin = dp(12) })
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
+        actions.addView(dialogTextButton(positiveLabel, ACCENT) {
+            if (onPositive()) dialog.dismiss()
+        }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(8) })
+        card.addView(actions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
+        dialog.setContentView(card)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(360), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+        }
+        input.requestFocus()
+    }
+
+    private fun showConfirmDialog(title: String, message: String, confirmLabel: String, destructive: Boolean = false, onConfirm: () -> Unit) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(15), dp(18), dp(12))
+            background = rounded(PANEL, dp(14), BORDER, dp(1))
+        }
+        card.addView(label(title, 15, TEXT, true), widthWrap())
+        card.addView(label(message, 12, SUBTLE).apply {
+            setPadding(0, dp(7), 0, dp(3))
+            setLineSpacing(dp(2).toFloat(), 1.08f)
+        }, widthWrap())
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
+        actions.addView(dialogTextButton(confirmLabel, if (destructive) ERROR else ACCENT) {
+            dialog.dismiss()
+            onConfirm()
+        }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(8) })
+        card.addView(actions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(7) })
+        dialog.setContentView(card)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(360), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+        }
     }
 
     private fun modelDefaultEffort(modelName: String): String? {
@@ -2190,13 +2631,14 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(DARK)
+            tag = TAG_INSET_CONTENT
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        header.addView(iconButton("close", "返回聊天") { closeSettings() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("back", "返回聊天") { closeSettings() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
         titleCopy.addView(label("设置", 17, TEXT, true), widthWrap())
         titleCopy.addView(label("偏好保存在本机", 10, MUTED), widthWrap())
@@ -2215,6 +2657,7 @@ class MainActivity : Activity() {
         overlay.addView(layout, FrameLayout.LayoutParams(MATCH, MATCH))
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
         settingsOverlay = overlay
+        updateInsetAwareOverlays()
 
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
@@ -2250,9 +2693,12 @@ class MainActivity : Activity() {
             copy.addView(label(title, 13, TEXT, selected), widthWrap())
             copy.addView(label(description, 10, MUTED), widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
-            row.addView(label(if (selected) "✓" else "", 16, ACCENT, true).apply {
-                gravity = Gravity.CENTER
-            }, LinearLayout.LayoutParams(dp(26), WRAP))
+            row.addView(ImageView(this).apply {
+                setImageResource(R.drawable.ic_check)
+                imageTintList = ColorStateList.valueOf(ACCENT)
+                visibility = if (selected) View.VISIBLE else View.INVISIBLE
+                contentDescription = if (selected) "已选择" else null
+            }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(8); rightMargin = dp(4) })
             appearance.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
         }
 
@@ -2311,20 +2757,15 @@ class MainActivity : Activity() {
 
         val account = section("本机配对", "管理本机保存的电脑连接凭据。")
         account.addView(settingsActionRow("解除配对", "清除此设备保存的配对信息") {
-            val dialog = AlertDialog.Builder(this).setMessage("解除本机配对？")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("解除") { _, _ ->
-                    runApi({ RemoteApi(endpoint, token).post("/api/v1/unpair") }, {
-                        closeSettings()
-                        prefs.edit().remove(KEY_TOKEN).apply()
-                        token = ""
-                        socket?.close(1000, "unpaired")
-                        showConnectionPage()
-                    })
-                }.create()
-            settingsDialog = dialog
-            dialog.setOnDismissListener { if (settingsDialog === dialog) settingsDialog = null }
-            dialog.show()
+            showConfirmDialog("解除配对", "清除此设备保存的电脑连接信息？", "解除", destructive = true) {
+                runApi({ RemoteApi(endpoint, token).post("/api/v1/unpair") }, {
+                    closeSettings()
+                    prefs.edit().remove(KEY_TOKEN).apply()
+                    token = ""
+                    socket?.close(1000, "unpaired")
+                    showConnectionPage()
+                })
+            }
         }, widthWrap())
     }
 
@@ -2346,7 +2787,10 @@ class MainActivity : Activity() {
         copy.addView(label(title, 12, SUBTLE, true), widthWrap())
         copy.addView(label(description, 10, MUTED), widthWrap())
         addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        addView(label("›", 20, MUTED).apply { gravity = Gravity.CENTER }, LinearLayout.LayoutParams(dp(24), WRAP))
+        addView(ImageView(this@MainActivity).apply {
+            setImageResource(R.drawable.ic_chevron_right)
+            imageTintList = ColorStateList.valueOf(MUTED)
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(6) })
     }
 
     private fun applyThemeFromSettings(useLightTheme: Boolean) {
@@ -2366,6 +2810,8 @@ class MainActivity : Activity() {
         workspaceLoader = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
+        workspaceGestureActive = false
+        workspacePendingRender = null
         renderHome()
         composerInput.setText(draft)
         showSettings()
@@ -2397,9 +2843,11 @@ class MainActivity : Activity() {
     }
 
     private fun showChangeConnectionDialog() {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(8), dp(20), 0)
+            setPadding(0, dp(11), 0, 0)
         }
         val address = editField("电脑网页地址", endpoint, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
         val code = editField("电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
@@ -2407,19 +2855,28 @@ class MainActivity : Activity() {
         form.addView(address, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
         form.addView(label("匹配码", 11, SUBTLE, true), widthWrap())
         form.addView(code, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4) })
-        val dialog = AlertDialog.Builder(this).setTitle("更改电脑地址").setView(form)
-            .setNegativeButton("取消", null).setPositiveButton("连接", null).create()
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(15), dp(18), dp(12))
+            background = rounded(PANEL, dp(14), BORDER, dp(1))
+        }
+        card.addView(label("更改电脑地址", 15, TEXT, true), widthWrap())
+        card.addView(form, LinearLayout.LayoutParams(MATCH, WRAP))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
+        val connectButton = dialogTextButton("连接", ACCENT) { }
+        actions.addView(connectButton, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(8) })
+        card.addView(actions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
+        dialog.setContentView(card)
         settingsDialog = dialog
         dialog.setOnDismissListener { if (settingsDialog === dialog) settingsDialog = null }
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+        connectButton.setOnClickListener {
                 val normalized = try { RemoteApi.normalizeEndpoint(address.text.toString()) }
                 catch (error: Exception) { showToast(error.message ?: "电脑地址无效"); return@setOnClickListener }
                 val pairingCode = code.text.toString().trim()
                 if (pairingCode.isBlank()) { showToast("请输入电脑端匹配码"); return@setOnClickListener }
-                val button = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
-                button.isEnabled = false
-                button.text = "正在连接…"
+                connectButton.isEnabled = false
+                connectButton.text = "正在连接…"
                 io.execute {
                     try {
                         val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
@@ -2434,41 +2891,40 @@ class MainActivity : Activity() {
                         }
                     } catch (error: Exception) {
                         handler.post {
-                            button.isEnabled = true
-                            button.text = "连接"
+                            connectButton.isEnabled = true
+                            connectButton.text = "连接"
                             showToast(error.message ?: "连接失败，请检查地址和匹配码")
                         }
                     }
                 }
-            }
         }
         dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(380), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+        }
     }
 
     private fun reconnect() {
-        val codeInput = EditText(this).apply {
-            hint = "输入电脑终端显示的匹配码"
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setTextColor(TEXT)
+        val codeInput = editField("输入电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
+        showInputDialog("重新配对", codeInput, "连接") {
+            val code = codeInput.text.toString().trim()
+            if (code.isBlank()) return@showInputDialog false
+            runApi({ RemoteApi(endpoint).post("/api/v1/pair", JSONObject().put("code", code)).getString("token") }, { newToken ->
+                token = newToken
+                prefs.edit().putString(KEY_TOKEN, newToken).apply()
+                openChatHome()
+            })
+            true
         }
-        AlertDialog.Builder(this).setTitle("重新配对").setView(codeInput)
-            .setNegativeButton("取消", null)
-            .setPositiveButton("连接") { _, _ ->
-                val code = codeInput.text.toString().trim()
-                if (code.isBlank()) return@setPositiveButton
-                runApi({ RemoteApi(endpoint).post("/api/v1/pair", JSONObject().put("code", code)).getString("token") }, { newToken ->
-                    token = newToken
-                    prefs.edit().putString(KEY_TOKEN, newToken).apply()
-                    openChatHome()
-                })
-            }.show()
     }
 
     private fun showWorkspaceBrowser() {
         if (token.isBlank()) return
         ensureWorkspaceBrowser()
-        setWorkspaceVisible(true)
         workspaceLoader?.invoke(workspaceCurrentPath)
+        setWorkspaceVisible(true)
     }
 
     private fun ensureWorkspaceBrowser() {
@@ -2479,8 +2935,8 @@ class MainActivity : Activity() {
             clipChildren = false
         }
         val scrim = View(this).apply {
-            setBackgroundColor(Color.BLACK)
-            alpha = 0f
+            setBackgroundColor(Color.argb(48, 0, 0, 0))
+            alpha = 1f
             setOnClickListener { setWorkspaceVisible(false) }
         }
         overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -2489,8 +2945,8 @@ class MainActivity : Activity() {
         val panelWidth = min(dp(380), (availableWidth * .80f).toInt()).coerceAtLeast(dp(260))
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(9), dp(12), dp(8))
-            background = rounded(PANEL, dp(16), BORDER, dp(1))
+            setPadding(dp(12), dp(4), dp(12), dp(4))
+            background = rounded(PANEL, 0, BORDER, dp(1))
             elevation = dp(4).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
@@ -2506,9 +2962,9 @@ class MainActivity : Activity() {
             val normalized = workspaceCurrentPath.trimEnd('/')
             workspaceLoader?.invoke(normalized.substringBeforeLast('/', ""))
         }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("add", "新建文件或文件夹") {
-            showCreateEntry(workspaceCurrentPath, ::refreshDirectory)
-        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        val createButton = iconButton("add", "新建文件或文件夹") { }
+        createButton.setOnClickListener { showCreateEntry(createButton, workspaceCurrentPath, ::refreshDirectory) }
+        header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         header.addView(iconButton("close", "关闭文件树") {
             setWorkspaceVisible(false)
         }, LinearLayout.LayoutParams(dp(32), dp(32)))
@@ -2533,20 +2989,25 @@ class MainActivity : Activity() {
         workspacePanel = panel
         workspaceScrim = scrim
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+        updateInsetAwareOverlays()
 
         workspaceLoader = { requestedPath ->
             val path = requestedPath.trim('/')
             workspaceCurrentPath = path
             workspaceLoadedPath = null
             workspaceLoadingPath = path
-            pathTitle.text = path.ifBlank {
-                activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
-                    ?: runtime.optString("workspace", "工作区")
+            val renderLoading = {
+                pathTitle.text = path.ifBlank {
+                    activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
+                        ?: runtime.optString("workspace", "工作区")
+                }
+                entries.removeAllViews()
+                entries.addView(label("正在读取…", 12, MUTED).apply {
+                    setPadding(dp(8), dp(12), dp(8), dp(12))
+                }, widthWrap())
             }
-            entries.removeAllViews()
-            entries.addView(label("正在读取…", 12, MUTED).apply {
-                setPadding(dp(8), dp(12), dp(8), dp(12))
-            }, widthWrap())
+            if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderLoading
+            else renderLoading()
 
             val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             val query = buildString {
@@ -2562,72 +3023,86 @@ class MainActivity : Activity() {
                     val tree = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/tree$query")
                     handler.post {
                         if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
-                        workspaceLoadedPath = path
-                        workspaceLoadingPath = null
-                        workspaceRootPath = tree.optString("cwd")
-                        pathTitle.text = tree.optString("cwd") + if (path.isBlank()) "" else "/$path"
-                        entries.removeAllViews()
-                        val children = tree.optJSONArray("entries") ?: JSONArray()
-                        if (children.length() == 0) {
-                            entries.addView(label("空文件夹", 12, MUTED).apply {
-                                setPadding(dp(8), dp(12), dp(8), dp(12))
-                            }, widthWrap())
+                        val renderTree = {
+                            if (workspaceOverlay === overlay && workspaceCurrentPath == path) {
+                                workspaceLoadedPath = path
+                                workspaceLoadingPath = null
+                                workspaceRootPath = tree.optString("cwd")
+                                pathTitle.text = tree.optString("cwd") + if (path.isBlank()) "" else "/$path"
+                                entries.removeAllViews()
+                                val children = tree.optJSONArray("entries") ?: JSONArray()
+                                if (children.length() == 0) {
+                                    entries.addView(label("空文件夹", 12, MUTED).apply {
+                                        setPadding(dp(8), dp(12), dp(8), dp(12))
+                                    }, widthWrap())
+                                }
+                                for (index in 0 until children.length()) {
+                                    val entry = children.optJSONObject(index) ?: continue
+                                    val isDirectory = entry.optString("kind") == "directory"
+                                    val row = LinearLayout(this@MainActivity).apply {
+                                        orientation = LinearLayout.HORIZONTAL
+                                        gravity = Gravity.CENTER_VERTICAL
+                                        setPadding(dp(7), dp(5), dp(3), dp(5))
+                                        background = rounded(Color.TRANSPARENT, dp(7))
+                                    }
+                                    val typeIcon = ImageView(this@MainActivity).apply {
+                                        setImageResource(if (isDirectory) R.drawable.ic_folder else R.drawable.ic_file)
+                                        imageTintList = ColorStateList.valueOf(if (isDirectory) ACCENT else SUBTLE)
+                                        contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
+                                    }
+                                    row.addView(typeIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
+                                    val name = label(entry.optString("name"), 13, TEXT).apply {
+                                        maxLines = 1
+                                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                                    }
+                                    row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
+                                    if (!isDirectory) row.addView(
+                                        label(formatFileSize(entry.optLong("size")), 10, MUTED),
+                                        LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(5) },
+                                    )
+                                    val relativePath = entry.optString("path")
+                                    val absolutePath = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
+                                        .filter { it.isNotBlank() }.joinToString("/")
+                                    if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
+                                        row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
+                                            insertWorkspacePathIntoComposer(absolutePath)
+                                        }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(3) })
+                                    }
+                                    row.setOnClickListener {
+                                        if (isDirectory) workspaceLoader?.invoke(entry.optString("path"))
+                                        else showFilePreview(entry.optString("path"), cwd)
+                                    }
+                                    row.setOnLongClickListener {
+                                        showWorkspaceEntryActions(row, entry, cwd) { refreshDirectory() }
+                                        true
+                                    }
+                                    entries.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(1) })
+                                }
+                                if (tree.optBoolean("truncated", false)) {
+                                    entries.addView(label("目录内容较多，已显示前 400 项", 10, MUTED).apply {
+                                        setPadding(dp(8), dp(8), dp(8), dp(8))
+                                    }, widthWrap())
+                                }
+                            }
                         }
-                        for (index in 0 until children.length()) {
-                            val entry = children.optJSONObject(index) ?: continue
-                            val isDirectory = entry.optString("kind") == "directory"
-                            val row = LinearLayout(this@MainActivity).apply {
-                                orientation = LinearLayout.HORIZONTAL
-                                gravity = Gravity.CENTER_VERTICAL
-                                setPadding(dp(8), dp(6), dp(5), dp(6))
-                                background = rounded(Color.TRANSPARENT, dp(7))
-                            }
-                            row.addView(
-                                label(if (isDirectory) "▰" else fileGlyph(entry.optString("name")), 14, if (isDirectory) ACCENT else SUBTLE, true),
-                                LinearLayout.LayoutParams(dp(25), WRAP),
-                            )
-                            val name = label(entry.optString("name"), 13, TEXT).apply {
-                                maxLines = 1
-                                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                            }
-                            row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
-                            if (!isDirectory) row.addView(
-                                label(formatFileSize(entry.optLong("size")), 10, MUTED),
-                                LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(5) },
-                            )
-                            val relativePath = entry.optString("path")
-                            val absolutePath = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
-                                .filter { it.isNotBlank() }.joinToString("/")
-                            if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
-                                row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
-                                    insertWorkspacePathIntoComposer(absolutePath)
-                                }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(3) })
-                            }
-                            row.setOnClickListener {
-                                if (isDirectory) workspaceLoader?.invoke(entry.optString("path"))
-                                else showFilePreview(entry.optString("path"), cwd)
-                            }
-                            row.setOnLongClickListener {
-                                showWorkspaceEntryActions(entry, cwd) { refreshDirectory() }
-                                true
-                            }
-                            entries.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(1) })
-                        }
-                        if (tree.optBoolean("truncated", false)) {
-                            entries.addView(label("目录内容较多，已显示前 400 项", 10, MUTED).apply {
-                                setPadding(dp(8), dp(8), dp(8), dp(8))
-                            }, widthWrap())
-                        }
+                        if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
+                        else renderTree()
                     }
                 } catch (error: Exception) {
                     handler.post {
                         if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
-                        workspaceLoadedPath = path
-                        workspaceLoadingPath = null
-                        entries.removeAllViews()
-                        entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply {
-                            setPadding(dp(8), dp(12), dp(8), dp(12))
-                        }, widthWrap())
+                        val renderError = {
+                            if (workspaceOverlay === overlay && workspaceCurrentPath == path) {
+                                workspaceLoadedPath = path
+                                workspaceLoadingPath = null
+                                entries.removeAllViews()
+                                entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply {
+                                    setPadding(dp(8), dp(12), dp(8), dp(12))
+                                }, widthWrap())
+                            }
+                        }
+                        if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderError
+                        else renderError()
                     }
                 }
             }
@@ -2665,12 +3140,14 @@ class MainActivity : Activity() {
             workspaceOverlay?.visibility = View.VISIBLE
         }
         workspaceVisible = visible
+        workspaceAnimator?.removeAllListeners()
         workspaceAnimator?.cancel()
         val start = workspaceProgress
         val target = if (visible) 1f else 0f
         if (start == target) {
             updateWorkspaceProgress(target)
             if (!visible) workspaceOverlay?.visibility = View.GONE
+            finishWorkspaceMotion()
             return
         }
         workspaceAnimator = ValueAnimator.ofFloat(start, target).apply {
@@ -2681,6 +3158,7 @@ class MainActivity : Activity() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     if (!workspaceVisible && workspaceProgress <= .001f) workspaceOverlay?.visibility = View.GONE
                     workspaceAnimator = null
+                    finishWorkspaceMotion()
                 }
             })
             start()
@@ -2693,9 +3171,25 @@ class MainActivity : Activity() {
         val overlay = workspaceOverlay ?: return
         val width = panel.width.takeIf { it > 0 } ?: panel.layoutParams?.width ?: dp(340)
         panel.translationX = width * (1f - workspaceProgress)
-        workspaceScrim?.alpha = workspaceProgress * .2f
         if (workspaceProgress > .001f) overlay.visibility = View.VISIBLE
         else if (!workspaceVisible) overlay.visibility = View.GONE
+    }
+
+    private fun finishWorkspaceMotion() {
+        workspaceGestureActive = false
+        val pending = workspacePendingRender
+        workspacePendingRender = null
+        pending?.invoke()
+        flushDeferredMessageRender()
+    }
+
+    private fun flushDeferredMessageRender() {
+        if (!messageRenderDeferred) return
+        if (sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) return
+        val scrollToEnd = deferredMessageScrollToEnd
+        messageRenderDeferred = false
+        deferredMessageScrollToEnd = false
+        renderMessages(scrollToEnd)
     }
 
     private fun handleWorkspaceBack(): Boolean {
@@ -2724,34 +3218,38 @@ class MainActivity : Activity() {
         showToast("已加入输入框")
     }
 
-    private fun showCreateEntry(parentPath: String, refresh: () -> Unit) {
-        AlertDialog.Builder(this).setTitle("新建")
-            .setItems(arrayOf("新建文件", "新建文件夹")) { _, index ->
-                val kind = if (index == 0) "file" else "directory"
-                val input = EditText(this).apply { hint = "名称"; setSingleLine(true) }
-                AlertDialog.Builder(this).setTitle(if (kind == "file") "新建文件" else "新建文件夹").setView(input)
-                    .setNegativeButton("取消", null).setPositiveButton("创建") { _, _ ->
-                        val name = input.text.toString().trim()
-                        if (name.isBlank()) return@setPositiveButton
-                        val path = listOf(parentPath.trim('/'), name).filter { it.isNotBlank() }.joinToString("/")
-                        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-                        runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/entries", JSONObject()
-                            .put("path", path).put("kind", kind).putOpt("cwd", cwd)) }, { refresh() })
-                    }.show()
-            }.show()
+    private fun showCreateEntry(anchor: View, parentPath: String, refresh: () -> Unit) {
+        showActionPopup(anchor, "新建", listOf(MenuAction("新建文件", "file"), MenuAction("新建文件夹", "folder"))) { index ->
+            val kind = if (index == 0) "file" else "directory"
+            val input = editField("名称", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+            showInputDialog(if (kind == "file") "新建文件" else "新建文件夹", input, "创建") {
+                val name = input.text.toString().trim()
+                if (name.isBlank()) return@showInputDialog false
+                val path = listOf(parentPath.trim('/'), name).filter { it.isNotBlank() }.joinToString("/")
+                val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+                runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/entries", JSONObject()
+                    .put("path", path).put("kind", kind).putOpt("cwd", cwd)) }, { refresh() })
+                true
+            }
+        }
     }
 
-    private fun showWorkspaceEntryActions(entry: JSONObject, cwd: String?, refreshed: () -> Unit) {
+    private fun showWorkspaceEntryActions(anchor: View, entry: JSONObject, cwd: String?, refreshed: () -> Unit) {
         val path = entry.optString("path")
         val isDirectory = entry.optString("kind") == "directory"
-        val actions = if (isDirectory && activeThreadId != null)
-            arrayOf("打开", "进入该路径并绑定当前聊天", "重命名", "复制", "剪切", "删除")
-        else arrayOf("打开", "重命名", "复制", "剪切", "删除")
-        AlertDialog.Builder(this).setTitle(entry.optString("name")).setItems(actions) { _, which ->
-            when (actions[which]) {
+        val actions = mutableListOf(MenuAction("打开", "open"))
+        if (isDirectory && activeThreadId != null) actions += MenuAction("绑定当前聊天", "link")
+        actions += listOf(
+            MenuAction("重命名", "edit"),
+            MenuAction("复制", "copy"),
+            MenuAction("剪切", "cut"),
+            MenuAction("删除", "delete", destructive = true),
+        )
+        showActionPopup(anchor, entry.optString("name"), actions) { which ->
+            when (actions[which].title) {
                 "打开" -> if (isDirectory) workspaceLoader?.invoke(path) else showFilePreview(path, cwd)
-                "进入该路径并绑定当前聊天" -> {
-                    val threadId = activeThreadId ?: return@setItems
+                "绑定当前聊天" -> {
+                    val threadId = activeThreadId ?: return@showActionPopup
                     val absolutePath = listOf(workspaceRootPath.trimEnd('/'), path.trimStart('/')).filter { it.isNotBlank() }.joinToString("/")
                     runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/workspace", JSONObject().put("cwd", absolutePath)) }, {
                         activeThread?.put("cwd", absolutePath)
@@ -2761,17 +3259,19 @@ class MainActivity : Activity() {
                     })
                 }
                 "重命名" -> {
-                    val input = EditText(this).apply { setText(entry.optString("name")); setSingleLine(true) }
-                    AlertDialog.Builder(this).setTitle("重命名").setView(input).setNegativeButton("取消", null).setPositiveButton("确定") { _, _ ->
+                    val input = editField("名称", entry.optString("name"), InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+                    showInputDialog("重命名", input, "确定") {
+                        if (input.text.toString().trim().isBlank()) return@showInputDialog false
                         runApi({ RemoteApi(endpoint, token).patch("/api/v1/codex/workspace/entry", JSONObject().put("path", path).put("name", input.text.toString().trim()).putOpt("cwd", cwd)) }, { refreshed() })
-                    }.show()
+                        true
+                    }
                 }
-                "复制", "剪切" -> { workspaceClipboard.clear(); workspaceClipboard += path; workspaceClipboardMode = if (actions[which] == "复制") "copy" else "move"; showToast(if (workspaceClipboardMode == "copy") "已复制" else "已剪切") }
-                "删除" -> AlertDialog.Builder(this).setMessage("删除 ${entry.optString("name")}？").setNegativeButton("取消", null).setPositiveButton("删除") { _, _ ->
+                "复制", "剪切" -> { workspaceClipboard.clear(); workspaceClipboard += path; workspaceClipboardMode = if (actions[which].title == "复制") "copy" else "move"; showToast(if (workspaceClipboardMode == "copy") "已复制" else "已剪切") }
+                "删除" -> showConfirmDialog("删除文件", "删除 ${entry.optString("name")}？此操作无法撤销。", "删除", destructive = true) {
                     runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/delete", JSONObject().put("paths", JSONArray().put(path)).putOpt("cwd", cwd)) }, { refreshed() })
-                }.show()
+                }
             }
-        }.show()
+        }
     }
 
     private fun pasteWorkspaceEntries(destination: String, refreshed: () -> Unit) {
@@ -2853,13 +3353,19 @@ class MainActivity : Activity() {
     private fun showTerminal() {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(8), dp(10), dp(9))
             background = rounded(if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17), dp(14), BORDER, dp(1))
         }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label("⌘  本机终端", 13, TEXT, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        header.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_terminal)
+            imageTintList = ColorStateList.valueOf(SUBTLE)
+            contentDescription = "本机终端"
+        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
+        header.addView(label("本机终端", 13, TEXT, true), LinearLayout.LayoutParams(0, dp(34), 1f))
         header.addView(smallButton("复制到输入框") {
             val value = terminalOutput?.text?.toString().orEmpty()
             composerInput.append(value.takeLast(120_000))
@@ -2867,7 +3373,11 @@ class MainActivity : Activity() {
         })
         header.addView(iconButton("close", "关闭终端") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         shell.addView(header, widthWrap())
-        terminalOutput = label("正在连接终端…", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226)).apply {
+        terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
+            setPadding(dp(3), 0, dp(3), dp(4))
+        }
+        shell.addView(terminalStatusView, widthWrap())
+        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226)).apply {
             typeface = Typeface.MONOSPACE
             setTextIsSelectable(true)
             setPadding(dp(9), dp(9), dp(9), dp(9))
@@ -2875,7 +3385,7 @@ class MainActivity : Activity() {
             minHeight = dp(190)
         }
         val outputScroll = ScrollView(this).apply {
-            isFillViewport = false; isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
+            isFillViewport = true; isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
             background = rounded(if (lightTheme) Color.rgb(244, 246, 248) else Color.rgb(8, 10, 12), dp(8))
             addView(terminalOutput, FrameLayout.LayoutParams(MATCH, WRAP))
         }
@@ -2917,6 +3427,7 @@ class MainActivity : Activity() {
             terminalDialog = null
             terminalDraftInput = null
             terminalOutput = null
+            terminalStatusView = null
         }
         terminalDialog = dialog
         dialog.show()
@@ -2971,17 +3482,18 @@ class MainActivity : Activity() {
     }
 
     private fun connectTerminal() {
+        updateTerminalStatus("正在连接电脑终端…", MUTED)
         val url = endpoint.replaceFirst(Regex("^http"), "ws") + "/api/v1/codex/terminal"
         val request = Request.Builder().url(url).build()
         terminalSocket = socketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
-                appendTerminal("WebSocket 已连接，正在启动终端…\n")
+                updateTerminalStatus("连接成功，正在恢复终端会话…", MUTED)
                 val thread = activeThreadId
                 val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
                 val sent = webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
                     .putOpt("threadId", thread).putOpt("cwd", cwd.takeIf { it.isNotBlank() })
                     .put("columns", 88).put("rows", 26).toString())
-                if (!sent) appendTerminal("终端连接信息发送失败。\n")
+                if (!sent) updateTerminalStatus("终端连接信息发送失败", ERROR)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -2990,14 +3502,17 @@ class MainActivity : Activity() {
                     when (event.optString("type")) {
                         "ready" -> {
                             terminalReady = true
-                            appendTerminal("已连接 ${event.optString("shell")} · ${event.optString("cwd")}\n")
+                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
                         }
                         "error" -> {
                             terminalReady = false
-                            appendTerminal("\n${event.optString("message", "终端连接失败")}\n")
+                            val message = event.optString("message", "终端连接失败")
+                            updateTerminalStatus(message, ERROR)
+                            appendTerminal("$message\n")
                         }
                         "exit" -> {
                             terminalReady = false
+                            updateTerminalStatus("终端会话已结束", WARNING)
                             appendTerminal("\n[终端已退出]\n")
                         }
                     }
@@ -3007,32 +3522,32 @@ class MainActivity : Activity() {
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) { appendTerminal(bytes.utf8()) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 terminalReady = false
-                appendTerminal("\n终端连接失败：${t.message}\n")
+                val message = "终端连接失败：${t.message ?: "未知错误"}"
+                updateTerminalStatus(message, ERROR)
+                appendTerminal("\n$message\n")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 terminalReady = false
-                if (terminalDialog?.isShowing == true) appendTerminal("\n终端连接已关闭（$code）：${reason.ifBlank { "无原因说明" }}\n")
+                if (terminalDialog?.isShowing == true) {
+                    updateTerminalStatus("连接已关闭（$code）", WARNING)
+                    appendTerminal("\n终端连接已关闭：${reason.ifBlank { "无原因说明" }}\n")
+                }
             }
         })
     }
 
     private fun appendTerminal(value: String) = handler.post {
         val output = terminalOutput ?: return@post
-        val clean = value.replace(Regex("\u001B\\[[0-?]*[ -/]*[@-~]"), "")
-            .replace(Regex("\u001B\\][^\u0007]*(?:\u0007|\u001B\\\\)"), "")
-            .replace("\u0000", "")
-        val buffer = StringBuilder(output.text)
-        for (character in clean) {
-            when (character) {
-                '\r' -> { while (buffer.isNotEmpty() && buffer.last() != '\n') buffer.deleteCharAt(buffer.length - 1) }
-                '\b' -> if (buffer.isNotEmpty() && buffer.last() != '\n') buffer.deleteCharAt(buffer.length - 1)
-                else -> buffer.append(character)
-            }
-        }
-        val text = buffer.toString().takeLast(180_000)
-        output.text = text
+        output.text = terminalScreen.append(value)
         (output.parent as? ScrollView)?.post { (output.parent as? ScrollView)?.fullScroll(View.FOCUS_DOWN) }
+    }
+
+    private fun updateTerminalStatus(value: String, color: Int) = handler.post {
+        terminalStatusView?.apply {
+            text = value
+            setTextColor(color)
+        }
     }
 
     private fun sendTerminalLine() {
@@ -3072,16 +3587,6 @@ class MainActivity : Activity() {
         size < 1024 -> "$size B"
         size < 1024 * 1024 -> "${size / 1024} KB"
         else -> String.format(Locale.ROOT, "%.1f MB", size / (1024f * 1024f))
-    }
-
-    private fun showFontSizeDialog() {
-        val size = prefs.getInt(KEY_FONT_SIZE, 14)
-        val input = EditText(this).apply { inputType = InputType.TYPE_CLASS_NUMBER; setText(size.toString()) }
-        AlertDialog.Builder(this).setTitle("聊天字体大小（12–20）").setView(input)
-            .setNegativeButton("取消", null).setPositiveButton("保存") { _, _ ->
-                prefs.edit().putInt(KEY_FONT_SIZE, input.text.toString().toIntOrNull()?.coerceIn(12, 20) ?: 14).apply()
-                renderMessages(false)
-            }.show()
     }
 
     private fun chooseAttachment() {
@@ -3488,6 +3993,18 @@ class MainActivity : Activity() {
         "settings" -> R.drawable.ic_settings
         "refresh" -> R.drawable.ic_refresh
         "arrow_up" -> R.drawable.ic_arrow_up
+        "file" -> R.drawable.ic_file
+        "open" -> R.drawable.ic_open
+        "edit" -> R.drawable.ic_edit
+        "pin" -> R.drawable.ic_pin
+        "copy" -> R.drawable.ic_copy
+        "cut" -> R.drawable.ic_cut
+        "delete" -> R.drawable.ic_delete
+        "link" -> R.drawable.ic_link
+        "check" -> R.drawable.ic_check
+        "chevron_down" -> R.drawable.ic_chevron_down
+        "chevron_up" -> R.drawable.ic_chevron_up
+        "back" -> R.drawable.ic_back
         else -> R.drawable.ic_add
     }
 
@@ -3507,6 +4024,13 @@ class MainActivity : Activity() {
         gravity = Gravity.CENTER
         setPadding(dp(9), 0, dp(9), 0)
         background = rounded(PANEL_INSET, dp(7))
+        setOnClickListener { action() }
+    }
+
+    private fun dialogTextButton(value: String, color: Int, action: () -> Unit): TextView = label(value, 12, color, true).apply {
+        gravity = Gravity.CENTER
+        setPadding(dp(10), 0, dp(10), 0)
+        background = ColorDrawable(Color.TRANSPARENT)
         setOnClickListener { action() }
     }
 
@@ -3544,10 +4068,152 @@ class MainActivity : Activity() {
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val KEY_LIGHT_THEME = "native_light_theme"
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
+        private const val TAG_INSET_CONTENT = "inset_content"
         private const val MAX_CACHED_THREADS = 32
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
         private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
         private const val MAX_HISTORY_CACHE_JSON_BYTES = 96 * 1024 * 1024
+    }
+}
+
+private class TerminalScreenBuffer(private val columns: Int, private val rows: Int) {
+    private val screen = MutableList(rows) { CharArray(columns) { ' ' } }
+    private var cursorRow = 0
+    private var cursorColumn = 0
+    private var savedRow = 0
+    private var savedColumn = 0
+    private var state = 0
+    private val sequence = StringBuilder()
+
+    fun append(value: String): String {
+        value.forEach(::consume)
+        val rendered = screen.map { String(it).trimEnd() }
+        val first = rendered.indexOfFirst { it.isNotBlank() }
+        val last = rendered.indexOfLast { it.isNotBlank() }
+        return if (first < 0 || last < first) "等待终端输出…" else rendered.subList(first, last + 1).joinToString("\n")
+    }
+
+    private fun consume(character: Char) {
+        when (state) {
+            0 -> when (character) {
+                '\u001b' -> state = 1
+                '\r' -> cursorColumn = 0
+                '\n' -> newLine()
+                '\b' -> cursorColumn = (cursorColumn - 1).coerceAtLeast(0)
+                '\t' -> cursorColumn = ((cursorColumn / 8 + 1) * 8).coerceAtMost(columns - 1)
+                '\u0000', '\u0007' -> Unit
+                else -> if (character >= ' ') put(character)
+            }
+            1 -> when (character) {
+                '[' -> { sequence.setLength(0); state = 2 }
+                ']' -> { sequence.setLength(0); state = 3 }
+                '7' -> { savedRow = cursorRow; savedColumn = cursorColumn; state = 0 }
+                '8' -> { cursorRow = savedRow; cursorColumn = savedColumn; state = 0 }
+                'c' -> { clear(); state = 0 }
+                '(', ')', '#', '%' -> state = 4
+                else -> state = 0
+            }
+            2 -> {
+                if (character in '@'..'~') {
+                    applyCsi(character, sequence.toString())
+                    state = 0
+                } else if (sequence.length < 64) sequence.append(character) else state = 0
+            }
+            3 -> when {
+                character == '\u0007' -> state = 0
+                character == '\u001b' -> state = 5
+                sequence.length < 512 -> sequence.append(character)
+                else -> state = 0
+            }
+            4 -> state = 0
+            5 -> state = if (character == '\\') 0 else 3
+        }
+    }
+
+    private fun put(character: Char) {
+        if (cursorColumn >= columns) newLine()
+        screen[cursorRow][cursorColumn] = character
+        cursorColumn += 1
+    }
+
+    private fun newLine() {
+        cursorRow += 1
+        cursorColumn = 0
+        if (cursorRow < rows) return
+        screen.removeAt(0)
+        screen.add(CharArray(columns) { ' ' })
+        cursorRow = rows - 1
+    }
+
+    private fun applyCsi(command: Char, raw: String) {
+        val cleaned = raw.trimStart('?', '>', '!', '=')
+        val values = cleaned.split(';').map { it.toIntOrNull() ?: 0 }
+        fun value(index: Int, fallback: Int = 1): Int = values.getOrNull(index)?.takeIf { it > 0 } ?: fallback
+        when (command) {
+            'A' -> cursorRow = (cursorRow - value(0)).coerceAtLeast(0)
+            'B' -> cursorRow = (cursorRow + value(0)).coerceAtMost(rows - 1)
+            'C' -> cursorColumn = (cursorColumn + value(0)).coerceAtMost(columns - 1)
+            'D' -> cursorColumn = (cursorColumn - value(0)).coerceAtLeast(0)
+            'E' -> { cursorRow = (cursorRow + value(0)).coerceAtMost(rows - 1); cursorColumn = 0 }
+            'F' -> { cursorRow = (cursorRow - value(0)).coerceAtLeast(0); cursorColumn = 0 }
+            'G' -> cursorColumn = (value(0) - 1).coerceIn(0, columns - 1)
+            'H', 'f' -> {
+                cursorRow = (value(0) - 1).coerceIn(0, rows - 1)
+                cursorColumn = (value(1) - 1).coerceIn(0, columns - 1)
+            }
+            'd' -> cursorRow = (value(0) - 1).coerceIn(0, rows - 1)
+            'J' -> eraseDisplay(values.firstOrNull() ?: 0)
+            'K' -> eraseLine(values.firstOrNull() ?: 0)
+            'P' -> deleteCharacters(value(0))
+            '@' -> insertCharacters(value(0))
+            'X' -> repeat(value(0).coerceAtMost(columns - cursorColumn)) { screen[cursorRow][cursorColumn + it] = ' ' }
+            'S' -> repeat(value(0).coerceAtMost(rows)) { screen.removeAt(0); screen.add(CharArray(columns) { ' ' }) }
+            'T' -> repeat(value(0).coerceAtMost(rows)) { screen.removeAt(rows - 1); screen.add(0, CharArray(columns) { ' ' }) }
+            's' -> { savedRow = cursorRow; savedColumn = cursorColumn }
+            'u' -> { cursorRow = savedRow; cursorColumn = savedColumn }
+        }
+    }
+
+    private fun eraseDisplay(mode: Int) {
+        when (mode) {
+            1 -> {
+                for (row in 0 until cursorRow) screen[row].fill(' ')
+                for (column in 0..cursorColumn.coerceAtMost(columns - 1)) screen[cursorRow][column] = ' '
+            }
+            2, 3 -> clear()
+            else -> {
+                for (column in cursorColumn until columns) screen[cursorRow][column] = ' '
+                for (row in cursorRow + 1 until rows) screen[row].fill(' ')
+            }
+        }
+    }
+
+    private fun eraseLine(mode: Int) {
+        when (mode) {
+            1 -> for (column in 0..cursorColumn.coerceAtMost(columns - 1)) screen[cursorRow][column] = ' '
+            2 -> screen[cursorRow].fill(' ')
+            else -> for (column in cursorColumn until columns) screen[cursorRow][column] = ' '
+        }
+    }
+
+    private fun deleteCharacters(count: Int) {
+        val line = screen[cursorRow]
+        val amount = count.coerceAtMost(columns - cursorColumn)
+        for (column in cursorColumn until columns - amount) line[column] = line[column + amount]
+        for (column in columns - amount until columns) line[column] = ' '
+    }
+
+    private fun insertCharacters(count: Int) {
+        val line = screen[cursorRow]
+        val amount = count.coerceAtMost(columns - cursorColumn)
+        for (column in columns - 1 downTo cursorColumn + amount) line[column] = line[column - amount]
+        for (column in cursorColumn until cursorColumn + amount) line[column] = ' '
+    }
+
+    private fun clear() {
+        screen.forEach { it.fill(' ') }
+        cursorRow = 0
+        cursorColumn = 0
     }
 }
 
