@@ -1765,16 +1765,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (readingDocuments) return
-    const directFiles = Array.from(event.clipboardData.files)
-    const itemFiles = Array.from(event.clipboardData.items)
-      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
-      .filter((file): file is File => file !== null)
-    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
-    if (images.length > 0) {
-      event.preventDefault()
-      void attachImages(images)
-      return
-    }
     const pastedText = event.clipboardData.getData('text/plain')
     const pastedTable = clipboardTableToMarkdown(event.clipboardData.getData('text/html'), pastedText)
     if (pastedTable) {
@@ -1800,6 +1790,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         activeTextarea.focus({ preventScroll: true })
         activeTextarea.setSelectionRange(cursor, cursor)
       })
+      return
+    }
+    const directFiles = Array.from(event.clipboardData.files)
+    const itemFiles = Array.from(event.clipboardData.items)
+      .map((item) => item.kind === 'file' ? item.getAsFile() : null)
+      .filter((file): file is File => file !== null)
+    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    if (images.length > 0) {
+      event.preventDefault()
+      void attachImages(images)
       return
     }
     if (pastedText.length < longPasteThreshold) return
