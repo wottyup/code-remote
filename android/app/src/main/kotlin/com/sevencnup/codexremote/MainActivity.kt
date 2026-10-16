@@ -875,13 +875,13 @@ class MainActivity : Activity() {
     private fun buildQueuePanel() {
         queuePanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(5), dp(14), dp(2))
+            setPadding(dp(14), dp(3), dp(14), dp(1))
             visibility = View.GONE
         }
         queueContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
         page.addView(queuePanel, widthWrap())
         page.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply {
-            leftMargin = dp(14); rightMargin = dp(14); bottomMargin = dp(4)
+            leftMargin = dp(14); rightMargin = dp(14); bottomMargin = dp(2)
         })
     }
 
@@ -3121,11 +3121,11 @@ class MainActivity : Activity() {
         }
         queuePanel.visibility = View.VISIBLE
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label("排队消息 · $count", 12, SUBTLE, true), LinearLayout.LayoutParams(0, dp(28), 1f))
+        header.addView(label("排队消息 · $count", 12, SUBTLE, true), LinearLayout.LayoutParams(0, dp(24), 1f))
         header.addView(iconButton(if (queueExpanded) "chevron_up" else "chevron_down", if (queueExpanded) "收起排队消息" else "展开排队消息") {
             queueExpanded = !queueExpanded
             renderQueue()
-        }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(28), dp(28)))
+        }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(24), dp(24)))
         queuePanel.addView(header, widthWrap())
         queueContent.removeAllViews()
         queueContent.visibility = if (queueExpanded) View.VISIBLE else View.GONE
@@ -3134,12 +3134,12 @@ class MainActivity : Activity() {
             val item = queuedMessages.optJSONObject(index) ?: continue
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(9), dp(7), dp(9), dp(7))
+                setPadding(dp(7), dp(5), dp(7), dp(5))
                 background = rounded(PANEL_INSET, dp(9))
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
             card.addView(label("${index + 1}.  ${text.ifBlank { "（附件消息）" }}", 12, TEXT).apply {
-                maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
+                maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
@@ -3148,17 +3148,21 @@ class MainActivity : Activity() {
                 else if (claudeQueueItem) claudeModelLabel(rawModel) else modelLabel(rawModel)
             val queuedEffort = if (rawEffort.isBlank() || rawEffort == "default") "默认"
                 else effortLabel(rawEffort)
-            card.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
-                setPadding(0, dp(4), 0, 0)
+            val details = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-            }, widthWrap())
-            val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)).apply { rightMargin = dp(4) })
-            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)).apply { rightMargin = dp(4) })
-            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)))
-            card.addView(controls, LinearLayout.LayoutParams(MATCH, dp(30)).apply { topMargin = dp(4) })
-            queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
+            }, LinearLayout.LayoutParams(0, dp(28), 1f))
+            val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(2) })
+            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(2) })
+            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)))
+            details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(28)))
+            card.addView(details, LinearLayout.LayoutParams(MATCH, dp(28)))
+            queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         }
     }
 
