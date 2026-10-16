@@ -7,7 +7,6 @@ import { restoreTerminalTouchSelection, type TerminalTouchSelection } from '../l
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
-const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 const terminalControlKeys = [
   { label: '向左', code: 'D', icon: ArrowLeft },
   { label: '向上', code: 'A', icon: ArrowUp },
@@ -117,8 +116,10 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [activeModifier, setActiveModifier] = useState<TerminalModifier | null>(null)
   const [manualPasteOpen, setManualPasteOpen] = useState(false)
   const [manualPasteText, setManualPasteText] = useState('')
+  const [desktopPasteHintVisible, setDesktopPasteHintVisible] = useState(false)
   const [connectionRound, setConnectionRound] = useState(0)
   const activeModifierRef = useRef<TerminalModifier | null>(null)
+  const desktopPasteHintTimer = useRef<number | undefined>(undefined)
   const terminalActions = useRef<TerminalActions>({
     clear: () => {},
     focus: () => {},
@@ -151,10 +152,23 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     setContextMenu(null)
     const value = await readTextFromClipboard()
     if (value === null) {
-      setManualPasteText('')
-      setManualPasteOpen(true)
+      if (window.matchMedia('(pointer: coarse)').matches) {
+        setManualPasteText('')
+        setManualPasteOpen(true)
+      } else {
+        terminalActions.current.focus()
+        setDesktopPasteHintVisible(true)
+        if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+        desktopPasteHintTimer.current = window.setTimeout(() => {
+          setDesktopPasteHintVisible(false)
+          desktopPasteHintTimer.current = undefined
+        }, 3_500)
+      }
       return
     }
+    setDesktopPasteHintVisible(false)
+    if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+    desktopPasteHintTimer.current = undefined
     if (value) terminalActions.current.paste(value)
     terminalActions.current.focus()
   }
@@ -212,14 +226,17 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     setWorkingDirectory(cwd ?? '')
     activeModifierRef.current = null
     setActiveModifier(null)
-    const compactTerminal = window.matchMedia(compactTerminalQuery)
+    const readFontSize = () => {
+      const fontSize = Number.parseFloat(window.getComputedStyle(container).fontSize)
+      return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 14
+    }
 
     const terminal = new Terminal({
       allowProposedApi: false,
       cursorBlink: true,
       convertEol: false,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: compactTerminal.matches ? 12 : 13,
+      fontSize: readFontSize(),
       lineHeight: 1.2,
       scrollback: 5_000,
       theme: {
@@ -271,19 +288,29 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         // The dialog can briefly have no measurable size while the pane is switching.
       }
     }
-    const updateFontSize = () => {
-      const fontSize = compactTerminal.matches ? 12 : 13
-      if (terminal.options.fontSize === fontSize) return
-      terminal.options.fontSize = fontSize
+    const scheduleFit = () => {
       window.cancelAnimationFrame(fitFrame)
       fitFrame = window.requestAnimationFrame(fitAndResize)
     }
-    compactTerminal.addEventListener('change', updateFontSize)
+    const updateFontSize = () => {
+      const fontSize = readFontSize()
+      if (terminal.options.fontSize === fontSize) return
+      terminal.options.fontSize = fontSize
+      scheduleFit()
+    }
+    const appRoot = container.closest('.app-root')
+    const fontPreferenceObserver = typeof MutationObserver === 'undefined' || !appRoot
+      ? null
+      : new MutationObserver(updateFontSize)
+    if (fontPreferenceObserver && appRoot) {
+      fontPreferenceObserver.observe(appRoot, { attributes: true, attributeFilter: ['style'] })
+    }
+    window.addEventListener('resize', updateFontSize)
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver(() => {
-        window.cancelAnimationFrame(fitFrame)
-        fitFrame = window.requestAnimationFrame(fitAndResize)
+        updateFontSize()
+        scheduleFit()
       })
     resizeObserver?.observe(container)
 
@@ -511,7 +538,8 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     return () => {
       disposed = true
       window.cancelAnimationFrame(fitFrame)
-      compactTerminal.removeEventListener('change', updateFontSize)
+      window.removeEventListener('resize', updateFontSize)
+      fontPreferenceObserver?.disconnect()
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
       container.removeEventListener('mousedown', handleMouseDown)
@@ -524,6 +552,8 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
       clearLongPress()
       stopControlRepeat()
+      if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+      desktopPasteHintTimer.current = undefined
       activeModifierRef.current = null
       sendTerminalInput.current = () => {}
       sendControlInput.current = () => {}
@@ -672,6 +702,11 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       )}
     >
       <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
+      {desktopPasteHintVisible ? (
+        <div className="terminal-dialog__paste-hint" role="status">
+          终端已聚焦，请按 Ctrl/⌘+V 粘贴
+        </div>
+      ) : null}
       {contextMenu ? (
         <div
           className="terminal-context-menu"

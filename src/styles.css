@@ -196,10 +196,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .terminal-dialog__status > svg { color: #c19b56; }
 .terminal-dialog__reconnect { display: inline-flex; min-height: 26px; flex: 0 0 auto; align-items: center; gap: 5px; padding: 0 7px; border: 0; border-radius: 6px; background: rgba(122, 137, 184, .15); color: #cbd4f2; cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); }
 .terminal-dialog__reconnect:hover { background: rgba(143, 161, 220, .28); color: #fff; }
-.terminal-dialog__screen { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: 8px 10px 10px; background: #111317; color: #e3e6ed; }
+.terminal-dialog__screen { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; padding: 8px 10px 10px; background: #111317; color: #e3e6ed; font-size: calc(14px + var(--mobile-font-offset)); }
 .terminal-dialog__screen .xterm { height: 100%; }
 .terminal-dialog__screen .xterm-helper-textarea:focus-visible { outline: 0; }
 .terminal-dialog__screen .xterm-viewport { overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.terminal-dialog__paste-hint { position: absolute; z-index: 1; right: 14px; bottom: 14px; max-width: calc(100% - 28px); padding: 8px 11px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 8px; background: rgba(28, 31, 38, .96); color: #e3e6ed; box-shadow: 0 8px 24px rgba(0, 0, 0, .3); font-size: calc(12px + var(--mobile-font-offset)); pointer-events: none; }
 .terminal-dialog > .chat-overlay-panel__footer { display: none; }
 .terminal-dialog__navigation { display: grid; width: min(100%, 420px); gap: 6px; margin: 0 auto; }
 .terminal-dialog__navigation-row { display: grid; min-width: 0; gap: 6px; }
