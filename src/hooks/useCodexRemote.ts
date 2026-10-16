@@ -2603,7 +2603,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return true
   }, [queueRecoveryReadyThreadId])
 
-  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
     const text = input.prompt.trim()
@@ -2620,6 +2620,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           requestText: queuedRequestText(text, documents),
           images,
           ...(documents.length > 0 ? { documents } : { documents: undefined }),
+          model: input.model,
+          effort: input.effort,
+          claudeModel: input.claudeModel,
+          claudeEffort: input.claudeEffort,
         }
         : message)
     })
@@ -2882,7 +2886,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return began
   }, [sharedQueueAction])
 
-  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
     if (!threadId || !previous) return false
@@ -2895,6 +2899,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         requestText: queuedRequestText(text, documents),
         images: input.images,
         documents,
+        model: input.model,
+        effort: input.effort,
+        claudeModel: input.claudeModel,
+        claudeEffort: input.claudeEffort,
         sendAttempt: undefined,
         editing: undefined,
       })

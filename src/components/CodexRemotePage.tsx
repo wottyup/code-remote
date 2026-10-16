@@ -655,6 +655,11 @@ interface ComposerMenuOption {
   label: string
 }
 
+interface ModelReasoningOptions {
+  options: ComposerMenuOption[]
+  defaultEffort?: string
+}
+
 function ComposerMenu({
   label,
   value,
@@ -830,6 +835,9 @@ interface ComposerSendInput {
   claudePermissionMode?: ClaudeCodePermissionMode
 }
 
+type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+
 interface ComposerHandle {
   replaceDraft(value: string): void
   appendDraft(value: string, focus?: boolean): void
@@ -861,6 +869,7 @@ interface MessageComposerProps {
   onTemporaryPreferencesChange: (enabled: boolean) => void
   modelOptions: ComposerMenuOption[]
   reasoningOptions: ComposerMenuOption[]
+  reasoningOptionsByModel: Record<string, ModelReasoningOptions>
   authorizationOptions: ComposerMenuOption[]
   claudeModelOptions: ComposerMenuOption[]
   claudeEffortOptions: ComposerMenuOption[]
@@ -875,7 +884,7 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
-  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean | Promise<boolean>
+  onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
   onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
@@ -904,6 +913,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onTemporaryPreferencesChange,
   modelOptions,
   reasoningOptions,
+  reasoningOptionsByModel,
   authorizationOptions,
   claudeModelOptions,
   claudeEffortOptions,
@@ -946,6 +956,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
+  const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
@@ -1295,7 +1306,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [])
 
   const canCompose = !sending && !writerConflict && connection === 'connected'
-  const canConfigure = canCompose && !editingQueuedMessageId
+  const canConfigure = canCompose
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
     && !readingDocuments
     && !readingImages
@@ -1313,6 +1324,43 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       {temporaryPreferences ? <Check size={14} aria-hidden="true" /> : null}
     </button>
   )
+  const composerSelectedModel = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.model ?? selectedModel : editingQueuedPreferences?.claudeModel ?? 'default'
+    : selectedModel
+  const composerSelectedEffort = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.effort ?? selectedEffort : editingQueuedPreferences?.claudeEffort ?? 'default'
+    : selectedEffort
+  const composerReasoningOptions = showCodexPreferences
+    ? editingQueuedMessageId ? reasoningOptionsByModel[composerSelectedModel]?.options ?? reasoningOptions : reasoningOptions
+    : claudeEffortOptions
+  const changeComposerModel = useCallback((model: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onModelChange(model)
+      return
+    }
+    if (!showCodexPreferences) {
+      setEditingQueuedPreferences((current) => ({ ...current, claudeModel: model }))
+      return
+    }
+    const modelReasoning = reasoningOptionsByModel[model]
+    setEditingQueuedPreferences((current) => {
+      const currentEffort = current?.effort ?? selectedEffort
+      if (!modelReasoning) return { ...current, model }
+      const effort = modelReasoning.options.some((option) => option.value === currentEffort)
+        ? currentEffort
+        : modelReasoning.defaultEffort ?? modelReasoning.options[0]?.value
+      return { ...current, model, effort }
+    })
+  }, [onModelChange, reasoningOptionsByModel, selectedEffort, showCodexPreferences])
+  const changeComposerEffort = useCallback((effort: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onEffortChange(effort)
+      return
+    }
+    setEditingQueuedPreferences((current) => showCodexPreferences
+      ? { ...current, effort }
+      : { ...current, claudeEffort: effort })
+  }, [onEffortChange, showCodexPreferences])
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
   )
@@ -1574,6 +1622,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       documents: attachedDocuments,
       attachmentError,
     }
+    setEditingQueuedPreferences(showCodexPreferences
+      ? { model: message.model ?? selectedModel, effort: message.effort ?? selectedEffort }
+      : { claudeModel: message.claudeModel ?? 'default', claudeEffort: message.claudeEffort ?? 'default' })
     editingQueuedMessageIdRef.current = message.id
     setEditingQueuedMessageId(message.id)
     updateDraft(message.text)
@@ -1592,6 +1643,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     editingQueuedMessageIdRef.current = null
     setEditingQueuedMessageId(null)
+    setEditingQueuedPreferences(null)
     restoreDraftAfterQueuedEdit()
     return true
   }
@@ -1611,6 +1663,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         prompt,
         images: attachedImages,
         documents: attachedDocuments,
+        model: showCodexPreferences ? editingQueuedPreferences?.model || undefined : undefined,
+        effort: showCodexPreferences ? editingQueuedPreferences?.effort || undefined : undefined,
+        claudeModel: !showCodexPreferences && editingQueuedPreferences?.claudeModel !== 'default'
+          ? editingQueuedPreferences?.claudeModel
+          : undefined,
+        claudeEffort: !showCodexPreferences && editingQueuedPreferences?.claudeEffort !== 'default'
+          ? editingQueuedPreferences?.claudeEffort
+          : undefined,
       })) {
         setAttachmentError('排队消息更新失败，请检查连接后重试。')
         return
@@ -1850,13 +1910,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <div className="message-composer__footer">
         <div className="composer-preferences">
           {showCodexPreferences ? <>
-            <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
-            <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
-            <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+            <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           </> : <>
-            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
-            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} footer={temporaryPreferencesToggle} temporary={temporaryPreferences} />
-            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
+            <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
           </>}
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
@@ -4650,6 +4710,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
+  const reasoningOptionsByModel = useMemo<Record<string, ModelReasoningOptions>>(() => {
+    const byModel: Record<string, ModelReasoningOptions> = {}
+    for (const model of availableModels) {
+      const id = modelIdOf(model)
+      if (!id) continue
+      byModel[id] = {
+        options: (model.supportedReasoningEfforts ?? []).map((option) => ({
+          value: option.reasoningEffort,
+          label: effortLabelOf(option.reasoningEffort),
+        })),
+        defaultEffort: model.defaultReasoningEffort,
+      }
+    }
+    return byModel
+  }, [availableModels])
   const sidebarThreads = useMemo(() => remote0.threads
     .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
     .sort((left, right) => {
@@ -4843,6 +4918,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onTemporaryPreferencesChange={changeTemporaryPreferences}
               modelOptions={modelOptions}
               reasoningOptions={reasoningOptions}
+              reasoningOptionsByModel={reasoningOptionsByModel}
               authorizationOptions={approvalPolicyOptions}
               claudeModelOptions={claudeModelOptions}
               claudeEffortOptions={claudeEffortOptions}
