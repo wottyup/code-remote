@@ -1618,4 +1618,4 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #c8d0ff; }
-.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #f38662; }
+.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #ee8c6d; }
