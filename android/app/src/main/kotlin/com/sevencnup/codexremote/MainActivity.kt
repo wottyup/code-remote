@@ -27,9 +27,12 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
+import android.text.Layout
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.StaticLayout
+import android.text.TextDirectionHeuristics
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
@@ -94,6 +97,7 @@ import java.util.zip.GZIPOutputStream
 import kotlin.math.max
 import kotlin.math.abs
 import kotlin.math.min
+import kotlin.math.ceil
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
@@ -278,6 +282,7 @@ class MainActivity : Activity() {
     private lateinit var completionNotice: LinearLayout
     private lateinit var modeSwitchNotice: LinearLayout
     private lateinit var composerInput: EditText
+    private lateinit var attachmentScroll: HorizontalScrollView
     private lateinit var attachmentStrip: LinearLayout
     private lateinit var sendButton: TextView
     private lateinit var modelButton: TextView
@@ -899,9 +904,27 @@ class MainActivity : Activity() {
             }
             addTextChangedListener(SimpleTextWatcher { value -> prefs.edit().putString(draftStorageKey(), value).apply() })
         }
+        attachmentStrip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+            clipToPadding = false
+        }
+        attachmentScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipChildren = false
+            clipToPadding = false
+            visibility = View.GONE
+            addView(attachmentStrip, FrameLayout.LayoutParams(WRAP, MATCH))
+        }
+        // Keep attachment previews above the editable text, matching the web composer.
+        // A fixed-height horizontal strip prevents long filenames or multiple images
+        // from growing the input field vertically.
+        composer.addView(attachmentScroll, LinearLayout.LayoutParams(MATCH, dp(60)).apply {
+            bottomMargin = dp(3)
+        })
         composer.addView(composerInput, LinearLayout.LayoutParams(MATCH, WRAP))
-        attachmentStrip = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; visibility = View.GONE }
-        composer.addView(attachmentStrip, widthWrap())
 
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -2163,13 +2186,16 @@ class MainActivity : Activity() {
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                     maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
-                // The bubble itself is WRAP_CONTENT. Giving its TextView MATCH_PARENT
-                // creates a circular width measurement on narrow screens and can
-                // collapse the bubble to one character per line. Let the text measure
-                // to its content; maxWidth above still constrains long messages.
-                bubble.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+                val contentWidth = if (role == "user") {
+                    val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
+                    naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
+                } else WRAP
+                // Specify the user's text width from Android's actual text layout.
+                // Nested WRAP_CONTENT measurement alone was collapsing to one glyph
+                // per line on some narrow devices even with maxWidth configured.
+                bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
             }
-            addMessageImages(bubble, item)
+            addMessageImages(bubble, item, maxBubbleWidth)
             if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
                 bubble.addView(label(displayTime, 10, MUTED).apply {
                     gravity = Gravity.END
@@ -2446,8 +2472,9 @@ class MainActivity : Activity() {
         return output.toList()
     }
 
-    private fun addMessageImages(container: LinearLayout, item: JSONObject) {
+    private fun addMessageImages(container: LinearLayout, item: JSONObject, maxBubbleWidth: Int) {
         val content = item.optJSONArray("content") ?: return
+        val imageWidth = (maxBubbleWidth - container.paddingLeft - container.paddingRight).coerceAtLeast(dp(120))
         for (index in 0 until content.length()) {
             val part = content.optJSONObject(index) ?: continue
             val type = normalizedType(part.optString("type"))
@@ -2456,7 +2483,7 @@ class MainActivity : Activity() {
             if (data.isBlank()) {
                 if (type == "localimage") {
                     part.optString("path").takeIf { it.isNotBlank() && it != "null" }?.let { path ->
-                        addRemoteMessageImage(container, path)
+                        addRemoteMessageImage(container, path, imageWidth)
                     }
                 }
                 continue
@@ -2479,13 +2506,13 @@ class MainActivity : Activity() {
                     background = rounded(USER_BUBBLE, dp(8))
                     setOnClickListener { showImageDialog(bitmap) }
                 }
-                container.addView(image, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
+                container.addView(image, LinearLayout.LayoutParams(imageWidth, dp(190)).apply { topMargin = dp(5) })
             } catch (_: IllegalArgumentException) { }
             catch (_: OutOfMemoryError) { messageImageCache.evictAll() }
         }
     }
 
-    private fun addRemoteMessageImage(container: LinearLayout, path: String) {
+    private fun addRemoteMessageImage(container: LinearLayout, path: String, imageWidth: Int) {
         val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
         val requestPath = workspaceImageRequestPath(cwd, path)
         val cacheKey = "path:${cwd.orEmpty()}:$requestPath"
@@ -2503,7 +2530,7 @@ class MainActivity : Activity() {
             indeterminateTintList = ColorStateList.valueOf(MUTED)
         }
         holder.addView(progress, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
-        container.addView(holder, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
+        container.addView(holder, LinearLayout.LayoutParams(imageWidth, dp(190)).apply { topMargin = dp(5) })
         var failureView: View? = null
 
         fun display(bitmap: Bitmap) {
@@ -2571,6 +2598,29 @@ class MainActivity : Activity() {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
         })
+    }
+
+    private fun naturalTextBlockWidth(textView: TextView, value: String, maxWidth: Int): Int {
+        if (value.isEmpty()) return dp(1).coerceAtMost(maxWidth)
+        val layout = StaticLayout.Builder.obtain(value, 0, value.length, textView.paint, maxWidth)
+            .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+            .setTextDirection(TextDirectionHeuristics.FIRSTSTRONG_LTR)
+            .setBreakStrategy(Layout.BREAK_STRATEGY_SIMPLE)
+            .setHyphenationFrequency(Layout.HYPHENATION_FREQUENCY_NONE)
+            .build()
+        val widestLine = (0 until layout.lineCount).maxOfOrNull { layout.getLineWidth(it) } ?: 0f
+        return ceil(widestLine.toDouble()).toInt().coerceIn(dp(1), maxWidth)
+    }
+
+    private fun createAttachmentThumbnail(bytes: ByteArray): String {
+        val bitmap = decodeSampledBitmap(bytes, 160) ?: return ""
+        return try {
+            val output = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+            android.util.Base64.encodeToString(output.toByteArray(), android.util.Base64.NO_WRAP)
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun showImageDialog(bitmap: android.graphics.Bitmap) {
@@ -2934,6 +2984,7 @@ class MainActivity : Activity() {
                     }
                     queuedMessages = response.optJSONArray("queue") ?: JSONArray()
                     selectedFiles.clear()
+                    renderAttachmentStrip()
                     renderQueue()
                     refreshActiveThread(false)
                     refreshThreads(false)
@@ -4968,6 +5019,7 @@ class MainActivity : Activity() {
             }
             return JSONObject().put("kind", "image").put("name", name).put("mediaType", mediaType)
                 .put("data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
+                .put("thumbnail", createAttachmentThumbnail(bytes))
         }
         if (mime == "application/pdf" || name.endsWith(".pdf", true) || name.endsWith(".xlsx", true) || name.endsWith(".xls", true)) {
             val contentType = if (mime.startsWith("application/") && mime != "application/octet-stream") mime else if (name.endsWith(".pdf", true)) "application/pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -5268,16 +5320,61 @@ class MainActivity : Activity() {
     private fun renderAttachmentStrip() {
         if (!::attachmentStrip.isInitialized) return
         attachmentStrip.removeAllViews()
-        attachmentStrip.visibility = if (selectedFiles.isEmpty()) View.GONE else View.VISIBLE
-        selectedFiles.toList().forEachIndexed { index, file ->
-            val name = label("${file.optString("name")}  ×", 10, SUBTLE).apply {
-                setPadding(dp(8), dp(4), dp(8), dp(4))
-                background = rounded(PANEL_INSET, dp(8))
-                setOnClickListener { selectedFiles.removeAt(index); renderAttachmentStrip() }
+        attachmentScroll.visibility = if (selectedFiles.isEmpty()) View.GONE else View.VISIBLE
+        selectedFiles.toList().forEach { file ->
+            if (file.optString("kind") == "image") {
+                val frame = FrameLayout(this)
+                val previewData = file.optString("thumbnail").ifBlank { file.optString("data") }
+                val cacheKey = "attachment:${file.optString("name")}:${file.optString("data").length}:${file.optString("data").take(40).hashCode()}"
+                val bitmap = messageImageCache.get(cacheKey) ?: runCatching {
+                    decodeSampledBitmap(android.util.Base64.decode(previewData, android.util.Base64.DEFAULT), 160)
+                        ?.also { messageImageCache.put(cacheKey, it) }
+                }.getOrNull()
+                val image = ImageView(this).apply {
+                    scaleType = ImageView.ScaleType.CENTER_CROP
+                    background = rounded(PANEL_INSET, dp(8), BORDER, dp(1))
+                    bitmap?.let(::setImageBitmap)
+                    contentDescription = file.optString("name")
+                    clipToOutline = true
+                }
+                frame.addView(image, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START))
+                val remove = label("×", 15, TEXT, true).apply {
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    background = rounded(PANEL, dp(10), BORDER, dp(1))
+                    contentDescription = "移除 ${file.optString("name")}"
+                    setOnClickListener {
+                        selectedFiles.remove(file)
+                        renderAttachmentStrip()
+                    }
+                }
+                frame.addView(remove, FrameLayout.LayoutParams(dp(20), dp(20), Gravity.TOP or Gravity.END))
+                attachmentStrip.addView(frame, LinearLayout.LayoutParams(dp(60), dp(60)).apply {
+                    rightMargin = dp(5)
+                })
+            } else {
+                val chip = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(9), dp(3), dp(7), dp(3))
+                    background = rounded(PANEL_INSET, dp(8))
+                }
+                chip.addView(label(file.optString("name"), 10, SUBTLE).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }, LinearLayout.LayoutParams(dp(150), WRAP))
+                chip.addView(label("×", 14, MUTED, true).apply {
+                    gravity = Gravity.CENTER
+                    contentDescription = "移除 ${file.optString("name")}"
+                    setOnClickListener {
+                        selectedFiles.remove(file)
+                        renderAttachmentStrip()
+                    }
+                }, LinearLayout.LayoutParams(dp(22), dp(28)))
+                attachmentStrip.addView(chip, LinearLayout.LayoutParams(WRAP, dp(42)).apply {
+                    rightMargin = dp(5)
+                })
             }
-            attachmentStrip.addView(name, LinearLayout.LayoutParams(WRAP, WRAP).apply {
-                rightMargin = dp(5); topMargin = dp(3); bottomMargin = dp(3)
-            })
         }
     }
 
