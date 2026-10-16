@@ -155,6 +155,8 @@ class MainActivity : Activity() {
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
+    private val CODEX_MODE_ACCENT: Int get() = if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
@@ -1224,8 +1226,8 @@ class MainActivity : Activity() {
     private fun updateSidebarModeAccent() {
         if (!::sidebarNewThreadButton.isInitialized) return
         val claudeMode = currentMode == "claude-code"
-        val fill = if (claudeMode) CLAUDE_MODE_ACCENT else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-        val foreground = if (claudeMode) Color.rgb(24, 27, 37) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+        val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
+        val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
         sidebarNewThreadButton.background = rounded(fill, dp(10))
         sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
         sidebarNewThreadIcon.background = rounded(
@@ -2286,7 +2288,7 @@ class MainActivity : Activity() {
                 if (role == "user") {
                     val bubbleColor = if (currentMode == "claude-code") {
                         colorWithAlpha(ACCENT_WARM, if (lightTheme) .28f else .32f)
-                    } else USER_BUBBLE
+                    } else CODEX_MODE_ACCENT
                     background = rounded(bubbleColor, dp(12))
                 }
             }
@@ -2316,7 +2318,8 @@ class MainActivity : Activity() {
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || !hasImage) {
-                val content = label(text.ifBlank { "（附件消息）" }, 14, TEXT).apply {
+                val contentColor = if (role == "user" && currentMode != "claude-code") CODEX_MODE_ACCENT_FOREGROUND else TEXT
+                val content = label(text.ifBlank { "（附件消息）" }, 14, contentColor).apply {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -2336,7 +2339,8 @@ class MainActivity : Activity() {
             }
             addMessageImages(bubble, item, maxBubbleWidth)
             if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
-                bubble.addView(label(displayTime, 10, MUTED).apply {
+                val timestampColor = if (currentMode != "claude-code") colorWithAlpha(CODEX_MODE_ACCENT_FOREGROUND, .72f) else MUTED
+                bubble.addView(label(displayTime, 10, timestampColor).apply {
                     gravity = Gravity.END
                     setPadding(0, dp(3), 0, 0)
                 }, LinearLayout.LayoutParams(WRAP, WRAP))
