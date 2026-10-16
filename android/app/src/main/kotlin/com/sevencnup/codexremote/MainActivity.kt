@@ -291,6 +291,7 @@ class MainActivity : Activity() {
     private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
     private val connectionProfiles = mutableListOf<ConnectionProfile>()
     private val draftFilesByScope = mutableMapOf<String, MutableList<JSONObject>>()
+    private val pendingUserMessages = mutableMapOf<String, MutableList<JSONObject>>()
     private var activeConnectionId = ""
     @Volatile private var connectionGeneration = 0L
     @Volatile private var backgroundThreadDirty = false
@@ -308,6 +309,10 @@ class MainActivity : Activity() {
     private val threadReadsInFlight = mutableSetOf<String>()
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
+    private val selectedSidebarThreadIds = mutableSetOf<String>()
+    private var sidebarSelectionMode = false
+    private var sidebarSelectionBusy = false
+    private var visibleSidebarThreadIds = emptyList<String>()
     private var running = false
     private val pausedThreadKeys = mutableSetOf<String>()
     @Volatile private var foreground = false
@@ -441,6 +446,7 @@ class MainActivity : Activity() {
     private lateinit var drawer: LinearLayout
     private lateinit var drawerSearch: EditText
     private lateinit var drawerThreads: LinearLayout
+    private lateinit var sidebarSelectionBar: LinearLayout
     private var welcomeAnimationText = ""
     private var welcomeCharacterIndex = 0
     private var welcomeCaretBlinkCount = 0
@@ -688,6 +694,8 @@ class MainActivity : Activity() {
         }
         persistCurrentDraft()
         connectionGeneration++
+        sidebarSelectionMode = false
+        selectedSidebarThreadIds.clear()
         activeConnectionId = profile.id
         endpoint = profile.endpoint
         token = profile.token
@@ -1420,9 +1428,26 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(3), 0, 0, 0)
         }
-        recentHeading.addView(label("最近对话", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(label("聊天记录", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(label("选择", 11, SUBTLE, true).apply {
+            tag = "sidebar_selection_toggle"
+            gravity = Gravity.CENTER
+            isClickable = true
+            contentDescription = "批量选择聊天"
+            setOnClickListener {
+                if (sidebarSelectionBusy) return@setOnClickListener
+                sidebarSelectionMode = !sidebarSelectionMode
+                selectedSidebarThreadIds.clear()
+                renderSidebar(force = true)
+            }
+        }, LinearLayout.LayoutParams(dp(48), dp(34)))
         recentHeading.addView(sidebarIconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
         drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(8) })
+        sidebarSelectionBar = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        drawer.addView(sidebarSelectionBar, LinearLayout.LayoutParams(MATCH, WRAP))
         val threadScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
@@ -1609,6 +1634,148 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun threadLastActiveMillis(thread: JSONObject): Long {
+        val value = firstJsonValue(thread, "updatedAt", "updated_at", "lastMessageAt", "last_message_at", "createdAt", "created_at")
+        return when (value) {
+            is Number -> value.toLong().let { if (it in -9_999_999_999L..9_999_999_999L) it * 1000L else it }
+            is String -> value.toLongOrNull()?.let { if (it in -9_999_999_999L..9_999_999_999L) it * 1000L else it }
+                ?: runCatching { Instant.parse(value).toEpochMilli() }.getOrNull()
+                ?: runCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }.getOrNull()
+                ?: 0L
+            else -> 0L
+        }
+    }
+
+    private fun sidebarDateSection(thread: JSONObject): String {
+        if (thread.optString("id") in pinnedThreadIds) return "置顶"
+        val updatedAt = threadLastActiveMillis(thread)
+        if (updatedAt <= 0L) return "更早"
+        val zone = ZoneId.systemDefault()
+        val days = (LocalDate.now(zone).toEpochDay() - Instant.ofEpochMilli(updatedAt).atZone(zone).toLocalDate().toEpochDay()).coerceAtLeast(0)
+        return when {
+            days == 0L -> "今天"
+            days < 7L -> "最近 7 天"
+            days < 15L -> "15 天内"
+            days < 30L -> "30 天内"
+            else -> "更早"
+        }
+    }
+
+    private fun bulkSelectedThreads(): List<JSONObject> = (0 until threads.length()).mapNotNull { threads.optJSONObject(it) }
+        .filter { it.optString("engine", "codex") == currentMode && it.optString("id") in selectedSidebarThreadIds }
+
+    private fun sidebarSelectionAction(title: String, color: Int = SUBTLE, action: () -> Unit): TextView =
+        label(title, 11, color, true).apply {
+            gravity = Gravity.CENTER
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { if (!sidebarSelectionBusy) action() }
+        }
+
+    private fun renderSidebarSelectionBar() {
+        if (!::sidebarSelectionBar.isInitialized) return
+        (drawer.findViewWithTag<TextView>("sidebar_selection_toggle"))?.text = if (sidebarSelectionMode) "取消" else "选择"
+        sidebarSelectionBar.removeAllViews()
+        sidebarSelectionBar.visibility = if (sidebarSelectionMode) View.VISIBLE else View.GONE
+        if (!sidebarSelectionMode) return
+        val count = bulkSelectedThreads().size
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        top.addView(label("已选 $count 个聊天", 11, MUTED), LinearLayout.LayoutParams(0, dp(32), 1f))
+        top.addView(sidebarSelectionAction("全选") {
+            selectedSidebarThreadIds.addAll(visibleSidebarThreadIds)
+            renderSidebar(force = true)
+        }, LinearLayout.LayoutParams(dp(48), dp(32)))
+        top.addView(sidebarSelectionAction("清空") {
+            selectedSidebarThreadIds.clear()
+            renderSidebar(force = true)
+        }, LinearLayout.LayoutParams(dp(48), dp(32)))
+        sidebarSelectionBar.addView(top, LinearLayout.LayoutParams(MATCH, dp(32)))
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        actions.addView(sidebarSelectionAction("置顶", ACCENT) { bulkPinSelectedThreads() }, LinearLayout.LayoutParams(0, dp(35), 1f))
+        actions.addView(sidebarSelectionAction("删除", ERROR) { bulkDeleteSelectedThreads() }, LinearLayout.LayoutParams(0, dp(35), 1f))
+        sidebarSelectionBar.addView(actions, LinearLayout.LayoutParams(MATCH, dp(35)))
+    }
+
+    private fun bulkPinSelectedThreads() {
+        val selected = bulkSelectedThreads()
+        if (selected.isEmpty()) return
+        val ids = selected.map { it.optString("id") }
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
+        sidebarSelectionBusy = true
+        io.execute {
+            val completed = mutableListOf<String>()
+            ids.forEach { id ->
+                runCatching {
+                    api.post("/api/v1/codex/threads/${RemoteApi.encodePath(id)}/pin", JSONObject().put("pinned", true))
+                }.onSuccess { completed += id }
+            }
+            handler.post {
+                sidebarSelectionBusy = false
+                if (generation != connectionGeneration) return@post
+                pinnedThreadIds.addAll(completed)
+                selectedSidebarThreadIds.removeAll(completed.toSet())
+                if (selectedSidebarThreadIds.isEmpty()) sidebarSelectionMode = false
+                renderSidebar(force = true)
+                if (completed.size != ids.size) showStatus("${ids.size - completed.size} 个聊天置顶失败")
+            }
+        }
+    }
+
+    private fun bulkDeleteSelectedThreads() {
+        val selected = bulkSelectedThreads()
+        if (selected.isEmpty()) return
+        val ids = selected.map { it.optString("id") }
+        showConfirmDialog("批量删除聊天", "删除选中的 ${ids.size} 个聊天？此操作无法撤销。", "删除", destructive = true) {
+            val generation = connectionGeneration
+            val api = RemoteApi(endpoint, token)
+            sidebarSelectionBusy = true
+            io.execute {
+                val completed = mutableListOf<String>()
+                ids.forEach { id ->
+                    runCatching { api.delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }
+                        .onSuccess { completed += id }
+                }
+                handler.post {
+                    sidebarSelectionBusy = false
+                    if (generation != connectionGeneration) return@post
+                    val removed = completed.toSet()
+                    selectedSidebarThreadIds.removeAll(removed)
+                    pinnedThreadIds.removeAll(removed)
+                    removed.forEach { id ->
+                        syncRevisions.remove(id)
+                        displayedThreadTitles.remove(threadTitleKey(id))
+                        pausedThreadKeys.remove(threadTitleKey(id))
+                        draftFilesByScope.remove(connectionScopedKey("draft_${currentMode}_$id"))
+                        pendingUserMessages.remove(connectionScopedKey("draft_${currentMode}_$id"))
+                    }
+                    if (activeThreadId?.let { it in removed } == true) {
+                        prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
+                        activeThreadId = null
+                        activeThread = null
+                        queuedMessages = JSONArray()
+                        running = false
+                        selectedFiles.clear()
+                        composerInput.setText("")
+                        renderAttachmentStrip()
+                        renderQueue()
+                        renderMessages(false)
+                        renderHeader()
+                    }
+                    threads = JSONArray().also { result ->
+                        for (index in 0 until threads.length()) {
+                            threads.optJSONObject(index)?.takeIf { it.optString("id") !in removed }?.let(result::put)
+                        }
+                    }
+                    if (selectedSidebarThreadIds.isEmpty()) sidebarSelectionMode = false
+                    renderSidebar(force = true)
+                    refreshThreads(false)
+                    if (completed.size != ids.size) showStatus("${ids.size - completed.size} 个聊天删除失败")
+                }
+            }
+        }
+    }
+
     private fun renderSidebar(force: Boolean = false) {
         if (!::drawerThreads.isInitialized) return
         updateSidebarModeAccent()
@@ -1629,7 +1796,10 @@ class MainActivity : Activity() {
             filtered += thread
         }
         filtered.sortWith(compareByDescending<JSONObject> { pinnedThreadIds.contains(it.optString("id")) }
-            .thenByDescending { it.optString("updatedAt") })
+            .thenByDescending { threadLastActiveMillis(it) })
+        val visibleThreads = filtered.take(MAX_VISIBLE_SIDEBAR_THREADS)
+        visibleSidebarThreadIds = visibleThreads.map { it.optString("id") }
+        renderSidebarSelectionBar()
         if (filtered.isEmpty()) {
             val empty = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -1644,13 +1814,21 @@ class MainActivity : Activity() {
             empty.addView(label(if (query.isBlank()) "当前模式暂无对话" else "没有匹配的对话", 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
             drawerThreads.addView(empty, widthWrap())
         }
-        filtered.take(MAX_VISIBLE_SIDEBAR_THREADS).forEach { thread ->
+        val sections = linkedMapOf<String, MutableList<JSONObject>>()
+        listOf("置顶", "今天", "最近 7 天", "15 天内", "30 天内", "更早").forEach { sections[it] = mutableListOf() }
+        visibleThreads.forEach { thread -> sections.getValue(sidebarDateSection(thread)).add(thread) }
+        sections.forEach { (section, entries) ->
+            if (entries.isEmpty()) return@forEach
+            drawerThreads.addView(label(section, 11, MUTED, true).apply {
+                setPadding(dp(9), dp(11), 0, dp(5))
+            }, LinearLayout.LayoutParams(MATCH, WRAP))
+            entries.forEach { thread ->
             val id = thread.optString("id")
-            val selected = id == activeThreadId
+            val selected = if (sidebarSelectionMode) id in selectedSidebarThreadIds else id == activeThreadId
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(9), dp(5), dp(5), dp(5))
+                setPadding(dp(9), dp(8), dp(5), dp(8))
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
                 background = if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
@@ -1659,9 +1837,15 @@ class MainActivity : Activity() {
             }
             val engine = thread.optString("engine", "codex")
             val icon = ImageView(this).apply {
-                setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT)
-                contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
+                if (sidebarSelectionMode) {
+                    setImageResource(if (selected) R.drawable.ic_selection_checked else R.drawable.ic_selection_unchecked)
+                    imageTintList = ColorStateList.valueOf(if (selected) (if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT) else MUTED)
+                    contentDescription = if (selected) "已勾选" else "未勾选"
+                } else {
+                    setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+                    setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT)
+                    contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
+                }
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
             val title = threadTitle(thread)
@@ -1670,9 +1854,14 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
             row.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
-            row.setOnClickListener { selectThread(thread) }
-            row.setOnLongClickListener { showThreadActions(row, thread); true }
-            drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
+            val choose = {
+                if (id in selectedSidebarThreadIds) selectedSidebarThreadIds.remove(id) else selectedSidebarThreadIds.add(id)
+                renderSidebar(force = true)
+            }
+            row.setOnClickListener { if (sidebarSelectionMode) choose() else selectThread(thread) }
+            row.setOnLongClickListener { if (sidebarSelectionMode) choose() else showThreadActions(row, thread); true }
+            drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(5) })
+            }
         }
         if (filtered.size > MAX_VISIBLE_SIDEBAR_THREADS) {
             drawerThreads.addView(label("继续输入名称可搜索其余对话", 11, MUTED).apply {
@@ -2495,7 +2684,8 @@ class MainActivity : Activity() {
             val turnTag = "$TAG_MESSAGE_TURN_PREFIX$effectiveIncrementalTurnId"
             for (childIndex in messageList.childCount - 1 downTo 0) {
                 val tag = messageList.getChildAt(childIndex).tag
-                if (tag == turnTag || tag == TAG_MESSAGE_DYNAMIC) messageList.removeViewAt(childIndex)
+                if (tag == turnTag || tag == TAG_MESSAGE_DYNAMIC ||
+                    (tag is String && tag.startsWith("${TAG_MESSAGE_TURN_PREFIX}pending-"))) messageList.removeViewAt(childIndex)
             }
         }
         val messages = mutableListOf<Pair<String, JSONObject>>()
@@ -2579,6 +2769,7 @@ class MainActivity : Activity() {
                 timelineTextBuilders[block]?.let { block.put("text", it.toString()) }
             }
         }
+        appendPendingUserMessages(messages)
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
         val showWelcomeTitle = effectiveIncrementalTurnId == null && !hasConversationMessages && (
             activeThreadId == null || (
@@ -2742,6 +2933,12 @@ class MainActivity : Activity() {
                     gravity = Gravity.END
                 }
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                if (item.optBoolean("_pending", false)) {
+                    messageColumn.addView(label(item.optString("_pendingState", "发送中…"), 10, MUTED).apply {
+                        gravity = Gravity.END
+                        setPadding(0, dp(3), dp(2), 0)
+                    }, LinearLayout.LayoutParams(WRAP, WRAP))
+                }
                 item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
                     messageColumn.addView(label(displayTime, 10, MUTED).apply {
                         gravity = Gravity.END
@@ -2754,6 +2951,12 @@ class MainActivity : Activity() {
             }
             val turnId = item.optString("_turnId")
             row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
+            if (item.optBoolean("_animate", false)) {
+                row.alpha = 0f
+                row.translationY = dp(6).toFloat()
+                row.animate().alpha(1f).translationY(0f).setDuration(170).start()
+                item.put("_animate", false)
+            }
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
 
             if (role == "assistant" && lastAssistantByTurn[turnId] === item) {
@@ -2794,6 +2997,114 @@ class MainActivity : Activity() {
         if (!::scrollToBottomButton.isInitialized || !::messageScroll.isInitialized || !::messageList.isInitialized) return
         val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
         scrollToBottomButton.visibility = if (distanceToBottom > dp(96)) View.VISIBLE else View.GONE
+    }
+
+    private fun addPendingUserMessage(scope: String, payload: JSONObject, files: List<JSONObject>) {
+        val knownIds = JSONArray()
+        activeThread?.optJSONArray("turns")?.let { turns ->
+            for (turnIndex in 0 until turns.length()) {
+                val items = turns.optJSONObject(turnIndex)?.optJSONArray("items") ?: continue
+                for (itemIndex in 0 until items.length()) {
+                    val item = items.optJSONObject(itemIndex) ?: continue
+                    if (normalizedType(item.optString("type")) == "usermessage") {
+                        item.optString("id").takeIf { it.isNotBlank() }?.let(knownIds::put)
+                    }
+                }
+            }
+        }
+        val content = JSONArray()
+        payload.optString("text").takeIf { it.isNotBlank() }?.let { content.put(JSONObject().put("type", "text").put("text", it)) }
+        files.filter { it.optString("kind") == "image" }.forEach { file ->
+            content.put(JSONObject().put("type", "localImage")
+                .put("data", file.optString("thumbnail").ifBlank { file.optString("data") })
+                .put("name", file.optString("name")))
+        }
+        val item = JSONObject().put("id", payload.optString("id"))
+            .put("content", content).put("_turnId", "pending-${payload.optString("id")}")
+            .put("_displayTime", formatMessageTime(payload.optString("createdAt")))
+            .put("_matchText", payload.optString("requestText").trim())
+            .put("_imageCount", files.count { it.optString("kind") == "image" })
+            .put("_knownUserIds", knownIds).put("_pending", true)
+            .put("_pendingState", "发送中…").put("_animate", true)
+        pendingUserMessages.getOrPut(scope) { mutableListOf() }.add(item)
+        if (draftStorageKey() == scope) appendPendingBubble(item)
+    }
+
+    private fun appendPendingBubble(item: JSONObject) {
+        if (!::messageList.isInitialized) return
+        updateWelcomeTitle(false)
+        val viewportWidth = messageScroll.width.takeIf { it > 0 }
+            ?: root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val maxBubbleWidth = ((viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(4)) * .92f).toInt()
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(dp(2), dp(5), dp(2), dp(5))
+            tag = "$TAG_MESSAGE_TURN_PREFIX${item.optString("_turnId")}"
+            alpha = 0f
+            translationY = dp(6).toFloat()
+        }
+        val column = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.END }
+        val bubble = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(11), dp(7), dp(11), dp(7))
+            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(12))
+        }
+        val text = messageText(item, "user")
+        if (text.isNotBlank()) {
+            val content = label(text, 14, if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT, translateUi = false).apply {
+                setTextIsSelectable(true)
+                maxWidth = (maxBubbleWidth - dp(22)).coerceAtLeast(dp(120))
+                setLineSpacing(dp(2).toFloat(), 1.08f)
+            }
+            bubble.addView(content, LinearLayout.LayoutParams(
+                naturalTextBlockWidth(content, text, (maxBubbleWidth - dp(22)).coerceAtLeast(dp(80))), WRAP))
+        }
+        addMessageImages(bubble, item, maxBubbleWidth)
+        column.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+        column.addView(label("发送中…", 10, MUTED).apply {
+            gravity = Gravity.END
+            setPadding(0, dp(3), dp(2), 0)
+        }, LinearLayout.LayoutParams(WRAP, WRAP))
+        row.addView(column, LinearLayout.LayoutParams(WRAP, WRAP))
+        messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
+        row.animate().alpha(1f).translationY(0f).setDuration(170).start()
+        item.put("_animate", false)
+        messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
+    }
+
+    private fun appendPendingUserMessages(messages: MutableList<Pair<String, JSONObject>>) {
+        val scope = draftStorageKey()
+        val pending = pendingUserMessages[scope] ?: return
+        val claimed = mutableSetOf<String>()
+        val realUsers = messages.filter { it.first == "user" }.map { it.second }
+        val remaining = pending.filterNot { local ->
+            val known = local.optJSONArray("_knownUserIds")
+            realUsers.any { real ->
+                val id = real.optString("id")
+                if (id.isBlank() || id in claimed || (0 until (known?.length() ?: 0)).any { known?.optString(it) == id }) return@any false
+                val realText = messageText(real, "user").trim()
+                val matchText = local.optString("_matchText")
+                val realImages = real.optJSONArray("content")?.let { parts ->
+                    (0 until parts.length()).count { index ->
+                        normalizedType(parts.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
+                    }
+                } ?: 0
+                val sameMessage = id == local.optString("id") ||
+                    (matchText.isNotBlank() && realText == matchText) ||
+                    (matchText.isBlank() && local.optInt("_imageCount") > 0 && realImages >= local.optInt("_imageCount"))
+                if (sameMessage) claimed += id
+                sameMessage
+            }
+        }
+        if (remaining.isEmpty()) pendingUserMessages.remove(scope) else pendingUserMessages[scope] = remaining.toMutableList()
+        remaining.forEach { messages += "user" to it }
+    }
+
+    private fun removePendingUserMessage(scope: String, requestId: String) {
+        pendingUserMessages[scope]?.removeAll { it.optString("id") == requestId }
+        if (pendingUserMessages[scope]?.isEmpty() == true) pendingUserMessages.remove(scope)
+        if (draftStorageKey() == scope) renderMessages(false)
     }
 
     private val activityLabel: String
@@ -3551,6 +3862,7 @@ class MainActivity : Activity() {
         selectedFiles.clear()
         draftFilesByScope.remove(outgoingScope)
         renderAttachmentStrip()
+        addPendingUserMessage(outgoingScope, payload, outgoingFiles)
         if (threadId == null) {
             io.execute {
                 try {
@@ -3560,16 +3872,19 @@ class MainActivity : Activity() {
                         .putOpt("model", payload.optString(if (sendMode == "codex") "model" else "claudeModel").takeIf { it.isNotBlank() })
                         .putOpt("approval_policy", if (sendMode == "codex") payload.optString("approvalPolicy") else null))
                     handler.post {
+                        val createdScope = outgoingScope.removeSuffix("_new") + "_${created.optString("id")}"
+                        pendingUserMessages.remove(outgoingScope)?.let { pendingUserMessages[createdScope] = it }
                         if (sendConnection == connectionGeneration) {
                             threads = JSONArray().put(created).also { old ->
                                 for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
                             }
                             if (draftStorageKey() == outgoingScope) selectThread(created)
                         }
-                        submitPayload(created.optString("id"), payload, outgoingFiles, outgoingScope, sendConnection, sendEndpoint, sendToken)
+                        submitPayload(created.optString("id"), payload, outgoingFiles, createdScope, sendConnection, sendEndpoint, sendToken)
                     }
                 } catch (error: Exception) {
                     handler.post {
+                        removePendingUserMessage(outgoingScope, requestId)
                         restoreFailedMessage(outgoingScope, text, outgoingFiles)
                         showStatus(error.message ?: "新建对话失败")
                     }
@@ -3634,6 +3949,7 @@ class MainActivity : Activity() {
             try {
                 val response = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
                 handler.post {
+                    if (!response.optBoolean("sent", false)) removePendingUserMessage(outgoingScope, payload.optString("id"))
                     if (sendConnection != connectionGeneration) return@post
                     if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
                     if (activeThreadId == threadId) {
@@ -3649,6 +3965,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 handler.post {
+                    removePendingUserMessage(outgoingScope, payload.optString("id"))
                     restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
                     if (sendConnection == connectionGeneration) {
                         showStatus(error.message ?: "发送失败")
@@ -3894,6 +4211,8 @@ class MainActivity : Activity() {
         }
         persistCurrentDraft()
         currentMode = targetMode
+        sidebarSelectionMode = false
+        selectedSidebarThreadIds.clear()
         prefs.edit().putString(KEY_MODE, currentMode).apply()
         updateSidebarBrand()
         val currentEngine = activeThread?.optString("engine", "codex") ?: ""
@@ -3976,6 +4295,7 @@ class MainActivity : Activity() {
                 }
                 syncRevisions.remove(id)
                 draftFilesByScope.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
+                pendingUserMessages.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 displayedThreadTitles.remove(threadTitleKey(id))
                 pausedThreadKeys.remove(threadTitleKey(id))
                 refreshThreads(false)
