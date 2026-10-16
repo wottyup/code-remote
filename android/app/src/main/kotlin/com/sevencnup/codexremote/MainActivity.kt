@@ -110,7 +110,7 @@ class MainActivity : Activity() {
     private val DARK: Int get() = when (themeName) {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
-        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), (100 - backgroundTransparency()) / 100f)
+        "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
@@ -159,6 +159,16 @@ class MainActivity : Activity() {
     private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
+    private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
+    private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
+    private val CODEX_USER_MESSAGE_FILL = Color.rgb(159, 166, 203)
+    private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
+    private val CODEX_USER_MESSAGE_TEXT = Color.rgb(24, 27, 37)
+    private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
+    private val ASSISTANT_NAME_ACCENT: Int get() = when {
+        themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
+        else -> ACCENT
+    }
     private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
@@ -458,8 +468,8 @@ class MainActivity : Activity() {
     }
 
     private fun showConnectionPage(message: String? = null) {
-        root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
-        installThemeBackground(root)
+        themeBackgroundImageView = null
+        root = FrameLayout(this).apply { setBackgroundColor(DARK) }
         val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
         val card = LinearLayout(this).apply {
@@ -709,8 +719,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderHome() {
-        root = ChatRootLayout(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
-        installThemeBackground(root)
+        root = ChatRootLayout(this).apply { setBackgroundColor(DARK) }
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
@@ -732,6 +741,7 @@ class MainActivity : Activity() {
         messageList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
         val chatArea = FrameLayout(this).apply { clipChildren = false }
+        installThemeBackground(chatArea)
         chatArea.addView(messageScroll, FrameLayout.LayoutParams(MATCH, MATCH))
         welcomeTitleView = label("", 18, TEXT, true).apply {
             gravity = Gravity.CENTER
@@ -2286,13 +2296,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
-                    val bubbleColor = if (currentMode == "claude-code") {
-                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .28f else .42f)
-                    } else if (lightTheme) {
-                        CODEX_MODE_ACCENT
-                    } else {
-                        colorWithAlpha(CODEX_MODE_ACCENT, .78f)
-                    }
+                    val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL
                     background = rounded(bubbleColor, dp(12))
                 }
             }
@@ -2302,7 +2306,7 @@ class MainActivity : Activity() {
                     gravity = Gravity.CENTER_VERTICAL
                 }
                 meta.addView(
-                    label(if (currentMode == "claude-code") "Claude" else "Codex", 11, ACCENT, true),
+                    label(if (currentMode == "claude-code") "Claude" else "Codex", 11, ASSISTANT_NAME_ACCENT, true),
                     LinearLayout.LayoutParams(WRAP, WRAP),
                 )
                 item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
@@ -2322,7 +2326,9 @@ class MainActivity : Activity() {
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || !hasImage) {
-                val contentColor = if (role == "user" && currentMode != "claude-code") CODEX_MODE_ACCENT_FOREGROUND else TEXT
+                val contentColor = if (role == "user") {
+                    if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT
+                } else TEXT
                 val content = label(text.ifBlank { "（附件消息）" }, 14, contentColor).apply {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
@@ -2342,14 +2348,22 @@ class MainActivity : Activity() {
                 bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
             }
             addMessageImages(bubble, item, maxBubbleWidth)
-            if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
-                val timestampColor = if (currentMode != "claude-code") colorWithAlpha(CODEX_MODE_ACCENT_FOREGROUND, .72f) else MUTED
-                bubble.addView(label(displayTime, 10, timestampColor).apply {
+            if (role == "user") {
+                val messageColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
                     gravity = Gravity.END
-                    setPadding(0, dp(3), 0, 0)
-                }, LinearLayout.LayoutParams(WRAP, WRAP))
+                }
+                messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
+                    messageColumn.addView(label(displayTime, 10, MUTED).apply {
+                        gravity = Gravity.END
+                        setPadding(0, dp(3), dp(2), 0)
+                    }, LinearLayout.LayoutParams(WRAP, WRAP))
+                }
+                row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
+            } else {
+                row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
             }
-            row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
             val turnId = item.optString("_turnId")
             row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -3623,11 +3637,12 @@ class MainActivity : Activity() {
         settingsOverlay = overlay
         updateInsetAwareOverlays()
 
+        val settingsAccent = ASSISTANT_NAME_ACCENT
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(13), dp(14), dp(12))
-                background = rounded(PANEL, dp(14), BORDER, dp(1))
+                background = rounded(blendColors(PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
             }
             card.addView(label(title, 14, TEXT, true), widthWrap())
             card.addView(label(description, 11, MUTED).apply {
@@ -3650,18 +3665,20 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
-                background = rounded(if (selected) PANEL_INSET else Color.TRANSPARENT, dp(10))
+                background = if (selected) {
+                    rounded(blendColors(PANEL_INSET, settingsAccent, .2f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
+                } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
                 isFocusable = false
                 setOnClickListener { applyThemeFromSettings(theme) }
             }
             val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            copy.addView(label(title, 13, TEXT, selected), widthWrap())
+            copy.addView(label(title, 13, if (selected) settingsAccent else TEXT, selected), widthWrap())
             copy.addView(label(description, 10, MUTED), widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             row.addView(ImageView(this).apply {
                 setImageResource(R.drawable.ic_check)
-                imageTintList = ColorStateList.valueOf(ACCENT)
+                imageTintList = ColorStateList.valueOf(settingsAccent)
                 visibility = if (selected) View.VISIBLE else View.INVISIBLE
                 contentDescription = if (selected) "已选择" else null
             }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(8); rightMargin = dp(4) })
@@ -3690,7 +3707,7 @@ class MainActivity : Activity() {
             val transparencyLabel = label("$transparencyValue%", 12, ACCENT, true)
             transparencyHeader.addView(transparencyLabel, widthWrap())
             transparencyRow.addView(transparencyHeader, widthWrap())
-            transparencyRow.addView(label("数值越高，背景图片和底色越透明。", 10, MUTED), widthWrap())
+            transparencyRow.addView(label("数值越高，聊天区域的背景图片越透明。", 10, MUTED), widthWrap())
             val transparencySeek = SeekBar(this).apply {
                 max = 100
                 progress = transparencyValue
@@ -3832,16 +3849,102 @@ class MainActivity : Activity() {
             setSingleLine(true)
             imeOptions = EditorInfo.IME_ACTION_DONE
         }
-        showInputDialog(title, input, "应用") {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(15), dp(18), dp(12))
+            background = rounded(PANEL, dp(14), BORDER, dp(1))
+        }
+        card.addView(label(title, 15, TEXT, true), widthWrap())
+        val previewRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        previewRow.addView(label("当前颜色", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+        val preview = View(this).apply {
+            background = rounded(runCatching { Color.parseColor(current) }.getOrElse { Color.parseColor(fallback) }, dp(9), BORDER, dp(1))
+            contentDescription = "颜色预览"
+        }
+        previewRow.addView(preview, LinearLayout.LayoutParams(dp(56), dp(28)))
+        card.addView(previewRow, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
+        card.addView(input, LinearLayout.LayoutParams(MATCH, dp(46)).apply { topMargin = dp(6) })
+        card.addView(label("常用色阶", 12, ASSISTANT_NAME_ACCENT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
+        card.addView(label("点选色卡，或输入 #RRGGBB。", 10, MUTED), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3) })
+
+        val paletteColors = listOf(
+            "#101114", "#2B2F38", "#4B5563", "#7B8492", "#C9CED6", "#F5F6F8",
+            "#142447", "#233B72", "#394B84", "#4B609D", "#7F93D3", "#C7D0FF",
+            "#40231C", "#6E4539", "#9F563F", "#CD6643", "#EE8C6D", "#F7C7B7",
+            "#163B32", "#276652", "#3F8B6F", "#7CB79B", "#B8D9C8", "#E7F3EC",
+            "#271F49", "#483B79", "#6253A0", "#8D7CCC", "#C1B6E6", "#EFEAFA",
+        )
+        val swatchViews = mutableListOf<Pair<String, View>>()
+        fun refreshPalette(selectedValue: String) {
+            val selectedHex = selectedValue.trim().uppercase(Locale.ROOT)
+            swatchViews.forEach { (hex, swatch) ->
+                val selected = hex == selectedHex
+                swatch.background = rounded(
+                    Color.parseColor(hex), dp(7),
+                    if (selected) ASSISTANT_NAME_ACCENT else colorWithAlpha(BORDER, .85f),
+                    dp(if (selected) 2 else 1),
+                )
+                swatch.contentDescription = if (selected) "$hex，已选择" else hex
+            }
+            val parsed = runCatching { Color.parseColor(selectedValue.trim()) }.getOrNull()
+            if (parsed != null) preview.background = rounded(parsed, dp(9), BORDER, dp(1))
+        }
+        val palette = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        paletteColors.chunked(6).forEach { colors ->
+            val paletteRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            colors.forEach { hex ->
+                val swatch = View(this).apply {
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        input.setText(hex)
+                        input.setSelection(input.text.length)
+                    }
+                }
+                swatchViews += hex to swatch
+                paletteRow.addView(swatch, LinearLayout.LayoutParams(0, dp(32), 1f).apply {
+                    leftMargin = dp(3)
+                    rightMargin = dp(3)
+                    bottomMargin = dp(6)
+                })
+            }
+            palette.addView(paletteRow, widthWrap())
+        }
+        card.addView(palette, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = refreshPalette(s?.toString().orEmpty())
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
+        refreshPalette(current)
+
+        val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
+        actions.addView(dialogTextButton("应用", ASSISTANT_NAME_ACCENT) {
             val value = input.text.toString().trim()
             if (!Regex("^#[0-9a-fA-F]{6}$").matches(value)) {
                 showToast("请输入 #RRGGBB 格式的颜色")
-                return@showInputDialog false
+            } else {
+                prefs.edit().putString(key, value.uppercase(Locale.ROOT)).apply()
+                dialog.dismiss()
+                rerenderAppKeepSettings()
             }
-            prefs.edit().putString(key, value.uppercase(Locale.ROOT)).apply()
-            rerenderAppKeepSettings()
-            true
+        }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(8) })
+        card.addView(actions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
+        dialog.setContentView(card)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(360), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         }
+        input.clearFocus()
     }
 
     private fun chooseThemeBackground() {
@@ -5805,8 +5908,6 @@ class MainActivity : Activity() {
 
     private fun updateCustomThemeBackgroundPreview() {
         if (themeName != "custom") return
-        if (::root.isInitialized) root.setBackgroundColor(DARK)
-        if (::headerView.isInitialized) headerView.setBackgroundColor(DARK)
         themeBackgroundImageView?.alpha = (100 - backgroundTransparency()) / 100f
     }
 
@@ -5816,6 +5917,17 @@ class MainActivity : Activity() {
         Color.green(color),
         Color.blue(color),
     )
+
+    private fun blendColors(base: Int, tint: Int, tintRatio: Float): Int {
+        val ratio = tintRatio.coerceIn(0f, 1f)
+        fun blend(baseChannel: Int, tintChannel: Int) = (baseChannel * (1f - ratio) + tintChannel * ratio + .5f).toInt()
+        return Color.argb(
+            Color.alpha(base),
+            blend(Color.red(base), Color.red(tint)),
+            blend(Color.green(base), Color.green(tint)),
+            blend(Color.blue(base), Color.blue(tint)),
+        )
+    }
 
     private fun installThemeBackground(target: FrameLayout) {
         themeBackgroundImageView = null
