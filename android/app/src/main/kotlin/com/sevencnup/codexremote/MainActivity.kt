@@ -97,17 +97,61 @@ import kotlin.math.min
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
-    private val lightTheme get() = prefs.getBoolean(KEY_LIGHT_THEME, false)
-    private val DARK: Int get() = if (lightTheme) Color.rgb(247, 248, 250) else Color.rgb(16, 17, 20)
-    private val PANEL: Int get() = if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
-    private val PANEL_INSET: Int get() = if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
-    private val BORDER: Int get() = if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
-    private val USER_BUBBLE: Int get() = if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
-    private val TEXT: Int get() = if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
-    private val SUBTLE: Int get() = if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
-    private val MUTED: Int get() = if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
-    private val ACCENT: Int get() = if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
-    private val ACCENT_WARM = Color.rgb(217, 119, 87)
+    private val themeName: String get() = prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark"
+    private val lightTheme get() = when (themeName) {
+        "light", "warm" -> true
+        "custom" -> Color.luminance(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)) > .46f
+        else -> false
+    }
+    private val DARK: Int get() = when (themeName) {
+        "light" -> Color.rgb(247, 248, 250)
+        "warm" -> Color.rgb(247, 240, 230)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), (100 - prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0)).coerceIn(0, 100) / 100f)
+        else -> Color.rgb(16, 17, 20)
+    }
+    private val PANEL: Int get() = when (themeName) {
+        "warm" -> Color.rgb(255, 250, 243)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
+        else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
+    }
+    private val PANEL_INSET: Int get() = when (themeName) {
+        "warm" -> Color.rgb(241, 231, 216)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
+        else -> if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
+    }
+    private val BORDER: Int get() = when (themeName) {
+        "warm" -> Color.rgb(225, 211, 194)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .3f)
+        else -> if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
+    }
+    private val USER_BUBBLE: Int get() = when (themeName) {
+        "warm" -> Color.rgb(240, 226, 208)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
+        else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
+    }
+    private val TEXT: Int get() = when (themeName) {
+        "warm" -> Color.rgb(66, 53, 40)
+        "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+        else -> if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
+    }
+    private val SUBTLE: Int get() = when (themeName) {
+        "warm" -> Color.rgb(109, 91, 71)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .84f)
+        else -> if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
+    }
+    private val MUTED: Int get() = when (themeName) {
+        "warm" -> Color.rgb(139, 121, 100)
+        "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .64f)
+        else -> if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
+    }
+    private val ACCENT: Int get() = when {
+        currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
+        themeName == "warm" -> Color.rgb(146, 114, 83)
+        themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+        lightTheme -> Color.rgb(75, 96, 157)
+        else -> Color.rgb(170, 186, 255)
+    }
+    private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
@@ -203,6 +247,16 @@ class MainActivity : Activity() {
     private var systemInsetBottom = 0
     private var imeInsetVisible = false
     private var imeFollowMessageBottom = false
+    private var imeFollowScrollQueued = false
+    private var completionNoticeThreadId: String? = null
+    private var completionNoticeEngine: String? = null
+    private var completionNoticeDismissRunnable: Runnable? = null
+    private var pendingCompletionNoticeThreadId: String? = null
+    private var modeSwitchDismissRunnable: Runnable? = null
+    private var workspacePathNavigate: ((String) -> Unit)? = null
+    private var workspacePathInput: EditText? = null
+    private var themeBackgroundPickerActive = false
+    private var previewFontAdjustment: Int? = null
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
     private val historyMemoryCache = object : LinkedHashMap<String, JSONObject>(12, .75f, true) {
@@ -221,6 +275,8 @@ class MainActivity : Activity() {
     private lateinit var scrollToBottomButton: ImageButton
     private lateinit var queuePanel: LinearLayout
     private lateinit var queueContent: LinearLayout
+    private lateinit var completionNotice: LinearLayout
+    private lateinit var modeSwitchNotice: LinearLayout
     private lateinit var composerInput: EditText
     private lateinit var attachmentStrip: LinearLayout
     private lateinit var sendButton: TextView
@@ -377,7 +433,8 @@ class MainActivity : Activity() {
     }
 
     private fun showConnectionPage(message: String? = null) {
-        root = FrameLayout(this).apply { setBackgroundColor(DARK) }
+        root = FrameLayout(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
+        installThemeBackground(root)
         val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
         val card = LinearLayout(this).apply {
@@ -546,11 +603,13 @@ class MainActivity : Activity() {
             )
             val ime = insets.getInsets(WindowInsets.Type.ime())
             val keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
+            val keyboardJustOpened = keyboardVisible && !imeInsetVisible
             val bottom = if (keyboardVisible) max(systemBars.bottom, ime.bottom) else systemBars.bottom
+            imeInsetVisible = keyboardVisible
             if (content == null) {
                 view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
             } else {
-                if (keyboardVisible && !imeInsetVisible && ::messageScroll.isInitialized) {
+                if (keyboardJustOpened && ::messageScroll.isInitialized) {
                     val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
                     imeFollowMessageBottom = ::composerInput.isInitialized && composerInput.hasFocus() && distanceToBottom <= dp(180)
                 }
@@ -572,13 +631,15 @@ class MainActivity : Activity() {
                     else -> terminalImeHiddenUntil
                 }
                 terminalImeVisible = terminalKeyboardVisible
-                imeInsetVisible = keyboardVisible
-                if (keyboardVisible && imeFollowMessageBottom && ::messageScroll.isInitialized) {
+                if (keyboardJustOpened && imeFollowMessageBottom && !imeFollowScrollQueued && ::messageScroll.isInitialized) {
+                    imeFollowScrollQueued = true
                     messageScroll.postOnAnimation {
+                        imeFollowScrollQueued = false
                         if (imeInsetVisible && imeFollowMessageBottom) messageScroll.scrollTo(0, messageList.height)
                     }
                 } else if (!keyboardVisible) {
                     imeFollowMessageBottom = false
+                    imeFollowScrollQueued = false
                 }
             }
         }
@@ -623,10 +684,11 @@ class MainActivity : Activity() {
     }
 
     private fun renderHome() {
-        root = ChatRootLayout(this).apply { setBackgroundColor(DARK) }
+        root = ChatRootLayout(this).apply { setBackgroundColor(Color.rgb(16, 17, 20)) }
+        installThemeBackground(root)
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(DARK)
+            setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
         }
         root.addView(page, FrameLayout.LayoutParams(MATCH, MATCH))
         buildHeader()
@@ -662,6 +724,8 @@ class MainActivity : Activity() {
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ -> updateScrollToBottomButton() }
         page.addView(chatArea, LinearLayout.LayoutParams(MATCH, 0, 1f))
         buildQueuePanel()
+        buildCompletionNotice()
+        buildModeSwitchNotice()
         buildComposer()
         buildSidebar()
         setContentView(root)
@@ -706,6 +770,106 @@ class MainActivity : Activity() {
         page.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply {
             leftMargin = dp(14); rightMargin = dp(14); bottomMargin = dp(4)
         })
+    }
+
+    private fun buildCompletionNotice() {
+        completionNotice = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            visibility = View.GONE
+            elevation = dp(3).toFloat()
+        }
+        page.addView(completionNotice, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(5)
+        })
+    }
+
+    private fun showCompletionNotice(threadId: String, engine: String) {
+        if (!::completionNotice.isInitialized || engine == currentMode) return
+        completionNoticeThreadId = threadId
+        completionNoticeEngine = engine
+        completionNotice.removeAllViews()
+        val brand = ImageView(this).apply {
+            setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+            imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else codexBrandAccent())
+            contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
+        }
+        completionNotice.addView(brand, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
+        val thread = findThread(threadId)
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(label(thread?.let(::threadTitle)?.let { "“$it”已完成回复" } ?: "另一模式的对话已完成回复", 12, TEXT, true), widthWrap())
+        copy.addView(label("${if (engine == "claude-code") "Claude Code" else "Codex"} 已完成 · 点击查看", 10, MUTED), widthWrap())
+        completionNotice.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        completionNotice.addView(ImageView(this).apply {
+            val activeClaude = currentMode == "claude-code"
+            setImageResource(if (activeClaude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+            imageTintList = ColorStateList.valueOf(if (activeClaude) ACCENT_WARM else codexBrandAccent())
+            contentDescription = "当前${if (activeClaude) "Claude Code" else "Codex"}模式"
+        }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(3) })
+        completionNotice.addView(iconButton("close", "关闭完成提示") { dismissCompletionNotice() }, LinearLayout.LayoutParams(dp(30), dp(30)))
+        completionNotice.setOnClickListener {
+            val target = completionNoticeThreadId?.let(::findThread)
+            if (target != null) selectThread(target) else {
+                pendingCompletionNoticeThreadId = completionNoticeThreadId
+                refreshThreads(true)
+            }
+            dismissCompletionNotice()
+        }
+        completionNotice.visibility = View.VISIBLE
+        completionNoticeDismissRunnable?.let(handler::removeCallbacks)
+        completionNoticeDismissRunnable = Runnable { dismissCompletionNotice() }.also { handler.postDelayed(it, 3_500L) }
+    }
+
+    private fun dismissCompletionNotice() {
+        completionNoticeDismissRunnable?.let(handler::removeCallbacks)
+        completionNoticeDismissRunnable = null
+        completionNoticeThreadId = null
+        completionNoticeEngine = null
+        if (::completionNotice.isInitialized) completionNotice.visibility = View.GONE
+    }
+
+    private fun buildModeSwitchNotice() {
+        modeSwitchNotice = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(6), dp(6), dp(6))
+            background = rounded(PANEL, dp(12), BORDER, dp(1))
+            visibility = View.GONE
+        }
+        page.addView(modeSwitchNotice, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(5)
+        })
+    }
+
+    private fun showModeSwitchNotice(previousMode: String, newMode: String) {
+        if (!::modeSwitchNotice.isInitialized) return
+        modeSwitchNotice.removeAllViews()
+        listOf(previousMode, newMode).forEachIndexed { index, engine ->
+            val claude = engine == "claude-code"
+            modeSwitchNotice.addView(ImageView(this).apply {
+                setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+                imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
+                contentDescription = if (claude) "Claude Code" else "Codex"
+            }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { if (index == 0) rightMargin = dp(4) else leftMargin = dp(4) })
+            if (index == 0) modeSwitchNotice.addView(label("→", 13, MUTED, true), LinearLayout.LayoutParams(WRAP, WRAP))
+        }
+        val modeLabel = if (newMode == "claude-code") "Claude Code" else "Codex"
+        val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
+        copy.addView(label("已切换到 $modeLabel", 12, TEXT, true), widthWrap())
+        copy.addView(label("新消息将发送到当前模式", 10, MUTED), widthWrap())
+        modeSwitchNotice.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        modeSwitchNotice.addView(iconButton("close", "关闭模式提示") { dismissModeSwitchNotice() }, LinearLayout.LayoutParams(dp(30), dp(30)))
+        modeSwitchNotice.visibility = View.VISIBLE
+        modeSwitchDismissRunnable?.let(handler::removeCallbacks)
+        modeSwitchDismissRunnable = Runnable { dismissModeSwitchNotice() }.also { handler.postDelayed(it, 2_800L) }
+    }
+
+    private fun dismissModeSwitchNotice() {
+        modeSwitchDismissRunnable?.let(handler::removeCallbacks)
+        modeSwitchDismissRunnable = null
+        if (::modeSwitchNotice.isInitialized) modeSwitchNotice.visibility = View.GONE
     }
 
     private fun buildComposer() {
@@ -754,14 +918,14 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
-        sendButton = label("↑", 20, DARK, true).apply {
+        sendButton = label("↑", 18, DARK, true).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
             background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             setOnClickListener { if (running) interruptTurn() else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
-        footer.addView(sendButton, LinearLayout.LayoutParams(dp(34), dp(34)).apply {
+        footer.addView(sendButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
             leftMargin = dp(6)
             gravity = Gravity.CENTER_VERTICAL
         })
@@ -812,7 +976,8 @@ class MainActivity : Activity() {
             hint = "搜索聊天记录"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
             setSingleLine(true)
-            textSize = 13f
+            textSize = adjustedTextSize(13)
+            setTag(R.id.base_text_size, 13f)
             setTextColor(TEXT)
             setHintTextColor(MUTED)
             background = null
@@ -1293,6 +1458,14 @@ class MainActivity : Activity() {
                 val result = RemoteApi(endpoint, token).getArray("/api/v1/codex/threads")
                 handler.post {
                     threads = result
+                    pendingCompletionNoticeThreadId?.let { completedId ->
+                        pendingCompletionNoticeThreadId = null
+                        val completed = findThread(completedId)
+                        val engine = completed?.optString("engine")
+                        if (engine != null && engine != currentMode && completedId != activeThreadId) {
+                            showCompletionNotice(completedId, engine)
+                        }
+                    }
                     renderSidebar(force = true)
                     val selected = activeThreadId
                     if (selected != null) {
@@ -1820,7 +1993,7 @@ class MainActivity : Activity() {
         }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
         if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId == null) {
-            messageList.addView(label("与 Codex Remote 一起完成项目", 19, TEXT, true).apply {
+            messageList.addView(label(if (currentMode == "claude-code") "与 Claude Code 一起完成项目" else "与 Codex Remote 一起完成项目", 19, TEXT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(36), dp(14), dp(30))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -1930,12 +2103,12 @@ class MainActivity : Activity() {
                     gravity = Gravity.CENTER_VERTICAL
                 }
                 meta.addView(
-                    label(if (currentMode == "claude-code") "Claude" else "Codex", 11, MUTED, true),
+                    label(if (currentMode == "claude-code") "Claude" else "Codex", 11, ACCENT, true),
                     LinearLayout.LayoutParams(WRAP, WRAP),
                 )
                 item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
                     meta.addView(
-                        label(displayTime, 9, MUTED).apply { setPadding(dp(7), 0, 0, 0) },
+                        label(displayTime, 10, MUTED).apply { setPadding(dp(7), 0, 0, 0) },
                         LinearLayout.LayoutParams(WRAP, WRAP),
                     )
                 }
@@ -1950,7 +2123,7 @@ class MainActivity : Activity() {
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || !hasImage) {
-                val content = label(text.ifBlank { "（附件消息）" }, prefs.getInt(KEY_FONT_SIZE, 14), TEXT).apply {
+                val content = label(text.ifBlank { "（附件消息）" }, 14, TEXT).apply {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -1963,10 +2136,10 @@ class MainActivity : Activity() {
             }
             addMessageImages(bubble, item)
             if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
-                bubble.addView(label(displayTime, 9, MUTED).apply {
+                bubble.addView(label(displayTime, 10, MUTED).apply {
                     gravity = Gravity.END
                     setPadding(0, dp(3), 0, 0)
-                }, LinearLayout.LayoutParams((maxBubbleWidth - dp(22)).coerceAtLeast(dp(120)), WRAP))
+                }, LinearLayout.LayoutParams(WRAP, WRAP))
             }
             row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
             val turnId = item.optString("_turnId")
@@ -1993,8 +2166,12 @@ class MainActivity : Activity() {
                 indeterminateTintList = ColorStateList.valueOf(ACCENT)
                 contentDescription = activityLabel
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-            activity.addView(label(activityLabel, 12, ACCENT), widthWrap())
-            messageList.addView(activity, widthWrap())
+            activity.addView(label(activityLabel, 12, ACCENT), LinearLayout.LayoutParams(0, WRAP, 1f))
+            activity.addView(label(currentMessageTime(), 10, MUTED).apply {
+                gravity = Gravity.END
+                contentDescription = "思考开始时间 ${currentMessageTime()}"
+            }, LinearLayout.LayoutParams(WRAP, WRAP))
+            messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.fullScroll(View.FOCUS_DOWN)
@@ -2029,7 +2206,7 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank()) continue
-                    val content = label(text, prefs.getInt(KEY_FONT_SIZE, 14), TEXT).apply {
+                    val content = label(text, 14, TEXT).apply {
                         setTextIsSelectable(true)
                         setLineSpacing(dp(2).toFloat(), 1.08f)
                         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
@@ -2145,9 +2322,11 @@ class MainActivity : Activity() {
             }, widthWrap())
             if (paths.isNotEmpty()) {
                 val path = paths.first()
-                copy.addView(label("打开 · ${path.substringAfterLast('/')}", 10, ACCENT).apply {
+                val imagePath = isWorkspaceImagePath(path)
+                copy.addView(label("${if (imagePath) "查看图片" else "打开文件"} · ${path.substringAfterLast('/')}", 10, ACCENT).apply {
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    contentDescription = if (imagePath) "查看图片 ${path.substringAfterLast('/')}" else "打开文件 ${path.substringAfterLast('/')}"
                     setOnClickListener { showFilePreview(path, null) }
                 }, widthWrap())
             }
@@ -2272,7 +2451,9 @@ class MainActivity : Activity() {
     }
 
     private fun addRemoteMessageImage(container: LinearLayout, path: String) {
-        val cacheKey = "path:$path"
+        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+        val requestPath = workspaceImageRequestPath(cwd, path)
+        val cacheKey = "path:${cwd.orEmpty()}:$requestPath"
         val holder = FrameLayout(this).apply {
             background = rounded(USER_BUBBLE, dp(8))
             clipToOutline = true
@@ -2288,6 +2469,7 @@ class MainActivity : Activity() {
         }
         holder.addView(progress, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
         container.addView(holder, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
+        var failureView: View? = null
 
         fun display(bitmap: Bitmap) {
             image.setImageBitmap(bitmap)
@@ -2300,31 +2482,46 @@ class MainActivity : Activity() {
             display(it)
             return
         }
-        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-        io.execute {
-            try {
-                val query = buildString {
-                    append("?path=${Uri.encode(path)}")
-                    if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
+        lateinit var loadImage: () -> Unit
+        loadImage = {
+            failureView?.let(holder::removeView)
+            failureView = null
+            progress.visibility = View.VISIBLE
+            io.execute {
+                try {
+                    val query = buildString {
+                        append("?path=${Uri.encode(requestPath)}")
+                        if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
+                    }
+                    val response = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/image$query")
+                    val encoded = response.optString("data")
+                    if (encoded.isBlank() || encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片过大")
+                    val bitmap = decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), 720)
+                        ?: throw IOException("图片内容无法解析")
+                    messageImageCache.put(cacheKey, bitmap)
+                    handler.post { if (holder.isAttachedToWindow) display(bitmap) }
+                } catch (error: Exception) {
+                    handler.post {
+                        if (!holder.isAttachedToWindow) return@post
+                        progress.visibility = View.GONE
+                        failureView = LinearLayout(this).apply {
+                            orientation = LinearLayout.VERTICAL
+                            gravity = Gravity.CENTER
+                            addView(label("图片无法加载", 11, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
+                            addView(label("点按重试 · ${error.message ?: ""}", 10, ACCENT).apply {
+                                gravity = Gravity.CENTER
+                                setOnClickListener { loadImage() }
+                            }, widthWrap())
+                        }
+                        holder.addView(failureView, FrameLayout.LayoutParams(MATCH, MATCH))
+                    }
+                } catch (_: OutOfMemoryError) {
+                    messageImageCache.evictAll()
+                    handler.post { if (holder.isAttachedToWindow) progress.visibility = View.GONE }
                 }
-                val response = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/image$query")
-                val encoded = response.optString("data")
-                if (encoded.isBlank() || encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片过大")
-                val bitmap = decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), 720)
-                    ?: throw IOException("图片内容无法解析")
-                messageImageCache.put(cacheKey, bitmap)
-                handler.post { if (holder.isAttachedToWindow) display(bitmap) }
-            } catch (_: Exception) {
-                handler.post {
-                    if (!holder.isAttachedToWindow) return@post
-                    progress.visibility = View.GONE
-                    holder.addView(label("图片暂时无法加载", 11, MUTED).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
-                }
-            } catch (_: OutOfMemoryError) {
-                messageImageCache.evictAll()
-                handler.post { if (holder.isAttachedToWindow) progress.visibility = View.GONE }
             }
         }
+        loadImage()
     }
 
     private fun decodeSampledBitmap(bytes: ByteArray, maximumDimension: Int): Bitmap? {
@@ -2794,6 +2991,7 @@ class MainActivity : Activity() {
     }
 
     private fun switchMode() {
+        val previousMode = currentMode
         val targetMode = if (currentMode == "codex") "claude-code" else "codex"
         if (targetMode == "claude-code" && !claudeAvailable) {
             showToast(claudeStatusMessage)
@@ -2817,6 +3015,7 @@ class MainActivity : Activity() {
         }
         if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
         renderSidebar(force = true)
+        showModeSwitchNotice(previousMode, currentMode)
         showToast(if (currentMode == "codex") "Codex 对话" else "Claude Code 对话")
     }
 
@@ -3010,7 +3209,7 @@ class MainActivity : Activity() {
             addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         menu.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        val popupWidth = min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210)))
+        val popupWidth = min(dp(224), (root.width - dp(28)).coerceAtLeast(dp(190)))
         val popup = PopupWindow(menu, popupWidth, menuHeight, false).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             elevation = dp(12).toFloat()
@@ -3205,12 +3404,14 @@ class MainActivity : Activity() {
             return card
         }
 
-        val appearance = section("外观", "选择主题，调整聊天内容的阅读大小。")
+        val appearance = section("主题", "选择工作区色彩；自定义主题支持背景图片与颜色。")
         listOf(
-            Triple(true, "浅色主题", "明亮背景"),
-            Triple(false, "深色主题", "低光环境"),
+            Triple("light", "白色", "清爽明亮"),
+            Triple("dark", "黑色", "低光阅读"),
+            Triple("warm", "暖色", "柔和纸感"),
+            Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
-            val selected = lightTheme == theme
+            val selected = themeName == theme
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -3233,28 +3434,79 @@ class MainActivity : Activity() {
             appearance.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
         }
 
-        val display = section("显示", "设置聊天文字大小，范围为 12 至 20 级。")
+        if (themeName == "custom") {
+            appearance.addView(settingsActionRow("背景颜色", prefs.getString(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND).orEmpty()) {
+                showThemeColorDialog("背景颜色", KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
+            }, widthWrap())
+            appearance.addView(settingsActionRow("字体颜色", prefs.getString(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT).orEmpty()) {
+                showThemeColorDialog("字体颜色", KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+            }, widthWrap())
+            val selectedImage = prefs.getString(KEY_CUSTOM_BACKGROUND_IMAGE, null)
+            appearance.addView(settingsActionRow("背景图片", if (selectedImage.isNullOrBlank()) "选择图片" else "更换或清除当前图片") {
+                chooseThemeBackground()
+            }, widthWrap())
+            if (!selectedImage.isNullOrBlank()) appearance.addView(settingsActionRow("清除背景图片", "保留自定义颜色") {
+                prefs.edit().remove(KEY_CUSTOM_BACKGROUND_IMAGE).apply()
+                rerenderAppKeepSettings()
+            }, widthWrap())
+            val transparencyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(7), dp(2), 0) }
+            val transparencyHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            transparencyHeader.addView(label("背景透明度", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+            val transparencyValue = prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0).coerceIn(0, 100)
+            val transparencyLabel = label("$transparencyValue%", 12, ACCENT, true)
+            transparencyHeader.addView(transparencyLabel, widthWrap())
+            transparencyRow.addView(transparencyHeader, widthWrap())
+            transparencyRow.addView(label("数值越高，背景图片和底色越透明。", 10, MUTED), widthWrap())
+            val transparencySeek = SeekBar(this).apply {
+                max = 100
+                progress = transparencyValue
+                progressTintList = ColorStateList.valueOf(ACCENT)
+                thumbTintList = ColorStateList.valueOf(ACCENT)
+                progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+                contentDescription = "背景透明度"
+            }
+            transparencySeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) { transparencyLabel.text = "$progress%" }
+                override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar) {
+                    prefs.edit().putInt(KEY_BACKGROUND_TRANSPARENCY, seekBar.progress).apply()
+                    rerenderAppKeepSettings()
+                }
+            })
+            transparencyRow.addView(transparencySeek, LinearLayout.LayoutParams(MATCH, dp(38)))
+            appearance.addView(transparencyRow, widthWrap())
+        }
+
+        val display = section("显示", "字体大小会同时影响聊天、输入框、侧栏、文件区和设置页面。")
         val sizeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val sizeLabel = label("${prefs.getInt(KEY_FONT_SIZE, 14)} 级", 13, ACCENT, true)
-        sizeRow.addView(label("聊天字体", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+        val currentFontAdjustment = globalFontAdjustment()
+        val sizeLabel = label(if (currentFontAdjustment == 0) "标准" else "${if (currentFontAdjustment > 0) "+" else ""}${currentFontAdjustment} px", 13, ACCENT, true)
+        sizeRow.addView(label("全局字体", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
         sizeRow.addView(sizeLabel, LinearLayout.LayoutParams(WRAP, WRAP))
         display.addView(sizeRow, widthWrap())
         val fontSeek = SeekBar(this).apply {
-            max = 8
-            progress = (prefs.getInt(KEY_FONT_SIZE, 14).coerceIn(12, 20) - 12)
+            max = 9
+            progress = currentFontAdjustment + 3
             progressTintList = ColorStateList.valueOf(ACCENT)
             thumbTintList = ColorStateList.valueOf(ACCENT)
             progressBackgroundTintList = ColorStateList.valueOf(BORDER)
-            contentDescription = "聊天字体大小"
+            contentDescription = "全局字体大小"
         }
         fontSeek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar, progress: Int, fromUser: Boolean) {
-                sizeLabel.text = "${progress + 12} 级"
+                val adjustment = progress - 3
+                sizeLabel.text = if (adjustment == 0) "标准" else "${if (adjustment > 0) "+" else ""}${adjustment} px"
+                if (fromUser) {
+                    previewFontAdjustment = adjustment
+                    applyGlobalFontAdjustment(root)
+                }
             }
             override fun onStartTrackingTouch(seekBar: SeekBar) = Unit
             override fun onStopTrackingTouch(seekBar: SeekBar) {
-                prefs.edit().putInt(KEY_FONT_SIZE, seekBar.progress + 12).apply()
-                renderMessages(false)
+                val adjustment = seekBar.progress - 3
+                prefs.edit().putInt(KEY_GLOBAL_FONT_ADJUSTMENT, adjustment).apply()
+                previewFontAdjustment = null
+                applyGlobalFontAdjustment(root)
             }
         })
         display.addView(fontSeek, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(2) })
@@ -3324,12 +3576,51 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(6) })
     }
 
-    private fun applyThemeFromSettings(useLightTheme: Boolean) {
-        if (lightTheme == useLightTheme) return
-        val draft = composerInput.text.toString()
-        persistCurrentDraft()
-        prefs.edit().putBoolean(KEY_LIGHT_THEME, useLightTheme).apply()
-        closeSettings()
+    private fun applyThemeFromSettings(theme: String) {
+        if (themeName == theme) return
+        prefs.edit().putString(KEY_THEME, theme).putBoolean(KEY_LIGHT_THEME, theme != "dark").apply()
+        rerenderAppKeepSettings()
+    }
+
+    private fun showThemeColorDialog(title: String, key: String, fallback: String) {
+        val current = prefs.getString(key, fallback) ?: fallback
+        val input = editField("#RRGGBB", current, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS).apply {
+            setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_DONE
+        }
+        showInputDialog(title, input, "应用") {
+            val value = input.text.toString().trim()
+            if (!Regex("^#[0-9a-fA-F]{6}$").matches(value)) {
+                showToast("请输入 #RRGGBB 格式的颜色")
+                return@showInputDialog false
+            }
+            prefs.edit().putString(key, value.uppercase(Locale.ROOT)).apply()
+            rerenderAppKeepSettings()
+            true
+        }
+    }
+
+    private fun chooseThemeBackground() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        themeBackgroundPickerActive = true
+        try {
+            startActivityForResult(intent, REQUEST_THEME_BACKGROUND)
+        } catch (_: Exception) {
+            themeBackgroundPickerActive = false
+            showToast("没有可用的图片选择器")
+        }
+    }
+
+    private fun rerenderAppKeepSettings() {
+        val reopenSettings = settingsOverlay != null
+        val draft = if (::composerInput.isInitialized) composerInput.text.toString() else ""
+        if (::composerInput.isInitialized) persistCurrentDraft()
+        if (reopenSettings) closeSettings()
+        preferencePopup?.dismiss()
         sidebarAnimator?.cancel()
         sidebarVisible = false
         sidebarProgress = 0f
@@ -3346,20 +3637,23 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
+        window.decorView.systemUiVisibility = if (lightTheme) {
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        } else 0
         renderHome()
         composerInput.setText(draft)
-        showSettings()
+        if (reopenSettings) showSettings()
     }
 
     private fun refreshSettingsNotificationControl() {
         settingsNotificationButton?.apply {
-            text = if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) "已开启" else "已关闭"
-            setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) ACCENT else MUTED)
+            text = if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) "已开启" else "已关闭"
+            setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) ACCENT else MUTED)
         }
     }
 
     private fun toggleSystemNotifications() {
-        val enabled = prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)
+        val enabled = prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)
         if (enabled) {
             prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false).apply()
             refreshSettingsNotificationControl()
@@ -3371,7 +3665,7 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             return
         }
-        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true).apply()
+        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false).apply()
         refreshSettingsNotificationControl()
         showToast("系统通知已开启")
     }
@@ -3476,13 +3770,34 @@ class MainActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
         header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
-        val refreshButton = iconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke("") }
+        val refreshButton = iconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
         header.addView(refreshButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         val createButton = iconButton("add", "新建文件或文件夹") { }
-        createButton.setOnClickListener { showCreateEntry(createButton, "") { workspaceRefresher?.invoke("") } }
+        createButton.setOnClickListener { showCreateEntry(createButton, workspaceCurrentPath) { workspaceRefresher?.invoke(workspaceCurrentPath) } }
         header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         header.addView(iconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
         panel.addView(header, widthWrap())
+
+        val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val parentButton = iconButton("back", "返回上级目录") { handleWorkspaceBack() }
+        pathNavigation.addView(parentButton, LinearLayout.LayoutParams(dp(32), dp(32)))
+        val pathInput = editField("输入路径", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
+            setSingleLine(true)
+            textSize = adjustedTextSize(11)
+            setTag(R.id.base_text_size, 11f)
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setPadding(dp(8), 0, dp(7), 0)
+            setOnEditorActionListener { _, action, _ ->
+                if (action == EditorInfo.IME_ACTION_GO) { workspacePathNavigate?.invoke(text.toString()); true } else false
+            }
+        }
+        pathNavigation.addView(pathInput, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(2) })
+        pathNavigation.addView(iconButton("open", "跳转到输入路径") {
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(pathInput.windowToken, 0)
+            workspacePathNavigate?.invoke(pathInput.text.toString())
+        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        panel.addView(pathNavigation, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
+        workspacePathInput = pathInput
 
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
@@ -3493,7 +3808,7 @@ class MainActivity : Activity() {
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3); bottomMargin = dp(3) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
-        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries("") { workspaceRefresher?.invoke("*") } })
+        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries(workspaceCurrentPath) { workspaceRefresher?.invoke(workspaceCurrentPath) } })
         panel.addView(footer, widthWrap())
 
         workspaceOverlay = overlay
@@ -3515,12 +3830,38 @@ class MainActivity : Activity() {
         fun currentCwd(): String? = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
         fun workspaceKey(): String = currentCwd() ?: runtime.optString("workspace", "<default>")
         fun parentPath(value: String): String = value.trim('/').substringBeforeLast('/', "")
-        fun absolutePath(relativePath: String): String = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
-            .filter { it.isNotBlank() }.joinToString("/")
         fun dispatchRender() {
             if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
             else renderTree()
         }
+        fun absolutePath(relativePath: String): String = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
+            .filter { it.isNotBlank() }.joinToString("/")
+        fun navigateToDirectory(rawPath: String) {
+            val input = rawPath.trim().replace('\\', '/')
+            val rootPath = workspaceRootPath.replace('\\', '/').trimEnd('/')
+            val windowsPath = Regex("^[a-zA-Z]:/").containsMatchIn(rootPath)
+            fun samePath(left: String, right: String): Boolean = if (windowsPath) left.equals(right, ignoreCase = true) else left == right
+            val relative = when {
+                input.isBlank() -> ""
+                rootPath.isNotBlank() && samePath(input.trimEnd('/'), rootPath) -> ""
+                rootPath.isNotBlank() && (if (windowsPath) input.startsWith("$rootPath/", ignoreCase = true) else input.startsWith("$rootPath/")) -> input.substring(rootPath.length + 1)
+                input.startsWith('/') || Regex("^[a-zA-Z]:/").containsMatchIn(input) -> {
+                    showToast("路径必须位于当前工作目录内")
+                    return
+                }
+                else -> input.trim('/')
+            }
+            val segments = relative.split('/').filter { it.isNotBlank() }
+            if (segments.any { it == "." || it == ".." }) {
+                showToast("路径不能越出当前工作目录")
+                return
+            }
+            workspaceCurrentPath = segments.joinToString("/")
+            workspacePathInput?.setText(absolutePath(workspaceCurrentPath))
+            if (directoryChildren.containsKey(workspaceCurrentPath)) dispatchRender()
+            else loadDirectory(workspaceCurrentPath, false)
+        }
+        workspacePathNavigate = ::navigateToDirectory
 
         addDirectoryRows = addRows@{ directoryPath, depth ->
             val children = directoryChildren[directoryPath] ?: return@addRows
@@ -3611,24 +3952,29 @@ class MainActivity : Activity() {
         renderTree = render@{
             if (workspaceOverlay !== overlay) return@render
             val previousScrollY = scroll.scrollY
+            val currentPath = workspaceCurrentPath
             pathTitle.text = workspaceRootPath.ifBlank { currentCwd() ?: runtime.optString("workspace", "工作区") }
+            if (currentPath.isNotBlank()) pathTitle.text = "$currentPath · ${pathTitle.text}"
+            if (!pathInput.hasFocus()) pathInput.setText(absolutePath(currentPath))
+            parentButton.isEnabled = currentPath.isNotBlank()
+            parentButton.alpha = if (parentButton.isEnabled) 1f else .45f
             entries.removeAllViews()
             when {
-                "" in loadingDirectories && !directoryChildren.containsKey("") -> entries.addView(
+                currentPath in loadingDirectories && !directoryChildren.containsKey(currentPath) -> entries.addView(
                     label("正在读取…", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap(),
                 )
-                directoryErrors.containsKey("") -> entries.addView(
-                    label("${directoryErrors[""]}\n点此重新加载", 12, ERROR).apply {
+                directoryErrors.containsKey(currentPath) -> entries.addView(
+                    label("${directoryErrors[currentPath]}\n点此重新加载", 12, ERROR).apply {
                         setPadding(dp(8), dp(12), dp(8), dp(12))
-                        setOnClickListener { loadDirectory("", true) }
+                        setOnClickListener { loadDirectory(currentPath, true) }
                     }, widthWrap(),
                 )
-                directoryChildren[""]?.length() == 0 -> entries.addView(
+                directoryChildren[currentPath]?.length() == 0 -> entries.addView(
                     label("空文件夹", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap(),
                 )
-                else -> addDirectoryRows("", 0)
+                else -> addDirectoryRows(currentPath, 0)
             }
-            if ("" in directoryTruncated) entries.addView(
+            if (currentPath in directoryTruncated) entries.addView(
                 label("目录内容较多，仅显示前 400 项", 10, MUTED).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }, widthWrap(),
             )
             scroll.post { scroll.scrollTo(0, previousScrollY.coerceAtMost((entries.height - scroll.height).coerceAtLeast(0))) }
@@ -3673,7 +4019,7 @@ class MainActivity : Activity() {
                         loadingDirectories.remove(path)
                         workspaceLoadingPath = null
                         workspaceRootPath = tree.optString("cwd").ifBlank { workspaceRootPath }
-                        if (path.isBlank()) workspaceLoadedPath = ""
+                        if (path == workspaceCurrentPath) workspaceLoadedPath = path
                         dispatchRender()
                     }
                 } catch (error: Exception) {
@@ -3768,6 +4114,14 @@ class MainActivity : Activity() {
 
     private fun handleWorkspaceBack(): Boolean {
         if (!workspaceVisible) return false
+        if (workspaceCurrentPath.isNotBlank()) {
+            workspaceCurrentPath = workspaceCurrentPath.trimEnd('/').substringBeforeLast('/', "")
+            val absolutePath = listOf(workspaceRootPath.trimEnd('/'), workspaceCurrentPath.trimStart('/'))
+                .filter { it.isNotBlank() }.joinToString("/")
+            workspacePathInput?.setText(absolutePath)
+            workspacePathNavigate?.invoke(absolutePath)
+            return true
+        }
         setWorkspaceVisible(false)
         return true
     }
@@ -4094,7 +4448,7 @@ class MainActivity : Activity() {
             background = rounded(PANEL, dp(14), BORDER, dp(1))
         }
         val previewInput = EditText(this).apply {
-            setTextColor(TEXT); setHintTextColor(MUTED); textSize = (prefs.getInt(KEY_FONT_SIZE, 14) - 1).toFloat()
+            setTextColor(TEXT); setHintTextColor(MUTED); textSize = adjustedTextSize(13); setTag(R.id.base_text_size, 13f)
             typeface = Typeface.MONOSPACE; gravity = Gravity.TOP or Gravity.START
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             setPadding(dp(9), dp(9), dp(9), dp(9)); background = rounded(if (lightTheme) Color.rgb(246, 247, 249) else Color.rgb(14, 16, 20), dp(8))
@@ -4207,6 +4561,17 @@ class MainActivity : Activity() {
             normalizedPath.substring(prefix.length)
         } else normalizedPath
     }
+
+    private fun workspaceImageRequestPath(cwd: String?, path: String): String {
+        val normalizedPath = path.replace('\\', '/').removePrefix("./")
+        val normalizedCwd = cwd?.replace('\\', '/')?.trimEnd('/').orEmpty()
+        if (normalizedCwd.isBlank() || !normalizedPath.startsWith('/') && !Regex("^[a-zA-Z]:/").containsMatchIn(normalizedPath)) {
+            return normalizedPath
+        }
+        return workspaceRelativePath(cwd, normalizedPath).takeIf { it != normalizedPath } ?: normalizedPath
+    }
+
+    private fun isWorkspaceImagePath(path: String): Boolean = path.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "webp", "gif")
 
     private fun savePreviewFile(path: String, cwd: String?, content: String, revision: String, editor: EditText) {
         if (revision.isBlank()) { showToast("文件还在加载"); return }
@@ -4516,6 +4881,18 @@ class MainActivity : Activity() {
     @Deprecated("Use Activity Result APIs when the Android module adopts AndroidX")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_THEME_BACKGROUND) {
+            themeBackgroundPickerActive = false
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null) {
+                runCatching {
+                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                prefs.edit().putString(KEY_CUSTOM_BACKGROUND_IMAGE, uri.toString()).apply()
+                rerenderAppKeepSettings()
+            }
+            return
+        }
         if (requestCode != REQUEST_ATTACH || resultCode != RESULT_OK || data == null) return
         val uris = mutableListOf<Uri>()
         data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri }
@@ -4659,6 +5036,8 @@ class MainActivity : Activity() {
                 if (eventThread == activeThreadId) {
                     running = false
                     handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                } else if (eventThread != null) {
+                    pendingCompletionNoticeThreadId = eventThread
                 }
                 if (!foreground && eventThread != null) showSystemNotification(eventThread)
                 handler.post { refreshThreads(false) }
@@ -4688,7 +5067,7 @@ class MainActivity : Activity() {
     }
 
     private fun showSystemNotification(threadId: String) {
-        if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true)) return
+        if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) return
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             handler.post { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS) }
             return
@@ -4775,14 +5154,25 @@ class MainActivity : Activity() {
     }
 
     private fun messageTime(item: JSONObject, turn: JSONObject, assistant: Boolean): String {
-        val itemValue = firstJsonValue(item, "createdAt", "created_at", "timestamp", "completedAt")
+        val itemValue = firstJsonValue(
+            item,
+            "createdAt", "created_at", "timestamp", "timestampMs", "timestamp_ms",
+            "createdAtMs", "created_at_ms", "completedAt", "completed_at", "time", "date",
+        )
         val turnValue = if (assistant) {
-            firstJsonValue(turn, "completedAt", "startedAt", "createdAt", "timestamp")
+            firstJsonValue(
+                turn,
+                "completedAt", "completed_at", "completedAtMs", "completed_at_ms",
+                "startedAt", "started_at", "startedAtMs", "started_at_ms",
+                "createdAt", "created_at", "timestamp", "timestampMs", "timestamp_ms",
+            )
         } else {
-            firstJsonValue(turn, "startedAt", "createdAt", "timestamp")
+            firstJsonValue(turn, "startedAt", "started_at", "startedAtMs", "started_at_ms", "createdAt", "created_at", "timestamp", "timestampMs", "timestamp_ms")
         }
         return formatMessageTime(itemValue ?: turnValue)
     }
+
+    private fun currentMessageTime(): String = formatMessageTime(Instant.now().toString())
 
     private fun firstJsonValue(value: JSONObject, vararg keys: String): Any? {
         for (key in keys) {
@@ -4964,14 +5354,16 @@ class MainActivity : Activity() {
         inputType = inputTypeValue
         setTextColor(TEXT)
         setHintTextColor(MUTED)
-        textSize = 14f
+        textSize = adjustedTextSize(14)
+        setTag(R.id.base_text_size, 14f)
         setPadding(dp(12), dp(7), dp(12), dp(7))
         background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(9), BORDER, dp(1))
     }
 
     private fun label(value: String, size: Int, color: Int, bold: Boolean = false): TextView = TextView(this).apply {
         text = value
-        textSize = size.toFloat()
+        textSize = adjustedTextSize(size)
+        setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
         if (bold) setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER_VERTICAL
@@ -4996,6 +5388,13 @@ class MainActivity : Activity() {
         val claude = engine == "claude-code"
         view.setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
         view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else ACCENT)
+    }
+
+    private fun codexBrandAccent(): Int = when (themeName) {
+        "warm" -> Color.rgb(146, 114, 83)
+        "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+        "light" -> Color.rgb(75, 96, 157)
+        else -> Color.rgb(170, 186, 255)
     }
 
     private fun iconResource(icon: String): Int = when (icon) {
@@ -5057,7 +5456,8 @@ class MainActivity : Activity() {
 
     private fun actionButton(value: String): Button = Button(this).apply {
         text = value
-        textSize = 13f
+        textSize = adjustedTextSize(13)
+        setTag(R.id.base_text_size, 13f)
         setTextColor(DARK)
         isAllCaps = false
         background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
@@ -5072,6 +5472,69 @@ class MainActivity : Activity() {
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
+    private fun adjustedTextSize(baseSize: Int): Float = (baseSize + globalFontAdjustment()).coerceAtLeast(8).toFloat()
+
+    private fun globalFontAdjustment(): Int = previewFontAdjustment ?: prefs.getInt(
+        KEY_GLOBAL_FONT_ADJUSTMENT,
+        (prefs.getInt(KEY_FONT_SIZE, 14) - 14).coerceIn(-3, 6),
+    ).coerceIn(-3, 6)
+
+    private fun applyGlobalFontAdjustment(view: View) {
+        val baseSize = view.getTag(R.id.base_text_size) as? Float
+        if (view is TextView && baseSize != null) view.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, (baseSize + globalFontAdjustment()).coerceAtLeast(8f))
+        if (view is ViewGroup) for (index in 0 until view.childCount) applyGlobalFontAdjustment(view.getChildAt(index))
+    }
+
+    private fun parseThemeColor(key: String, fallback: String): Int = runCatching {
+        Color.parseColor(prefs.getString(key, fallback) ?: fallback)
+    }.getOrElse { Color.parseColor(fallback) }
+
+    private fun colorWithAlpha(color: Int, opacity: Float): Int = Color.argb(
+        (Color.alpha(color) * opacity.coerceIn(0f, 1f)).toInt(),
+        Color.red(color),
+        Color.green(color),
+        Color.blue(color),
+    )
+
+    private fun installThemeBackground(target: FrameLayout) {
+        if (themeName != "custom") {
+            target.setBackgroundColor(DARK)
+            return
+        }
+        target.setBackgroundColor(DARK)
+        val storedUri = prefs.getString(KEY_CUSTOM_BACKGROUND_IMAGE, null).orEmpty()
+        if (storedUri.isBlank()) return
+        val image = runCatching { decodeThemeBackground(Uri.parse(storedUri)) }.getOrNull() ?: return
+        val opacity = (100 - prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0)).coerceIn(0, 100) / 100f
+        val imageView = ImageView(this).apply {
+            setImageBitmap(image)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = opacity
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        target.addView(imageView, FrameLayout.LayoutParams(MATCH, MATCH))
+    }
+
+    private fun decodeThemeBackground(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        val boundsRead = runCatching {
+            contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, bounds)
+                true
+            } ?: false
+        }.getOrDefault(false)
+        if (!boundsRead) return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > 1800 || bounds.outHeight / sampleSize > 1800) sampleSize *= 2
+        return contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.RGB_565
+            })
+        }
+    }
+
     companion object {
         private const val PREFS = "codex_remote_mobile"
         private const val KEY_ENDPOINT = "endpoint"
@@ -5079,10 +5542,19 @@ class MainActivity : Activity() {
         private const val KEY_MODE = "native_engine_mode"
         private const val KEY_ACTIVE_THREAD_PREFIX = "native_active_thread_"
         private const val KEY_FONT_SIZE = "native_chat_font_size"
+        private const val KEY_GLOBAL_FONT_ADJUSTMENT = "native_global_font_adjustment"
+        private const val KEY_THEME = "native_theme"
+        private const val KEY_CUSTOM_BACKGROUND = "native_custom_background_color"
+        private const val KEY_CUSTOM_TEXT = "native_custom_text_color"
+        private const val KEY_BACKGROUND_TRANSPARENCY = "native_background_transparency"
+        private const val KEY_CUSTOM_BACKGROUND_IMAGE = "native_custom_background_image_uri"
+        private const val DEFAULT_CUSTOM_BACKGROUND = "#4B5563"
+        private const val DEFAULT_CUSTOM_TEXT = "#F1F5F9"
         private const val PREF_DEFAULT = "composer_default"
         private const val PREF_THREAD_PREFIX = "composer_thread_"
         private const val REQUEST_ATTACH = 4101
         private const val REQUEST_NOTIFICATIONS = 4102
+        private const val REQUEST_THEME_BACKGROUND = 4103
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
