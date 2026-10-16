@@ -434,8 +434,7 @@ class MainActivity : Activity() {
     private lateinit var sidebarNewThreadLabel: TextView
     private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
     private lateinit var sidebarBrandMark: ImageView
-    private lateinit var sendButton: TextView
-    private lateinit var pauseButton: TextView
+    private lateinit var sendButton: ImageView
     private lateinit var modelButton: TextView
     private lateinit var effortButton: TextView
     private lateinit var permissionButton: TextView
@@ -1268,6 +1267,7 @@ class MainActivity : Activity() {
             }
             addTextChangedListener(SimpleTextWatcher { value ->
                 if (queueEditItem == null) prefs.edit().putString(draftStorageKey(), value).apply()
+                updateSendButton()
             })
         }
         attachmentStrip = LinearLayout(this).apply {
@@ -1307,22 +1307,21 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
-        pauseButton = label("Ⅱ", 16, SUBTLE, true).apply {
-            gravity = Gravity.CENTER
-            includeFontPadding = false
-            background = rounded(PANEL_INSET, dp(15))
-            setOnClickListener { if (running) interruptTurn() else continueInterruptedTurn() }
-            visibility = View.GONE
-        }
-        footer.addView(pauseButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
-            leftMargin = dp(4)
-            gravity = Gravity.CENTER_VERTICAL
-        })
-        sendButton = label("↑", 18, DARK, true).apply {
-            gravity = Gravity.CENTER
-            includeFontPadding = false
+        sendButton = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(6), dp(6), dp(6), dp(6))
             background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
-            setOnClickListener { if (queueEditItem != null) finishQueueEdit(true) else sendCurrentMessage() }
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                when {
+                    queueEditItem != null -> finishQueueEdit(true)
+                    composerInput.text.isNotBlank() || selectedFiles.isNotEmpty() -> sendCurrentMessage()
+                    running -> interruptTurn()
+                    activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true -> continueInterruptedTurn()
+                    else -> sendCurrentMessage()
+                }
+            }
             contentDescription = "发送消息"
         }
         footer.addView(sendButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
@@ -1334,6 +1333,7 @@ class MainActivity : Activity() {
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         renderAttachmentStrip()
         updateComposerPreferences()
+        updateSendButton()
     }
 
     private fun buildSidebar() {
@@ -3667,21 +3667,26 @@ class MainActivity : Activity() {
     private fun updateSendButton() {
         if (!::sendButton.isInitialized) return
         val editingQueue = queueEditItem != null
+        val hasDraft = ::composerInput.isInitialized && (composerInput.text.isNotBlank() || selectedFiles.isNotEmpty())
+        val canContinue = activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true
         sendButton.isEnabled = !sendBusy
-        sendButton.text = if (sendBusy) "…" else if (editingQueue) "✓" else "↑"
+        sendButton.setImageResource(when {
+            sendBusy -> R.drawable.ic_composer_wait
+            editingQueue -> R.drawable.ic_composer_confirm
+            hasDraft -> R.drawable.ic_composer_send
+            running -> R.drawable.ic_composer_pause
+            canContinue -> R.drawable.ic_composer_continue
+            else -> R.drawable.ic_composer_send
+        })
         sendButton.contentDescription = tr(when {
             editingQueue -> "确认修改排队消息"
+            hasDraft -> "发送消息"
+            running -> "暂停当前回复"
+            canContinue -> "继续回复：发送续写请求"
             else -> "发送消息"
         })
-        sendButton.setTextColor(DARK)
+        sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
         sendButton.background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
-        if (::pauseButton.isInitialized) {
-            val canContinue = activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true
-            pauseButton.visibility = if (!editingQueue && (running || canContinue)) View.VISIBLE else View.GONE
-            pauseButton.text = if (running) "Ⅱ" else "▶"
-            pauseButton.contentDescription = tr(if (running) "暂停当前回复" else "继续回复：发送续写请求")
-            pauseButton.isEnabled = !sendBusy
-        }
     }
 
     private fun interruptTurn() {
@@ -6654,6 +6659,7 @@ class MainActivity : Activity() {
 
     private fun renderAttachmentStrip() {
         if (!::attachmentStrip.isInitialized) return
+        updateSendButton()
         attachmentStrip.removeAllViews()
         attachmentScroll.visibility = if (selectedFiles.isEmpty()) View.GONE else View.VISIBLE
         selectedFiles.toList().forEach { file ->
