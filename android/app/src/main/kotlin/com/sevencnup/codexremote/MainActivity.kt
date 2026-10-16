@@ -762,7 +762,8 @@ class MainActivity : Activity() {
         val path = label("本机项目", 10, MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         titleColumn.addView(path, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
-        modeButton = iconButton(if (currentMode == "codex") "codex" else "claude", "切换 Codex / Claude") { switchMode() }
+        val targetMode = modeSwitchTarget()
+        modeButton = iconButton(if (targetMode == "claude-code") "claude" else "codex", modeSwitchDescription()) { switchMode() }
         headerView.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
         headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
@@ -1159,8 +1160,8 @@ class MainActivity : Activity() {
             ?: if (activeThreadId == null) "新对话" else "Codex Remote"
         titleView.text = title
         if (::modeButton.isInitialized) {
-            setBrandIcon(modeButton, currentMode)
-            modeButton.contentDescription = if (currentMode == "codex") "切换到 Claude Code" else "切换到 Codex"
+            setBrandIcon(modeButton, modeSwitchTarget())
+            modeButton.contentDescription = modeSwitchDescription()
         }
         updateSidebarModeAccent()
         val path = page.findViewWithTag<TextView>("workspace_path")
@@ -1176,6 +1177,10 @@ class MainActivity : Activity() {
         sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
         updateComposerPreferences()
     }
+
+    private fun modeSwitchTarget(): String = if (currentMode == "codex") "claude-code" else "codex"
+
+    private fun modeSwitchDescription(): String = if (modeSwitchTarget() == "claude-code") "切换到 Claude Code" else "切换到 Codex"
 
     private fun threadTitle(thread: JSONObject): String = listOf(
         thread.optString("name"),
