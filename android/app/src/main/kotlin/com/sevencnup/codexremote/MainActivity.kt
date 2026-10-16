@@ -341,6 +341,7 @@ class MainActivity : Activity() {
     private var preferencePopup: PopupWindow? = null
     private var sidebarHost: EdgeDrawerHost? = null
     private var sidebarLongPressActive = false
+    private var sidebarTouchActive = false
     private var workspaceHost: EdgeDrawerHost? = null
     private var workspaceOverlay: FrameLayout? = null
     private var workspacePanel: LinearLayout? = null
@@ -1783,7 +1784,9 @@ class MainActivity : Activity() {
         if (!::drawerThreads.isInitialized) return
         updateSidebarModeAccent()
         if (!force && !sidebarRenderDirty) return
-        if (sidebarGestureActive || sidebarAnimator?.isRunning == true) {
+        if (sidebarGestureActive || sidebarAnimator?.isRunning == true || sidebarTouchActive ||
+            (sidebarVisible && preferencePopup?.isShowing == true)
+        ) {
             sidebarRenderDirty = true
             return
         }
@@ -1871,14 +1874,16 @@ class MainActivity : Activity() {
             row.setOnTouchListener { view, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
+                        sidebarTouchActive = true
                         downX = event.x
                         downY = event.y
                         longPressed = false
                         pressTask?.let(handler::removeCallbacks)
                         pressTask = Runnable {
                             if (view.isAttachedToWindow) {
-                                longPressed = view.performLongClick()
-                                if (longPressed) sidebarLongPressActive = true
+                                longPressed = true
+                                sidebarLongPressActive = true
+                                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                             }
                         }.also { handler.postDelayed(it, ViewConfiguration.getLongPressTimeout().toLong()) }
                         view.parent?.requestDisallowInterceptTouchEvent(true)
@@ -1888,6 +1893,7 @@ class MainActivity : Activity() {
                         if (!longPressed && (abs(event.x - downX) > pressSlop || abs(event.y - downY) > pressSlop)) {
                             pressTask?.let(handler::removeCallbacks)
                             pressTask = null
+                            sidebarTouchActive = false
                             view.parent?.requestDisallowInterceptTouchEvent(false)
                         }
                         true
@@ -1897,9 +1903,12 @@ class MainActivity : Activity() {
                         pressTask = null
                         view.parent?.requestDisallowInterceptTouchEvent(false)
                         sidebarLongPressActive = false
-                        if (event.actionMasked == MotionEvent.ACTION_UP && !longPressed &&
-                            abs(event.x - downX) <= pressSlop && abs(event.y - downY) <= pressSlop
-                        ) view.performClick()
+                        sidebarTouchActive = false
+                        if (event.actionMasked == MotionEvent.ACTION_UP) {
+                            if (longPressed) view.performLongClick()
+                            else if (abs(event.x - downX) <= pressSlop && abs(event.y - downY) <= pressSlop) view.performClick()
+                        }
+                        if (sidebarRenderDirty && preferencePopup?.isShowing != true) view.post { renderSidebar(force = true) }
                         true
                     }
                     else -> true
@@ -4569,7 +4578,10 @@ class MainActivity : Activity() {
             elevation = dp(12).toFloat()
             isOutsideTouchable = true
             isClippingEnabled = true
-            setOnDismissListener { if (preferencePopup === this) preferencePopup = null }
+            setOnDismissListener {
+                if (preferencePopup === this) preferencePopup = null
+                if (sidebarRenderDirty && sidebarVisible) renderSidebar(force = true)
+            }
         }
         preferencePopup = popup
         val anchorLocation = IntArray(2)
