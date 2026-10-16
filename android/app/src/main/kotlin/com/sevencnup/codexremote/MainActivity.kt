@@ -79,6 +79,11 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import java.time.Instant
+import java.time.LocalDate
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ExecutorService
@@ -152,6 +157,8 @@ class MainActivity : Activity() {
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
+    private var sidebarHost: EdgeDrawerHost? = null
+    private var workspaceHost: EdgeDrawerHost? = null
     private var workspaceOverlay: FrameLayout? = null
     private var workspacePanel: LinearLayout? = null
     private var workspaceScrim: View? = null
@@ -175,7 +182,8 @@ class MainActivity : Activity() {
     private var lastSocketActivityAt = 0L
     private var backgroundedAt = 0L
     private var pendingApproval: JSONObject? = null
-    private var terminalDialog: Dialog? = null
+    private var terminalOverlay: LinearLayout? = null
+    private var terminalPositionListener: View.OnLayoutChangeListener? = null
     private var terminalSocket: WebSocket? = null
     private var terminalOutput: TextView? = null
     private var terminalStatusView: TextView? = null
@@ -197,9 +205,14 @@ class MainActivity : Activity() {
     private var imeFollowMessageBottom = false
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
+    private val historyMemoryCache = object : LinkedHashMap<String, JSONObject>(12, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, JSONObject>?): Boolean = size > 12
+    }
 
     private lateinit var root: FrameLayout
     private lateinit var page: LinearLayout
+    private lateinit var headerView: LinearLayout
+    private lateinit var composerDock: LinearLayout
     private lateinit var titleView: TextView
     private lateinit var modeButton: ImageButton
     private lateinit var statusView: TextView
@@ -217,6 +230,13 @@ class MainActivity : Activity() {
     private lateinit var drawer: LinearLayout
     private lateinit var drawerSearch: EditText
     private lateinit var drawerThreads: LinearLayout
+
+    private data class EdgeDrawerHost(
+        val overlay: FrameLayout,
+        val scrim: View,
+        val panel: LinearLayout,
+        val gravity: Int,
+    )
 
     private val socketHeartbeatRunnable = object : Runnable {
         override fun run() {
@@ -281,8 +301,10 @@ class MainActivity : Activity() {
         endpoint = prefs.getString(KEY_ENDPOINT, "").orEmpty()
         token = prefs.getString(KEY_TOKEN, "").orEmpty()
         currentMode = prefs.getString(KEY_MODE, "codex") ?: "codex"
-        showConnectionPage()
-        if (endpoint.isNotBlank() && token.isNotBlank()) verifySavedConnection()
+        if (endpoint.isNotBlank() && token.isNotBlank()) {
+            openChatHome()
+            verifySavedConnection(homeAlreadyOpen = true)
+        } else showConnectionPage()
     }
 
     override fun onResume() {
@@ -338,7 +360,7 @@ class MainActivity : Activity() {
             settingsDialog?.isShowing == true -> settingsDialog?.dismiss()
             preferencePopup?.isShowing == true -> preferencePopup?.dismiss()
             settingsOverlay != null -> closeSettings()
-            terminalDialog?.isShowing == true && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
+            terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
                 val input = terminalDraftInput
                 if (input != null) {
@@ -346,7 +368,7 @@ class MainActivity : Activity() {
                         ?.hideSoftInputFromWindow(input.windowToken, 0)
                 }
             }
-            terminalDialog?.isShowing == true -> terminalDialog?.dismiss()
+            terminalOverlay != null -> closeTerminal()
             workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
             activeThreadId != null -> showConfirmDialog("关闭应用", "要关闭 Codex Remote 吗？", "关闭") { finish() }
@@ -434,11 +456,11 @@ class MainActivity : Activity() {
         installWindowInsets(root)
     }
 
-    private fun verifySavedConnection() {
+    private fun verifySavedConnection(homeAlreadyOpen: Boolean = false) {
         io.execute {
             try {
                 RemoteApi(endpoint, token).get("/api/v1/codex/status")
-                handler.post { openChatHome() }
+                if (!homeAlreadyOpen) handler.post { openChatHome() }
             } catch (error: Exception) {
                 if (error is RemoteApiException && error.statusCode == 401) {
                     handler.post {
@@ -448,7 +470,7 @@ class MainActivity : Activity() {
                     }
                 } else {
                     handler.post {
-                        openChatHome()
+                        if (!homeAlreadyOpen) openChatHome()
                         showStatus("电脑服务暂时无法连接，已保留配对信息，正在重试。")
                     }
                 }
@@ -479,6 +501,8 @@ class MainActivity : Activity() {
         workspaceVisible = false
         workspaceProgress = 0f
         workspaceAnimator?.cancel()
+        sidebarHost = null
+        workspaceHost = null
         workspaceOverlay?.visibility = View.GONE
         workspaceOverlay = null
         workspacePanel = null
@@ -489,12 +513,21 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
+        closeTerminal()
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
         deferredMessageTurnIds.clear()
         syncRevisions.clear()
         renderHome()
+        prefs.getString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", null)
+            ?.takeIf { it.isNotBlank() }
+            ?.let { cachedId ->
+                selectThread(
+                    JSONObject().put("id", cachedId).put("engine", currentMode),
+                    eagerDiskCache = true,
+                )
+            }
         refreshRuntime()
         refreshThreads(true)
         refreshPins()
@@ -526,12 +559,19 @@ class MainActivity : Activity() {
                 systemInsetRight = systemBars.right
                 systemInsetBottom = systemBars.bottom
                 view.setPadding(0, 0, 0, 0)
-                if (content.paddingLeft != systemBars.left || content.paddingTop != systemBars.top ||
+                if (content.paddingLeft != systemBars.left || content.paddingTop != 0 ||
                     content.paddingRight != systemBars.right || content.paddingBottom != bottom
                 ) {
-                    content.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+                    content.setPadding(systemBars.left, 0, systemBars.right, bottom)
                 }
                 updateInsetAwareOverlays()
+                val terminalKeyboardVisible = keyboardVisible && terminalDraftInput?.hasFocus() == true
+                terminalImeHiddenUntil = when {
+                    terminalKeyboardVisible -> 0L
+                    terminalImeVisible -> System.currentTimeMillis() + 500L
+                    else -> terminalImeHiddenUntil
+                }
+                terminalImeVisible = terminalKeyboardVisible
                 imeInsetVisible = keyboardVisible
                 if (keyboardVisible && imeFollowMessageBottom && ::messageScroll.isInitialized) {
                     messageScroll.postOnAnimation {
@@ -561,26 +601,25 @@ class MainActivity : Activity() {
     }
 
     private fun updateInsetAwareOverlays() {
-        if (::drawer.isInitialized) {
-            drawer.setPadding(
-                dp(14) + systemInsetLeft,
-                dp(8) + systemInsetTop,
-                dp(14),
-                dp(8) + systemInsetBottom,
-            )
+        if (::headerView.isInitialized) {
+            headerView.setPadding(dp(10), systemInsetTop + dp(2), dp(8), dp(2))
+            headerView.layoutParams?.let { params ->
+                val targetHeight = systemInsetTop + dp(44)
+                if (params.height != targetHeight) {
+                    params.height = targetHeight
+                    headerView.layoutParams = params
+                }
+            }
         }
-        workspacePanel?.setPadding(
-            dp(12),
-            dp(4) + systemInsetTop,
-            dp(12) + systemInsetRight,
-            dp(4) + systemInsetBottom,
-        )
+        applyEdgeDrawerInsets(sidebarHost)
+        applyEdgeDrawerInsets(workspaceHost)
         (settingsOverlay?.findViewWithTag<View>(TAG_INSET_CONTENT))?.setPadding(
             systemInsetLeft,
             systemInsetTop,
             systemInsetRight,
             systemInsetBottom,
         )
+        positionTerminalOverlay()
     }
 
     private fun renderHome() {
@@ -635,25 +674,25 @@ class MainActivity : Activity() {
     }
 
     private fun buildHeader() {
-        val header = LinearLayout(this).apply {
+        headerView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(2), dp(8), dp(2))
-            background = rounded(DARK, 0, BORDER, dp(1))
+            setBackgroundColor(DARK)
         }
         val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }
-        header.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
+        headerView.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
         val path = label("本机项目", 10, MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         titleColumn.addView(path, widthWrap())
-        header.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
+        headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         modeButton = iconButton(if (currentMode == "codex") "codex" else "claude", "切换 Codex / Claude") { switchMode() }
-        header.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
-        header.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        header.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        page.addView(header, LinearLayout.LayoutParams(MATCH, dp(44)))
+        headerView.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+        headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(44)))
     }
 
     private fun buildQueuePanel() {
@@ -670,7 +709,7 @@ class MainActivity : Activity() {
     }
 
     private fun buildComposer() {
-        val dock = LinearLayout(this).apply {
+        composerDock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(2), dp(12), dp(12))
             background = rounded(DARK, dp(18))
@@ -727,8 +766,8 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
-        dock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
-        page.addView(dock, LinearLayout.LayoutParams(MATCH, WRAP))
+        composerDock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
+        page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         renderAttachmentStrip()
         updateComposerPreferences()
     }
@@ -736,10 +775,6 @@ class MainActivity : Activity() {
     private fun buildSidebar() {
         drawer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            background = rounded(PANEL, dp(18), BORDER, dp(1))
-            visibility = View.GONE
-            elevation = dp(12).toFloat()
         }
         val brand = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -840,20 +875,75 @@ class MainActivity : Activity() {
         footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
         drawer.addView(footer, widthWrap())
 
-        val scrim = View(this).apply {
-            setBackgroundColor(Color.argb(140, 0, 0, 0))
-            visibility = View.GONE
-            alpha = 0f
-            setOnClickListener { setSidebarVisible(false) }
-        }
-        root.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
-        val drawerWidth = min(dp(304), (resources.displayMetrics.widthPixels * .82f).toInt()).coerceAtLeast(dp(260))
-        root.addView(drawer, FrameLayout.LayoutParams(drawerWidth, MATCH, Gravity.START))
-        drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
-        drawer.translationX = -drawerWidth.toFloat()
-        drawer.tag = scrim
+        sidebarHost = createEdgeDrawer(drawer, Gravity.START) { setSidebarVisible(false) }
         updateInsetAwareOverlays()
         renderSidebar(force = true)
+    }
+
+    private fun createEdgeDrawer(panel: LinearLayout, gravity: Int, close: () -> Unit): EdgeDrawerHost {
+        val overlay = FrameLayout(this).apply {
+            visibility = View.GONE
+            elevation = dp(16).toFloat()
+            clipChildren = false
+        }
+        val scrim = View(this).apply {
+            setBackgroundColor(Color.argb(112, 0, 0, 0))
+            alpha = 0f
+            setOnClickListener { close() }
+        }
+        overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
+        val availableWidth = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val panelWidth = min(dp(300), (availableWidth * .78f).toInt())
+            .coerceAtLeast(dp(248))
+            .coerceAtMost((availableWidth - dp(28)).coerceAtLeast(dp(220)))
+        panel.apply {
+            background = ColorDrawable(PANEL)
+            elevation = dp(5).toFloat()
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
+        overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, gravity))
+        root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+        return EdgeDrawerHost(overlay, scrim, panel, gravity).also { applyEdgeDrawerProgress(it, 0f, false) }
+    }
+
+    private fun applyEdgeDrawerInsets(host: EdgeDrawerHost?) {
+        host ?: return
+        val isStart = host.gravity == Gravity.START
+        host.panel.setPadding(
+            dp(12) + if (isStart) systemInsetLeft else 0,
+            dp(6) + systemInsetTop,
+            dp(12) + if (isStart) 0 else systemInsetRight,
+            dp(6) + systemInsetBottom,
+        )
+    }
+
+    private fun applyEdgeDrawerProgress(host: EdgeDrawerHost, progress: Float, requestedVisible: Boolean) {
+        val clamped = progress.coerceIn(0f, 1f)
+        val width = host.panel.width.takeIf { it > 0 } ?: host.panel.layoutParams?.width ?: dp(280)
+        val direction = if (host.gravity == Gravity.START) -1f else 1f
+        host.panel.translationX = direction * width * (1f - clamped)
+        host.scrim.alpha = clamped
+        if (clamped > .001f) host.overlay.visibility = View.VISIBLE
+        else if (!requestedVisible) host.overlay.visibility = View.GONE
+    }
+
+    private fun edgeDrawerAnimator(
+        host: EdgeDrawerHost,
+        from: Float,
+        to: Float,
+        requestedVisible: () -> Boolean,
+        update: (Float) -> Unit,
+        finished: () -> Unit,
+    ): ValueAnimator = ValueAnimator.ofFloat(from, to).apply {
+        duration = 190L
+        interpolator = DecelerateInterpolator()
+        addUpdateListener { update(it.animatedValue as Float) }
+        addListener(object : android.animation.AnimatorListenerAdapter() {
+            override fun onAnimationEnd(animation: android.animation.Animator) {
+                if (!requestedVisible() && to <= .001f) host.overlay.visibility = View.GONE
+                finished()
+            }
+        })
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
@@ -983,6 +1073,7 @@ class MainActivity : Activity() {
 
     private fun setSidebarVisible(visible: Boolean) {
         if (!::drawer.isInitialized) return
+        val host = sidebarHost ?: return
         if (visible && workspaceVisible) setWorkspaceVisible(false)
         sidebarVisible = visible
         if (visible) renderSidebar()
@@ -991,48 +1082,21 @@ class MainActivity : Activity() {
         val target = if (visible) 1f else 0f
         if (start == target) {
             updateSidebarProgress(target)
-            if (!visible) {
-                drawer.visibility = View.GONE
-                (drawer.tag as? View)?.visibility = View.GONE
-            }
+            if (!visible) host.overlay.visibility = View.GONE
             return
         }
-        if (visible) {
-            drawer.visibility = View.VISIBLE
-            (drawer.tag as? View)?.visibility = View.VISIBLE
-        }
-        sidebarAnimator = ValueAnimator.ofFloat(start, target).apply {
-            duration = 190L
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { updateSidebarProgress(it.animatedValue as Float) }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    if (!sidebarVisible && sidebarProgress <= 0.001f) {
-                        drawer.visibility = View.GONE
-                        (drawer.tag as? View)?.visibility = View.GONE
-                    }
-                    sidebarAnimator = null
-                    if (sidebarRenderDirty && !sidebarGestureActive) renderSidebar(force = true)
-                    flushDeferredMessageRender()
-                }
-            })
-            start()
-        }
+        if (visible) host.overlay.visibility = View.VISIBLE
+        sidebarAnimator = edgeDrawerAnimator(host, start, target, { sidebarVisible }, ::updateSidebarProgress) {
+            sidebarAnimator = null
+            if (sidebarRenderDirty && !sidebarGestureActive) renderSidebar(force = true)
+            flushDeferredMessageRender()
+        }.also { it.start() }
     }
 
     private fun updateSidebarProgress(progress: Float) {
         sidebarProgress = progress.coerceIn(0f, 1f)
-        if (!::drawer.isInitialized) return
-        val width = drawer.width.takeIf { it > 0 } ?: drawer.layoutParams?.width ?: dp(300)
-        drawer.translationX = -width * (1f - sidebarProgress)
-        val scrim = drawer.tag as? View ?: return
-        scrim.alpha = sidebarProgress
-        if (sidebarProgress > 0.001f) {
-            drawer.visibility = View.VISIBLE
-            scrim.visibility = View.VISIBLE
-        } else if (!sidebarVisible) {
-            scrim.visibility = View.GONE
-        }
+        val host = sidebarHost ?: return
+        applyEdgeDrawerProgress(host, sidebarProgress, sidebarVisible)
     }
 
     private inner class ChatRootLayout(context: Context) : FrameLayout(context) {
@@ -1113,8 +1177,7 @@ class MainActivity : Activity() {
                 sidebarAnimator?.cancel()
                 sidebarAnimator = null
                 if (opens) {
-                    drawer.visibility = View.VISIBLE
-                    (drawer.tag as? View)?.visibility = View.VISIBLE
+                    sidebarHost?.overlay?.visibility = View.VISIBLE
                 }
             }
 
@@ -1262,16 +1325,25 @@ class MainActivity : Activity() {
         .mapNotNull { threads.optJSONObject(it) }
         .firstOrNull { it.optString("id") == id }
 
-    private fun selectThread(thread: JSONObject) {
+    private fun selectThread(thread: JSONObject, eagerDiskCache: Boolean = false) {
         val id = thread.optString("id")
         if (id.isBlank()) return
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
+        val memoryHistory = historyMemoryCache[id]
+        val diskHistory = if (eagerDiskCache && existingHistory == null && memoryHistory == null) {
+            readThreadHistoryCache(id, MAX_EAGER_HISTORY_CACHE_BYTES)
+        } else null
         persistCurrentDraft()
         activeThreadId = id
-        activeThread = existingHistory ?: thread
+        activeThread = existingHistory ?: memoryHistory ?: diskHistory?.first ?: thread
+        if (diskHistory != null) {
+            historyMemoryCache[id] = diskHistory.first
+            diskHistory.second.takeIf { it.isNotBlank() }?.let { syncRevisions.putIfAbsent(id, it) }
+        }
         workspaceLoadedPath = null
         workspaceLoadingPath = null
-        historyLoadingThreadId = if ((activeThread?.optJSONArray("turns")?.length() ?: 0) > 0) null else id
+        val hasCachedHistory = activeThread?.optJSONArray("turns") != null
+        historyLoadingThreadId = if (hasCachedHistory) null else id
         historyLoadError = null
         historySelectionGeneration += 1
         visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
@@ -1285,7 +1357,7 @@ class MainActivity : Activity() {
         renderSidebar(force = true)
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         renderMessages(true)
-        loadThreadHistoryCacheThenRefresh(id)
+        if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
         refreshQueue(true)
         socket?.send(JSONObject().put("type", "thread.subscribe").put("thread_id", id).toString())
     }
@@ -1299,6 +1371,7 @@ class MainActivity : Activity() {
                 val cachedThread = cached?.first
                 if (cachedThread != null) {
                     if ((activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) activeThread = cachedThread
+                    historyMemoryCache[threadId] = cachedThread
                     cached.second?.takeIf { it.isNotBlank() }?.let { syncRevisions.putIfAbsent(threadId, it) }
                     historyLoadingThreadId = null
                     historyLoadError = null
@@ -1321,10 +1394,13 @@ class MainActivity : Activity() {
         return File(historyCacheDirectory(), "$digest.json.gz")
     }
 
-    private fun readThreadHistoryCache(threadId: String): Pair<JSONObject, String>? {
+    private fun readThreadHistoryCache(
+        threadId: String,
+        maxCompressedBytes: Long = MAX_SINGLE_HISTORY_CACHE_BYTES,
+    ): Pair<JSONObject, String>? {
         return try {
             val file = historyCacheFile(threadId)
-            if (!file.isFile || file.length() <= 0L || file.length() > MAX_SINGLE_HISTORY_CACHE_BYTES) return null
+            if (!file.isFile || file.length() <= 0L || file.length() > maxCompressedBytes) return null
             val json = GZIPInputStream(FileInputStream(file)).use { input -> readHistoryCachePayload(input) } ?: return null
             val wrapper = JSONObject(String(json, StandardCharsets.UTF_8))
             val thread = wrapper.optJSONObject("thread") ?: return null
@@ -1342,8 +1418,11 @@ class MainActivity : Activity() {
             var threadSnapshot = historyCacheSnapshot(thread, null)
             if (!jsonFitsHistoryCache(threadSnapshot)) {
                 partial = true
-                threadSnapshot = historyCacheSnapshot(thread, DEFAULT_VISIBLE_HISTORY_TURNS)
-                if (!jsonFitsHistoryCache(threadSnapshot)) return
+                val fallbackLimits = listOf(DEFAULT_VISIBLE_HISTORY_TURNS, 6, 3, 1).distinct()
+                threadSnapshot = fallbackLimits.asSequence()
+                    .map { limit -> historyCacheSnapshot(thread, limit) }
+                    .firstOrNull(::jsonFitsHistoryCache)
+                    ?: return
             }
             val directory = historyCacheDirectory()
             if (!directory.exists() && !directory.mkdirs()) return
@@ -1520,6 +1599,7 @@ class MainActivity : Activity() {
                     if (activeThreadId != threadId) return@post
                     if (newRevision != null) syncRevisions[threadId] = newRevision
                     activeThread = resolved
+                    historyMemoryCache[threadId] = resolved
                     historyLoadingThreadId = null
                     historyLoadError = null
                     running = isThreadRunning(resolved)
@@ -1680,7 +1760,9 @@ class MainActivity : Activity() {
                             }
                         } == true
                         if (messageText(item, "user").isNotBlank() || hasImage) {
-                            messages += "user" to shallowCopyObject(item).put("_turnId", turnId)
+                            messages += "user" to shallowCopyObject(item)
+                                .put("_turnId", turnId)
+                                .put("_displayTime", messageTime(item, turn, false))
                         }
                         assistantInTurn = null
                     }
@@ -1690,6 +1772,7 @@ class MainActivity : Activity() {
                             val message = assistantInTurn ?: shallowCopyObject(item)
                                 .put("_turnId", turnId)
                                 .put("_duration", turn.optLong("durationMs", 0))
+                                .put("_displayTime", messageTime(item, turn, true))
                                 .put("_activityTimeline", JSONArray())
                                 .also {
                                     assistantTextBuilders[it] = StringBuilder()
@@ -1842,10 +1925,21 @@ class MainActivity : Activity() {
                 if (role == "user") background = rounded(USER_BUBBLE, dp(12))
             }
             if (role == "assistant") {
-                val name = label(if (currentMode == "claude-code") "Claude" else "Codex", 11, MUTED, true).apply {
-                    maxWidth = (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120))
+                val meta = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
                 }
-                bubble.addView(name, widthWrap())
+                meta.addView(
+                    label(if (currentMode == "claude-code") "Claude" else "Codex", 11, MUTED, true),
+                    LinearLayout.LayoutParams(WRAP, WRAP),
+                )
+                item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
+                    meta.addView(
+                        label(displayTime, 9, MUTED).apply { setPadding(dp(7), 0, 0, 0) },
+                        LinearLayout.LayoutParams(WRAP, WRAP),
+                    )
+                }
+                bubble.addView(meta, LinearLayout.LayoutParams((maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), WRAP))
             }
             val text = messageText(item, role)
             val hasImage = item.optJSONArray("content")?.let { parts ->
@@ -1868,10 +1962,12 @@ class MainActivity : Activity() {
                 bubble.addView(content, widthWrap())
             }
             addMessageImages(bubble, item)
-            val time = item.optString("createdAt").ifBlank { item.optString("timestamp") }
-            if (time.isNotBlank()) bubble.addView(label(time.take(16).replace('T', ' '), 9, MUTED).apply {
-                maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
-            }, widthWrap())
+            if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
+                bubble.addView(label(displayTime, 9, MUTED).apply {
+                    gravity = Gravity.END
+                    setPadding(0, dp(3), 0, 0)
+                }, LinearLayout.LayoutParams((maxBubbleWidth - dp(22)).coerceAtLeast(dp(120)), WRAP))
+            }
             row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
             val turnId = item.optString("_turnId")
             row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
@@ -2390,7 +2486,8 @@ class MainActivity : Activity() {
             chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
             if (card.childCount > 1) card.removeViews(1, card.childCount - 1)
             if (expanded) {
-                entries.take(8).forEach { item ->
+                val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                entries.forEach { item ->
                     val line = RelativeLayout(this).apply {
                         gravity = Gravity.CENTER_VERTICAL
                         setPadding(dp(21), dp(3), 0, dp(3))
@@ -2417,11 +2514,33 @@ class MainActivity : Activity() {
                         addRule(RelativeLayout.START_OF, stats.id)
                         marginEnd = if (item.additions > 0 || item.deletions > 0) dp(8) else 0
                     })
-                    card.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
+                    rows.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
                 }
-                if (entries.size > 8) {
-                    card.addView(label("另外 ${entries.size - 8} 个文件", 10, MUTED).apply { setPadding(dp(21), dp(3), 0, 0) }, widthWrap())
+                val listHeight = min(dp(252), (entries.size * dp(28)).coerceAtLeast(dp(28)))
+                var previousY = 0f
+                val scroll = ScrollView(this).apply {
+                    isVerticalScrollBarEnabled = false
+                    overScrollMode = View.OVER_SCROLL_NEVER
+                    isNestedScrollingEnabled = true
+                    addView(rows, FrameLayout.LayoutParams(MATCH, WRAP))
+                    setOnTouchListener { view, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> {
+                                previousY = event.y
+                                view.parent?.requestDisallowInterceptTouchEvent(true)
+                            }
+                            MotionEvent.ACTION_MOVE -> {
+                                val movingDown = event.y > previousY
+                                previousY = event.y
+                                val canConsume = canScrollVertically(if (movingDown) -1 else 1)
+                                view.parent?.requestDisallowInterceptTouchEvent(canConsume)
+                            }
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                        false
+                    }
                 }
+                card.addView(scroll, LinearLayout.LayoutParams(MATCH, listHeight).apply { topMargin = dp(3) })
             }
         }
         heading.setOnClickListener {
@@ -2481,6 +2600,18 @@ class MainActivity : Activity() {
             val text = item.optString("text").ifBlank { item.optString("requestText") }
             card.addView(label("${index + 1}.  ${text.ifBlank { "（附件消息）" }}", 12, TEXT).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
+            }, widthWrap())
+            val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
+            val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
+            val rawEffort = item.optString(if (claudeQueueItem) "claudeEffort" else "effort")
+            val queuedModel = if (rawModel.isBlank() || rawModel == "default") "默认模型"
+                else if (claudeQueueItem) claudeModelLabel(rawModel) else modelLabel(rawModel)
+            val queuedEffort = if (rawEffort.isBlank() || rawEffort == "default") "默认"
+                else effortLabel(rawEffort)
+            card.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
+                setPadding(0, dp(4), 0, 0)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
             }, widthWrap())
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
             controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply { setPadding(dp(6), dp(6), dp(6), dp(6)) }, LinearLayout.LayoutParams(dp(29), dp(29)).apply { rightMargin = dp(4) })
@@ -2831,7 +2962,12 @@ class MainActivity : Activity() {
 
     private fun showChoicePopup(anchor: View, title: String, choices: List<Pair<String, String>>, selected: String?, onChoice: (String) -> Unit) {
         preferencePopup?.dismiss()
-        val maxHeight = min(dp(244), (root.height - dp(20)).coerceAtLeast(dp(142)))
+        val anchorLocation = IntArray(2)
+        val rootLocation = IntArray(2)
+        anchor.getLocationOnScreen(anchorLocation)
+        root.getLocationOnScreen(rootLocation)
+        val availableAbove = anchorLocation[1] - rootLocation[1] - systemInsetTop - dp(11)
+        val maxHeight = min(dp(244), availableAbove.coerceAtLeast(dp(118)))
         val menuHeight = min(dp(32) + choices.size * dp(32), maxHeight)
         val menu = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2874,22 +3010,25 @@ class MainActivity : Activity() {
             addView(options, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         menu.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        val popup = PopupWindow(menu, min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210))), menuHeight, true).apply {
+        val popupWidth = min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210)))
+        val popup = PopupWindow(menu, popupWidth, menuHeight, false).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             elevation = dp(12).toFloat()
+            isTouchable = true
             isOutsideTouchable = true
             isClippingEnabled = true
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
             setOnDismissListener { if (preferencePopup === this) preferencePopup = null }
         }
         preferencePopup = popup
-        val anchorLocation = IntArray(2)
-        val rootLocation = IntArray(2)
-        anchor.getLocationOnScreen(anchorLocation)
-        root.getLocationOnScreen(rootLocation)
-        val popupWidth = min(dp(260), (root.width - dp(20)).coerceAtLeast(dp(210)))
-        val popupX = (anchorLocation[0] - rootLocation[0]).coerceIn(dp(10), (root.width - popupWidth - dp(10)).coerceAtLeast(dp(10)))
-        val popupY = (anchorLocation[1] - rootLocation[1] - menuHeight - dp(5)).coerceAtLeast(dp(6))
-        popup.showAtLocation(root, Gravity.TOP or Gravity.START, popupX, popupY)
+        val x = (anchorLocation[0] - rootLocation[0])
+            .coerceIn(dp(10), (root.width - popupWidth - dp(10)).coerceAtLeast(dp(10)))
+        val anchorTop = anchorLocation[1] - rootLocation[1]
+        val above = anchorTop - menuHeight - dp(5)
+        val safeTop = systemInsetTop + dp(6)
+        val y = above.coerceAtLeast(safeTop)
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, x, y)
     }
 
     private data class MenuAction(val title: String, val icon: String, val destructive: Boolean = false)
@@ -3195,6 +3334,9 @@ class MainActivity : Activity() {
         sidebarVisible = false
         sidebarProgress = 0f
         sidebarRenderDirty = true
+        closeTerminal()
+        sidebarHost = null
+        workspaceHost = null
         workspaceOverlay?.visibility = View.GONE
         workspaceOverlay = null
         workspacePanel = null
@@ -3321,28 +3463,12 @@ class MainActivity : Activity() {
 
     private fun ensureWorkspaceBrowser() {
         if (workspaceOverlay != null) return
-        val overlay = FrameLayout(this).apply {
-            visibility = View.GONE
-            elevation = dp(16).toFloat()
-            clipChildren = false
-        }
-        val scrim = View(this).apply {
-            setBackgroundColor(Color.argb(48, 0, 0, 0))
-            alpha = 1f
-            setOnClickListener { setWorkspaceVisible(false) }
-        }
-        overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
-
-        val availableWidth = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-        val panelWidth = min(dp(360), (availableWidth * .78f).toInt()).coerceAtLeast(dp(260))
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(3), dp(10), dp(3))
-            background = rounded(PANEL, 0, BORDER, dp(1))
-            elevation = dp(4).toFloat()
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
-        overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, Gravity.END))
+        val host = createEdgeDrawer(panel, Gravity.END) { setWorkspaceVisible(false) }
+        val overlay = host.overlay
+        val scrim = host.scrim
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val pathTitle = label("文件", 14, TEXT, true).apply {
@@ -3373,7 +3499,7 @@ class MainActivity : Activity() {
         workspaceOverlay = overlay
         workspacePanel = panel
         workspaceScrim = scrim
-        root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
+        workspaceHost = host
         updateInsetAwareOverlays()
 
         val directoryChildren = linkedMapOf<String, JSONArray>()
@@ -3573,8 +3699,7 @@ class MainActivity : Activity() {
             sidebarAnimator = null
             sidebarVisible = false
             updateSidebarProgress(0f)
-            drawer.visibility = View.GONE
-            (drawer.tag as? View)?.visibility = View.GONE
+            sidebarHost?.overlay?.visibility = View.GONE
         }
         ensureWorkspaceBrowser()
         workspaceVisible = true
@@ -3590,10 +3715,13 @@ class MainActivity : Activity() {
     }
 
     private fun setWorkspaceVisible(visible: Boolean) {
-        if (visible) {
+        val host = workspaceHost ?: if (visible) {
             ensureWorkspaceBrowser()
+            workspaceHost ?: return
+        } else return
+        if (visible) {
             if (sidebarVisible) setSidebarVisible(false)
-            workspaceOverlay?.visibility = View.VISIBLE
+            host.overlay.visibility = View.VISIBLE
         }
         workspaceVisible = visible
         workspaceAnimator?.removeAllListeners()
@@ -3602,34 +3730,20 @@ class MainActivity : Activity() {
         val target = if (visible) 1f else 0f
         if (start == target) {
             updateWorkspaceProgress(target)
-            if (!visible) workspaceOverlay?.visibility = View.GONE
+            if (!visible) host.overlay.visibility = View.GONE
             finishWorkspaceMotion()
             return
         }
-        workspaceAnimator = ValueAnimator.ofFloat(start, target).apply {
-            duration = 190L
-            interpolator = DecelerateInterpolator()
-            addUpdateListener { updateWorkspaceProgress(it.animatedValue as Float) }
-            addListener(object : android.animation.AnimatorListenerAdapter() {
-                override fun onAnimationEnd(animation: android.animation.Animator) {
-                    if (!workspaceVisible && workspaceProgress <= .001f) workspaceOverlay?.visibility = View.GONE
-                    workspaceAnimator = null
-                    finishWorkspaceMotion()
-                }
-            })
-            start()
-        }
+        workspaceAnimator = edgeDrawerAnimator(host, start, target, { workspaceVisible }, ::updateWorkspaceProgress) {
+            workspaceAnimator = null
+            finishWorkspaceMotion()
+        }.also { it.start() }
     }
 
     private fun updateWorkspaceProgress(progress: Float) {
         workspaceProgress = progress.coerceIn(0f, 1f)
-        val panel = workspacePanel ?: return
-        val overlay = workspaceOverlay ?: return
-        val width = panel.width.takeIf { it > 0 } ?: panel.layoutParams?.width ?: dp(340)
-        panel.translationX = width * (1f - workspaceProgress)
-        workspaceScrim?.alpha = workspaceProgress
-        if (workspaceProgress > .001f) overlay.visibility = View.VISIBLE
-        else if (!workspaceVisible) overlay.visibility = View.GONE
+        val host = workspaceHost ?: return
+        applyEdgeDrawerProgress(host, workspaceProgress, workspaceVisible)
     }
 
     private fun finishWorkspaceMotion() {
@@ -4104,15 +4218,20 @@ class MainActivity : Activity() {
     }
 
     private fun showTerminal() {
-        val dialog = Dialog(this)
-        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        if (terminalOverlay != null) return
+        preferencePopup?.dismiss()
         terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(9))
-            background = rounded(if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17), dp(14), BORDER, dp(1))
+            setPadding(dp(10), 0, dp(10), dp(8))
+            setBackgroundColor(if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17))
+            elevation = dp(18).toFloat()
         }
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, systemInsetTop, 0, 0)
+        }
         header.addView(ImageView(this).apply {
             setImageResource(R.drawable.ic_terminal)
             imageTintList = ColorStateList.valueOf(SUBTLE)
@@ -4122,10 +4241,11 @@ class MainActivity : Activity() {
         header.addView(smallButton("复制到输入框") {
             val value = terminalOutput?.text?.toString().orEmpty()
             composerInput.append(value.takeLast(120_000))
-            dialog.dismiss()
+            closeTerminal()
         })
-        header.addView(iconButton("close", "关闭终端") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        shell.addView(header, widthWrap())
+        header.addView(iconButton("close", "关闭终端") { closeTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(1)))
+        shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(44)))
         terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
@@ -4170,68 +4290,65 @@ class MainActivity : Activity() {
         inputRow.addView(terminalDraftInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         inputRow.addView(smallButton("发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
         shell.addView(inputRow, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(5) })
-        dialog.setContentView(shell)
         terminalReady = false
         terminalImeVisible = false
-        dialog.setOnDismissListener {
-            terminalReady = false
-            terminalSocket?.close(1000, "closed")
-            terminalSocket = null
-            terminalDialog = null
-            terminalDraftInput = null
-            terminalOutput = null
-            terminalStatusView = null
+        terminalOverlay = shell
+        root.addView(shell, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.TOP))
+        terminalPositionListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionTerminalOverlay() }
+        terminalPositionListener?.let { listener ->
+            root.addOnLayoutChangeListener(listener)
+            composerDock.addOnLayoutChangeListener(listener)
         }
-        terminalDialog = dialog
-        dialog.show()
-        val baseTerminalHeight = (resources.displayMetrics.heightPixels * .72f).toInt()
-        dialog.window?.apply {
-            setBackgroundDrawableResource(android.R.color.transparent)
-            clearFlags(WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE)
-            setLayout(MATCH, baseTerminalHeight)
-            setGravity(Gravity.BOTTOM)
-            val adjustMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
-            } else {
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-            }
-            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or adjustMode)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                decorView.setOnApplyWindowInsetsListener { _, insets ->
-                    val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
-                    val systemTop = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout()).top
-                    val activityInsets = this@MainActivity.window.decorView.rootWindowInsets
-                    val activityImeBottom = activityInsets?.getInsets(WindowInsets.Type.ime())?.bottom ?: 0
-                    val activityTopInset = activityInsets
-                        ?.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.displayCutout())?.top ?: systemTop
-                    val imeVisible = insets.isVisible(WindowInsets.Type.ime())
-                    val wasImeVisible = terminalImeVisible
-                    terminalImeVisible = imeVisible
-                    terminalImeHiddenUntil = when {
-                        imeVisible -> 0L
-                        wasImeVisible -> System.currentTimeMillis() + 600L
-                        else -> terminalImeHiddenUntil
-                    }
-                    val keyboardBottom = if (imeVisible) maxOf(imeBottom, activityImeBottom) else 0
-                    val targetHeight = if (imeVisible) {
-                        (resources.displayMetrics.heightPixels - keyboardBottom - activityTopInset).coerceAtLeast(dp(260))
-                    } else baseTerminalHeight
-                    val targetGravity = if (imeVisible) Gravity.TOP or Gravity.CENTER_HORIZONTAL else Gravity.BOTTOM
-                    val targetY = if (imeVisible) systemTop else 0
-                    val windowAttributes = this@apply.attributes
-                    if (windowAttributes.height != targetHeight || windowAttributes.gravity != targetGravity || windowAttributes.y != targetY) {
-                        windowAttributes.width = MATCH
-                        windowAttributes.height = targetHeight
-                        windowAttributes.gravity = targetGravity
-                        windowAttributes.y = targetY
-                        this@apply.attributes = windowAttributes
-                    }
-                    insets
-                }
-                decorView.requestApplyInsets()
-            }
-        }
+        positionTerminalOverlay()
+        shell.post { positionTerminalOverlay() }
         connectTerminal()
+    }
+
+    private fun positionTerminalOverlay() {
+        val shell = terminalOverlay ?: return
+        if (!::root.isInitialized || !::composerDock.isInitialized || root.height <= 0) return
+        val rootLocation = IntArray(2)
+        val composerLocation = IntArray(2)
+        root.getLocationOnScreen(rootLocation)
+        composerDock.getLocationOnScreen(composerLocation)
+        val composerTop = (composerLocation[1] - rootLocation[1]).coerceIn(0, root.height)
+        (shell.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+            if (params.height != composerTop) {
+                params.width = MATCH
+                params.height = composerTop
+                params.gravity = Gravity.TOP
+                shell.layoutParams = params
+            }
+        }
+        (shell.getChildAt(0)?.layoutParams as? LinearLayout.LayoutParams)?.let { headerParams ->
+            val target = systemInsetTop + dp(44)
+            if (headerParams.height != target) {
+                headerParams.height = target
+                shell.getChildAt(0).layoutParams = headerParams
+            }
+        }
+        (shell.getChildAt(0) as? ViewGroup)?.setPadding(0, systemInsetTop, 0, 0)
+    }
+
+    private fun closeTerminal() {
+        val shell = terminalOverlay ?: return
+        terminalPositionListener?.let { listener ->
+            if (::root.isInitialized) root.removeOnLayoutChangeListener(listener)
+            if (::composerDock.isInitialized) composerDock.removeOnLayoutChangeListener(listener)
+        }
+        terminalPositionListener = null
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(terminalDraftInput?.windowToken, 0)
+        if (::root.isInitialized && shell.parent === root) root.removeView(shell)
+        terminalReady = false
+        terminalSocket?.close(1000, "closed")
+        terminalSocket = null
+        terminalOverlay = null
+        terminalDraftInput = null
+        terminalOutput = null
+        terminalStatusView = null
+        terminalImeVisible = false
+        terminalImeHiddenUntil = 0L
     }
 
     private fun connectTerminal() {
@@ -4282,7 +4399,7 @@ class MainActivity : Activity() {
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 terminalReady = false
-                if (terminalDialog?.isShowing == true) {
+                if (terminalOverlay != null) {
                     updateTerminalStatus("连接已关闭（$code）", WARNING)
                     appendTerminal("\n终端连接已关闭：${reason.ifBlank { "无原因说明" }}\n")
                 }
@@ -4657,6 +4774,49 @@ class MainActivity : Activity() {
         return pieces.joinToString("").ifBlank { item.optString("text") }
     }
 
+    private fun messageTime(item: JSONObject, turn: JSONObject, assistant: Boolean): String {
+        val itemValue = firstJsonValue(item, "createdAt", "created_at", "timestamp", "completedAt")
+        val turnValue = if (assistant) {
+            firstJsonValue(turn, "completedAt", "startedAt", "createdAt", "timestamp")
+        } else {
+            firstJsonValue(turn, "startedAt", "createdAt", "timestamp")
+        }
+        return formatMessageTime(itemValue ?: turnValue)
+    }
+
+    private fun firstJsonValue(value: JSONObject, vararg keys: String): Any? {
+        for (key in keys) {
+            val candidate = value.opt(key)
+            if (candidate != null && candidate !== JSONObject.NULL && candidate.toString().isNotBlank() && candidate.toString() != "null") return candidate
+        }
+        return null
+    }
+
+    private fun formatMessageTime(value: Any?): String {
+        val instant = try {
+            when (value) {
+                is Number -> {
+                    val raw = value.toLong()
+                    Instant.ofEpochMilli(if (raw in -9_999_999_999L..9_999_999_999L) raw * 1000L else raw)
+                }
+                is String -> {
+                    val text = value.trim()
+                    text.toLongOrNull()?.let { raw ->
+                        Instant.ofEpochMilli(if (raw in -9_999_999_999L..9_999_999_999L) raw * 1000L else raw)
+                    } ?: runCatching { Instant.parse(text) }.getOrNull()
+                        ?: runCatching { OffsetDateTime.parse(text).toInstant() }.getOrNull()
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        } ?: return ""
+        val zone = ZoneId.systemDefault()
+        val local = instant.atZone(zone)
+        val pattern = if (local.toLocalDate() == LocalDate.now(zone)) "HH:mm" else "MM-dd HH:mm"
+        return DateTimeFormatter.ofPattern(pattern, Locale.getDefault()).format(local)
+    }
+
     private fun flattenText(value: Any?): String = when (value) {
         is String -> value
         is JSONArray -> (0 until value.length()).mapNotNull { index ->
@@ -4942,6 +5102,7 @@ class MainActivity : Activity() {
         private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
         private val WHITESPACE_PATTERN = Regex("\\s+")
         private const val MAX_CACHED_THREADS = 32
+        private const val MAX_EAGER_HISTORY_CACHE_BYTES = 1024L * 1024L
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
         private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
         private const val MAX_HISTORY_CACHE_JSON_BYTES = 12 * 1024 * 1024
