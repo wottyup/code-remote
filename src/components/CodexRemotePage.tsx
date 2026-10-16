@@ -3435,6 +3435,7 @@ function RemoteChatPane({
               <Fragment key={message.id}>
                 <MessageBubble
                   message={message}
+                  assistantName={activeEngineLabel}
                   operations={operations}
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
@@ -5606,8 +5607,9 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
+  assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
@@ -5629,7 +5631,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, fileCha
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
-          {message.role === 'assistant' ? <strong>Codex</strong> : null}
+          {message.role === 'assistant' ? <strong>{assistantName}</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
