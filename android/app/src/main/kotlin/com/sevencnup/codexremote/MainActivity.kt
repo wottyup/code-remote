@@ -16,9 +16,16 @@ import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.ColorFilter
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -77,6 +84,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.lang.ref.WeakReference
 import java.security.MessageDigest
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -98,6 +106,98 @@ import kotlin.math.max
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.ceil
+import kotlin.math.roundToInt
+
+private class ThemeWallpaperDrawable(
+    private val bitmap: Bitmap,
+    private val baseColor: Int,
+    imageOpacity: Float,
+    private val cornerRadius: Float = 0f,
+    private val strokeColor: Int? = null,
+    private val strokeWidth: Float = 0f,
+    private val viewportWidth: Float = 0f,
+    private val viewportHeight: Float = 0f,
+    viewportOffsetX: Float = 0f,
+    viewportOffsetY: Float = 0f,
+) : Drawable() {
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private var imageOpacity = imageOpacity.coerceIn(0f, 1f)
+    private var drawableAlpha = 255
+    private var colorFilter: ColorFilter? = null
+    private var viewportOffsetX = viewportOffsetX
+    private var viewportOffsetY = viewportOffsetY
+
+    override fun draw(canvas: Canvas) {
+        val rect = RectF(bounds)
+        if (rect.isEmpty) return
+        val checkpoint = canvas.save()
+        if (cornerRadius > 0f) {
+            val clip = Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) }
+            canvas.clipPath(clip)
+        }
+
+        fillPaint.color = baseColor
+        fillPaint.alpha = Color.alpha(baseColor) * drawableAlpha / 255
+        fillPaint.colorFilter = colorFilter
+        canvas.drawRect(rect, fillPaint)
+
+        val renderWidth = viewportWidth.takeIf { it > 0f } ?: rect.width()
+        val renderHeight = viewportHeight.takeIf { it > 0f } ?: rect.height()
+        val scale = maxOf(renderWidth / bitmap.width, renderHeight / bitmap.height)
+        val imageWidth = bitmap.width * scale
+        val imageHeight = bitmap.height * scale
+        val centerX = renderWidth / 2f - viewportOffsetX
+        val centerY = renderHeight / 2f - viewportOffsetY
+        val imageRect = RectF(
+            centerX - imageWidth / 2f,
+            centerY - imageHeight / 2f,
+            centerX + imageWidth / 2f,
+            centerY + imageHeight / 2f,
+        )
+        imagePaint.alpha = (255f * imageOpacity * drawableAlpha / 255f).roundToInt()
+        imagePaint.colorFilter = colorFilter
+        canvas.drawBitmap(bitmap, null, imageRect, imagePaint)
+        canvas.restoreToCount(checkpoint)
+
+        if (strokeColor != null && strokeWidth > 0f) {
+            strokePaint.color = strokeColor
+            strokePaint.alpha = drawableAlpha
+            strokePaint.strokeWidth = strokeWidth
+            strokePaint.colorFilter = colorFilter
+            val inset = strokeWidth / 2f
+            val strokeRect = RectF(rect).apply { inset(inset, inset) }
+            if (cornerRadius > 0f) {
+                canvas.drawRoundRect(strokeRect, (cornerRadius - inset).coerceAtLeast(0f), (cornerRadius - inset).coerceAtLeast(0f), strokePaint)
+            } else canvas.drawRect(strokeRect, strokePaint)
+        }
+    }
+
+    fun setImageOpacity(value: Float) {
+        imageOpacity = value.coerceIn(0f, 1f)
+        invalidateSelf()
+    }
+
+    fun setViewportOffset(x: Float, y: Float) {
+        viewportOffsetX = x
+        viewportOffsetY = y
+        invalidateSelf()
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(filter: ColorFilter?) {
+        colorFilter = filter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Android graphics API")
+    override fun getOpacity(): Int = if (drawableAlpha == 255 && Color.alpha(baseColor) == 255) PixelFormat.OPAQUE else PixelFormat.TRANSLUCENT
+}
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
@@ -188,6 +288,11 @@ class MainActivity : Activity() {
 
     private var endpoint = ""
     private var token = ""
+    private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
+    private val connectionProfiles = mutableListOf<ConnectionProfile>()
+    private val connectionDraftFiles = mutableMapOf<String, MutableList<JSONObject>>()
+    private var activeConnectionId = ""
+    @Volatile private var connectionGeneration = 0L
     private var currentMode = "codex"
     private var activeThreadId: String? = null
     private var activeThread: JSONObject? = null
@@ -200,7 +305,7 @@ class MainActivity : Activity() {
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
     private var running = false
-    private var foreground = false
+    @Volatile private var foreground = false
     private var sidebarVisible = false
     private var sidebarProgress = 0f
     private var sidebarRenderDirty = true
@@ -247,7 +352,7 @@ class MainActivity : Activity() {
     private val queueEditPreferences = mutableMapOf<String, String?>()
     private var workspaceClipboard = mutableListOf<String>()
     private var workspaceClipboardMode = "copy"
-    private var socket: WebSocket? = null
+    @Volatile private var socket: WebSocket? = null
     private var socketConnected = false
     private var outstandingSocketPing: String? = null
     private var socketPingSentAt = 0L
@@ -282,12 +387,12 @@ class MainActivity : Activity() {
     private var completionNoticeDismissRunnable: Runnable? = null
     private var pendingCompletionNoticeThreadId: String? = null
     private var modeSwitchDismissRunnable: Runnable? = null
-    private var workspacePathNavigate: ((String) -> Unit)? = null
-    private var workspacePathInput: EditText? = null
     private var themeBackgroundPickerActive = false
     private var previewFontAdjustment: Int? = null
     private var previewBackgroundTransparency: Int? = null
-    private var themeBackgroundImageView: ImageView? = null
+    private val themeWallpaperDrawables = mutableListOf<WeakReference<ThemeWallpaperDrawable>>()
+    private var cachedThemeBackgroundUri: String? = null
+    private var cachedThemeBackgroundBitmap: Bitmap? = null
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
     private val historyMemoryCache = object : LinkedHashMap<String, JSONObject>(12, .75f, true) {
@@ -340,11 +445,12 @@ class MainActivity : Activity() {
         val scrim: View,
         val panel: LinearLayout,
         val gravity: Int,
+        val wallpaper: ThemeWallpaperDrawable?,
     )
 
     private val socketHeartbeatRunnable = object : Runnable {
         override fun run() {
-            if (!foreground || !socketConnected) return
+            if ((!foreground && !prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) || !socketConnected) return
             val now = System.currentTimeMillis()
             if (outstandingSocketPing != null && now - socketPingSentAt > 35_000) {
                 socket?.cancel()
@@ -404,11 +510,15 @@ class MainActivity : Activity() {
 
         endpoint = prefs.getString(KEY_ENDPOINT, "").orEmpty()
         token = prefs.getString(KEY_TOKEN, "").orEmpty()
+        loadConnectionProfiles()
         currentMode = prefs.getString(KEY_MODE, "codex") ?: "codex"
         if (endpoint.isNotBlank() && token.isNotBlank()) {
             openChatHome()
             verifySavedConnection(homeAlreadyOpen = true)
         } else showConnectionPage()
+        intent?.takeIf { it.hasExtra(EXTRA_THREAD_ID) }?.let { launchIntent ->
+            handler.post { navigateNotification(launchIntent) }
+        }
     }
 
     override fun onResume() {
@@ -446,8 +556,11 @@ class MainActivity : Activity() {
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
         activeThreadRefreshScheduled = false
-        handler.removeCallbacks(socketHeartbeatRunnable)
-        outstandingSocketPing = null
+        if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) {
+            handler.removeCallbacks(socketHeartbeatRunnable)
+            outstandingSocketPing = null
+        }
+        if (socket == null && prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) scheduleSocketReconnect()
         super.onPause()
     }
 
@@ -461,7 +574,9 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        socket?.close(1000, "activity destroyed")
+        val closingSocket = socket
+        socket = null
+        closingSocket?.close(1000, "activity destroyed")
         terminalSocket?.close(1000, "terminal closed")
         io.shutdownNow()
         super.onDestroy()
@@ -490,9 +605,95 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun loadConnectionProfiles() {
+        connectionProfiles.clear()
+        val saved = runCatching { JSONArray(prefs.getString(KEY_CONNECTION_PROFILES, "[]")) }.getOrDefault(JSONArray())
+        for (index in 0 until saved.length()) {
+            val entry = saved.optJSONObject(index) ?: continue
+            val id = entry.optString("id")
+            val address = entry.optString("endpoint")
+            if (id.isBlank() || address.isBlank()) continue
+            connectionProfiles += ConnectionProfile(id, entry.optString("name").ifBlank { connectionName(address) }, address, entry.optString("token"))
+        }
+        if (connectionProfiles.isEmpty() && endpoint.isNotBlank()) {
+            val legacy = ConnectionProfile(UUID.randomUUID().toString(), connectionName(endpoint), endpoint, token)
+            connectionProfiles += legacy
+            prefs.edit().putString(KEY_LEGACY_CONNECTION_ID, legacy.id).apply()
+        }
+        val requestedId = prefs.getString(KEY_ACTIVE_CONNECTION_ID, null)
+        val selected = connectionProfiles.firstOrNull { it.id == requestedId }
+            ?: connectionProfiles.firstOrNull { it.endpoint == endpoint }
+            ?: connectionProfiles.firstOrNull()
+        activeConnectionId = selected?.id.orEmpty()
+        if (selected != null) {
+            endpoint = selected.endpoint
+            token = selected.token
+            persistConnectionProfiles()
+        }
+    }
+
+    private fun connectionName(address: String): String = Uri.parse(address).authority?.takeIf { it.isNotBlank() } ?: address
+
+    private fun persistConnectionProfiles() {
+        val saved = JSONArray()
+        connectionProfiles.forEach { profile ->
+            saved.put(JSONObject().put("id", profile.id).put("name", profile.name)
+                .put("endpoint", profile.endpoint).put("token", profile.token))
+        }
+        prefs.edit().putString(KEY_CONNECTION_PROFILES, saved.toString())
+            .putString(KEY_ACTIVE_CONNECTION_ID, activeConnectionId)
+            .putString(KEY_ENDPOINT, endpoint).putString(KEY_TOKEN, token).apply()
+    }
+
+    private fun saveConnectionProfile(address: String, pairedToken: String, requestedName: String = ""): String {
+        val existingIndex = connectionProfiles.indexOfFirst { it.endpoint == address }
+        val previous = connectionProfiles.getOrNull(existingIndex)
+        val profile = ConnectionProfile(previous?.id ?: UUID.randomUUID().toString(),
+            requestedName.trim().ifBlank { previous?.name ?: connectionName(address) }, address, pairedToken)
+        if (existingIndex >= 0) connectionProfiles[existingIndex] = profile else connectionProfiles += profile
+        return profile.id
+    }
+
+    private fun updateActiveConnectionToken(newToken: String) {
+        token = newToken
+        val index = connectionProfiles.indexOfFirst { it.id == activeConnectionId }
+        if (index >= 0) connectionProfiles[index] = connectionProfiles[index].copy(token = newToken)
+        persistConnectionProfiles()
+    }
+
+    private fun switchConnection(profileId: String) {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先结束排队消息编辑"); return }
+        val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
+        if (profile.id == activeConnectionId && token == profile.token && ::composerInput.isInitialized) {
+            closeSettings()
+            return
+        }
+        persistCurrentDraft()
+        if (activeConnectionId.isNotBlank()) connectionDraftFiles[activeConnectionId] = selectedFiles.toMutableList()
+        connectionGeneration++
+        activeConnectionId = profile.id
+        endpoint = profile.endpoint
+        token = profile.token
+        selectedFiles = connectionDraftFiles[profile.id]?.toMutableList() ?: mutableListOf()
+        persistConnectionProfiles()
+        closeSettings()
+        pinnedThreadIds.clear()
+        historyMemoryCache.clear()
+        messageImageCache.evictAll()
+        threadReadsInFlight.clear()
+        pendingThreadReads.clear()
+        if (token.isBlank()) showConnectionPage("这个连接需要重新配对。") else openChatHome()
+    }
+
+    private fun connectionScopedKey(base: String): String =
+        if (activeConnectionId.isBlank() || activeConnectionId == prefs.getString(KEY_LEGACY_CONNECTION_ID, null)) base
+        else "${activeConnectionId}_$base"
+
+    private fun activeThreadStorageKey(mode: String): String = connectionScopedKey("$KEY_ACTIVE_THREAD_PREFIX$mode")
+
     private fun showConnectionPage(message: String? = null) {
-        themeBackgroundImageView = null
-        root = FrameLayout(this).apply { setBackgroundColor(DARK) }
+        root = FrameLayout(this)
+        installThemeBackground(root)
         val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
         val card = LinearLayout(this).apply {
@@ -511,6 +712,10 @@ class MainActivity : Activity() {
         card.addView(label("输入电脑网页地址和终端显示的匹配码。配对信息保存在本机，之后会自动重连。", 13, MUTED).apply {
             setLineSpacing(dp(2).toFloat(), 1.2f)
         }, widthWrap())
+
+        connectionProfiles.filter { it.token.isNotBlank() }.forEach { profile ->
+            card.addView(settingsActionRow("切换到 ${profile.name}", profile.endpoint) { switchConnection(profile.id) }, widthWrap())
+        }
 
         card.addView(label("电脑网页地址", 12, SUBTLE, true).apply { setPadding(0, dp(22), 0, dp(6)) }, widthWrap())
         val address = editField("http://192.168.x.x:4173", endpoint, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI)
@@ -552,10 +757,7 @@ class MainActivity : Activity() {
                     val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
                     val newToken = paired.getString("token")
                     handler.post {
-                        endpoint = normalized
-                        token = newToken
-                        prefs.edit().putString(KEY_ENDPOINT, endpoint).putString(KEY_TOKEN, token).apply()
-                        openChatHome()
+                        switchConnection(saveConnectionProfile(normalized, newToken))
                     }
                 } catch (error: Exception) {
                     handler.post {
@@ -572,19 +774,22 @@ class MainActivity : Activity() {
     }
 
     private fun verifySavedConnection(homeAlreadyOpen: Boolean = false) {
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                RemoteApi(endpoint, token).get("/api/v1/codex/status")
-                if (!homeAlreadyOpen) handler.post { openChatHome() }
+                api.get("/api/v1/codex/status")
+                if (!homeAlreadyOpen) handler.post { if (generation == connectionGeneration) openChatHome() }
             } catch (error: Exception) {
                 if (error is RemoteApiException && error.statusCode == 401) {
                     handler.post {
-                        prefs.edit().remove(KEY_TOKEN).apply()
-                        token = ""
+                        if (generation != connectionGeneration) return@post
+                        updateActiveConnectionToken("")
                         showConnectionPage(error.message ?: "配对已失效，请重新输入匹配码。")
                     }
                 } else {
                     handler.post {
+                        if (generation != connectionGeneration) return@post
                         if (!homeAlreadyOpen) openChatHome()
                         showStatus("电脑服务暂时无法连接，已保留配对信息，正在重试。")
                     }
@@ -604,6 +809,9 @@ class MainActivity : Activity() {
         threads = JSONArray()
         models = JSONArray()
         queuedMessages = JSONArray()
+        running = false
+        pendingApproval = null
+        pendingCompletionNoticeThreadId = null
         historyLoadingThreadId = null
         historyLoadError = null
         historySelectionGeneration += 1
@@ -626,6 +834,8 @@ class MainActivity : Activity() {
         workspaceRefresher = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
+        workspaceCurrentPath = ""
+        workspaceRootPath = ""
         workspaceGestureActive = false
         workspacePendingRender = null
         closeTerminal()
@@ -635,7 +845,7 @@ class MainActivity : Activity() {
         deferredMessageTurnIds.clear()
         syncRevisions.clear()
         renderHome()
-        prefs.getString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", null)
+        prefs.getString(activeThreadStorageKey(currentMode), null)
             ?.takeIf { it.isNotBlank() }
             ?.let { cachedId ->
                 selectThread(
@@ -776,7 +986,8 @@ class MainActivity : Activity() {
     }
 
     private fun renderHome() {
-        root = ChatRootLayout(this).apply { setBackgroundColor(DARK); isFocusableInTouchMode = true }
+        root = ChatRootLayout(this).apply { isFocusableInTouchMode = true }
+        installThemeBackground(root)
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
@@ -797,8 +1008,10 @@ class MainActivity : Activity() {
         }
         messageList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
-        val chatArea = FrameLayout(this).apply { clipChildren = false }
-        installThemeBackground(chatArea)
+        val chatArea = FrameLayout(this).apply {
+            clipChildren = false
+            setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
+        }
         chatArea.addView(messageScroll, FrameLayout.LayoutParams(MATCH, MATCH))
         welcomeTitleView = label("", 18, TEXT, true).apply {
             gravity = Gravity.CENTER
@@ -854,7 +1067,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(2), dp(8), dp(2))
-            setBackgroundColor(DARK)
+            background = ColorDrawable(Color.TRANSPARENT)
         }
         val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }
         headerView.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
@@ -989,12 +1202,12 @@ class MainActivity : Activity() {
         composerDock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(2), dp(12), dp(12))
-            background = rounded(DARK, dp(18))
+            background = ColorDrawable(Color.TRANSPARENT)
         }
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            background = rounded(PANEL, dp(18), BORDER, dp(1))
+            background = if (themeName == "custom") rounded(colorWithAlpha(OPAQUE_PANEL, .2f), dp(18), BORDER, dp(1)) else rounded(PANEL, dp(18), BORDER, dp(1))
         }
         queueEditBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1209,16 +1422,19 @@ class MainActivity : Activity() {
         val panelWidth = min(dp(300), (availableWidth * .78f).toInt())
             .coerceAtLeast(dp(248))
             .coerceAtMost((availableWidth - dp(28)).coerceAtLeast(dp(220)))
+        val wallpaper = wallpaperBackground(
+            OPAQUE_PANEL,
+            viewportWidthPx = availableWidth,
+            viewportHeightPx = root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels,
+        ) as? ThemeWallpaperDrawable
         panel.apply {
-            // Drawers sit above a live chat view. Keep their base fully opaque so
-            // streamed message updates cannot show through custom-theme surfaces.
-            background = ColorDrawable(OPAQUE_PANEL)
+            background = wallpaper ?: ColorDrawable(OPAQUE_PANEL)
             elevation = dp(5).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, gravity))
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
-        return EdgeDrawerHost(overlay, scrim, panel, gravity).also { applyEdgeDrawerProgress(it, 0f, false) }
+        return EdgeDrawerHost(overlay, scrim, panel, gravity, wallpaper).also { applyEdgeDrawerProgress(it, 0f, false) }
     }
 
     private fun applyEdgeDrawerInsets(host: EdgeDrawerHost?) {
@@ -1237,6 +1453,12 @@ class MainActivity : Activity() {
         val width = host.panel.width.takeIf { it > 0 } ?: host.panel.layoutParams?.width ?: dp(280)
         val direction = if (host.gravity == Gravity.START) -1f else 1f
         host.panel.translationX = direction * width * (1f - clamped)
+        val screenX = if (host.gravity == Gravity.START) {
+            host.panel.translationX
+        } else {
+            root.width - width + host.panel.translationX
+        }
+        host.wallpaper?.setViewportOffset(screenX, host.panel.top.toFloat() + host.panel.translationY)
         host.scrim.alpha = clamped
         if (clamped > .001f) host.overlay.visibility = View.VISIBLE
         else if (!requestedVisible) host.overlay.visibility = View.GONE
@@ -1636,26 +1858,34 @@ class MainActivity : Activity() {
     }
 
     private fun refreshRuntime() {
-        runApi({ RemoteApi(endpoint, token).get("/api/v1/codex/status") }, { result ->
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
+        runApi({ api.get("/api/v1/codex/status") }, { result ->
+            if (generation != connectionGeneration) return@runApi
             runtime = result
             renderHeader()
-        }, { error -> showStatus(error.message ?: "Codex 连接失败") })
+        }, { error -> if (generation == connectionGeneration) showStatus(error.message ?: "Codex 连接失败") })
     }
 
     private fun refreshModels() {
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                val result = RemoteApi(endpoint, token).getArray("/api/v1/codex/models")
-                handler.post { models = result; updateComposerPreferences() }
+                val result = api.getArray("/api/v1/codex/models")
+                handler.post { if (generation == connectionGeneration) { models = result; updateComposerPreferences() } }
             } catch (_: Exception) { }
         }
     }
 
     private fun refreshPins() {
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                val result = RemoteApi(endpoint, token).get("/api/v1/codex/pins").optJSONArray("thread_ids") ?: JSONArray()
+                val result = api.get("/api/v1/codex/pins").optJSONArray("thread_ids") ?: JSONArray()
                 handler.post {
+                    if (generation != connectionGeneration) return@post
                     pinnedThreadIds.clear()
                     for (index in 0 until result.length()) pinnedThreadIds += result.optString(index)
                     renderSidebar(force = true)
@@ -1665,26 +1895,34 @@ class MainActivity : Activity() {
     }
 
     private fun refreshClaudeStatus() {
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                val result = RemoteApi(endpoint, token).get("/api/v1/claude/status")
+                val result = api.get("/api/v1/claude/status")
                 handler.post {
+                    if (generation != connectionGeneration) return@post
                     claudeAvailable = result.optBoolean("available")
                     claudeStatusMessage = result.optString("error").ifBlank { "Claude Code 不可用" }
                     renderHeader()
                 }
             } catch (error: Exception) {
-                handler.post { claudeAvailable = false; claudeStatusMessage = error.message ?: "Claude Code 不可用" }
+                handler.post { if (generation == connectionGeneration) {
+                    claudeAvailable = false; claudeStatusMessage = error.message ?: "Claude Code 不可用"
+                } }
             }
         }
     }
 
     private fun refreshThreads(showErrors: Boolean) {
         if (token.isBlank()) return
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                val result = RemoteApi(endpoint, token).getArray("/api/v1/codex/threads")
+                val result = api.getArray("/api/v1/codex/threads")
                 handler.post {
+                    if (generation != connectionGeneration) return@post
                     threads = result
                     pendingCompletionNoticeThreadId?.let { completedId ->
                         pendingCompletionNoticeThreadId = null
@@ -1710,14 +1948,14 @@ class MainActivity : Activity() {
                     } else if (showErrors && result.length() > 0) {
                         val first = (0 until result.length()).mapNotNull { result.optJSONObject(it) }
                             .filter { it.optString("engine", "codex") == currentMode }
-                            .firstOrNull { it.optString("id") == prefs.getString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", null) }
+                            .firstOrNull { it.optString("id") == prefs.getString(activeThreadStorageKey(currentMode), null) }
                             ?: (0 until result.length()).mapNotNull { result.optJSONObject(it) }
                                 .firstOrNull { it.optString("engine", "codex") == currentMode }
                         if (first != null) selectThread(first)
                     }
                 }
             } catch (error: Exception) {
-                if (showErrors) handler.post { showStatus(error.message ?: "读取对话列表失败") }
+                if (showErrors) handler.post { if (generation == connectionGeneration) showStatus(error.message ?: "读取对话列表失败") }
             }
         }
     }
@@ -1750,7 +1988,7 @@ class MainActivity : Activity() {
         historySelectionGeneration += 1
         visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
-        prefs.edit().putString(KEY_MODE, currentMode).putString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", id).apply()
+        prefs.edit().putString(KEY_MODE, currentMode).putString(activeThreadStorageKey(currentMode), id).apply()
         running = isThreadRunning(activeThread ?: thread)
         pendingApproval = null
         queuedMessages = JSONArray()
@@ -1766,10 +2004,12 @@ class MainActivity : Activity() {
 
     private fun loadThreadHistoryCacheThenRefresh(threadId: String) {
         val generation = historySelectionGeneration
+        val connection = connectionGeneration
         io.execute {
+            if (connection != connectionGeneration) return@execute
             val cached = readThreadHistoryCache(threadId)
             handler.post {
-                if (activeThreadId != threadId || historySelectionGeneration != generation) return@post
+                if (connection != connectionGeneration || activeThreadId != threadId || historySelectionGeneration != generation) return@post
                 val cachedThread = cached?.first
                 if (cachedThread != null) {
                     if ((activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) activeThread = cachedThread
@@ -1790,8 +2030,10 @@ class MainActivity : Activity() {
 
     private fun historyCacheDirectory(): File = File(filesDir, "thread_history_cache_v2")
 
-    private fun historyCacheFile(threadId: String): File {
-        val digest = MessageDigest.getInstance("SHA-256").digest(threadId.toByteArray(StandardCharsets.UTF_8))
+    private fun historyCacheFile(threadId: String, profileId: String = activeConnectionId): File {
+        val cacheId = if (profileId.isBlank() || profileId == prefs.getString(KEY_LEGACY_CONNECTION_ID, null)) threadId
+            else "${profileId}_$threadId"
+        val digest = MessageDigest.getInstance("SHA-256").digest(cacheId.toByteArray(StandardCharsets.UTF_8))
             .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
         return File(historyCacheDirectory(), "$digest.json.gz")
     }
@@ -1814,7 +2056,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun writeThreadHistoryCache(threadId: String, thread: JSONObject, revision: String?) {
+    private fun writeThreadHistoryCache(threadId: String, thread: JSONObject, revision: String?, profileId: String = activeConnectionId) {
         try {
             var partial = false
             var threadSnapshot = historyCacheSnapshot(thread, null)
@@ -1828,7 +2070,7 @@ class MainActivity : Activity() {
             }
             val directory = historyCacheDirectory()
             if (!directory.exists() && !directory.mkdirs()) return
-            val file = historyCacheFile(threadId)
+            val file = historyCacheFile(threadId, profileId)
             val temporary = File(directory, "${file.name}.tmp")
             temporary.delete()
             val wrapper = JSONObject()
@@ -1948,6 +2190,9 @@ class MainActivity : Activity() {
 
     private fun refreshActiveThread(showLoading: Boolean, fullHistory: Boolean = false) {
         val threadId = activeThreadId ?: return
+        val connection = connectionGeneration
+        val profileId = activeConnectionId
+        val api = RemoteApi(endpoint, token)
         if (showLoading && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) {
             historyLoadingThreadId = threadId
             historyLoadError = null
@@ -1965,7 +2210,6 @@ class MainActivity : Activity() {
         )
         io.execute {
             try {
-                val api = RemoteApi(endpoint, token)
                 val encodedId = RemoteApi.encodePath(threadId)
                 val lightweightQuery = buildString {
                     append("?include_images=false")
@@ -1973,6 +2217,7 @@ class MainActivity : Activity() {
                     if (boundedHistory) append("&tail_turns=$DEFAULT_VISIBLE_HISTORY_TURNS")
                 }
                 var response = api.get("/api/v1/codex/threads/$encodedId$lightweightQuery")
+                if (connection != connectionGeneration) return@execute
                 val changedTurnIds = if (revision != null) {
                     val changedTurns = response.optJSONArray("turns") ?: JSONArray()
                     (0 until changedTurns.length()).mapNotNull { changedTurns.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
@@ -1995,8 +2240,10 @@ class MainActivity : Activity() {
                 val sync = resolved.optJSONObject("historySync") ?: response.optJSONObject("historySync")
                 val newRevision = sync?.optString("revision")?.takeIf { !it.isNullOrBlank() && it != "null" }
                 if (resolved.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
-                writeThreadHistoryCache(threadId, resolved, newRevision)
+                if (connection != connectionGeneration) return@execute
+                writeThreadHistoryCache(threadId, resolved, newRevision, profileId)
                 handler.post {
+                    if (connection != connectionGeneration) return@post
                     finishThreadRead(threadId)
                     if (activeThreadId != threadId) return@post
                     if (newRevision != null) syncRevisions[threadId] = newRevision
@@ -2010,6 +2257,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 handler.post {
+                    if (connection != connectionGeneration) return@post
                     finishThreadRead(threadId)
                     if (activeThreadId != threadId) return@post
                     historyLoadingThreadId = null
@@ -2099,17 +2347,19 @@ class MainActivity : Activity() {
 
     private fun refreshQueue(showErrors: Boolean) {
         val threadId = activeThreadId ?: return
+        val connection = connectionGeneration
+        val api = RemoteApi(endpoint, token)
         io.execute {
             try {
-                val response = RemoteApi(endpoint, token).get("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}")
+                val response = api.get("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}")
                 val next = response.optJSONArray("queue") ?: JSONArray()
                 handler.post {
-                    if (activeThreadId != threadId) return@post
+                    if (connection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = next
                     renderQueue()
                 }
             } catch (error: Exception) {
-                if (showErrors) handler.post { showStatus(error.message ?: "读取排队消息失败") }
+                if (showErrors) handler.post { if (connection == connectionGeneration) showStatus(error.message ?: "读取排队消息失败") }
             }
         }
     }
@@ -3497,7 +3747,7 @@ class MainActivity : Activity() {
             val id = thread.optString("id")
             runApi({ RemoteApi(endpoint, token).delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }, {
                 if (activeThreadId == id) {
-                    prefs.edit().remove("$KEY_ACTIVE_THREAD_PREFIX$currentMode").apply()
+                    prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
                     activeThreadId = null
                     activeThread = null
                     historyLoadingThreadId = null
@@ -3531,12 +3781,12 @@ class MainActivity : Activity() {
 
     private fun preference(key: String): String? {
         if (queueEditItem != null && queueEditPreferences.containsKey(key)) return queueEditPreferences[key]
-        val scope = activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT
+        val scope = connectionScopedKey(activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT)
         val value = prefs.getString("$scope:$key", null)
         return value?.takeIf { it.isNotBlank() && it != "null" }
     }
 
-    private fun draftStorageKey(): String = "draft_${currentMode}_${activeThreadId ?: "new"}"
+    private fun draftStorageKey(): String = connectionScopedKey("draft_${currentMode}_${activeThreadId ?: "new"}")
 
     private fun persistCurrentDraft() {
         if (::composerInput.isInitialized && queueEditItem == null) prefs.edit().putString(draftStorageKey(), composerInput.text.toString()).apply()
@@ -3548,7 +3798,7 @@ class MainActivity : Activity() {
             updateComposerPreferences()
             return
         }
-        val scope = activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT
+        val scope = connectionScopedKey(activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT)
         prefs.edit().putString("$scope:$key", value ?: "").apply()
         updateComposerPreferences()
     }
@@ -3795,12 +4045,12 @@ class MainActivity : Activity() {
         if (sidebarVisible) setSidebarVisible(false)
 
         val overlay = FrameLayout(this).apply {
-            setBackgroundColor(DARK)
+            background = wallpaperBackground(DARK)
             elevation = dp(16).toFloat()
         }
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(DARK)
+            setBackgroundColor(Color.TRANSPARENT)
             tag = TAG_INSET_CONTENT
         }
         val header = LinearLayout(this).apply {
@@ -3834,7 +4084,7 @@ class MainActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(13), dp(14), dp(12))
-                background = rounded(blendColors(OPAQUE_PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
+                background = rounded(if (themeName == "custom") colorWithAlpha(blendColors(OPAQUE_PANEL, settingsAccent, .035f), .72f) else blendColors(OPAQUE_PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
             }
             card.addView(label(title, 14, TEXT, true), widthWrap())
             card.addView(label(description, 11, MUTED).apply {
@@ -3858,7 +4108,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
                 background = if (selected) {
-                    rounded(blendColors(OPAQUE_PANEL, settingsAccent, .2f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
+                    rounded(colorWithAlpha(blendColors(OPAQUE_PANEL, settingsAccent, .2f), if (themeName == "custom") .38f else 1f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
                 } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
                 isFocusable = false
@@ -3899,7 +4149,7 @@ class MainActivity : Activity() {
             val transparencyLabel = label("$transparencyValue%", 12, ACCENT, true)
             transparencyHeader.addView(transparencyLabel, widthWrap())
             transparencyRow.addView(transparencyHeader, widthWrap())
-            transparencyRow.addView(label("数值越高，聊天区域的背景图片越透明。", 10, MUTED), widthWrap())
+            transparencyRow.addView(label("数值越高，全局背景图片越透明。", 10, MUTED), widthWrap())
             val transparencySeek = SeekBar(this).apply {
                 max = 100
                 progress = transparencyValue
@@ -3978,26 +4228,50 @@ class MainActivity : Activity() {
         notificationRow.addView(settingsNotificationButton, LinearLayout.LayoutParams(dp(72), WRAP))
         notifications.addView(notificationRow, LinearLayout.LayoutParams(MATCH, dp(40)))
         refreshSettingsNotificationControl()
-
-        val connection = section("连接", "连接到运行 Codex Remote 的电脑。")
-        connection.addView(label(if (runtime.optBoolean("connected", false)) "电脑服务已连接" else "电脑服务等待连接", 12, if (runtime.optBoolean("connected", false)) ACCENT else MUTED, true), widthWrap())
-        connection.addView(label(endpoint, 11, MUTED).apply {
-            setPadding(0, dp(5), 0, dp(7))
-            maxLines = 2
-            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-            setTextIsSelectable(true)
+        notifications.addView(settingsActionRow("发送测试通知", "检查手机是否允许 APP 显示通知") {
+            if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) showSystemNotification(activeThreadId, test = true)
+            else showToast("请先开启系统通知")
         }, widthWrap())
-        connection.addView(settingsActionRow("更改电脑地址", "输入新地址和电脑端匹配码") {
+
+        val connection = section("连接", "保存多台电脑，点击即可切换。")
+        connection.addView(label(if (runtime.optBoolean("connected", false)) "电脑服务已连接" else "电脑服务等待连接", 12, if (runtime.optBoolean("connected", false)) ACCENT else MUTED, true), widthWrap())
+        connectionProfiles.toList().forEach { profile ->
+            val selected = profile.id == activeConnectionId
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(7), dp(5), dp(2), dp(5))
+                background = if (selected) rounded(colorWithAlpha(ACCENT, .13f), dp(10)) else rounded(PANEL_INSET, dp(10))
+            }
+            val copy = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                isClickable = true
+                contentDescription = if (selected) "当前连接 ${profile.name}" else "切换到 ${profile.name}"
+                setOnClickListener { switchConnection(profile.id) }
+            }
+            copy.addView(label(if (selected) "${profile.name} · 当前" else profile.name, 12, if (selected) ACCENT else TEXT, selected), widthWrap())
+            copy.addView(label(profile.endpoint, 10, MUTED).apply {
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            }, widthWrap())
+            row.addView(copy, LinearLayout.LayoutParams(0, dp(42), 1f))
+            row.addView(iconButton("edit", "重命名 ${profile.name}") { renameConnection(profile.id) }.apply {
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            }, LinearLayout.LayoutParams(dp(38), dp(38)))
+            row.addView(iconButton("delete", "删除 ${profile.name}") { removeConnection(profile.id) }.apply {
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+            }, LinearLayout.LayoutParams(dp(38), dp(38)))
+            connection.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(6) })
+        }
+        connection.addView(settingsActionRow("添加电脑连接", "输入地址和匹配码") {
             showChangeConnectionDialog()
         }, widthWrap())
 
-        val account = section("本机配对", "管理本机保存的电脑连接凭据。")
-        account.addView(settingsActionRow("解除配对", "清除此设备保存的配对信息") {
-            showConfirmDialog("解除配对", "清除此设备保存的电脑连接信息？", "解除", destructive = true) {
+        val account = section("本机配对", "管理当前电脑的配对凭据。")
+        account.addView(settingsActionRow("解除当前连接配对", "其它已保存的连接仍可切换") {
+            showConfirmDialog("解除配对", "解除当前电脑的配对？", "解除", destructive = true) {
                 runApi({ RemoteApi(endpoint, token).post("/api/v1/unpair") }, {
                     closeSettings()
-                    prefs.edit().remove(KEY_TOKEN).apply()
-                    token = ""
+                    updateActiveConnectionToken("")
                     socket?.close(1000, "unpaired")
                     showConnectionPage()
                 })
@@ -4176,6 +4450,7 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
+        window.decorView.setBackgroundColor(DARK)
         window.decorView.systemUiVisibility = if (lightTheme) {
             View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         } else 0
@@ -4209,15 +4484,65 @@ class MainActivity : Activity() {
         showToast("系统通知已开启")
     }
 
+    private fun renameConnection(profileId: String) {
+        val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
+        val input = editField("连接名称", profile.name, InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+        showInputDialog("重命名连接", input, "保存") {
+            val name = input.text.toString().trim()
+            if (name.isBlank()) { showToast("请输入连接名称"); return@showInputDialog false }
+            val index = connectionProfiles.indexOfFirst { it.id == profileId }
+            if (index >= 0) {
+                connectionProfiles[index] = connectionProfiles[index].copy(name = name)
+                persistConnectionProfiles()
+                closeSettings()
+                showSettings()
+            }
+            true
+        }
+    }
+
+    private fun removeConnection(profileId: String) {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先结束排队消息编辑"); return }
+        val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
+        showConfirmDialog("删除连接", "从本机删除“${profile.name}”的连接配置？", "删除", destructive = true) {
+            connectionProfiles.removeAll { it.id == profileId }
+            connectionDraftFiles.remove(profileId)
+            if (profileId == activeConnectionId) {
+                val next = connectionProfiles.firstOrNull { it.token.isNotBlank() } ?: connectionProfiles.firstOrNull()
+                if (next != null) switchConnection(next.id)
+                else {
+                    persistCurrentDraft()
+                    connectionGeneration++
+                    activeConnectionId = ""
+                    endpoint = ""
+                    token = ""
+                    persistConnectionProfiles()
+                    closeSettings()
+                    socket?.close(1000, "connection removed")
+                    socket = null
+                    showConnectionPage()
+                }
+            } else {
+                persistConnectionProfiles()
+                closeSettings()
+                showSettings()
+            }
+        }
+    }
+
     private fun showChangeConnectionDialog() {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先结束排队消息编辑"); return }
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val form = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(0, dp(11), 0, 0)
         }
-        val address = editField("电脑网页地址", endpoint, InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
+        val name = editField("连接名称（可选）", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+        val address = editField("电脑网页地址", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
         val code = editField("电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
+        form.addView(label("连接名称", 11, SUBTLE, true), widthWrap())
+        form.addView(name, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
         form.addView(label("电脑网页地址", 11, SUBTLE, true), widthWrap())
         form.addView(address, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
         form.addView(label("匹配码", 11, SUBTLE, true), widthWrap())
@@ -4227,7 +4552,7 @@ class MainActivity : Activity() {
             setPadding(dp(18), dp(15), dp(18), dp(12))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
-        card.addView(label("更改电脑地址", 15, TEXT, true), widthWrap())
+        card.addView(label("添加电脑连接", 15, TEXT, true), widthWrap())
         card.addView(form, LinearLayout.LayoutParams(MATCH, WRAP))
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
@@ -4250,11 +4575,7 @@ class MainActivity : Activity() {
                         val newToken = paired.getString("token")
                         handler.post {
                             dialog.dismiss()
-                            endpoint = normalized
-                            token = newToken
-                            prefs.edit().putString(KEY_ENDPOINT, endpoint).putString(KEY_TOKEN, token).apply()
-                            closeSettings()
-                            openChatHome()
+                            switchConnection(saveConnectionProfile(normalized, newToken, name.text.toString()))
                         }
                     } catch (error: Exception) {
                         handler.post {
@@ -4279,8 +4600,7 @@ class MainActivity : Activity() {
             val code = codeInput.text.toString().trim()
             if (code.isBlank()) return@showInputDialog false
             runApi({ RemoteApi(endpoint).post("/api/v1/pair", JSONObject().put("code", code)).getString("token") }, { newToken ->
-                token = newToken
-                prefs.edit().putString(KEY_TOKEN, newToken).apply()
+                updateActiveConnectionToken(newToken)
                 openChatHome()
             })
             true
@@ -4296,7 +4616,7 @@ class MainActivity : Activity() {
 
     private fun ensureWorkspaceBrowser() {
         if (workspaceOverlay != null) return
-        var manualRoot = prefs.getString(KEY_WORKSPACE_EXPLORER_ROOT, null)?.takeIf { it.isNotBlank() }
+        var manualRoot = prefs.getString(connectionScopedKey(KEY_WORKSPACE_EXPLORER_ROOT), null)?.takeIf { it.isNotBlank() }
         val expandedDirectories = linkedSetOf<String>()
         val directoryChildren = linkedMapOf<String, JSONArray>()
         val directoryTruncated = mutableSetOf<String>()
@@ -4341,7 +4661,7 @@ class MainActivity : Activity() {
             (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
                 ?.hideSoftInputFromWindow(rootInput.windowToken, 0)
             manualRoot = nextRoot
-            prefs.edit().putString(KEY_WORKSPACE_EXPLORER_ROOT, nextRoot).apply()
+            prefs.edit().putString(connectionScopedKey(KEY_WORKSPACE_EXPLORER_ROOT), nextRoot).apply()
             rootInput.setText(nextRoot)
             workspaceRootPath = ""
             workspaceCurrentPath = ""
@@ -4355,7 +4675,7 @@ class MainActivity : Activity() {
             (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
                 ?.hideSoftInputFromWindow(rootInput.windowToken, 0)
             manualRoot = null
-            prefs.edit().remove(KEY_WORKSPACE_EXPLORER_ROOT).apply()
+            prefs.edit().remove(connectionScopedKey(KEY_WORKSPACE_EXPLORER_ROOT)).apply()
             rootInput.setText((currentCwd() ?: runtime.optString("workspace")).takeUnless { it == "null" }.orEmpty())
             workspaceRootPath = ""
             workspaceCurrentPath = ""
@@ -5170,7 +5490,11 @@ class MainActivity : Activity() {
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), 0, dp(10), dp(8))
-            setBackgroundColor(if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17))
+            background = wallpaperBackground(
+                if (themeName == "custom") OPAQUE_PANEL else if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17),
+                viewportWidthPx = root.width,
+                viewportHeightPx = root.height,
+            )
             elevation = dp(18).toFloat()
         }
         val header = LinearLayout(this).apply {
@@ -5526,17 +5850,30 @@ class MainActivity : Activity() {
         return JSONObject().put("kind", "document").put("name", name).put("content", text)
     }
 
+    private fun scheduleSocketReconnect() {
+        val generation = connectionGeneration
+        val delay = if (foreground) 1_200L else 5_000L
+        if (!foreground && !prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) return
+        handler.postDelayed({
+            if (generation == connectionGeneration && token.isNotBlank() &&
+                (foreground || prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false))) connectSocket()
+        }, delay)
+    }
+
     private fun connectSocket() {
         if (token.isBlank() || socket != null) return
+        val generation = connectionGeneration
+        val socketToken = token
         val url = endpoint.replaceFirst(Regex("^http"), "ws") + "/api/v1/codex/ws"
         val request = Request.Builder().url(url).build()
         socket = socketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (socket !== webSocket || generation != connectionGeneration) { webSocket.close(1000, "connection changed"); return }
                 socketConnected = true
                 outstandingSocketPing = null
                 lastSocketActivityAt = System.currentTimeMillis()
                 webSocket.send(JSONObject().put("type", "codex.client.hello").put("protocol_version", 1)
-                    .put("token", token).put("thread_id", activeThreadId).toString())
+                    .put("token", socketToken).put("thread_id", activeThreadId).toString())
                 handler.post {
                     handler.removeCallbacks(socketHeartbeatRunnable)
                     handler.postDelayed(socketHeartbeatRunnable, 20_000)
@@ -5545,6 +5882,7 @@ class MainActivity : Activity() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (socket !== webSocket || generation != connectionGeneration) return
                 lastSocketActivityAt = System.currentTimeMillis()
                 try { handleSocketEvent(JSONObject(text)) } catch (_: JSONException) { }
             }
@@ -5557,7 +5895,7 @@ class MainActivity : Activity() {
                     handler.removeCallbacks(socketHeartbeatRunnable)
                     handler.post {
                         renderHeader()
-                        if (foreground) handler.postDelayed({ if (foreground) connectSocket() }, 1200)
+                        scheduleSocketReconnect()
                     }
                 }
             }
@@ -5568,7 +5906,7 @@ class MainActivity : Activity() {
                     socket = null
                     outstandingSocketPing = null
                     handler.removeCallbacks(socketHeartbeatRunnable)
-                    handler.post { renderHeader(); if (foreground) handler.postDelayed({ if (foreground) connectSocket() }, 1200) }
+                    handler.post { renderHeader(); scheduleSocketReconnect() }
                 }
             }
         })
@@ -5650,27 +5988,39 @@ class MainActivity : Activity() {
         renderMessages(false)
     }
 
-    private fun showSystemNotification(threadId: String) {
+    private fun showSystemNotification(threadId: String?, test: Boolean = false) {
         if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) return
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            handler.post { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS) }
+            if (test) handler.post { showToast("手机尚未授予通知权限") }
             return
         }
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        if (!manager.areNotificationsEnabled()) {
+            if (test) handler.post { showToast("手机系统已关闭此 APP 的通知") }
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Codex Remote", NotificationManager.IMPORTANCE_DEFAULT))
+            if (manager.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
+                if (test) handler.post { showToast("手机系统已关闭此通知类别") }
+                return
+            }
         }
-        val thread = findThread(threadId)
-        val title = thread?.optString("name")?.takeIf { !it.isNullOrBlank() && it != "null" } ?: "Codex 回复完成"
+        val thread = threadId?.let(::findThread)
+        val profileName = connectionProfiles.firstOrNull { it.id == activeConnectionId }?.name ?: "CAR"
+        val threadName = thread?.optString("name")?.takeIf { !it.isNullOrBlank() && it != "null" } ?: "回复完成"
+        val title = if (test) "$profileName · 测试通知" else "$profileName · $threadName"
         val intent = Intent(this, MainActivity::class.java).apply {
-            action = "$packageName.NOTIFICATION.$threadId"
-            putExtra(EXTRA_THREAD_ID, threadId)
+            action = "$packageName.NOTIFICATION.$activeConnectionId.$threadId"
+            if (threadId != null) putExtra(EXTRA_THREAD_ID, threadId)
+            putExtra(EXTRA_CONNECTION_ID, activeConnectionId)
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         }
-        val pending = PendingIntent.getActivity(this, threadId.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val notificationId = "$activeConnectionId:${threadId ?: "test"}".hashCode()
+        val pending = PendingIntent.getActivity(this, notificationId, intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val notification = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
-        manager.notify(threadId.hashCode(), notification.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title)
-            .setContentText("有一条新的回复。打开查看对话。")
+        manager.notify(notificationId, notification.setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(title)
+            .setContentText(if (test) "通知通道已就绪。" else "有一条新的回复。打开查看对话。")
             .setContentIntent(pending).setAutoCancel(true).build())
     }
 
@@ -5686,21 +6036,26 @@ class MainActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        handler.post { navigateNotification(intent) }
+    }
+
+    private fun navigateNotification(intent: Intent) {
         val threadId = intent.getStringExtra(EXTRA_THREAD_ID) ?: return
-        handler.post {
-            val thread = findThread(threadId)
-            if (thread != null) selectThread(thread) else {
-                activeThreadId = threadId
-                activeThread = null
-                historyLoadingThreadId = threadId
-                historyLoadError = null
-                historySelectionGeneration += 1
-                queuedMessages = JSONArray()
-                running = false
-                renderMessages(false)
-                renderQueue()
-                loadThreadHistoryCacheThenRefresh(threadId)
-            }
+        val targetConnection = intent.getStringExtra(EXTRA_CONNECTION_ID)
+        if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) switchConnection(targetConnection)
+        if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) return
+        val thread = findThread(threadId)
+        if (thread != null) selectThread(thread) else {
+            activeThreadId = threadId
+            activeThread = null
+            historyLoadingThreadId = threadId
+            historyLoadError = null
+            historySelectionGeneration += 1
+            queuedMessages = JSONArray()
+            running = false
+            renderMessages(false)
+            renderQueue()
+            loadThreadHistoryCacheThenRefresh(threadId)
         }
     }
 
@@ -6144,7 +6499,12 @@ class MainActivity : Activity() {
 
     private fun updateCustomThemeBackgroundPreview() {
         if (themeName != "custom") return
-        themeBackgroundImageView?.alpha = (100 - backgroundTransparency()) / 100f
+        val opacity = (100 - backgroundTransparency()) / 100f
+        val iterator = themeWallpaperDrawables.iterator()
+        while (iterator.hasNext()) {
+            val drawable = iterator.next().get()
+            if (drawable == null) iterator.remove() else drawable.setImageOpacity(opacity)
+        }
     }
 
     private fun colorWithAlpha(color: Int, opacity: Float): Int = Color.argb(
@@ -6165,25 +6525,54 @@ class MainActivity : Activity() {
         )
     }
 
-    private fun installThemeBackground(target: FrameLayout) {
-        themeBackgroundImageView = null
-        if (themeName != "custom") {
-            target.setBackgroundColor(DARK)
-            return
+    private fun wallpaperBackground(
+        baseColor: Int,
+        cornerRadiusDp: Int = 0,
+        strokeColor: Int? = null,
+        strokeWidthDp: Int = 0,
+        viewportWidthPx: Int = 0,
+        viewportHeightPx: Int = 0,
+        viewportOffsetXpx: Float = 0f,
+        viewportOffsetYpx: Float = 0f,
+    ): Drawable {
+        val bitmap = if (themeName == "custom") customThemeBackgroundBitmap() else null
+        if (bitmap != null) {
+            return ThemeWallpaperDrawable(
+                bitmap = bitmap,
+                baseColor = baseColor,
+                imageOpacity = (100 - backgroundTransparency()) / 100f,
+                cornerRadius = dp(cornerRadiusDp).toFloat(),
+                strokeColor = strokeColor,
+                strokeWidth = dp(strokeWidthDp).toFloat(),
+                viewportWidth = viewportWidthPx.toFloat(),
+                viewportHeight = viewportHeightPx.toFloat(),
+                viewportOffsetX = viewportOffsetXpx,
+                viewportOffsetY = viewportOffsetYpx,
+            ).also { themeWallpaperDrawables += WeakReference(it) }
         }
-        target.setBackgroundColor(DARK)
+        return if (cornerRadiusDp > 0 || strokeColor != null && strokeWidthDp > 0) {
+            rounded(baseColor, dp(cornerRadiusDp), strokeColor, dp(strokeWidthDp))
+        } else ColorDrawable(baseColor)
+    }
+
+    private fun customThemeBackgroundBitmap(): Bitmap? {
         val storedUri = prefs.getString(KEY_CUSTOM_BACKGROUND_IMAGE, null).orEmpty()
-        if (storedUri.isBlank()) return
-        val image = runCatching { decodeThemeBackground(Uri.parse(storedUri)) }.getOrNull() ?: return
-        val opacity = (100 - backgroundTransparency()) / 100f
-        val imageView = ImageView(this).apply {
-            setImageBitmap(image)
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            alpha = opacity
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        if (storedUri.isBlank()) {
+            cachedThemeBackgroundUri = null
+            cachedThemeBackgroundBitmap = null
+            return null
         }
-        themeBackgroundImageView = imageView
-        target.addView(imageView, FrameLayout.LayoutParams(MATCH, MATCH))
+        if (cachedThemeBackgroundUri == storedUri) {
+            return cachedThemeBackgroundBitmap?.takeUnless { it.isRecycled }
+        }
+        val bitmap = runCatching { decodeThemeBackground(Uri.parse(storedUri)) }.getOrNull()
+        cachedThemeBackgroundUri = storedUri
+        cachedThemeBackgroundBitmap = bitmap
+        return bitmap
+    }
+
+    private fun installThemeBackground(target: FrameLayout) {
+        target.background = wallpaperBackground(DARK)
     }
 
     private fun decodeThemeBackground(uri: Uri): Bitmap? {
@@ -6210,6 +6599,9 @@ class MainActivity : Activity() {
         private const val PREFS = "codex_remote_mobile"
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_TOKEN = "token"
+        private const val KEY_CONNECTION_PROFILES = "native_connection_profiles"
+        private const val KEY_ACTIVE_CONNECTION_ID = "native_active_connection_id"
+        private const val KEY_LEGACY_CONNECTION_ID = "native_legacy_connection_id"
         private const val KEY_MODE = "native_engine_mode"
         private const val KEY_ACTIVE_THREAD_PREFIX = "native_active_thread_"
         private const val KEY_FONT_SIZE = "native_chat_font_size"
@@ -6228,10 +6620,12 @@ class MainActivity : Activity() {
         private const val REQUEST_THEME_BACKGROUND = 4103
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
+        private const val EXTRA_CONNECTION_ID = "notification_connection_id"
         private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
         private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
         private const val KEY_LIGHT_THEME = "native_light_theme"
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
+        private const val KEY_WORKSPACE_EXPLORER_ROOT = "native_workspace_explorer_root"
         private const val TAG_INSET_CONTENT = "inset_content"
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
