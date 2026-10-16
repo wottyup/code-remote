@@ -3441,13 +3441,13 @@ class MainActivity : Activity() {
             details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
-            }, LinearLayout.LayoutParams(0, dp(28), 1f))
+            }, LinearLayout.LayoutParams(0, dp(44), 1f))
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
-            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(2) })
-            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { rightMargin = dp(2) })
-            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(28), dp(28)))
-            details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(28)))
-            card.addView(details, LinearLayout.LayoutParams(MATCH, dp(28)))
+            controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
+            controls.addView(iconButton("arrow_up", "立即发送") { sendQueuedNow(item) }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
+            controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }, LinearLayout.LayoutParams(dp(44), dp(44)))
+            details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
+            card.addView(details, LinearLayout.LayoutParams(MATCH, dp(44)))
             queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         }
     }

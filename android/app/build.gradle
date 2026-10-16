@@ -11,8 +11,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 211
-        versionName '0.23.0-dev.6'
+        versionCode 212
+        versionName '0.23.0-dev.7'
     }
 
     buildFeatures {
