@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.15.0-dev.2] - 修复 Windows 后台任务空闲时停止 Codex Remote
+
 ## [0.15.0-dev.1] - 支持 Windows 后台驻留、登录自启并修复 Codex 状态目录权限
 
 ## [0.14.1-dev.2] - 修复移动端聊天代码块横向溢出
