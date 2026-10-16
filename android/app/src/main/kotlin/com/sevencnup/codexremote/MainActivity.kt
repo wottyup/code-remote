@@ -4164,9 +4164,75 @@ class MainActivity : Activity() {
 
     private fun ensureWorkspaceBrowser() {
         if (workspaceOverlay != null) return
+        var manualRoot = prefs.getString(KEY_WORKSPACE_EXPLORER_ROOT, null)?.takeIf { it.isNotBlank() }
         val expandedDirectories = linkedSetOf<String>()
+        val directoryChildren = linkedMapOf<String, JSONArray>()
+        val directoryTruncated = mutableSetOf<String>()
+        val directoryErrors = mutableMapOf<String, String>()
+        val loadingDirectories = mutableSetOf<String>()
+        var loadedWorkspaceKey: String? = null
         lateinit var renderTree: () -> Unit
         lateinit var dispatchRender: () -> Unit
+        lateinit var loadDirectory: (String, Boolean) -> Unit
+        lateinit var addDirectoryRows: (String, Int) -> Unit
+        lateinit var rootInput: EditText
+
+        fun currentCwd(): String? = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+        fun browsingCwd(): String? = manualRoot ?: currentCwd()
+            ?: runtime.optString("workspace").takeIf { it.isNotBlank() && it != "null" }
+        fun workspaceKey(): String = browsingCwd() ?: "<default>"
+        fun absolutePath(relativePath: String): String = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
+            .filter { it.isNotBlank() }.joinToString("/")
+        fun parentDirectory(value: String): String {
+            val drive = Regex("^([a-zA-Z]:)[/\\\\]*(.*)$").matchEntire(value)
+            val separator = if (value.contains('\\') && !value.contains('/')) '\\' else '/'
+            if (drive != null) {
+                val segments = drive.groupValues[2].split(Regex("[/\\\\]+"))
+                    .filter { it.isNotBlank() }.toMutableList()
+                if (segments.isEmpty()) return "${drive.groupValues[1]}$separator"
+                segments.removeAt(segments.lastIndex)
+                return "${drive.groupValues[1]}$separator${segments.joinToString(separator.toString())}"
+            }
+            val normalized = value.replace(Regex("[/\\\\]+$"), "")
+            if (normalized.isBlank()) return if (value.startsWith('\\')) "\\" else "/"
+            val lastSeparator = maxOf(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'))
+            if (lastSeparator < 0) return value
+            if (lastSeparator == 0) return normalized.substring(0, 1)
+            return normalized.substring(0, lastSeparator)
+        }
+        fun selectWorkspaceRoot(rawRoot: String?) {
+            val nextRoot = rawRoot?.trim()?.takeIf { it.isNotBlank() }
+            if (nextRoot == null) {
+                showToast("请输入目录路径")
+                return
+            }
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(rootInput.windowToken, 0)
+            manualRoot = nextRoot
+            prefs.edit().putString(KEY_WORKSPACE_EXPLORER_ROOT, nextRoot).apply()
+            rootInput.setText(nextRoot)
+            workspaceRootPath = ""
+            workspaceCurrentPath = ""
+            expandedDirectories.clear()
+            workspaceClipboard.clear()
+            workspaceClipboardMode = "copy"
+            workspaceLoadedPath = null
+            loadDirectory("*", false)
+        }
+        fun followChatWorkspaceRoot() {
+            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(rootInput.windowToken, 0)
+            manualRoot = null
+            prefs.edit().remove(KEY_WORKSPACE_EXPLORER_ROOT).apply()
+            rootInput.setText((currentCwd() ?: runtime.optString("workspace")).takeUnless { it == "null" }.orEmpty())
+            workspaceRootPath = ""
+            workspaceCurrentPath = ""
+            expandedDirectories.clear()
+            workspaceClipboard.clear()
+            workspaceClipboardMode = "copy"
+            workspaceLoadedPath = null
+            loadDirectory("*", false)
+        }
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -4183,38 +4249,46 @@ class MainActivity : Activity() {
         val refreshButton = sidebarIconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
         header.addView(refreshButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         val createButton = sidebarIconButton("add", "新建文件或文件夹") { }
-        createButton.setOnClickListener { showCreateEntry(createButton, workspaceCurrentPath) { workspaceRefresher?.invoke(workspaceCurrentPath) } }
+        createButton.setOnClickListener {
+            showCreateEntry(createButton, workspaceCurrentPath, browsingCwd()) {
+                workspaceRefresher?.invoke(workspaceCurrentPath)
+            }
+        }
         header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         header.addView(sidebarIconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
         panel.addView(header, widthWrap())
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val parentButton = sidebarIconButton("back", "返回上级目录或收起展开的文件夹") {
-            if (workspaceCurrentPath.isNotBlank()) {
-                handleWorkspaceBack()
-            } else if (expandedDirectories.isNotEmpty()) {
-                expandedDirectories.clear()
-                dispatchRender()
-            }
-        }
-        pathNavigation.addView(parentButton, LinearLayout.LayoutParams(dp(40), dp(40)))
-        val pathInput = editField("输入路径", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
+        rootInput = editField("输入服务端目录路径", manualRoot ?: currentCwd() ?: runtime.optString("workspace"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
             setSingleLine(true)
             textSize = adjustedTextSize(11)
             setTag(R.id.base_text_size, 11f)
             imeOptions = EditorInfo.IME_ACTION_GO
             setPadding(dp(8), 0, dp(7), 0)
             setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_GO) { workspacePathNavigate?.invoke(text.toString()); true } else false
+                if (action == EditorInfo.IME_ACTION_GO) { selectWorkspaceRoot(text.toString()); true } else false
             }
         }
-        pathNavigation.addView(pathInput, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(2) })
-        pathNavigation.addView(sidebarIconButton("open", "跳转到输入路径") {
-            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(pathInput.windowToken, 0)
-            workspacePathNavigate?.invoke(pathInput.text.toString())
-        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        pathNavigation.addView(rootInput, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(4) })
+        pathNavigation.addView(smallButton("打开") {
+            selectWorkspaceRoot(rootInput.text.toString())
+        }, LinearLayout.LayoutParams(WRAP, dp(30)))
         panel.addView(pathNavigation, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
-        workspacePathInput = pathInput
+
+        val parentButton = smallButton("↑ 上级") {
+            val currentRoot = workspaceRootPath.ifBlank { browsingCwd().orEmpty() }
+            val parent = parentDirectory(currentRoot)
+            if (currentRoot.isNotBlank() && parent != currentRoot) selectWorkspaceRoot(parent)
+        }
+        val followChatButton = smallButton("↻ 跟随聊天") { followChatWorkspaceRoot() }
+        val rootActions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(parentButton, LinearLayout.LayoutParams(WRAP, dp(30)))
+            addView(View(this@MainActivity), LinearLayout.LayoutParams(0, 1, 1f))
+            addView(followChatButton, LinearLayout.LayoutParams(WRAP, dp(30)))
+        }
+        panel.addView(rootActions, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
 
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
@@ -4225,7 +4299,9 @@ class MainActivity : Activity() {
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3); bottomMargin = dp(3) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
-        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries(workspaceCurrentPath) { workspaceRefresher?.invoke(workspaceCurrentPath) } })
+        footer.addView(smallButton("粘贴") {
+            pasteWorkspaceEntries(workspaceCurrentPath, browsingCwd()) { workspaceRefresher?.invoke(workspaceCurrentPath) }
+        })
         panel.addView(footer, widthWrap())
 
         workspaceOverlay = overlay
@@ -4234,49 +4310,10 @@ class MainActivity : Activity() {
         workspaceHost = host
         updateInsetAwareOverlays()
 
-        val directoryChildren = linkedMapOf<String, JSONArray>()
-        val directoryTruncated = mutableSetOf<String>()
-        val directoryErrors = mutableMapOf<String, String>()
-        val loadingDirectories = mutableSetOf<String>()
-        var loadedWorkspaceKey: String? = null
-        lateinit var loadDirectory: (String, Boolean) -> Unit
-        lateinit var addDirectoryRows: (String, Int) -> Unit
-
-        fun currentCwd(): String? = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-        fun workspaceKey(): String = currentCwd() ?: runtime.optString("workspace", "<default>")
-        fun parentPath(value: String): String = value.trim('/').substringBeforeLast('/', "")
         dispatchRender = {
             if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
             else renderTree()
         }
-        fun absolutePath(relativePath: String): String = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
-            .filter { it.isNotBlank() }.joinToString("/")
-        fun navigateToDirectory(rawPath: String) {
-            val input = rawPath.trim().replace('\\', '/')
-            val rootPath = workspaceRootPath.replace('\\', '/').trimEnd('/')
-            val windowsPath = Regex("^[a-zA-Z]:/").containsMatchIn(rootPath)
-            fun samePath(left: String, right: String): Boolean = if (windowsPath) left.equals(right, ignoreCase = true) else left == right
-            val relative = when {
-                input.isBlank() -> ""
-                rootPath.isNotBlank() && samePath(input.trimEnd('/'), rootPath) -> ""
-                rootPath.isNotBlank() && (if (windowsPath) input.startsWith("$rootPath/", ignoreCase = true) else input.startsWith("$rootPath/")) -> input.substring(rootPath.length + 1)
-                input.startsWith('/') || Regex("^[a-zA-Z]:/").containsMatchIn(input) -> {
-                    showToast("路径必须位于当前工作目录内")
-                    return
-                }
-                else -> input.trim('/')
-            }
-            val segments = relative.split('/').filter { it.isNotBlank() }
-            if (segments.any { it == "." || it == ".." }) {
-                showToast("路径不能越出当前工作目录")
-                return
-            }
-            workspaceCurrentPath = segments.joinToString("/")
-            workspacePathInput?.setText(absolutePath(workspaceCurrentPath))
-            if (directoryChildren.containsKey(workspaceCurrentPath)) dispatchRender()
-            else loadDirectory(workspaceCurrentPath, false)
-        }
-        workspacePathNavigate = ::navigateToDirectory
 
         addDirectoryRows = addRows@{ directoryPath, depth ->
             val children = directoryChildren[directoryPath] ?: return@addRows
@@ -4328,10 +4365,10 @@ class MainActivity : Activity() {
                             if (directoryChildren.containsKey(relativePath)) dispatchRender()
                             else loadDirectory(relativePath, false)
                         }
-                    } else showFilePreview(relativePath, currentCwd())
+                    } else showFilePreview(relativePath, browsingCwd())
                 }
                 row.setOnLongClickListener {
-                    showWorkspaceEntryActions(row, entry, currentCwd()) { changedDirectory ->
+                    showWorkspaceEntryActions(row, entry, browsingCwd()) { changedDirectory ->
                         loadDirectory(changedDirectory, true)
                     }
                     true
@@ -4368,11 +4405,14 @@ class MainActivity : Activity() {
             if (workspaceOverlay !== overlay) return@render
             val previousScrollY = scroll.scrollY
             val currentPath = workspaceCurrentPath
-            pathTitle.text = workspaceRootPath.ifBlank { currentCwd() ?: runtime.optString("workspace", "工作区") }
+            val displayedRoot = workspaceRootPath.ifBlank { browsingCwd().orEmpty() }
+            pathTitle.text = displayedRoot.ifBlank { "工作区" }
             if (currentPath.isNotBlank()) pathTitle.text = "$currentPath · ${pathTitle.text}"
-            if (!pathInput.hasFocus()) pathInput.setText(absolutePath(currentPath))
-            parentButton.isEnabled = currentPath.isNotBlank() || expandedDirectories.isNotEmpty()
+            if (!rootInput.hasFocus()) rootInput.setText(displayedRoot)
+            parentButton.isEnabled = displayedRoot.isNotBlank() && parentDirectory(displayedRoot) != displayedRoot
             parentButton.alpha = if (parentButton.isEnabled) 1f else .45f
+            followChatButton.isEnabled = manualRoot != null
+            followChatButton.alpha = if (followChatButton.isEnabled) 1f else .45f
             entries.removeAllViews()
             when {
                 currentPath in loadingDirectories && !directoryChildren.containsKey(currentPath) -> entries.addView(
@@ -4418,7 +4458,7 @@ class MainActivity : Activity() {
             directoryErrors.remove(path)
             workspaceLoadingPath = path
             dispatchRender()
-            val cwd = currentCwd()
+            val cwd = browsingCwd()
             val query = buildString {
                 append("?path=${Uri.encode(path)}")
                 if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
@@ -4529,14 +4569,6 @@ class MainActivity : Activity() {
 
     private fun handleWorkspaceBack(): Boolean {
         if (!workspaceVisible) return false
-        if (workspaceCurrentPath.isNotBlank()) {
-            workspaceCurrentPath = workspaceCurrentPath.trimEnd('/').substringBeforeLast('/', "")
-            val absolutePath = listOf(workspaceRootPath.trimEnd('/'), workspaceCurrentPath.trimStart('/'))
-                .filter { it.isNotBlank() }.joinToString("/")
-            workspacePathInput?.setText(absolutePath)
-            workspacePathNavigate?.invoke(absolutePath)
-            return true
-        }
         setWorkspaceVisible(false)
         return true
     }
@@ -4555,20 +4587,19 @@ class MainActivity : Activity() {
         showToast("已加入输入框")
     }
 
-    private fun showCreateEntry(anchor: View, parentPath: String, refresh: () -> Unit) {
+    private fun showCreateEntry(anchor: View, parentPath: String, cwd: String?, refresh: () -> Unit) {
         showActionPopup(anchor, "新建", listOf(MenuAction("新建文件", "file_add"), MenuAction("新建文件夹", "folder_add"))) { index ->
             val kind = if (index == 0) "file" else "directory"
-            showCreateWorkspaceEntryDialog(kind, parentPath, refresh)
+            showCreateWorkspaceEntryDialog(kind, parentPath, cwd, refresh)
         }
     }
 
-    private fun showCreateWorkspaceEntryDialog(kind: String, parentPath: String, refresh: () -> Unit) {
+    private fun showCreateWorkspaceEntryDialog(kind: String, parentPath: String, cwd: String?, refresh: () -> Unit) {
         val input = editField("名称", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
         showInputDialog(if (kind == "file") "新建文件" else "新建文件夹", input, "创建") {
             val name = input.text.toString().trim()
             if (name.isBlank()) return@showInputDialog false
             val path = listOf(parentPath.trim('/'), name).filter { it.isNotBlank() }.joinToString("/")
-            val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/entries", JSONObject()
                 .put("path", path).put("kind", kind).putOpt("cwd", cwd)) }, { refresh() })
             true
@@ -4604,8 +4635,8 @@ class MainActivity : Activity() {
                     })
                 }
                 "加入输入框" -> insertWorkspacePathIntoComposer(absolutePath)
-                "新建文件" -> showCreateWorkspaceEntryDialog("file", path) { refreshed(path) }
-                "新建文件夹" -> showCreateWorkspaceEntryDialog("directory", path) { refreshed(path) }
+                "新建文件" -> showCreateWorkspaceEntryDialog("file", path, cwd) { refreshed(path) }
+                "新建文件夹" -> showCreateWorkspaceEntryDialog("directory", path, cwd) { refreshed(path) }
                 "重命名" -> {
                     val input = editField("名称", entry.optString("name"), InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
                     showInputDialog("重命名", input, "确定") {
@@ -4615,7 +4646,7 @@ class MainActivity : Activity() {
                     }
                 }
                 "复制", "剪切" -> { workspaceClipboard.clear(); workspaceClipboard += path; workspaceClipboardMode = if (actions[which].title == "复制") "copy" else "move"; showToast(if (workspaceClipboardMode == "copy") "已复制" else "已剪切") }
-                "粘贴到此处" -> pasteWorkspaceEntries(path) { refreshed("*") }
+                "粘贴到此处" -> pasteWorkspaceEntries(path, cwd) { refreshed("*") }
                 "删除" -> showConfirmDialog("删除所选内容", "永久删除 ${entry.optString("name")}？非空文件夹也会一并删除，此操作无法恢复。", "删除", destructive = true) {
                     runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/delete", JSONObject().put("paths", JSONArray().put(path)).putOpt("cwd", cwd)) }, { refreshed(parentPath) })
                 }
@@ -4623,9 +4654,8 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun pasteWorkspaceEntries(destination: String, refreshed: () -> Unit) {
+    private fun pasteWorkspaceEntries(destination: String, cwd: String?, refreshed: () -> Unit) {
         if (workspaceClipboard.isEmpty()) { showToast("剪贴板为空"); return }
-        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
         val paths = JSONArray().also { array -> workspaceClipboard.forEach(array::put) }
         runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/paste", JSONObject()
             .put("paths", paths).put("destination", destination).put("mode", workspaceClipboardMode).putOpt("cwd", cwd)) }, {
