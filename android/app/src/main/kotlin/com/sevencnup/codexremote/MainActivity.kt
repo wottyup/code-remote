@@ -976,10 +976,11 @@ class MainActivity : Activity() {
             setPadding(dp(2), 0, 0, dp(2))
         }
         sidebarBrandMark = ImageView(this).apply {
-            setBrandIcon(this, currentMode)
+            setImageResource(R.drawable.codex_remote)
+            imageTintList = null
             background = rounded(PANEL_INSET, dp(10))
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            contentDescription = if (currentMode == "claude-code") "Claude Code" else "Codex"
+            contentDescription = "Codex Remote"
         }
         brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
@@ -1185,8 +1186,9 @@ class MainActivity : Activity() {
 
     private fun updateSidebarBrand() {
         if (!::sidebarBrandMark.isInitialized) return
-        setBrandIcon(sidebarBrandMark, currentMode)
-        sidebarBrandMark.contentDescription = if (currentMode == "claude-code") "Claude Code" else "Codex"
+        sidebarBrandMark.setImageResource(R.drawable.codex_remote)
+        sidebarBrandMark.imageTintList = null
+        sidebarBrandMark.contentDescription = "Codex Remote"
     }
 
     private fun threadTitle(thread: JSONObject): String = listOf(
