@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.22.0-dev.11] - 修正 Android 系统通知开关状态
+
 ## [0.22.0-dev.10] - 压缩 Android 排队消息卡片高度
 
 ## [0.22.0-dev.9] - 压缩 Android 排队消息卡片高度

@@ -3973,7 +3973,7 @@ class MainActivity : Activity() {
             isFocusable = false
             setOnClickListener { toggleSystemNotifications() }
         }
-        notificationRow.addView(label("回复与审批提醒", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
+        notificationRow.addView(label("回复完成提醒", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
         settingsNotificationButton = label("", 12, ACCENT, true).apply { gravity = Gravity.CENTER; minWidth = dp(72) }
         notificationRow.addView(settingsNotificationButton, LinearLayout.LayoutParams(dp(72), WRAP))
         notifications.addView(notificationRow, LinearLayout.LayoutParams(MATCH, dp(40)))
@@ -4204,7 +4204,7 @@ class MainActivity : Activity() {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQUEST_NOTIFICATIONS)
             return
         }
-        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false).apply()
+        prefs.edit().putBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, true).apply()
         refreshSettingsNotificationControl()
         showToast("系统通知已开启")
     }
