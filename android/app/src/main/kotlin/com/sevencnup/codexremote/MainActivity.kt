@@ -158,6 +158,7 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var messageScroll: ScrollView
     private lateinit var messageList: LinearLayout
+    private lateinit var scrollToBottomButton: TextView
     private lateinit var queuePanel: LinearLayout
     private lateinit var queueContent: LinearLayout
     private lateinit var composerInput: EditText
@@ -293,7 +294,7 @@ class MainActivity : Activity() {
 
     private fun showConnectionPage(message: String? = null) {
         root = FrameLayout(this).apply { setBackgroundColor(DARK) }
-        val scroll = ScrollView(this).apply { isFillViewport = true }
+        val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
         root.addView(scroll, FrameLayout.LayoutParams(MATCH, MATCH))
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -472,13 +473,29 @@ class MainActivity : Activity() {
         page.addView(statusView, widthWrap())
         messageScroll = ScrollView(this).apply {
             isFillViewport = false
+            isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             clipToPadding = false
             setPadding(dp(12), dp(8), dp(12), dp(8))
         }
         messageList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
-        page.addView(messageScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        val chatArea = FrameLayout(this).apply { clipChildren = false }
+        chatArea.addView(messageScroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        scrollToBottomButton = label("↓", 21, TEXT, true).apply {
+            gravity = Gravity.CENTER
+            background = rounded(PANEL, dp(21), BORDER, dp(1))
+            elevation = dp(3).toFloat()
+            contentDescription = "回到底部"
+            visibility = View.GONE
+            setOnClickListener { messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) } }
+        }
+        chatArea.addView(scrollToBottomButton, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.END or Gravity.BOTTOM).apply {
+            rightMargin = dp(16)
+            bottomMargin = dp(12)
+        })
+        messageScroll.setOnScrollChangeListener { _, _, _, _, _ -> updateScrollToBottomButton() }
+        page.addView(chatArea, LinearLayout.LayoutParams(MATCH, 0, 1f))
         buildQueuePanel()
         buildComposer()
         buildSidebar()
@@ -573,11 +590,12 @@ class MainActivity : Activity() {
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
         sendButton = label("↑", 23, DARK, true).apply {
             gravity = Gravity.CENTER
-            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(9))
+            includeFontPadding = false
+            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(20))
             setOnClickListener { if (running) interruptTurn() else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
-        footer.addView(sendButton, LinearLayout.LayoutParams(dp(40), dp(38)).apply { leftMargin = dp(5) })
+        footer.addView(sendButton, LinearLayout.LayoutParams(dp(40), dp(40)).apply { leftMargin = dp(5) })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
         dock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(dock, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -677,7 +695,10 @@ class MainActivity : Activity() {
         recentHeading.addView(label("最近对话", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
         recentHeading.addView(iconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
         drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(8) })
-        val threadScroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
+        val threadScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
         drawerThreads = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(2), 0, 0) }
         threadScroll.addView(drawerThreads)
         drawer.addView(threadScroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
@@ -696,7 +717,7 @@ class MainActivity : Activity() {
             setOnClickListener { setSidebarVisible(false) }
         }
         root.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
-        val drawerWidth = min(dp(340), (resources.displayMetrics.widthPixels - dp(44)).coerceAtLeast(dp(260)))
+        val drawerWidth = min(dp(304), (resources.displayMetrics.widthPixels * .82f).toInt()).coerceAtLeast(dp(260))
         root.addView(drawer, FrameLayout.LayoutParams(drawerWidth, MATCH, Gravity.START))
         drawer.translationX = -drawerWidth.toFloat()
         drawer.tag = scrim
@@ -738,7 +759,7 @@ class MainActivity : Activity() {
         sendButton.text = if (running) "Ⅱ" else "↑"
         sendButton.contentDescription = if (running) "暂停回复" else "发送消息"
         sendButton.setTextColor(if (running) TEXT else DARK)
-        sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(9))
+        sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(20))
         updateComposerPreferences()
     }
 
@@ -831,7 +852,13 @@ class MainActivity : Activity() {
                 drawer.visibility = View.GONE
                 (drawer.tag as? View)?.visibility = View.GONE
             }
+            drawer.setLayerType(View.LAYER_TYPE_NONE, null)
+            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
             return
+        }
+        if (visible || sidebarProgress > .001f) {
+            drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         if (visible) {
             drawer.visibility = View.VISIBLE
@@ -847,6 +874,8 @@ class MainActivity : Activity() {
                         drawer.visibility = View.GONE
                         (drawer.tag as? View)?.visibility = View.GONE
                     }
+                    drawer.setLayerType(View.LAYER_TYPE_NONE, null)
+                    (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
                     sidebarAnimator = null
                 }
             })
@@ -948,6 +977,8 @@ class MainActivity : Activity() {
                     (drawer.tag as? View)?.visibility = View.VISIBLE
                     renderSidebar()
                 }
+                drawer.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+                (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
             }
 
             val cancel = MotionEvent.obtain(event)
@@ -1358,10 +1389,9 @@ class MainActivity : Activity() {
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
         val messages = mutableListOf<Pair<String, JSONObject>>()
-        val operations = mutableListOf<JSONObject>()
         for (turnIndex in 0 until turns.length()) {
             val turn = turns.optJSONObject(turnIndex) ?: continue
-            val turnId = turn.optString("id")
+            val turnId = turn.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: "history-turn-$turnIndex"
             val items = turn.optJSONArray("items") ?: JSONArray()
             var assistantInTurn: JSONObject? = null
             for (itemIndex in 0 until items.length()) {
@@ -1379,27 +1409,41 @@ class MainActivity : Activity() {
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
                         if (text.isNotBlank()) {
-                            val previous = assistantInTurn
-                            if (previous == null) {
-                                val message = JSONObject(item.toString()).put("_turnId", turnId).put("_duration", turn.optLong("durationMs", 0))
-                                assistantInTurn = message
-                                messages += "assistant" to message
+                            val message = assistantInTurn ?: JSONObject(item.toString())
+                                .put("_turnId", turnId)
+                                .put("_duration", turn.optLong("durationMs", 0))
+                                .put("_activityTimeline", JSONArray())
+                                .also { assistantInTurn = it; messages += "assistant" to it }
+                            val timeline = message.optJSONArray("_activityTimeline") ?: JSONArray().also { message.put("_activityTimeline", it) }
+                            val lastBlock = timeline.optJSONObject(timeline.length() - 1)
+                            if (lastBlock?.optString("type") == "message") {
+                                lastBlock.put("text", listOf(lastBlock.optString("text"), text).filter { it.isNotBlank() }.joinToString("\n\n"))
                             } else {
-                                val previousText = messageText(previous, "assistant")
-                                previous.put("text", listOf(previousText, text).filter { it.isNotBlank() }.joinToString("\n\n"))
+                                timeline.put(JSONObject().put("type", "message").put("text", text))
                             }
+                            val previousText = messageText(message, "assistant")
+                            message.put("text", listOf(previousText, text).filter { it.isNotBlank() }.distinct().joinToString("\n\n"))
                         }
                     }
-                    else -> operations += JSONObject(item.toString()).put("_turnId", turnId)
+                    else -> {
+                        val operation = JSONObject(item.toString()).put("_turnId", turnId).put("_activityIndex", itemIndex)
+                        val assistantTimeline = assistantInTurn?.optJSONArray("_activityTimeline")
+                        if (assistantTimeline != null) {
+                            assistantTimeline.put(JSONObject().put("type", "operation").put("item", operation))
+                        } else {
+                            messages += "operation" to operation
+                        }
+                    }
                 }
             }
         }
-        if (messages.isEmpty() && activeThreadId == null) {
+        val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
+        if (!hasConversationMessages && activeThreadId == null) {
             messageList.addView(label("与 Codex Remote 一起完成项目", 19, TEXT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(36), dp(14), dp(30))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
-        } else if (messages.isEmpty() && activeThreadId != null) {
+        } else if (!hasConversationMessages && activeThreadId != null) {
             when {
                 historyLoadingThreadId == activeThreadId -> {
                     messageList.addView(label("正在加载聊天记录…", 13, MUTED).apply {
@@ -1431,10 +1475,28 @@ class MainActivity : Activity() {
             }
         }
 
-        val operationsByTurn = operations.groupBy { it.optString("_turnId") }
         val lastAssistantByTurn = messages.filter { it.first == "assistant" }.groupBy { it.second.optString("_turnId") }
-            .mapValues { (_, values) -> values.lastOrNull()?.second?.optString("id") }
-        messages.forEach { (role, item) ->
+            .mapValues { (_, values) -> values.lastOrNull()?.second }
+        var messageIndex = 0
+        while (messageIndex < messages.size) {
+            val (role, item) = messages[messageIndex]
+            if (role == "operation") {
+                val turnId = item.optString("_turnId")
+                val groupedOperations = mutableListOf<JSONObject>()
+                while (messageIndex < messages.size) {
+                    val (nextRole, nextItem) = messages[messageIndex]
+                    if (nextRole != "operation" || nextItem.optString("_turnId") != turnId) break
+                    groupedOperations += nextItem
+                    messageIndex++
+                }
+                addOperationLog(turnId, groupedOperations)
+                continue
+            }
+            val viewportWidth = messageScroll.width.takeIf { it > 0 }
+                ?: root.width.takeIf { it > 0 }
+                ?: resources.displayMetrics.widthPixels
+            val availableWidth = (viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(4)).coerceAtLeast(dp(160))
+            val maxBubbleWidth = (availableWidth * if (role == "user") .92f else .98f).toInt()
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = if (role == "user") Gravity.END else Gravity.START
@@ -1446,14 +1508,18 @@ class MainActivity : Activity() {
                 if (role == "user") background = rounded(USER_BUBBLE, dp(12))
             }
             if (role == "assistant") {
-                val name = label(if (currentMode == "claude-code") "Claude" else "Codex", 11, MUTED, true)
+                val name = label(if (currentMode == "claude-code") "Claude" else "Codex", 11, MUTED, true).apply {
+                    maxWidth = (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120))
+                }
                 bubble.addView(name, widthWrap())
             }
             val text = messageText(item, role)
             val hasImage = item.optJSONArray("content")?.let { parts ->
                 (0 until parts.length()).any { parts.optJSONObject(it)?.optString("type") in setOf("image", "localImage") }
             } == true
-            if (text.isNotBlank() || !hasImage) {
+            if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
+                addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+            } else if (text.isNotBlank() || !hasImage) {
                 val content = label(text.ifBlank { "（附件消息）" }, prefs.getInt(KEY_FONT_SIZE, 14), TEXT).apply {
                     setTextIsSelectable(true)
                     setLineSpacing(dp(2).toFloat(), 1.08f)
@@ -1461,26 +1527,31 @@ class MainActivity : Activity() {
                     setHorizontallyScrolling(false)
                     breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                    maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
                 bubble.addView(content, widthWrap())
             }
             addMessageImages(bubble, item)
             val time = item.optString("createdAt").ifBlank { item.optString("timestamp") }
-            if (time.isNotBlank()) bubble.addView(label(time.take(16).replace('T', ' '), 9, MUTED), widthWrap())
-            val viewportWidth = messageScroll.width.takeIf { it > 0 }
-                ?: root.width.takeIf { it > 0 }
-                ?: resources.displayMetrics.widthPixels
-            val availableWidth = (viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(4)).coerceAtLeast(dp(160))
-            val maxBubbleWidth = (availableWidth * if (role == "user") .84f else .96f).toInt()
-            row.addView(bubble, LinearLayout.LayoutParams(maxBubbleWidth, WRAP))
+            if (time.isNotBlank()) bubble.addView(label(time.take(16).replace('T', ' '), 9, MUTED).apply {
+                maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
+            }, widthWrap())
+            row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
 
-            if (role == "assistant" && lastAssistantByTurn[item.optString("_turnId")] == item.optString("id")) {
-                val turnOps = operationsByTurn[item.optString("_turnId")].orEmpty()
-                if (turnOps.isNotEmpty()) addOperationLog(item.optString("_turnId"), turnOps)
-                val fileChanges = thread?.optJSONObject("codexRemoteWorkspaceChanges")?.optJSONObject(item.optString("_turnId"))
+            val turnId = item.optString("_turnId")
+            if (role == "assistant" && lastAssistantByTurn[turnId] === item) {
+                val workspaceChanges = thread?.optJSONObject("codexRemoteWorkspaceChanges")
+                val rawChanges = workspaceChanges?.opt(turnId)
+                val fileChanges = when {
+                    rawChanges is JSONArray -> JSONObject().put("changes", rawChanges)
+                    rawChanges is JSONObject && rawChanges.optJSONArray("changes") != null -> rawChanges
+                    rawChanges is JSONObject -> JSONObject().put("changes", JSONArray().put(rawChanges))
+                    else -> null
+                }
                 if (fileChanges != null) addFileChangeSummary(fileChanges)
             }
+            messageIndex++
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
@@ -1489,40 +1560,101 @@ class MainActivity : Activity() {
                 setPadding(dp(12), dp(8), dp(12), dp(8))
             }, widthWrap())
         }
-        if (scrollToEnd || wasNearEnd) messageScroll.post { messageScroll.fullScroll(View.FOCUS_DOWN) }
+        messageScroll.post {
+            if (scrollToEnd || wasNearEnd) messageScroll.fullScroll(View.FOCUS_DOWN)
+            updateScrollToBottomButton()
+        }
+    }
+
+    private fun updateScrollToBottomButton() {
+        if (!::scrollToBottomButton.isInitialized || !::messageScroll.isInitialized || !::messageList.isInitialized) return
+        val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
+        scrollToBottomButton.visibility = if (distanceToBottom > dp(96)) View.VISIBLE else View.GONE
     }
 
     private val activityLabel: String
         get() = if (socketConnected) "正在思考…" else "正在等待连接…"
 
+    private fun addAssistantTimeline(container: LinearLayout, message: JSONObject, maximumWidth: Int) {
+        val timeline = message.optJSONArray("_activityTimeline") ?: return
+        val pendingOperations = mutableListOf<JSONObject>()
+        val turnId = message.optString("_turnId")
+
+        fun flushOperations() {
+            if (pendingOperations.isEmpty()) return
+            container.addView(operationLogView(turnId, pendingOperations.toList(), maximumWidth), LinearLayout.LayoutParams(WRAP, WRAP))
+            pendingOperations.clear()
+        }
+
+        for (index in 0 until timeline.length()) {
+            val block = timeline.optJSONObject(index) ?: continue
+            when (block.optString("type")) {
+                "message" -> {
+                    flushOperations()
+                    val text = block.optString("text")
+                    if (text.isBlank()) continue
+                    val content = label(text, prefs.getInt(KEY_FONT_SIZE, 14), TEXT).apply {
+                        setTextIsSelectable(true)
+                        setLineSpacing(dp(2).toFloat(), 1.08f)
+                        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                        setHorizontallyScrolling(false)
+                        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                        maxWidth = maximumWidth
+                    }
+                    container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+                }
+                "operation" -> block.optJSONObject("item")?.let(pendingOperations::add)
+            }
+        }
+        flushOperations()
+    }
+
     private fun addOperationLog(turnId: String, operations: List<JSONObject>) {
-        val expanded = turnId in expandedOperationIds
-        val header = label("⌄  操作记录 · ${operations.size}", 12, MUTED, true).apply {
+        val viewportWidth = messageScroll.width.takeIf { it > 0 } ?: root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val maxWidth = (viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(8)).coerceAtLeast(dp(160))
+        messageList.addView(operationLogView(turnId, operations, maxWidth), widthWrap())
+    }
+
+    private fun operationLogView(turnId: String, operations: List<JSONObject>, maximumWidth: Int): LinearLayout {
+        val operationKey = operations.firstOrNull()?.let { operation ->
+            operation.optString("_activityIndex").takeIf { it.isNotBlank() }
+                ?: operation.optString("id").takeIf { it.isNotBlank() }
+        } ?: "empty"
+        val logId = "$turnId:$operationKey"
+        val expanded = logId in expandedOperationIds
+        val container = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val header = label("${if (expanded) "⌃" else "⌄"}  操作记录 · ${operations.size}", 12, MUTED, true).apply {
             setPadding(dp(8), dp(5), dp(8), dp(5))
+            maxWidth = maximumWidth
             setOnClickListener {
-                if (expanded) expandedOperationIds.remove(turnId) else expandedOperationIds.add(turnId)
+                if (expanded) expandedOperationIds.remove(logId) else expandedOperationIds.add(logId)
                 renderMessages(false)
             }
         }
-        messageList.addView(header, widthWrap())
-        if (!expanded) return
+        container.addView(header, LinearLayout.LayoutParams(WRAP, WRAP))
+        if (!expanded) return container
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), dp(2), 0, dp(5)) }
         operations.forEach { operation ->
             val kind = operation.optString("type").replace(Regex("([a-z])([A-Z])"), "$1 $2")
             val detail = operation.optString("command").ifBlank { operation.optString("description") }
                 .ifBlank { operation.optString("path") }.ifBlank { kind }
-            list.addView(label("•  $detail", 11, SUBTLE).apply { setPadding(0, dp(3), 0, dp(3)); setTextIsSelectable(true) }, widthWrap())
+            list.addView(label("•  $detail", 11, SUBTLE).apply {
+                setPadding(0, dp(3), 0, dp(3)); setTextIsSelectable(true); maxWidth = (maximumWidth - dp(12)).coerceAtLeast(dp(120))
+            }, LinearLayout.LayoutParams(WRAP, WRAP))
             val changes = operation.optJSONArray("changes")
             if (changes != null) for (index in 0 until changes.length()) {
                 val change = changes.optJSONObject(index) ?: continue
                 val path = change.optString("path").ifBlank { change.optString("filePath") }
                 if (path.isNotBlank()) list.addView(label("  ${change.optString("kind", "修改")} · $path", 11, ACCENT).apply {
                     setPadding(0, dp(2), 0, dp(3))
+                    maxWidth = (maximumWidth - dp(12)).coerceAtLeast(dp(120))
                     setOnClickListener { showFilePreview(path, null) }
-                }, widthWrap())
+                }, LinearLayout.LayoutParams(WRAP, WRAP))
             }
         }
-        messageList.addView(list, widthWrap())
+        container.addView(list, LinearLayout.LayoutParams(WRAP, WRAP))
+        return container
     }
 
     private fun addMessageImages(container: LinearLayout, item: JSONObject) {
@@ -2036,7 +2168,7 @@ class MainActivity : Activity() {
         overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
 
         val availableWidth = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-        val panelWidth = min(dp(440), (availableWidth * .84f).toInt()).coerceAtLeast(dp(260))
+        val panelWidth = min(dp(380), (availableWidth * .80f).toInt()).coerceAtLeast(dp(260))
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(9), dp(12), dp(8))
@@ -2064,7 +2196,10 @@ class MainActivity : Activity() {
         panel.addView(header, widthWrap())
 
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val scroll = ScrollView(this).apply { overScrollMode = View.OVER_SCROLL_NEVER }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+        }
         scroll.addView(entries)
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply {
             topMargin = dp(5)
@@ -2133,7 +2268,18 @@ class MainActivity : Activity() {
                                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                             }
                             row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
-                            if (!isDirectory) row.addView(label(formatFileSize(entry.optLong("size")), 10, MUTED), widthWrap())
+                            if (!isDirectory) row.addView(
+                                label(formatFileSize(entry.optLong("size")), 10, MUTED),
+                                LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(5) },
+                            )
+                            val relativePath = entry.optString("path")
+                            val absolutePath = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
+                                .filter { it.isNotBlank() }.joinToString("/")
+                            if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
+                                row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
+                                    insertWorkspacePathIntoComposer(absolutePath)
+                                }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(3) })
+                            }
                             row.setOnClickListener {
                                 if (isDirectory) workspaceLoader?.invoke(entry.optString("path"))
                                 else showFilePreview(entry.optString("path"), cwd)
@@ -2172,10 +2318,14 @@ class MainActivity : Activity() {
             updateSidebarProgress(0f)
             drawer.visibility = View.GONE
             (drawer.tag as? View)?.visibility = View.GONE
+            drawer.setLayerType(View.LAYER_TYPE_NONE, null)
+            (drawer.tag as? View)?.setLayerType(View.LAYER_TYPE_NONE, null)
         }
         ensureWorkspaceBrowser()
         workspaceVisible = true
         workspaceOverlay?.visibility = View.VISIBLE
+        workspacePanel?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        workspaceScrim?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
         workspaceLoader?.invoke(workspaceCurrentPath)
         updateWorkspaceProgress(workspaceProgress)
     }
@@ -2186,6 +2336,10 @@ class MainActivity : Activity() {
             if (sidebarVisible) setSidebarVisible(false)
             workspaceOverlay?.visibility = View.VISIBLE
         }
+        if (visible || workspaceProgress > .001f) {
+            workspacePanel?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            workspaceScrim?.setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
         workspaceVisible = visible
         workspaceAnimator?.cancel()
         val start = workspaceProgress
@@ -2193,6 +2347,8 @@ class MainActivity : Activity() {
         if (start == target) {
             updateWorkspaceProgress(target)
             if (!visible) workspaceOverlay?.visibility = View.GONE
+            workspacePanel?.setLayerType(View.LAYER_TYPE_NONE, null)
+            workspaceScrim?.setLayerType(View.LAYER_TYPE_NONE, null)
             return
         }
         workspaceAnimator = ValueAnimator.ofFloat(start, target).apply {
@@ -2202,6 +2358,8 @@ class MainActivity : Activity() {
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     if (!workspaceVisible && workspaceProgress <= .001f) workspaceOverlay?.visibility = View.GONE
+                    workspacePanel?.setLayerType(View.LAYER_TYPE_NONE, null)
+                    workspaceScrim?.setLayerType(View.LAYER_TYPE_NONE, null)
                     workspaceAnimator = null
                 }
             })
@@ -2233,6 +2391,18 @@ class MainActivity : Activity() {
     }
 
     private fun refreshDirectory() { workspaceLoader?.invoke(workspaceCurrentPath) }
+
+    private fun insertWorkspacePathIntoComposer(path: String) {
+        val current = composerInput.text.toString()
+        if (current.contains(path)) {
+            showToast("该路径已在输入框中")
+            return
+        }
+        val separator = if (current.isBlank() || current.last().isWhitespace()) "" else "\n"
+        composerInput.append(separator + path)
+        composerInput.setSelection(composerInput.text.length)
+        showToast("已加入输入框")
+    }
 
     private fun showCreateEntry(parentPath: String, refresh: () -> Unit) {
         AlertDialog.Builder(this).setTitle("新建")
@@ -2317,6 +2487,7 @@ class MainActivity : Activity() {
         header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         layout.addView(header, widthWrap())
         val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
                 addView(previewInput, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -2384,7 +2555,7 @@ class MainActivity : Activity() {
             minHeight = dp(190)
         }
         val outputScroll = ScrollView(this).apply {
-            isFillViewport = false; overScrollMode = View.OVER_SCROLL_NEVER
+            isFillViewport = false; isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
             background = rounded(if (lightTheme) Color.rgb(244, 246, 248) else Color.rgb(8, 10, 12), dp(8))
             addView(terminalOutput, FrameLayout.LayoutParams(MATCH, WRAP))
         }
@@ -2991,7 +3162,7 @@ class MainActivity : Activity() {
         setPadding(dp(7), 0, dp(7), 0)
         minWidth = dp(44)
         minHeight = dp(40)
-        background = rounded(PANEL_INSET, dp(7))
+        background = null
         setOnClickListener { action() }
     }
 
