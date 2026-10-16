@@ -278,6 +278,7 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var messageScroll: ScrollView
     private lateinit var messageList: LinearLayout
+    private lateinit var welcomeTitleView: TextView
     private lateinit var scrollToBottomButton: ImageButton
     private lateinit var queuePanel: LinearLayout
     private lateinit var queueContent: LinearLayout
@@ -297,6 +298,15 @@ class MainActivity : Activity() {
     private lateinit var drawer: LinearLayout
     private lateinit var drawerSearch: EditText
     private lateinit var drawerThreads: LinearLayout
+    private var welcomeAnimationText = ""
+    private var welcomeCharacterIndex = 0
+    private var welcomeCaretBlinkCount = 0
+    private var welcomeCaretVisible = true
+    private var welcomeAnimationActive = false
+    private var welcomeAnimationScheduled = false
+    private val welcomeTypingRunnable = object : Runnable {
+        override fun run() = animateWelcomeTitleStep()
+    }
 
     private data class EdgeDrawerHost(
         val overlay: FrameLayout,
@@ -719,6 +729,15 @@ class MainActivity : Activity() {
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
         val chatArea = FrameLayout(this).apply { clipChildren = false }
         chatArea.addView(messageScroll, FrameLayout.LayoutParams(MATCH, MATCH))
+        welcomeTitleView = label("", 18, TEXT, true).apply {
+            gravity = Gravity.CENTER
+            textAlignment = View.TEXT_ALIGNMENT_CENTER
+            breakStrategy = Layout.BREAK_STRATEGY_BALANCED
+            maxLines = 2
+            setPadding(dp(12), dp(24), dp(12), dp(24))
+            visibility = View.GONE
+        }
+        chatArea.addView(welcomeTitleView, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
         scrollToBottomButton = iconButton("chevron_down", "回到底部") {
             messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
         }.apply {
@@ -1985,6 +2004,67 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun updateWelcomeTitle(visible: Boolean) {
+        if (!::welcomeTitleView.isInitialized) return
+        if (!visible) {
+            welcomeTitleView.visibility = View.GONE
+            welcomeAnimationActive = false
+            welcomeAnimationScheduled = false
+            handler.removeCallbacks(welcomeTypingRunnable)
+            return
+        }
+
+        val text = if (currentMode == "claude-code") {
+            "与 Claude Code 完成一个伟大项目"
+        } else {
+            "与 Codex Remote 完成一个伟大项目"
+        }
+        welcomeTitleView.visibility = View.VISIBLE
+        welcomeTitleView.contentDescription = text
+        if (!welcomeAnimationActive || welcomeAnimationText != text) {
+            handler.removeCallbacks(welcomeTypingRunnable)
+            welcomeAnimationText = text
+            welcomeCharacterIndex = 0
+            welcomeCaretBlinkCount = 0
+            welcomeCaretVisible = true
+            welcomeAnimationActive = true
+            welcomeAnimationScheduled = false
+            welcomeTitleView.text = "_"
+        }
+        if (!welcomeAnimationScheduled) scheduleWelcomeTitleStep(160L)
+    }
+
+    private fun scheduleWelcomeTitleStep(delayMillis: Long) {
+        welcomeAnimationScheduled = true
+        handler.postDelayed(welcomeTypingRunnable, delayMillis)
+    }
+
+    private fun animateWelcomeTitleStep() {
+        welcomeAnimationScheduled = false
+        if (!welcomeAnimationActive || !::welcomeTitleView.isInitialized || welcomeTitleView.visibility != View.VISIBLE) return
+
+        if (welcomeCharacterIndex < welcomeAnimationText.length) {
+            welcomeCharacterIndex += 1
+            welcomeTitleView.text = welcomeAnimationText.substring(0, welcomeCharacterIndex) + "_"
+            scheduleWelcomeTitleStep(if (welcomeCharacterIndex == welcomeAnimationText.length) 440L else 72L)
+            return
+        }
+
+        if (welcomeCaretBlinkCount < 3) {
+            welcomeCaretVisible = !welcomeCaretVisible
+            if (welcomeCaretVisible) welcomeCaretBlinkCount += 1
+            welcomeTitleView.text = welcomeAnimationText + if (welcomeCaretVisible) "_" else " "
+            scheduleWelcomeTitleStep(320L)
+            return
+        }
+
+        welcomeCharacterIndex = 0
+        welcomeCaretBlinkCount = 0
+        welcomeCaretVisible = true
+        welcomeTitleView.text = "_"
+        scheduleWelcomeTitleStep(220L)
+    }
+
     private fun renderMessages(scrollToEnd: Boolean, incrementalTurnId: String? = null) {
         if (!::messageList.isInitialized) return
         if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) {
@@ -2092,12 +2172,15 @@ class MainActivity : Activity() {
             }
         }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
-        if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId == null) {
-            messageList.addView(label(if (currentMode == "claude-code") "与 Claude Code 一起完成项目" else "与 Codex Remote 一起完成项目", 19, TEXT, true).apply {
-                gravity = Gravity.CENTER
-                setPadding(dp(14), dp(36), dp(14), dp(30))
-            }, LinearLayout.LayoutParams(MATCH, WRAP))
-        } else if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId != null) {
+        val showWelcomeTitle = effectiveIncrementalTurnId == null && !hasConversationMessages && (
+            activeThreadId == null || (
+                historyLoadingThreadId != activeThreadId &&
+                    historyLoadError.isNullOrBlank() &&
+                    turns.length() == 0
+                )
+            )
+        updateWelcomeTitle(showWelcomeTitle)
+        if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId != null) {
             when {
                 historyLoadingThreadId == activeThreadId -> {
                     messageList.addView(label("正在加载聊天记录…", 13, MUTED).apply {
@@ -2121,10 +2204,7 @@ class MainActivity : Activity() {
                     messageList.addView(loadError, LinearLayout.LayoutParams(MATCH, WRAP))
                 }
                 turns.length() == 0 -> {
-                    messageList.addView(label(if (currentMode == "claude-code") "与 Claude Code 一起完成项目" else "与 Codex Remote 一起完成项目", 18, TEXT, true).apply {
-                        gravity = Gravity.CENTER
-                        setPadding(dp(14), dp(36), dp(14), dp(30))
-                    }, LinearLayout.LayoutParams(MATCH, WRAP))
+                    Unit
                 }
             }
         }
@@ -2196,10 +2276,10 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
-                    val stroke = if (currentMode == "claude-code") {
-                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .32f else .44f)
-                    } else null
-                    background = rounded(USER_BUBBLE, dp(12), stroke, if (stroke != null) dp(1) else 0)
+                    val bubbleColor = if (currentMode == "claude-code") {
+                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .28f else .32f)
+                    } else USER_BUBBLE
+                    background = rounded(bubbleColor, dp(12))
                 }
             }
             if (role == "assistant") {

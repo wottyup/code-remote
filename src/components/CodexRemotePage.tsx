@@ -91,6 +91,61 @@ function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: num
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
 }
 
+function WelcomeTypingTitle({ text }: { text: string }) {
+  const [visibleText, setVisibleText] = useState('')
+  const [cursorVisible, setCursorVisible] = useState(true)
+
+  useEffect(() => {
+    const characters = Array.from(text)
+    let index = 0
+    let completedBlinks = 0
+    let showCursor = true
+    let timer = 0
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisibleText(text)
+      setCursorVisible(false)
+      return
+    }
+
+    setVisibleText('')
+    setCursorVisible(true)
+    const typeNext = () => {
+      if (index < characters.length) {
+        index += 1
+        setVisibleText(characters.slice(0, index).join(''))
+        timer = window.setTimeout(typeNext, index === characters.length ? 440 : 72)
+        return
+      }
+
+      if (completedBlinks < 3) {
+        showCursor = !showCursor
+        setCursorVisible(showCursor)
+        if (showCursor) completedBlinks += 1
+        timer = window.setTimeout(typeNext, 320)
+        return
+      }
+
+      index = 0
+      completedBlinks = 0
+      showCursor = true
+      setVisibleText('')
+      setCursorVisible(true)
+      timer = window.setTimeout(typeNext, 220)
+    }
+
+    timer = window.setTimeout(typeNext, 160)
+    return () => window.clearTimeout(timer)
+  }, [text])
+
+  return (
+    <h1 aria-label={text}>
+      <span aria-hidden="true">{visibleText}</span>
+      <span className="welcome-state__cursor" aria-hidden="true">{cursorVisible ? '_' : '\u00a0'}</span>
+    </h1>
+  )
+}
+
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   if (preferences.theme === 'light' || preferences.theme === 'warm') return true
   if (preferences.theme === 'dark') return false
@@ -3356,7 +3411,7 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -3409,7 +3464,7 @@ function RemoteChatPane({
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-              <h1>{remote.activeEngine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
+              <WelcomeTypingTitle text={remote.activeEngine === 'claude-code' ? '与 Claude Code 完成一个伟大项目' : '与 Codex Remote 完成一个伟大项目'} />
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
