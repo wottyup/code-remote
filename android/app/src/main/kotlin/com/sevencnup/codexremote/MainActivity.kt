@@ -238,6 +238,13 @@ class MainActivity : Activity() {
     private var expandedFileChangeIds = mutableSetOf<String>()
     private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
+    private var queueEditItem: JSONObject? = null
+    private var queueEditThreadId: String? = null
+    private var queueEditOwnerId: String? = null
+    private var queueEditPending = false
+    private var queueEditDraft = ""
+    private var queueEditDraftFiles = mutableListOf<JSONObject>()
+    private val queueEditPreferences = mutableMapOf<String, String?>()
     private var workspaceClipboard = mutableListOf<String>()
     private var workspaceClipboardMode = "copy"
     private var socket: WebSocket? = null
@@ -303,6 +310,7 @@ class MainActivity : Activity() {
     private lateinit var completionNotice: LinearLayout
     private lateinit var modeSwitchNotice: LinearLayout
     private lateinit var composerInput: EditText
+    private lateinit var queueEditBar: LinearLayout
     private lateinit var attachmentScroll: HorizontalScrollView
     private lateinit var attachmentStrip: LinearLayout
     private lateinit var sidebarNewThreadButton: LinearLayout
@@ -476,6 +484,7 @@ class MainActivity : Activity() {
             terminalOverlay != null -> closeTerminal()
             workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
+            queueEditItem != null -> finishQueueEdit(false)
             activeThreadId != null -> showConfirmDialog("关闭应用", "要关闭 Codex Remote 吗？", "关闭") { finish() }
             else -> super.onBackPressed()
         }
@@ -987,6 +996,14 @@ class MainActivity : Activity() {
             setPadding(dp(11), dp(8), dp(11), dp(6))
             background = rounded(PANEL, dp(18), BORDER, dp(1))
         }
+        queueEditBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+        }
+        queueEditBar.addView(label("正在修改排队消息", 12, SUBTLE, true), LinearLayout.LayoutParams(0, dp(32), 1f))
+        queueEditBar.addView(iconButton("close", "取消修改排队消息") { finishQueueEdit(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        composer.addView(queueEditBar, LinearLayout.LayoutParams(MATCH, dp(32)))
         composerInput = editField("发送消息…", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
             minHeight = dp(44)
             maxLines = 5
@@ -1010,7 +1027,9 @@ class MainActivity : Activity() {
                     true
                 } else false
             }
-            addTextChangedListener(SimpleTextWatcher { value -> prefs.edit().putString(draftStorageKey(), value).apply() })
+            addTextChangedListener(SimpleTextWatcher { value ->
+                if (queueEditItem == null) prefs.edit().putString(draftStorageKey(), value).apply()
+            })
         }
         attachmentStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1053,7 +1072,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             includeFontPadding = false
             background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
-            setOnClickListener { if (running) interruptTurn() else sendCurrentMessage() }
+            setOnClickListener { if (queueEditItem != null) finishQueueEdit(true) else if (running) interruptTurn() else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
         footer.addView(sendButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
@@ -1708,6 +1727,7 @@ class MainActivity : Activity() {
         .firstOrNull { it.optString("id") == id }
 
     private fun selectThread(thread: JSONObject, eagerDiskCache: Boolean = false) {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val id = thread.optString("id")
         if (id.isBlank()) return
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
@@ -3143,8 +3163,10 @@ class MainActivity : Activity() {
     }
 
     private fun sendCurrentMessage() {
+        if (queueEditPending) return
+        if (queueEditItem != null) { finishQueueEdit(true); return }
         val text = composerInput.text.toString().trim()
-        if (text.isBlank()) return
+        if (text.isBlank() && selectedFiles.isEmpty()) return
         val threadId = activeThreadId
         val requestId = UUID.randomUUID().toString()
         val payload = queuedPayload(text, requestId)
@@ -3194,7 +3216,7 @@ class MainActivity : Activity() {
         }
         val payload = JSONObject()
             .put("id", id)
-            .put("text", textWithDocs)
+            .put("text", text)
             .put("requestText", textWithDocs)
             .put("images", images)
             .put("documents", documents)
@@ -3241,7 +3263,8 @@ class MainActivity : Activity() {
     private fun setSendBusy(busy: Boolean) {
         if (!::sendButton.isInitialized) return
         sendButton.isEnabled = !busy
-        sendButton.text = if (busy) "…" else if (running) "Ⅱ" else "↑"
+        sendButton.text = if (busy) "…" else if (queueEditItem != null) "✓" else if (running) "Ⅱ" else "↑"
+        sendButton.contentDescription = if (queueEditItem != null) "保存排队消息" else "发送消息"
     }
 
     private fun interruptTurn() {
@@ -3255,26 +3278,107 @@ class MainActivity : Activity() {
     }
 
     private fun editQueuedMessage(item: JSONObject) {
-        val input = editField("排队消息", item.optString("text"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
-            minLines = 3
-            maxLines = 8
+        val threadId = activeThreadId ?: return
+        if (queueEditPending || queueEditItem != null) return
+        val ownerId = "android-${UUID.randomUUID()}"
+        queueEditPending = true
+        io.execute {
+            try {
+                val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
+                RemoteApi(endpoint, token).post("$base/edit/begin", JSONObject()
+                    .put("message_id", item.optString("id")).put("owner_id", ownerId))
+                handler.post {
+                    queueEditPending = false
+                    queueEditItem = shallowCopyObject(item)
+                    queueEditThreadId = threadId
+                    queueEditOwnerId = ownerId
+                    queueEditDraft = composerInput.text.toString()
+                    queueEditDraftFiles = selectedFiles.toMutableList()
+                    queueEditPreferences.clear()
+                    listOf("model", "effort", "claudeModel", "claudeEffort", "approvalPolicy", "claudePermissionMode").forEach { key ->
+                        queueEditPreferences[key] = item.optString(key).takeIf { it.isNotBlank() }
+                    }
+                    composerInput.setText(item.optString("text"))
+                    selectedFiles.clear()
+                    item.optJSONArray("images")?.let { images ->
+                        for (index in 0 until images.length()) images.optJSONObject(index)?.let { image ->
+                            selectedFiles.add(shallowCopyObject(image).put("kind", "image"))
+                        }
+                    }
+                    item.optJSONArray("documents")?.let { documents ->
+                        for (index in 0 until documents.length()) documents.optJSONObject(index)?.let { document ->
+                            selectedFiles.add(shallowCopyObject(document).put("kind", "document"))
+                        }
+                    }
+                    composerInput.hint = "编辑排队消息…"
+                    queueEditBar.visibility = View.VISIBLE
+                    renderAttachmentStrip()
+                    updateComposerPreferences()
+                    setSendBusy(false)
+                    renderQueue()
+                }
+            } catch (error: Exception) { handler.post {
+                queueEditPending = false
+                showStatus(error.message ?: "无法编辑这条排队消息")
+                refreshQueue(false)
+            } }
         }
-        showInputDialog("修改排队消息", input, "确定") {
-            val threadId = activeThreadId ?: return@showInputDialog false
-            val ownerId = "android-${UUID.randomUUID()}"
-            val updated = shallowCopyObject(item).put("text", input.text.toString()).put("requestText", input.text.toString())
-            io.execute {
-                try {
-                    val api = RemoteApi(endpoint, token)
-                    val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
-                    val ownerBody = JSONObject().put("message_id", item.optString("id")).put("owner_id", ownerId)
-                    api.post("$base/edit/begin", ownerBody)
-                    api.post("$base/edit/update", updated)
-                    api.post("$base/edit/end", ownerBody)
-                    handler.post { refreshQueue(false) }
-                } catch (error: Exception) { handler.post { showStatus(error.message ?: "修改排队消息失败"); refreshQueue(false) } }
+    }
+
+    private fun finishQueueEdit(save: Boolean) {
+        val item = queueEditItem ?: return
+        val threadId = queueEditThreadId ?: return
+        val ownerId = queueEditOwnerId ?: return
+        if (queueEditPending || attachRequestActive) return
+        val text = composerInput.text.toString().trim()
+        if (save && text.isBlank() && selectedFiles.isEmpty()) {
+            showStatus("消息内容和附件不能同时为空")
+            return
+        }
+        val updated = if (save) {
+            val payload = queuedPayload(text, item.optString("id"))
+            shallowCopyObject(item).apply {
+                put("text", text)
+                put("requestText", payload.optString("requestText"))
+                put("images", payload.optJSONArray("images"))
+                put("documents", payload.optJSONArray("documents"))
+                listOf("model", "effort", "claudeModel", "claudeEffort", "approvalPolicy", "claudePermissionMode").forEach { key ->
+                    if (payload.has(key)) put(key, payload.opt(key)) else remove(key)
+                }
+                remove("editing")
+                remove("sendAttempt")
             }
-            true
+        } else null
+        queueEditPending = true
+        setSendBusy(true)
+        io.execute {
+            try {
+                val api = RemoteApi(endpoint, token)
+                val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
+                if (updated != null) api.post("$base/edit/update", updated)
+                api.post("$base/edit/end", JSONObject().put("message_id", item.optString("id")).put("owner_id", ownerId))
+                handler.post {
+                    queueEditPending = false
+                    queueEditItem = null
+                    queueEditThreadId = null
+                    queueEditOwnerId = null
+                    queueEditPreferences.clear()
+                    composerInput.setText(queueEditDraft)
+                    selectedFiles = queueEditDraftFiles
+                    queueEditDraftFiles = mutableListOf()
+                    composerInput.hint = "发送消息…"
+                    queueEditBar.visibility = View.GONE
+                    renderAttachmentStrip()
+                    updateComposerPreferences()
+                    setSendBusy(false)
+                    refreshQueue(false)
+                }
+            } catch (error: Exception) { handler.post {
+                queueEditPending = false
+                setSendBusy(false)
+                showStatus(error.message ?: "修改排队消息失败")
+                refreshQueue(false)
+            } }
         }
     }
 
@@ -3302,6 +3406,7 @@ class MainActivity : Activity() {
         .put("owner_id", "android-${UUID.randomUUID()}")
 
     private fun createThread() {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val requestId = UUID.randomUUID().toString()
         val body = JSONObject().put("engine", currentMode).put("request_id", requestId)
             .putOpt("model", preference(if (currentMode == "codex") "model" else "claudeModel"))
@@ -3315,6 +3420,7 @@ class MainActivity : Activity() {
     }
 
     private fun switchMode() {
+        if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val previousMode = currentMode
         val targetMode = if (currentMode == "codex") "claude-code" else "codex"
         if (targetMode == "claude-code" && !claudeAvailable) {
@@ -3420,6 +3526,7 @@ class MainActivity : Activity() {
     }
 
     private fun preference(key: String): String? {
+        if (queueEditItem != null && queueEditPreferences.containsKey(key)) return queueEditPreferences[key]
         val scope = activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT
         val value = prefs.getString("$scope:$key", null)
         return value?.takeIf { it.isNotBlank() && it != "null" }
@@ -3428,10 +3535,15 @@ class MainActivity : Activity() {
     private fun draftStorageKey(): String = "draft_${currentMode}_${activeThreadId ?: "new"}"
 
     private fun persistCurrentDraft() {
-        if (::composerInput.isInitialized) prefs.edit().putString(draftStorageKey(), composerInput.text.toString()).apply()
+        if (::composerInput.isInitialized && queueEditItem == null) prefs.edit().putString(draftStorageKey(), composerInput.text.toString()).apply()
     }
 
     private fun savePreference(key: String, value: String?) {
+        if (queueEditItem != null && key in listOf("model", "effort", "claudeModel", "claudeEffort", "approvalPolicy", "claudePermissionMode")) {
+            queueEditPreferences[key] = value
+            updateComposerPreferences()
+            return
+        }
         val scope = activeThreadId?.let { "$PREF_THREAD_PREFIX$it" } ?: PREF_DEFAULT
         prefs.edit().putString("$scope:$key", value ?: "").apply()
         updateComposerPreferences()
@@ -3473,7 +3585,7 @@ class MainActivity : Activity() {
             showChoicePopup(permissionButton, "授权", listOf("on-request" to "请求批准", "untrusted" to "帮我批准", "never" to "完全访问"), preference("approvalPolicy") ?: "on-request") {
                 savePreference("approvalPolicy", it)
                 val threadId = activeThreadId
-                if (threadId != null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", it)) })
+                if (threadId != null && queueEditItem == null) runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/settings", JSONObject().put("approval_policy", it)) })
             }
         } else {
             showChoicePopup(permissionButton, "权限模式", listOf(
