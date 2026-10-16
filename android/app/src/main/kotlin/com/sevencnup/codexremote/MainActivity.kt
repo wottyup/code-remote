@@ -637,14 +637,16 @@ class MainActivity : Activity() {
 
     private fun installWindowInsets(view: View, content: View? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        var overlaysInitialized = false
+        var imeAnimationDepth = 0
         val update = { insets: WindowInsets ->
             val systemBars = insets.getInsets(
                 WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
             )
             val ime = insets.getInsets(WindowInsets.Type.ime())
-            val keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
+            val keyboardVisible = insets.isVisible(WindowInsets.Type.ime()) || ime.bottom > systemBars.bottom
             val keyboardJustOpened = keyboardVisible && !imeInsetVisible
-            val bottom = if (keyboardVisible) max(systemBars.bottom, ime.bottom) else systemBars.bottom
+            val bottom = max(systemBars.bottom, ime.bottom)
             imeInsetVisible = keyboardVisible
             if (content == null) {
                 view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
@@ -653,17 +655,25 @@ class MainActivity : Activity() {
                     imeFollowMessageBottom = ::composerInput.isInitialized &&
                         composerInput.hasFocus() && messageNearBottomBeforeIme
                 }
+                val systemInsetsChanged = !overlaysInitialized ||
+                    systemInsetLeft != systemBars.left || systemInsetTop != systemBars.top ||
+                    systemInsetRight != systemBars.right || systemInsetBottom != systemBars.bottom
                 systemInsetLeft = systemBars.left
                 systemInsetTop = systemBars.top
                 systemInsetRight = systemBars.right
                 systemInsetBottom = systemBars.bottom
-                view.setPadding(0, 0, 0, 0)
+                if (view.paddingLeft != 0 || view.paddingTop != 0 ||
+                    view.paddingRight != 0 || view.paddingBottom != 0
+                ) view.setPadding(0, 0, 0, 0)
                 if (content.paddingLeft != systemBars.left || content.paddingTop != 0 ||
                     content.paddingRight != systemBars.right || content.paddingBottom != bottom
                 ) {
                     content.setPadding(systemBars.left, 0, systemBars.right, bottom)
                 }
-                updateInsetAwareOverlays()
+                if (systemInsetsChanged) {
+                    updateInsetAwareOverlays()
+                    overlaysInitialized = true
+                }
                 val terminalKeyboardVisible = keyboardVisible && terminalDraftInput?.hasFocus() == true
                 terminalImeHiddenUntil = when {
                     terminalKeyboardVisible -> 0L
@@ -680,18 +690,29 @@ class MainActivity : Activity() {
             }
         }
         view.setOnApplyWindowInsetsListener { _, insets ->
-            update(insets)
+            if (imeAnimationDepth == 0) update(insets)
             insets
         }
         view.setWindowInsetsAnimationCallback(object : WindowInsetsAnimation.Callback(
             WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE,
         ) {
+            override fun onPrepare(animation: WindowInsetsAnimation) {
+                if ((animation.typeMask and WindowInsets.Type.ime()) != 0) imeAnimationDepth++
+            }
+
             override fun onProgress(
                 insets: WindowInsets,
                 runningAnimations: MutableList<WindowInsetsAnimation>,
             ): WindowInsets {
                 update(insets)
                 return insets
+            }
+
+            override fun onEnd(animation: WindowInsetsAnimation) {
+                if ((animation.typeMask and WindowInsets.Type.ime()) != 0) {
+                    imeAnimationDepth = (imeAnimationDepth - 1).coerceAtLeast(0)
+                    if (imeAnimationDepth == 0) view.rootWindowInsets?.let(update)
+                }
             }
         })
         view.requestApplyInsets()
@@ -2436,7 +2457,7 @@ class MainActivity : Activity() {
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
         }
         messageScroll.post {
-            if (scrollToEnd || wasNearEnd) messageScroll.fullScroll(View.FOCUS_DOWN)
+            if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
             updateScrollToBottomButton()
         }
     }
@@ -5161,7 +5182,9 @@ class MainActivity : Activity() {
     private fun appendTerminal(value: String) = handler.post {
         val output = terminalOutput ?: return@post
         output.text = terminalScreen.append(value)
-        (output.parent as? ScrollView)?.post { (output.parent as? ScrollView)?.fullScroll(View.FOCUS_DOWN) }
+        (output.parent as? ScrollView)?.let { scroll ->
+            scroll.post { scroll.scrollTo(0, output.height) }
+        }
     }
 
     private fun updateTerminalStatus(value: String, color: Int) = handler.post {
