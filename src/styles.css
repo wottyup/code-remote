@@ -472,7 +472,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .activity-timeline > .chat-message__content { margin-top: 0; }
 .activity-timeline > .operation-log { width: 100%; margin: 0; }
 .operation-log { width: min(100%, 840px); margin: 10px auto 0; overflow: visible; border: 0; border-radius: 0; background: transparent; color: #aeb4c0; }
-.operation-log > summary { display: flex; min-height: 26px; align-items: center; gap: 7px; padding: 1px 0; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); list-style: none; user-select: none; }
+.operation-log > summary { position: relative; display: flex; min-height: 26px; align-items: center; gap: 7px; padding: 1px 0 4px; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); list-style: none; user-select: none; }
+.operation-log > summary::after { position: absolute; right: 0; bottom: 0; left: 0; height: 2px; background: var(--operation-log-accent); content: ''; }
 .operation-log > summary::-webkit-details-marker { display: none; }
 .operation-log > summary > svg { flex: 0 0 auto; color: #818b9d; transition: transform .16s ease; }
 .operation-log[open] > summary > svg { transform: rotate(180deg); }
@@ -1378,10 +1379,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #fff; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > span { color: #c3cad7; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > small { color: #929baa; }
+.remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary { --operation-log-accent: #242a3e; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > span { color: #303030; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > small { color: #777; }
+.remote-shell--theme-light :is(.remote-shell *) .operation-log > summary { --operation-log-accent: #e8e8e8; }
 .remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > span { color: #514335; }
 .remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > small { color: #8b7d6d; }
+.remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary { --operation-log-accent: #f1e5d6; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #000; opacity: 1; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #fff; opacity: 1; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-activity__text { background-image: none; color: #000; animation: none; -webkit-text-fill-color: #000; }
