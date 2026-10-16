@@ -2287,8 +2287,12 @@ class MainActivity : Activity() {
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
                     val bubbleColor = if (currentMode == "claude-code") {
-                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .28f else .32f)
-                    } else CODEX_MODE_ACCENT
+                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .28f else .42f)
+                    } else if (lightTheme) {
+                        CODEX_MODE_ACCENT
+                    } else {
+                        colorWithAlpha(CODEX_MODE_ACCENT, .78f)
+                    }
                     background = rounded(bubbleColor, dp(12))
                 }
             }
