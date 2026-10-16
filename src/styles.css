@@ -478,7 +478,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .operation-log[open] > summary > svg { transform: rotate(180deg); }
 .operation-log > summary > span { color: #c3cad7; font-weight: 580; }
 .operation-log > summary > small { margin-left: auto; color: #788295; font-size: calc(14px + var(--mobile-font-offset)); }
-.remote-shell--theme-dark .operation-log > summary > :is(span, small) { color: #242a3e; }
 .operation-log > ul { display: grid; max-height: 260px; gap: 0; margin: 0; overflow: auto; padding: 0 0 5px; list-style: none; }
 .operation-log__item { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: start; gap: 7px; padding: 4px 0; }
 .operation-log__status { display: grid; min-height: 15px; place-items: center; color: #778399; }
@@ -970,7 +969,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .operation-log > summary > svg { color: #777; }
 .remote-shell--theme-light .operation-log > summary > span { color: #303030; }
 .remote-shell--theme-light .operation-log > summary > small, .remote-shell--theme-light .operation-log__item > small { color: #777; }
-.remote-shell--theme-light .operation-log > summary > :is(span, small) { color: #e8e8e8; }
 .remote-shell--theme-light .operation-log__status { color: #777; }
 .remote-shell--theme-light .operation-log__item--running .operation-log__status { color: #6479a4; }
 .remote-shell--theme-light .operation-log__item--completed .operation-log__status { color: #438453; }
@@ -1104,7 +1102,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .connection-label { border-color: #e6d7c5; background: #f8efe5; color: #806f5e; }
 .remote-shell--theme-warm .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .remote-shell--theme-warm .chat-message__content, .remote-shell--theme-warm .chat-message__meta { color: #514335; }
-.remote-shell--theme-warm .operation-log > summary > :is(span, small) { color: #f1e5d6; }
 .remote-shell--theme-warm .chat-message__timing, .remote-shell--theme-warm .chat-message__sent-at { color: #8d7964; }
 .remote-shell--theme-warm .running-indicator__elapsed { color: #8d7964; }
 .remote-shell--theme-warm .scroll-to-bottom { border-color: #e0cfbd; background: rgba(255, 250, 243, .94); color: #735f4d; box-shadow: 0 9px 22px rgba(98, 75, 52, .12); }
@@ -1379,6 +1376,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-dark { color: #fff; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #000; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #fff; }
+.remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #242a3e; }
+.remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #e8e8e8; }
+.remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #f1e5d6; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #000; opacity: 1; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #fff; opacity: 1; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-activity__text { background-image: none; color: #000; animation: none; -webkit-text-fill-color: #000; }
