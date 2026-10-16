@@ -473,12 +473,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .activity-timeline > .operation-log { width: 100%; margin: 0; }
 .operation-log { width: min(100%, 840px); margin: 10px auto 0; overflow: visible; border: 0; border-radius: 0; background: transparent; color: #aeb4c0; }
 .operation-log > summary { display: flex; min-height: 26px; align-items: center; gap: 7px; padding: 1px 0; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); list-style: none; user-select: none; }
-.remote-shell--theme-dark .operation-log > summary { background: #242a3e; }
 .operation-log > summary::-webkit-details-marker { display: none; }
 .operation-log > summary > svg { flex: 0 0 auto; color: #818b9d; transition: transform .16s ease; }
 .operation-log[open] > summary > svg { transform: rotate(180deg); }
 .operation-log > summary > span { color: #c3cad7; font-weight: 580; }
 .operation-log > summary > small { margin-left: auto; color: #788295; font-size: calc(14px + var(--mobile-font-offset)); }
+.remote-shell--theme-dark .operation-log > summary > :is(span, small) { color: #242a3e; }
 .operation-log > ul { display: grid; max-height: 260px; gap: 0; margin: 0; overflow: auto; padding: 0 0 5px; list-style: none; }
 .operation-log__item { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; align-items: start; gap: 7px; padding: 4px 0; }
 .operation-log__status { display: grid; min-height: 15px; place-items: center; color: #778399; }
@@ -967,10 +967,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .file-change-card__diff-line--hunk { color: #5c626d; }
 .remote-shell--theme-light .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .remote-shell--theme-light .operation-log { background: transparent; color: #383838; }
-.remote-shell--theme-light .operation-log > summary { background: #e8e8e8; }
 .remote-shell--theme-light .operation-log > summary > svg { color: #777; }
 .remote-shell--theme-light .operation-log > summary > span { color: #303030; }
 .remote-shell--theme-light .operation-log > summary > small, .remote-shell--theme-light .operation-log__item > small { color: #777; }
+.remote-shell--theme-light .operation-log > summary > :is(span, small) { color: #e8e8e8; }
 .remote-shell--theme-light .operation-log__status { color: #777; }
 .remote-shell--theme-light .operation-log__item--running .operation-log__status { color: #6479a4; }
 .remote-shell--theme-light .operation-log__item--completed .operation-log__status { color: #438453; }
@@ -1104,7 +1104,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .connection-label { border-color: #e6d7c5; background: #f8efe5; color: #806f5e; }
 .remote-shell--theme-warm .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
 .remote-shell--theme-warm .chat-message__content, .remote-shell--theme-warm .chat-message__meta { color: #514335; }
-.remote-shell--theme-warm .operation-log > summary { background: #f1e5d6; }
+.remote-shell--theme-warm .operation-log > summary > :is(span, small) { color: #f1e5d6; }
 .remote-shell--theme-warm .chat-message__timing, .remote-shell--theme-warm .chat-message__sent-at { color: #8d7964; }
 .remote-shell--theme-warm .running-indicator__elapsed { color: #8d7964; }
 .remote-shell--theme-warm .scroll-to-bottom { border-color: #e0cfbd; background: rgba(255, 250, 243, .94); color: #735f4d; box-shadow: 0 9px 22px rgba(98, 75, 52, .12); }
