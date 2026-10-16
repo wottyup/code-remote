@@ -323,6 +323,7 @@ class MainActivity : Activity() {
     private var deferredMessageRequiresFullRender = false
     private val deferredMessageTurnIds = mutableSetOf<String>()
     private var settingsOverlay: View? = null
+    private var settingsScroll: ScrollView? = null
     private var settingsDialog: Dialog? = null
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
@@ -661,11 +662,12 @@ class MainActivity : Activity() {
         persistConnectionProfiles()
     }
 
-    private fun switchConnection(profileId: String) {
+    private fun switchConnection(profileId: String, restoreSettingsScrollY: Int? = null) {
         if (queueEditPending || queueEditItem != null) { showStatus("请先结束排队消息编辑"); return }
         val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
         if (profile.id == activeConnectionId && token == profile.token && ::composerInput.isInitialized) {
             closeSettings()
+            if (restoreSettingsScrollY != null) showSettings(restoreSettingsScrollY)
             return
         }
         persistCurrentDraft()
@@ -682,7 +684,10 @@ class MainActivity : Activity() {
         messageImageCache.evictAll()
         threadReadsInFlight.clear()
         pendingThreadReads.clear()
-        if (token.isBlank()) showConnectionPage("这个连接需要重新配对。") else openChatHome()
+        if (token.isBlank()) showConnectionPage("这个连接需要重新配对。") else {
+            openChatHome()
+            if (restoreSettingsScrollY != null) showSettings(restoreSettingsScrollY)
+        }
     }
 
     private fun connectionScopedKey(base: String): String =
@@ -3419,13 +3424,14 @@ class MainActivity : Activity() {
     private fun sendCurrentMessage() {
         if (queueEditPending) return
         if (queueEditItem != null) { finishQueueEdit(true); return }
+        android.view.inputmethod.BaseInputConnection.removeComposingSpans(composerInput.text)
         val text = composerInput.text.toString().trim()
         if (text.isBlank() && selectedFiles.isEmpty()) return
         val threadId = activeThreadId
         val requestId = UUID.randomUUID().toString()
         val payload = queuedPayload(text, requestId)
-        composerInput.setText("")
         (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(composerInput.windowToken, 0)
+        composerInput.setText("")
         if (threadId == null) {
             io.execute {
                 try {
@@ -3491,6 +3497,10 @@ class MainActivity : Activity() {
             try {
                 val response = RemoteApi(endpoint, token).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
                 handler.post {
+                    val sentText = payload.optString("text")
+                    if (sentText.isNotBlank() && ::composerInput.isInitialized && composerInput.text.toString().trim() == sentText) {
+                        composerInput.setText("")
+                    }
                     if (activeThreadId == oldSelected || activeThreadId == threadId) {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
@@ -4040,7 +4050,7 @@ class MainActivity : Activity() {
         return model.optString("defaultReasoningEffort").takeIf { it.isNotBlank() && it != "null" }
     }
 
-    private fun showSettings() {
+    private fun showSettings(restoreScrollY: Int = 0) {
         if (settingsOverlay != null) return
         if (sidebarVisible) setSidebarVisible(false)
 
@@ -4073,6 +4083,7 @@ class MainActivity : Activity() {
         }
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         scroll.addView(content, LinearLayout.LayoutParams(MATCH, WRAP))
+        settingsScroll = scroll
         layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
         overlay.addView(layout, FrameLayout.LayoutParams(MATCH, MATCH))
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -4277,12 +4288,14 @@ class MainActivity : Activity() {
                 })
             }
         }, widthWrap())
+        if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
     }
 
     private fun closeSettings() {
         val overlay = settingsOverlay ?: return
         if (::root.isInitialized) root.removeView(overlay)
         settingsOverlay = null
+        settingsScroll = null
         settingsNotificationButton = null
     }
 
@@ -4430,6 +4443,7 @@ class MainActivity : Activity() {
 
     private fun rerenderAppKeepSettings() {
         val reopenSettings = settingsOverlay != null
+        val settingsScrollY = settingsScroll?.scrollY ?: 0
         val draft = if (::composerInput.isInitialized) composerInput.text.toString() else ""
         if (::composerInput.isInitialized) persistCurrentDraft()
         if (reopenSettings) closeSettings()
@@ -4456,7 +4470,7 @@ class MainActivity : Activity() {
         } else 0
         renderHome()
         composerInput.setText(draft)
-        if (reopenSettings) showSettings()
+        if (reopenSettings) showSettings(settingsScrollY)
     }
 
     private fun refreshSettingsNotificationControl() {
@@ -4494,8 +4508,9 @@ class MainActivity : Activity() {
             if (index >= 0) {
                 connectionProfiles[index] = connectionProfiles[index].copy(name = name)
                 persistConnectionProfiles()
+                val scrollY = settingsScroll?.scrollY ?: 0
                 closeSettings()
-                showSettings()
+                showSettings(scrollY)
             }
             true
         }
@@ -4524,8 +4539,9 @@ class MainActivity : Activity() {
                 }
             } else {
                 persistConnectionProfiles()
+                val scrollY = settingsScroll?.scrollY ?: 0
                 closeSettings()
-                showSettings()
+                showSettings(scrollY)
             }
         }
     }
@@ -4574,8 +4590,9 @@ class MainActivity : Activity() {
                         val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
                         val newToken = paired.getString("token")
                         handler.post {
+                            val scrollY = settingsScroll?.scrollY ?: 0
                             dialog.dismiss()
-                            switchConnection(saveConnectionProfile(normalized, newToken, name.text.toString()))
+                            switchConnection(saveConnectionProfile(normalized, newToken, name.text.toString()), scrollY)
                         }
                     } catch (error: Exception) {
                         handler.post {
