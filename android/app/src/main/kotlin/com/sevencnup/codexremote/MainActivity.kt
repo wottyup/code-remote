@@ -1281,6 +1281,10 @@ class MainActivity : Activity() {
                     velocityTracker?.recycle()
                     velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
                     swipeTarget = when {
+                        // Settings controls and text editing need the full touch
+                        // sequence. Cancelling their MOVE events breaks SeekBar
+                        // dragging and can drop the composer's cursor/selection.
+                        settingsOverlay != null || isInteractiveTouchTarget(event.x, event.y) -> null
                         sidebarVisible || sidebarProgress > .02f -> if (event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))) "sidebar" else null
                         workspaceVisible || workspaceProgress > .02f -> "workspace"
                         !isChatSwipeOrigin(event.y) -> null
@@ -1402,6 +1406,33 @@ class MainActivity : Activity() {
             swipeTarget = null
             velocityTracker?.recycle()
             velocityTracker = null
+        }
+
+        private fun isInteractiveTouchTarget(x: Float, y: Float): Boolean {
+            fun deepest(view: View, localX: Float, localY: Float): View? {
+                if (view.visibility != View.VISIBLE || localX < 0f || localY < 0f ||
+                    localX >= view.width || localY >= view.height
+                ) return null
+                if (view is ViewGroup) {
+                    for (index in view.childCount - 1 downTo 0) {
+                        val child = view.getChildAt(index)
+                        val childX = localX + view.scrollX - child.left - child.translationX
+                        val childY = localY + view.scrollY - child.top - child.translationY
+                        deepest(child, childX, childY)?.let { return it }
+                    }
+                }
+                return view
+            }
+
+            var target = deepest(this, x, y)
+            while (target != null && target !== this) {
+                if (target is EditText || target is SeekBar || target is ScrollView ||
+                    target is HorizontalScrollView || (target is TextView && target.isTextSelectable) ||
+                    target.isClickable || target.isLongClickable
+                ) return true
+                target = target.parent as? View
+            }
+            return false
         }
 
         private fun isChatSwipeOrigin(y: Float): Boolean = y >= dp(48) && y <= height - dp(145)
@@ -3513,7 +3544,10 @@ class MainActivity : Activity() {
                 applyGlobalFontAdjustment(root)
             }
         })
-        display.addView(fontSeek, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(2) })
+        display.addView(fontSeek, LinearLayout.LayoutParams(MATCH, dp(56)).apply {
+            topMargin = dp(2)
+            fontSeek.setPadding(0, dp(10), 0, dp(10))
+        })
 
         val notifications = section("系统通知", "应用在后台时提醒回复完成；通知不包含聊天正文。")
         val notificationRow = LinearLayout(this).apply {
