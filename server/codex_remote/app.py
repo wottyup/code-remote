@@ -825,9 +825,14 @@ def workspace_image_preview(base: Path, relative_path: str, managed_image_root: 
         try:
             candidate = Path(relative_path).expanduser().resolve()
             allowed_root = managed_image_root.resolve() if managed_image_root is not None else None
-            if allowed_root is None:
+            in_managed_image_root = allowed_root is not None and candidate.is_relative_to(allowed_root)
+            in_codex_clipboard = (
+                candidate.parent == Path(tempfile.gettempdir()).resolve()
+                and candidate.stem.startswith("codex-clipboard-")
+                and candidate.suffix.lower() in IMAGE_MEDIA_TYPES
+            )
+            if not in_managed_image_root and not in_codex_clipboard:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
-            candidate.relative_to(allowed_root)
         except HTTPException:
             raise
         except (OSError, RuntimeError, ValueError) as error:
@@ -1092,6 +1097,27 @@ def enrich_user_message_item(item: dict[str, Any], image_directory: Path) -> dic
     wrapper = {"turns": [{"items": [{**item, "type": "userMessage"}]}]}
     enrich_thread_images(wrapper, image_directory)
     return wrapper["turns"][0]["items"][0]
+
+
+def tail_thread_history(response: dict[str, Any], limit: int | None) -> dict[str, Any]:
+    """Return a bounded first screen while retaining a full-history sync revision."""
+    if limit is None:
+        return response
+    turns = response.get("turns")
+    if not isinstance(turns, list):
+        return response
+    bounded_limit = max(1, min(limit, 100))
+    if len(turns) <= bounded_limit:
+        return response
+    visible_turns = turns[-bounded_limit:]
+    visible_ids = {turn.get("id") for turn in visible_turns if isinstance(turn, dict) and isinstance(turn.get("id"), str)}
+    result = {**response, "turns": visible_turns, "historyPartial": True, "totalTurns": len(turns)}
+    workspace_changes = response.get("codexRemoteWorkspaceChanges")
+    if isinstance(workspace_changes, dict):
+        result["codexRemoteWorkspaceChanges"] = {
+            turn_id: changes for turn_id, changes in workspace_changes.items() if turn_id in visible_ids
+        }
+    return result
 
 
 class PairingAuth:
@@ -1361,7 +1387,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.18.1-dev.3", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.19.0-dev.21", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1556,24 +1582,32 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.get("/api/v1/codex/threads/{thread_id}")
-    async def read_thread(thread_id: str, since: str | None = None) -> dict[str, Any]:
+    async def read_thread(
+        thread_id: str,
+        since: str | None = None,
+        include_images: bool = True,
+        tail_turns: int | None = None,
+    ) -> dict[str, Any]:
         if is_claude_thread_id(thread_id):
             try:
                 thread = await claude_code.read_thread(thread_id)
-                return browser_history_sync.response(thread, since)
+                response = browser_history_sync.response(thread, since)
+                return tail_thread_history(response, tail_turns if since is None else None)
             except ClaudeThreadNotFoundError as error:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             # Capture before reading: a concurrent append must leave this
             # response stale, rather than claiming to contain the new data.
             revision = app_server.thread_history_revision(thread_id)
-            thread = browser_thread(await app_server.read_thread(thread_id))
+            thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns))
             if revision is not None:
                 thread["historyRevision"] = revision
             bound_cwd = shared_state.thread_workspace(thread_id)
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
-            return enrich_thread_images(browser_history_sync.response(thread, since), image_directory)
+            response = browser_history_sync.response(thread, since)
+            response = tail_thread_history(response, tail_turns if since is None else None)
+            return enrich_thread_images(response, image_directory) if include_images else response
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

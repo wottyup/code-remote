@@ -27,6 +27,12 @@ import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
+import android.text.SpannableString
+import android.text.SpannableStringBuilder
+import android.text.Spanned
+import android.text.style.BackgroundColorSpan
+import android.text.style.ForegroundColorSpan
+import android.text.style.StyleSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -120,7 +126,6 @@ class MainActivity : Activity() {
     internal var models = JSONArray()
     private var queuedMessages = JSONArray()
     private var syncRevisions = mutableMapOf<String, String>()
-    private val uncacheableHistoryThreadIds = mutableSetOf<String>()
     private val threadReadsInFlight = mutableSetOf<String>()
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
@@ -151,6 +156,7 @@ class MainActivity : Activity() {
     private var workspacePanel: LinearLayout? = null
     private var workspaceScrim: View? = null
     private var workspaceLoader: ((String) -> Unit)? = null
+    private var workspaceRefresher: ((String) -> Unit)? = null
     private var historyLoadingThreadId: String? = null
     private var historyLoadError: String? = null
     private var historySelectionGeneration = 0L
@@ -478,6 +484,7 @@ class MainActivity : Activity() {
         workspacePanel = null
         workspaceScrim = null
         workspaceLoader = null
+        workspaceRefresher = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
         workspaceGestureActive = false
@@ -1262,6 +1269,8 @@ class MainActivity : Activity() {
         persistCurrentDraft()
         activeThreadId = id
         activeThread = existingHistory ?: thread
+        workspaceLoadedPath = null
+        workspaceLoadingPath = null
         historyLoadingThreadId = if ((activeThread?.optJSONArray("turns")?.length() ?: 0) > 0) null else id
         historyLoadError = null
         historySelectionGeneration += 1
@@ -1304,7 +1313,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun historyCacheDirectory(): File = File(filesDir, "thread_history_cache_v1")
+    private fun historyCacheDirectory(): File = File(filesDir, "thread_history_cache_v2")
 
     private fun historyCacheFile(threadId: String): File {
         val digest = MessageDigest.getInstance("SHA-256").digest(threadId.toByteArray(StandardCharsets.UTF_8))
@@ -1329,20 +1338,22 @@ class MainActivity : Activity() {
 
     private fun writeThreadHistoryCache(threadId: String, thread: JSONObject, revision: String?) {
         try {
-            if (threadId in uncacheableHistoryThreadIds) return
-            if (!jsonFitsHistoryCache(thread)) {
-                uncacheableHistoryThreadIds += threadId
-                return
+            var partial = false
+            var threadSnapshot = historyCacheSnapshot(thread, null)
+            if (!jsonFitsHistoryCache(threadSnapshot)) {
+                partial = true
+                threadSnapshot = historyCacheSnapshot(thread, DEFAULT_VISIBLE_HISTORY_TURNS)
+                if (!jsonFitsHistoryCache(threadSnapshot)) return
             }
             val directory = historyCacheDirectory()
             if (!directory.exists() && !directory.mkdirs()) return
             val file = historyCacheFile(threadId)
             val temporary = File(directory, "${file.name}.tmp")
             temporary.delete()
-            val threadSnapshot = shallowCopyObject(thread, setOf("historySync"))
             val wrapper = JSONObject()
                 .put("threadId", threadId)
-                .put("revision", revision.orEmpty())
+                .put("revision", if (partial) "" else revision.orEmpty())
+                .put("partial", partial)
                 .put("thread", threadSnapshot)
             val payload = wrapper.toString().toByteArray(StandardCharsets.UTF_8)
             if (payload.size > MAX_HISTORY_CACHE_JSON_BYTES) return
@@ -1361,9 +1372,67 @@ class MainActivity : Activity() {
                 }
             }
             file.setLastModified(System.currentTimeMillis())
-            uncacheableHistoryThreadIds.remove(threadId)
             pruneThreadHistoryCache(file)
         } catch (_: Exception) { }
+    }
+
+    private fun historyCacheSnapshot(thread: JSONObject, recentTurnLimit: Int?): JSONObject {
+        val copy = shallowCopyObject(thread, setOf("historySync", "turns", "codexRemoteWorkspaceChanges"))
+        val sourceTurns = thread.optJSONArray("turns") ?: JSONArray()
+        val firstTurn = recentTurnLimit?.let { (sourceTurns.length() - it).coerceAtLeast(0) } ?: 0
+        val turns = JSONArray()
+        val retainedTurnIds = mutableSetOf<String>()
+        for (turnIndex in firstTurn until sourceTurns.length()) {
+            val sourceTurn = sourceTurns.optJSONObject(turnIndex) ?: continue
+            val turn = shallowCopyObject(sourceTurn, setOf("items"))
+            sourceTurn.optString("id").takeIf { it.isNotBlank() && it != "null" }?.let(retainedTurnIds::add)
+            val sourceItems = sourceTurn.optJSONArray("items") ?: JSONArray()
+            val items = JSONArray()
+            for (itemIndex in 0 until sourceItems.length()) {
+                val sourceItem = sourceItems.optJSONObject(itemIndex) ?: continue
+                if (normalizedType(sourceItem.optString("type")) != "usermessage") {
+                    items.put(sourceItem)
+                    continue
+                }
+                val sourceContent = sourceItem.optJSONArray("content")
+                if (sourceContent == null) {
+                    items.put(sourceItem)
+                    continue
+                }
+                var contentChanged = false
+                val content = JSONArray()
+                for (partIndex in 0 until sourceContent.length()) {
+                    val sourcePart = sourceContent.optJSONObject(partIndex)
+                    if (sourcePart == null) {
+                        content.put(sourceContent.opt(partIndex))
+                        continue
+                    }
+                    val localImage = normalizedType(sourcePart.optString("type")) == "localimage"
+                    if (localImage && sourcePart.has("data")) {
+                        content.put(shallowCopyObject(sourcePart, setOf("data")))
+                        contentChanged = true
+                    } else content.put(sourcePart)
+                }
+                items.put(if (contentChanged) shallowCopyObject(sourceItem, setOf("content")).put("content", content) else sourceItem)
+            }
+            turns.put(turn.put("items", items))
+        }
+        copy.put("turns", turns)
+        if (recentTurnLimit != null && sourceTurns.length() > turns.length()) {
+            copy.put("historyPartial", true)
+            copy.put("totalTurns", sourceTurns.length())
+        }
+
+        val sourceChanges = thread.optJSONObject("codexRemoteWorkspaceChanges")
+        if (sourceChanges != null) {
+            if (recentTurnLimit == null) copy.put("codexRemoteWorkspaceChanges", sourceChanges)
+            else {
+                val changes = JSONObject()
+                retainedTurnIds.forEach { turnId -> if (sourceChanges.has(turnId)) changes.put(turnId, sourceChanges.opt(turnId)) }
+                copy.put("codexRemoteWorkspaceChanges", changes)
+            }
+        }
+        return copy
     }
 
     private fun readHistoryCachePayload(input: InputStream): ByteArray? {
@@ -1396,7 +1465,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun refreshActiveThread(showLoading: Boolean) {
+    private fun refreshActiveThread(showLoading: Boolean, fullHistory: Boolean = false) {
         val threadId = activeThreadId ?: return
         if (showLoading && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) {
             historyLoadingThreadId = threadId
@@ -1407,19 +1476,34 @@ class MainActivity : Activity() {
             pendingThreadReads.add(threadId)
             return
         }
-        val revision = syncRevisions[threadId]
+        val revision = syncRevisions[threadId].takeUnless { fullHistory }
+        val boundedHistory = !fullHistory && (
+            activeThread?.optJSONArray("turns") == null ||
+                activeThread?.optBoolean("historyPartial", false) == true ||
+                activeThread?.optBoolean("historyWindowed", false) == true
+        )
         io.execute {
             try {
                 val api = RemoteApi(endpoint, token)
                 val encodedId = RemoteApi.encodePath(threadId)
-                var response = api.get("/api/v1/codex/threads/$encodedId" + if (revision.isNullOrBlank()) "" else "?since=${RemoteApi.encodePath(revision)}")
+                val lightweightQuery = buildString {
+                    append("?include_images=false")
+                    if (!revision.isNullOrBlank()) append("&since=${RemoteApi.encodePath(revision)}")
+                    if (boundedHistory) append("&tail_turns=$DEFAULT_VISIBLE_HISTORY_TURNS")
+                }
+                var response = api.get("/api/v1/codex/threads/$encodedId$lightweightQuery")
                 val changedTurnIds = if (revision != null) {
                     val changedTurns = response.optJSONArray("turns") ?: JSONArray()
                     (0 until changedTurns.length()).mapNotNull { changedTurns.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
                 } else emptyList()
                 val merged = if (revision != null) mergeHistory(threadId, activeThread, response, revision) else response
-                if (merged == null) {
-                    response = api.get("/api/v1/codex/threads/$encodedId")
+                val responseIsCompleteWindow = revision != null && response.has("turns") &&
+                    response.optJSONObject("historySync")?.optString("baseRevision").orEmpty().isBlank()
+                if (merged == null && !responseIsCompleteWindow) {
+                    response = api.get(buildString {
+                        append("/api/v1/codex/threads/$encodedId?include_images=false")
+                        if (boundedHistory) append("&tail_turns=$DEFAULT_VISIBLE_HISTORY_TURNS")
+                    })
                 }
                 val resolved = merged ?: response
                 val usedDelta = revision != null && merged != null
@@ -1501,8 +1585,15 @@ class MainActivity : Activity() {
             turns[id] = shallowCopyObject(changed).put("items", ordered)
         }
         val order = sync.optJSONArray("turnIds") ?: return null
+        val partialHistory = old.optBoolean("historyPartial", false)
+        val firstOrderIndex = if (partialHistory) (order.length() - DEFAULT_VISIBLE_HISTORY_TURNS).coerceAtLeast(0) else 0
         val mergedTurns = JSONArray()
-        for (index in 0 until order.length()) mergedTurns.put(turns[order.optString(index)] ?: return null)
+        val retainedTurnIds = mutableSetOf<String>()
+        for (index in firstOrderIndex until order.length()) {
+            val turnId = order.optString(index)
+            mergedTurns.put(turns[turnId] ?: return null)
+            retainedTurnIds += turnId
+        }
         val result = shallowCopyObject(delta).put("turns", mergedTurns)
         val oldChanges = old.optJSONObject("codexRemoteWorkspaceChanges") ?: JSONObject()
         val changes = shallowCopyObject(oldChanges)
@@ -1514,7 +1605,13 @@ class MainActivity : Activity() {
                 if (freshChanges.has(key)) changes.put(key, freshChanges.get(key))
             }
         }
-        result.put("codexRemoteWorkspaceChanges", changes)
+        if (partialHistory) {
+            val boundedChanges = JSONObject()
+            retainedTurnIds.forEach { turnId -> if (changes.has(turnId)) boundedChanges.put(turnId, changes.opt(turnId)) }
+            result.put("codexRemoteWorkspaceChanges", boundedChanges)
+            result.put("historyPartial", true)
+            result.put("totalTurns", delta.optInt("totalTurns", old.optInt("totalTurns", order.length())))
+        } else result.put("codexRemoteWorkspaceChanges", changes)
         return result
     }
 
@@ -1578,7 +1675,9 @@ class MainActivity : Activity() {
                 when (normalizedType(item.optString("type"))) {
                     "usermessage" -> {
                         val hasImage = item.optJSONArray("content")?.let { content ->
-                            (0 until content.length()).any { content.optJSONObject(it)?.optString("type") in setOf("image", "localImage") }
+                            (0 until content.length()).any { index ->
+                                normalizedType(content.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
+                            }
                         } == true
                         if (messageText(item, "user").isNotBlank() || hasImage) {
                             messages += "user" to shallowCopyObject(item).put("_turnId", turnId)
@@ -1674,19 +1773,29 @@ class MainActivity : Activity() {
             }
         }
 
-        if (effectiveIncrementalTurnId == null && firstVisibleTurnIndex > 0) {
-            val hiddenTurnCount = firstVisibleTurnIndex
-            messageList.addView(label("显示更早的 $hiddenTurnCount 轮对话", 11, ACCENT, true).apply {
+        val remoteHiddenTurnCount = if (thread?.optBoolean("historyPartial", false) == true) {
+            (thread.optInt("totalTurns", turns.length()) - turns.length()).coerceAtLeast(0)
+        } else 0
+        if (effectiveIncrementalTurnId == null && (firstVisibleTurnIndex > 0 || remoteHiddenTurnCount > 0)) {
+            val hiddenTurnCount = if (remoteHiddenTurnCount > 0) remoteHiddenTurnCount else firstVisibleTurnIndex
+            messageList.addView(label(if (remoteHiddenTurnCount > 0) "加载更早的 $hiddenTurnCount 轮对话" else "显示更早的 $hiddenTurnCount 轮对话", 11, ACCENT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(12), dp(10), dp(12), dp(10))
                 background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
                 setOnClickListener {
-                    val previousHeight = messageList.height
-                    val previousScrollY = messageScroll.scrollY
-                    visibleHistoryTurnCount += DEFAULT_VISIBLE_HISTORY_TURNS
-                    renderMessages(false)
-                    messageScroll.post {
-                        messageScroll.scrollTo(0, previousScrollY + (messageList.height - previousHeight).coerceAtLeast(0))
+                    if (remoteHiddenTurnCount > 0) {
+                        text = "正在加载更早的对话…"
+                        isEnabled = false
+                        visibleHistoryTurnCount += DEFAULT_VISIBLE_HISTORY_TURNS
+                        refreshActiveThread(false, fullHistory = true)
+                    } else {
+                        val previousHeight = messageList.height
+                        val previousScrollY = messageScroll.scrollY
+                        visibleHistoryTurnCount += DEFAULT_VISIBLE_HISTORY_TURNS
+                        renderMessages(false)
+                        messageScroll.post {
+                            messageScroll.scrollTo(0, previousScrollY + (messageList.height - previousHeight).coerceAtLeast(0))
+                        }
                     }
                 }
             }, LinearLayout.LayoutParams(MATCH, WRAP).apply {
@@ -1740,7 +1849,9 @@ class MainActivity : Activity() {
             }
             val text = messageText(item, role)
             val hasImage = item.optJSONArray("content")?.let { parts ->
-                (0 until parts.length()).any { parts.optJSONObject(it)?.optString("type") in setOf("image", "localImage") }
+                (0 until parts.length()).any { index ->
+                    normalizedType(parts.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
+                }
             } == true
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
@@ -2029,10 +2140,17 @@ class MainActivity : Activity() {
         val content = item.optJSONArray("content") ?: return
         for (index in 0 until content.length()) {
             val part = content.optJSONObject(index) ?: continue
-            val type = part.optString("type")
-            val dataValue = if (type == "image") part.optString("image_url") else if (type == "localImage") part.optString("data") else ""
+            val type = normalizedType(part.optString("type"))
+            val dataValue = if (type == "image") part.optString("image_url") else if (type == "localimage") part.optString("data") else ""
             val data = dataValue.substringAfter("base64,", dataValue)
-            if (data.isBlank()) continue
+            if (data.isBlank()) {
+                if (type == "localimage") {
+                    part.optString("path").takeIf { it.isNotBlank() && it != "null" }?.let { path ->
+                        addRemoteMessageImage(container, path)
+                    }
+                }
+                continue
+            }
             if (data.length > MAX_INLINE_IMAGE_BASE64_CHARS) {
                 container.addView(label("图片过大，已跳过内嵌预览", 11, WARNING).apply {
                     setPadding(0, dp(5), 0, dp(3))
@@ -2054,6 +2172,62 @@ class MainActivity : Activity() {
                 container.addView(image, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
             } catch (_: IllegalArgumentException) { }
             catch (_: OutOfMemoryError) { messageImageCache.evictAll() }
+        }
+    }
+
+    private fun addRemoteMessageImage(container: LinearLayout, path: String) {
+        val cacheKey = "path:$path"
+        val holder = FrameLayout(this).apply {
+            background = rounded(USER_BUBBLE, dp(8))
+            clipToOutline = true
+        }
+        val image = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            visibility = View.INVISIBLE
+        }
+        holder.addView(image, FrameLayout.LayoutParams(MATCH, MATCH))
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            isIndeterminate = true
+            indeterminateTintList = ColorStateList.valueOf(MUTED)
+        }
+        holder.addView(progress, FrameLayout.LayoutParams(dp(24), dp(24), Gravity.CENTER))
+        container.addView(holder, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
+
+        fun display(bitmap: Bitmap) {
+            image.setImageBitmap(bitmap)
+            image.visibility = View.VISIBLE
+            progress.visibility = View.GONE
+            image.setOnClickListener { showImageDialog(bitmap) }
+        }
+
+        messageImageCache.get(cacheKey)?.let {
+            display(it)
+            return
+        }
+        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+        io.execute {
+            try {
+                val query = buildString {
+                    append("?path=${Uri.encode(path)}")
+                    if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
+                }
+                val response = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/image$query")
+                val encoded = response.optString("data")
+                if (encoded.isBlank() || encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片过大")
+                val bitmap = decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), 720)
+                    ?: throw IOException("图片内容无法解析")
+                messageImageCache.put(cacheKey, bitmap)
+                handler.post { if (holder.isAttachedToWindow) display(bitmap) }
+            } catch (_: Exception) {
+                handler.post {
+                    if (!holder.isAttachedToWindow) return@post
+                    progress.visibility = View.GONE
+                    holder.addView(label("图片暂时无法加载", 11, MUTED).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
+                }
+            } catch (_: OutOfMemoryError) {
+                messageImageCache.evictAll()
+                handler.post { if (holder.isAttachedToWindow) progress.visibility = View.GONE }
+            }
         }
     }
 
@@ -2098,6 +2272,7 @@ class MainActivity : Activity() {
         val additions: Int = 0,
         val deletions: Int = 0,
         val kind: String = "",
+        val diff: String = "",
     )
 
     private fun fileChangesForTurn(turnId: String, turn: JSONObject?, thread: JSONObject?): List<FileChangeEntry> {
@@ -2106,7 +2281,15 @@ class MainActivity : Activity() {
         for (itemIndex in 0 until items.length()) {
             val item = items.optJSONObject(itemIndex) ?: continue
             if (normalizedType(item.optString("type")) != "filechange") continue
-            parseFileChanges(item.opt("changes")).forEach { merged[it.path] = it }
+            parseFileChanges(item.opt("changes")).forEach { incoming ->
+                val previous = merged[incoming.path]
+                merged[incoming.path] = if (previous == null) incoming else previous.copy(
+                    additions = previous.additions + incoming.additions,
+                    deletions = previous.deletions + incoming.deletions,
+                    kind = incoming.kind.ifBlank { previous.kind },
+                    diff = listOf(previous.diff, incoming.diff).filter(String::isNotBlank).distinct().joinToString("\n\n"),
+                )
+            }
         }
         val workspaceValue = thread?.optJSONObject("codexRemoteWorkspaceChanges")?.opt(turnId)
         val workspaceChanges = when (workspaceValue) {
@@ -2119,6 +2302,7 @@ class MainActivity : Activity() {
                 additions = if (previous.additions > 0 || previous.deletions > 0) previous.additions else incoming.additions,
                 deletions = if (previous.additions > 0 || previous.deletions > 0) previous.deletions else incoming.deletions,
                 kind = previous.kind.ifBlank { incoming.kind },
+                diff = listOf(previous.diff, incoming.diff).filter(String::isNotBlank).distinct().joinToString("\n\n"),
             )
         }
         return merged.values.toList()
@@ -2150,7 +2334,13 @@ class MainActivity : Activity() {
             val diff = listOf("diff", "patch", "unified_diff", "unifiedDiff").map { key -> item.optString(key) }.firstOrNull { it.isNotBlank() }.orEmpty()
             val additions = if (item.has("additions")) item.optInt("additions") else diff.lineSequence().count { it.startsWith("+") && !it.startsWith("+++") }
             val deletions = if (item.has("deletions")) item.optInt("deletions") else diff.lineSequence().count { it.startsWith("-") && !it.startsWith("---") }
-            FileChangeEntry(path, additions.coerceAtLeast(0), deletions.coerceAtLeast(0), item.optString("kind").ifBlank { item.optString("type") })
+            FileChangeEntry(
+                path,
+                additions.coerceAtLeast(0),
+                deletions.coerceAtLeast(0),
+                item.optString("kind").ifBlank { item.optString("type") },
+                diff,
+            )
         }
     }
 
@@ -2204,10 +2394,7 @@ class MainActivity : Activity() {
                     val line = RelativeLayout(this).apply {
                         gravity = Gravity.CENTER_VERTICAL
                         setPadding(dp(21), dp(3), 0, dp(3))
-                        setOnClickListener {
-                            val threadCwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-                            showFilePreview(item.path, threadCwd)
-                        }
+                        setOnClickListener { showDiffPreview(item) }
                     }
                     val stats = LinearLayout(this).apply {
                         id = View.generateViewId()
@@ -3147,10 +3334,10 @@ class MainActivity : Activity() {
         overlay.addView(scrim, FrameLayout.LayoutParams(MATCH, MATCH))
 
         val availableWidth = root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
-        val panelWidth = min(dp(380), (availableWidth * .80f).toInt()).coerceAtLeast(dp(260))
+        val panelWidth = min(dp(360), (availableWidth * .78f).toInt()).coerceAtLeast(dp(260))
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(4), dp(12), dp(4))
+            setPadding(dp(10), dp(3), dp(10), dp(3))
             background = rounded(PANEL, 0, BORDER, dp(1))
             elevation = dp(4).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
@@ -3163,31 +3350,24 @@ class MainActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
         header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
-        header.addView(iconButton("arrow_up", "返回上级目录") {
-            val normalized = workspaceCurrentPath.trimEnd('/')
-            workspaceLoader?.invoke(normalized.substringBeforeLast('/', ""))
-        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        val refreshButton = iconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke("") }
+        header.addView(refreshButton, LinearLayout.LayoutParams(dp(32), dp(32)))
         val createButton = iconButton("add", "新建文件或文件夹") { }
-        createButton.setOnClickListener { showCreateEntry(createButton, workspaceCurrentPath, ::refreshDirectory) }
+        createButton.setOnClickListener { showCreateEntry(createButton, "") { workspaceRefresher?.invoke("") } }
         header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(iconButton("close", "关闭文件树") {
-            setWorkspaceVisible(false)
-        }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        header.addView(iconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
         panel.addView(header, widthWrap())
 
         val entries = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
+            addView(entries)
         }
-        scroll.addView(entries)
-        panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply {
-            topMargin = dp(5)
-            bottomMargin = dp(6)
-        })
+        panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3); bottomMargin = dp(3) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        footer.addView(label("长按条目可重命名、复制、剪切或删除", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
-        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries(workspaceCurrentPath, ::refreshDirectory) })
+        footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
+        footer.addView(smallButton("粘贴") { pasteWorkspaceEntries("") { workspaceRefresher?.invoke("*") } })
         panel.addView(footer, widthWrap())
 
         workspaceOverlay = overlay
@@ -3196,122 +3376,193 @@ class MainActivity : Activity() {
         root.addView(overlay, FrameLayout.LayoutParams(MATCH, MATCH))
         updateInsetAwareOverlays()
 
-        workspaceLoader = { requestedPath ->
-            val path = requestedPath.trim('/')
-            workspaceCurrentPath = path
-            workspaceLoadedPath = null
-            workspaceLoadingPath = path
-            val renderLoading = {
-                pathTitle.text = path.ifBlank {
-                    activeThread?.optString("cwd")?.takeIf { !it.isNullOrBlank() && it != "null" }
-                        ?: runtime.optString("workspace", "工作区")
-                }
-                entries.removeAllViews()
-                entries.addView(label("正在读取…", 12, MUTED).apply {
-                    setPadding(dp(8), dp(12), dp(8), dp(12))
-                }, widthWrap())
-            }
-            if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderLoading
-            else renderLoading()
+        val directoryChildren = linkedMapOf<String, JSONArray>()
+        val directoryTruncated = mutableSetOf<String>()
+        val directoryErrors = mutableMapOf<String, String>()
+        val loadingDirectories = mutableSetOf<String>()
+        val expandedDirectories = linkedSetOf<String>()
+        var loadedWorkspaceKey: String? = null
+        lateinit var renderTree: () -> Unit
+        lateinit var loadDirectory: (String, Boolean) -> Unit
+        lateinit var addDirectoryRows: (String, Int) -> Unit
 
-            val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-            val query = buildString {
-                append("?path=")
-                append(Uri.encode(path))
-                if (!cwd.isNullOrBlank()) {
-                    append("&cwd=")
-                    append(Uri.encode(cwd))
+        fun currentCwd(): String? = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+        fun workspaceKey(): String = currentCwd() ?: runtime.optString("workspace", "<default>")
+        fun parentPath(value: String): String = value.trim('/').substringBeforeLast('/', "")
+        fun absolutePath(relativePath: String): String = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
+            .filter { it.isNotBlank() }.joinToString("/")
+        fun dispatchRender() {
+            if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
+            else renderTree()
+        }
+
+        addDirectoryRows = addRows@{ directoryPath, depth ->
+            val children = directoryChildren[directoryPath] ?: return@addRows
+            for (index in 0 until children.length()) {
+                val entry = children.optJSONObject(index) ?: continue
+                val isDirectory = entry.optString("kind") == "directory"
+                val relativePath = entry.optString("path")
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(3 + depth * 15), dp(4), dp(2), dp(4))
+                    background = rounded(Color.TRANSPARENT, dp(7))
                 }
+                if (isDirectory) {
+                    row.addView(ImageView(this).apply {
+                        setImageResource(if (relativePath in expandedDirectories) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
+                        imageTintList = ColorStateList.valueOf(MUTED)
+                        contentDescription = if (relativePath in expandedDirectories) "已展开" else "已收起"
+                    }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(3) })
+                } else {
+                    row.addView(View(this), LinearLayout.LayoutParams(dp(17), dp(1)))
+                }
+                row.addView(ImageView(this).apply {
+                    setImageResource(if (isDirectory) R.drawable.ic_folder else fileIconResource(entry.optString("name")))
+                    imageTintList = if (isDirectory) ColorStateList.valueOf(ACCENT) else null
+                    contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
+                }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
+                row.addView(label(entry.optString("name"), 13, TEXT).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                if (!isDirectory) row.addView(
+                    label(formatFileSize(entry.optLong("size")), 9, MUTED),
+                    LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(4) },
+                )
+                val fullPath = absolutePath(relativePath)
+                if (fullPath.isNotBlank() && !composerInput.text.toString().contains(fullPath)) {
+                    row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
+                        insertWorkspacePathIntoComposer(fullPath)
+                    }, LinearLayout.LayoutParams(dp(28), dp(28)).apply { leftMargin = dp(2) })
+                }
+                row.setOnClickListener {
+                    if (isDirectory) {
+                        if (relativePath in expandedDirectories) {
+                            expandedDirectories.remove(relativePath)
+                            dispatchRender()
+                        } else {
+                            expandedDirectories.add(relativePath)
+                            if (directoryChildren.containsKey(relativePath)) dispatchRender()
+                            else loadDirectory(relativePath, false)
+                        }
+                    } else showFilePreview(relativePath, currentCwd())
+                }
+                row.setOnLongClickListener {
+                    showWorkspaceEntryActions(row, entry, currentCwd()) { changedDirectory ->
+                        loadDirectory(changedDirectory, true)
+                    }
+                    true
+                }
+                entries.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(1) })
+
+                if (!isDirectory || relativePath !in expandedDirectories) continue
+                when {
+                    relativePath in loadingDirectories && !directoryChildren.containsKey(relativePath) -> entries.addView(
+                        label("正在读取…", 10, MUTED).apply { setPadding(dp(38 + (depth + 1) * 15), dp(6), dp(6), dp(6)) },
+                        widthWrap(),
+                    )
+                    directoryErrors.containsKey(relativePath) -> entries.addView(
+                        label("读取失败，点此重试", 10, ERROR).apply {
+                            setPadding(dp(38 + (depth + 1) * 15), dp(6), dp(6), dp(6))
+                            setOnClickListener { loadDirectory(relativePath, true) }
+                        },
+                        widthWrap(),
+                    )
+                    directoryChildren[relativePath]?.length() == 0 -> entries.addView(
+                        label("空文件夹", 10, MUTED).apply { setPadding(dp(38 + (depth + 1) * 15), dp(5), dp(6), dp(5)) },
+                        widthWrap(),
+                    )
+                    else -> addDirectoryRows(relativePath, depth + 1)
+                }
+                if (relativePath in directoryTruncated) entries.addView(
+                    label("目录内容较多，仅显示前 400 项", 9, MUTED).apply { setPadding(dp(38 + (depth + 1) * 15), dp(4), dp(6), dp(5)) },
+                    widthWrap(),
+                )
+            }
+        }
+
+        renderTree = render@{
+            if (workspaceOverlay !== overlay) return@render
+            val previousScrollY = scroll.scrollY
+            pathTitle.text = workspaceRootPath.ifBlank { currentCwd() ?: runtime.optString("workspace", "工作区") }
+            entries.removeAllViews()
+            when {
+                "" in loadingDirectories && !directoryChildren.containsKey("") -> entries.addView(
+                    label("正在读取…", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap(),
+                )
+                directoryErrors.containsKey("") -> entries.addView(
+                    label("${directoryErrors[""]}\n点此重新加载", 12, ERROR).apply {
+                        setPadding(dp(8), dp(12), dp(8), dp(12))
+                        setOnClickListener { loadDirectory("", true) }
+                    }, widthWrap(),
+                )
+                directoryChildren[""]?.length() == 0 -> entries.addView(
+                    label("空文件夹", 12, MUTED).apply { setPadding(dp(8), dp(12), dp(8), dp(12)) }, widthWrap(),
+                )
+                else -> addDirectoryRows("", 0)
+            }
+            if ("" in directoryTruncated) entries.addView(
+                label("目录内容较多，仅显示前 400 项", 10, MUTED).apply { setPadding(dp(8), dp(8), dp(8), dp(8)) }, widthWrap(),
+            )
+            scroll.post { scroll.scrollTo(0, previousScrollY.coerceAtMost((entries.height - scroll.height).coerceAtLeast(0))) }
+        }
+
+        loadDirectory = load@{ requestedPath, force ->
+            val resetTree = requestedPath == "*"
+            val path = if (resetTree) "" else requestedPath.trim('/')
+            val requestWorkspaceKey = workspaceKey()
+            if (resetTree || loadedWorkspaceKey != requestWorkspaceKey) {
+                loadedWorkspaceKey = requestWorkspaceKey
+                directoryChildren.clear()
+                directoryTruncated.clear()
+                directoryErrors.clear()
+                loadingDirectories.clear()
+                expandedDirectories.clear()
+                workspaceRootPath = ""
+                workspaceCurrentPath = ""
+                workspaceLoadedPath = null
+            }
+            if (!force && (directoryChildren.containsKey(path) || path in loadingDirectories)) {
+                dispatchRender()
+                return@load
+            }
+            loadingDirectories.add(path)
+            directoryErrors.remove(path)
+            workspaceLoadingPath = path
+            dispatchRender()
+            val cwd = currentCwd()
+            val query = buildString {
+                append("?path=${Uri.encode(path)}")
+                if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
             }
             io.execute {
                 try {
                     val tree = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/tree$query")
                     handler.post {
-                        if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
-                        val renderTree = {
-                            if (workspaceOverlay === overlay && workspaceCurrentPath == path) {
-                                workspaceLoadedPath = path
-                                workspaceLoadingPath = null
-                                workspaceRootPath = tree.optString("cwd")
-                                pathTitle.text = tree.optString("cwd") + if (path.isBlank()) "" else "/$path"
-                                entries.removeAllViews()
-                                val children = tree.optJSONArray("entries") ?: JSONArray()
-                                if (children.length() == 0) {
-                                    entries.addView(label("空文件夹", 12, MUTED).apply {
-                                        setPadding(dp(8), dp(12), dp(8), dp(12))
-                                    }, widthWrap())
-                                }
-                                for (index in 0 until children.length()) {
-                                    val entry = children.optJSONObject(index) ?: continue
-                                    val isDirectory = entry.optString("kind") == "directory"
-                                    val row = LinearLayout(this@MainActivity).apply {
-                                        orientation = LinearLayout.HORIZONTAL
-                                        gravity = Gravity.CENTER_VERTICAL
-                                        setPadding(dp(7), dp(5), dp(3), dp(5))
-                                        background = rounded(Color.TRANSPARENT, dp(7))
-                                    }
-                                    val typeIcon = ImageView(this@MainActivity).apply {
-                                        setImageResource(if (isDirectory) R.drawable.ic_folder else R.drawable.ic_file)
-                                        imageTintList = ColorStateList.valueOf(if (isDirectory) ACCENT else SUBTLE)
-                                        contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
-                                    }
-                                    row.addView(typeIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
-                                    val name = label(entry.optString("name"), 13, TEXT).apply {
-                                        maxLines = 1
-                                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                                    }
-                                    row.addView(name, LinearLayout.LayoutParams(0, WRAP, 1f))
-                                    if (!isDirectory) row.addView(
-                                        label(formatFileSize(entry.optLong("size")), 10, MUTED),
-                                        LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(5) },
-                                    )
-                                    val relativePath = entry.optString("path")
-                                    val absolutePath = listOf(workspaceRootPath.trimEnd('/'), relativePath.trimStart('/'))
-                                        .filter { it.isNotBlank() }.joinToString("/")
-                                    if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
-                                        row.addView(iconButton("add", "加入输入框 ${entry.optString("name")}") {
-                                            insertWorkspacePathIntoComposer(absolutePath)
-                                        }, LinearLayout.LayoutParams(dp(30), dp(30)).apply { leftMargin = dp(3) })
-                                    }
-                                    row.setOnClickListener {
-                                        if (isDirectory) workspaceLoader?.invoke(entry.optString("path"))
-                                        else showFilePreview(entry.optString("path"), cwd)
-                                    }
-                                    row.setOnLongClickListener {
-                                        showWorkspaceEntryActions(row, entry, cwd) { refreshDirectory() }
-                                        true
-                                    }
-                                    entries.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(1) })
-                                }
-                                if (tree.optBoolean("truncated", false)) {
-                                    entries.addView(label("目录内容较多，已显示前 400 项", 10, MUTED).apply {
-                                        setPadding(dp(8), dp(8), dp(8), dp(8))
-                                    }, widthWrap())
-                                }
-                            }
-                        }
-                        if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
-                        else renderTree()
+                        if (workspaceOverlay !== overlay || loadedWorkspaceKey != requestWorkspaceKey || workspaceKey() != requestWorkspaceKey) return@post
+                        directoryChildren[path] = tree.optJSONArray("entries") ?: JSONArray()
+                        if (tree.optBoolean("truncated", false)) directoryTruncated.add(path) else directoryTruncated.remove(path)
+                        directoryErrors.remove(path)
+                        loadingDirectories.remove(path)
+                        workspaceLoadingPath = null
+                        workspaceRootPath = tree.optString("cwd").ifBlank { workspaceRootPath }
+                        if (path.isBlank()) workspaceLoadedPath = ""
+                        dispatchRender()
                     }
                 } catch (error: Exception) {
                     handler.post {
-                        if (workspaceOverlay !== overlay || workspaceCurrentPath != path) return@post
-                        val renderError = {
-                            if (workspaceOverlay === overlay && workspaceCurrentPath == path) {
-                                workspaceLoadedPath = path
-                                workspaceLoadingPath = null
-                                entries.removeAllViews()
-                                entries.addView(label(error.message ?: "无法读取文件目录", 12, ERROR).apply {
-                                    setPadding(dp(8), dp(12), dp(8), dp(12))
-                                }, widthWrap())
-                            }
-                        }
-                        if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderError
-                        else renderError()
+                        if (workspaceOverlay !== overlay || loadedWorkspaceKey != requestWorkspaceKey) return@post
+                        directoryErrors[path] = error.message ?: "无法读取文件目录"
+                        loadingDirectories.remove(path)
+                        workspaceLoadingPath = null
+                        dispatchRender()
                     }
                 }
             }
         }
+        workspaceLoader = { path -> loadDirectory(path, false) }
+        workspaceRefresher = { path -> loadDirectory(path, true) }
         updateWorkspaceProgress(workspaceProgress)
     }
 
@@ -3403,17 +3654,11 @@ class MainActivity : Activity() {
 
     private fun handleWorkspaceBack(): Boolean {
         if (!workspaceVisible) return false
-        val path = workspaceCurrentPath.trim('/')
-        if (path.isBlank()) {
-            setWorkspaceVisible(false)
-        } else {
-            workspaceLoader?.invoke(path.substringBeforeLast('/', ""))
-            setWorkspaceVisible(true)
-        }
+        setWorkspaceVisible(false)
         return true
     }
 
-    private fun refreshDirectory() { workspaceLoader?.invoke(workspaceCurrentPath) }
+    private fun refreshDirectory() { workspaceRefresher?.invoke(workspaceCurrentPath) }
 
     private fun insertWorkspacePathIntoComposer(path: String) {
         val current = composerInput.text.toString()
@@ -3428,56 +3673,68 @@ class MainActivity : Activity() {
     }
 
     private fun showCreateEntry(anchor: View, parentPath: String, refresh: () -> Unit) {
-        showActionPopup(anchor, "新建", listOf(MenuAction("新建文件", "file"), MenuAction("新建文件夹", "folder"))) { index ->
+        showActionPopup(anchor, "新建", listOf(MenuAction("新建文件", "file_add"), MenuAction("新建文件夹", "folder_add"))) { index ->
             val kind = if (index == 0) "file" else "directory"
-            val input = editField("名称", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
-            showInputDialog(if (kind == "file") "新建文件" else "新建文件夹", input, "创建") {
-                val name = input.text.toString().trim()
-                if (name.isBlank()) return@showInputDialog false
-                val path = listOf(parentPath.trim('/'), name).filter { it.isNotBlank() }.joinToString("/")
-                val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-                runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/entries", JSONObject()
-                    .put("path", path).put("kind", kind).putOpt("cwd", cwd)) }, { refresh() })
-                true
-            }
+            showCreateWorkspaceEntryDialog(kind, parentPath, refresh)
         }
     }
 
-    private fun showWorkspaceEntryActions(anchor: View, entry: JSONObject, cwd: String?, refreshed: () -> Unit) {
+    private fun showCreateWorkspaceEntryDialog(kind: String, parentPath: String, refresh: () -> Unit) {
+        val input = editField("名称", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
+        showInputDialog(if (kind == "file") "新建文件" else "新建文件夹", input, "创建") {
+            val name = input.text.toString().trim()
+            if (name.isBlank()) return@showInputDialog false
+            val path = listOf(parentPath.trim('/'), name).filter { it.isNotBlank() }.joinToString("/")
+            val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+            runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/entries", JSONObject()
+                .put("path", path).put("kind", kind).putOpt("cwd", cwd)) }, { refresh() })
+            true
+        }
+    }
+
+    private fun showWorkspaceEntryActions(anchor: View, entry: JSONObject, cwd: String?, refreshed: (String) -> Unit) {
         val path = entry.optString("path")
         val isDirectory = entry.optString("kind") == "directory"
-        val actions = mutableListOf(MenuAction("打开", "open"))
-        if (isDirectory && activeThreadId != null) actions += MenuAction("绑定当前聊天", "link")
+        val parentPath = path.trim('/').substringBeforeLast('/', "")
+        val absolutePath = listOf(workspaceRootPath.trimEnd('/'), path.trimStart('/')).filter { it.isNotBlank() }.joinToString("/")
+        val actions = mutableListOf<MenuAction>()
+        if (isDirectory && activeThreadId != null) actions += MenuAction("绑定当前聊天到此目录", "link")
+        if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) actions += MenuAction("加入输入框", "add")
+        if (isDirectory) actions += listOf(MenuAction("新建文件", "file_add"), MenuAction("新建文件夹", "folder_add"))
         actions += listOf(
             MenuAction("重命名", "edit"),
             MenuAction("复制", "copy"),
             MenuAction("剪切", "cut"),
-            MenuAction("删除", "delete", destructive = true),
         )
+        if (isDirectory && workspaceClipboard.isNotEmpty()) actions += MenuAction("粘贴到此处", "paste")
+        actions += MenuAction("删除", "delete", destructive = true)
         showActionPopup(anchor, entry.optString("name"), actions) { which ->
             when (actions[which].title) {
-                "打开" -> if (isDirectory) workspaceLoader?.invoke(path) else showFilePreview(path, cwd)
-                "绑定当前聊天" -> {
+                "绑定当前聊天到此目录" -> {
                     val threadId = activeThreadId ?: return@showActionPopup
-                    val absolutePath = listOf(workspaceRootPath.trimEnd('/'), path.trimStart('/')).filter { it.isNotBlank() }.joinToString("/")
                     runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/workspace", JSONObject().put("cwd", absolutePath)) }, {
                         activeThread?.put("cwd", absolutePath)
+                        workspaceLoadedPath = null
                         renderHeader()
                         refreshThreads(false)
                         showToast("已绑定当前聊天的工作路径")
                     })
                 }
+                "加入输入框" -> insertWorkspacePathIntoComposer(absolutePath)
+                "新建文件" -> showCreateWorkspaceEntryDialog("file", path) { refreshed(path) }
+                "新建文件夹" -> showCreateWorkspaceEntryDialog("directory", path) { refreshed(path) }
                 "重命名" -> {
                     val input = editField("名称", entry.optString("name"), InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
                     showInputDialog("重命名", input, "确定") {
                         if (input.text.toString().trim().isBlank()) return@showInputDialog false
-                        runApi({ RemoteApi(endpoint, token).patch("/api/v1/codex/workspace/entry", JSONObject().put("path", path).put("name", input.text.toString().trim()).putOpt("cwd", cwd)) }, { refreshed() })
+                        runApi({ RemoteApi(endpoint, token).patch("/api/v1/codex/workspace/entry", JSONObject().put("path", path).put("name", input.text.toString().trim()).putOpt("cwd", cwd)) }, { refreshed(parentPath) })
                         true
                     }
                 }
                 "复制", "剪切" -> { workspaceClipboard.clear(); workspaceClipboard += path; workspaceClipboardMode = if (actions[which].title == "复制") "copy" else "move"; showToast(if (workspaceClipboardMode == "copy") "已复制" else "已剪切") }
-                "删除" -> showConfirmDialog("删除文件", "删除 ${entry.optString("name")}？此操作无法撤销。", "删除", destructive = true) {
-                    runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/delete", JSONObject().put("paths", JSONArray().put(path)).putOpt("cwd", cwd)) }, { refreshed() })
+                "粘贴到此处" -> pasteWorkspaceEntries(path) { refreshed("*") }
+                "删除" -> showConfirmDialog("删除所选内容", "永久删除 ${entry.optString("name")}？非空文件夹也会一并删除，此操作无法恢复。", "删除", destructive = true) {
+                    runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/delete", JSONObject().put("paths", JSONArray().put(path)).putOpt("cwd", cwd)) }, { refreshed(parentPath) })
                 }
             }
         }
@@ -3492,6 +3749,222 @@ class MainActivity : Activity() {
             if (workspaceClipboardMode == "move") workspaceClipboard.clear()
             refreshed()
         })
+    }
+
+    private data class NumberedDiffLine(
+        val content: String,
+        val kind: String,
+        val oldLine: Int? = null,
+        val newLine: Int? = null,
+    )
+
+    private fun numberDiffLines(diff: String): List<NumberedDiffLine> {
+        val result = mutableListOf<NumberedDiffLine>()
+        val hunkPattern = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@""")
+        var oldLine = 0
+        var newLine = 0
+        var oldRemaining = 0
+        var newRemaining = 0
+        var insideHunk = false
+        diff.lineSequence().forEach { line ->
+            val hunk = hunkPattern.find(line)
+            if (hunk != null) {
+                oldLine = hunk.groupValues[1].toIntOrNull() ?: 0
+                oldRemaining = hunk.groupValues[2].toIntOrNull() ?: 1
+                newLine = hunk.groupValues[3].toIntOrNull() ?: 0
+                newRemaining = hunk.groupValues[4].toIntOrNull() ?: 1
+                insideHunk = true
+                result += NumberedDiffLine(line, "hunk")
+                return@forEach
+            }
+            if (!insideHunk) return@forEach
+            when {
+                line.startsWith("\\") -> result += NumberedDiffLine(line, "context")
+                line.startsWith("-") && oldRemaining > 0 -> {
+                    result += NumberedDiffLine(line.drop(1), "deleted", oldLine = oldLine)
+                    oldLine += 1
+                    oldRemaining -= 1
+                }
+                line.startsWith("+") && newRemaining > 0 -> {
+                    result += NumberedDiffLine(line.drop(1), "added", newLine = newLine)
+                    newLine += 1
+                    newRemaining -= 1
+                }
+                line.startsWith(" ") && oldRemaining > 0 && newRemaining > 0 -> {
+                    result += NumberedDiffLine(line.drop(1), "context", oldLine, newLine)
+                    oldLine += 1
+                    newLine += 1
+                    oldRemaining -= 1
+                    newRemaining -= 1
+                }
+            }
+            if (oldRemaining <= 0 && newRemaining <= 0) insideHunk = false
+        }
+        if (result.isNotEmpty()) return result
+        return diff.lineSequence().mapNotNull { line ->
+            when {
+                line.startsWith("+") && !line.startsWith("+++") -> NumberedDiffLine(line.drop(1), "added")
+                line.startsWith("-") && !line.startsWith("---") -> NumberedDiffLine(line.drop(1), "deleted")
+                else -> null
+            }
+        }.toList()
+    }
+
+    private fun syntaxKind(path: String): String {
+        val name = path.substringAfterLast('/').lowercase(Locale.ROOT)
+        return when {
+            name == "dockerfile" || name.startsWith("dockerfile.") -> "docker"
+            name in setOf("makefile", "gnumakefile", "cmakelists.txt") -> "build"
+            name == "gradlew" || name == "gradlew.bat" -> "shell"
+            name.endsWith(".gradle") || name.endsWith(".gradle.kts") -> "gradle"
+            name.startsWith(".env") -> "config"
+            else -> name.substringAfterLast('.', "")
+        }
+    }
+
+    private fun highlightedCode(path: String, source: String): SpannableString {
+        val value = SpannableString(source)
+        if (value.isEmpty()) return value
+        val extension = syntaxKind(path)
+        val keywordSet = when (extension) {
+            "kt", "kts" -> "class|interface|object|fun|val|var|when|if|else|for|while|return|private|public|internal|protected|override|data|sealed|suspend|try|catch|finally|throw|is|in|as|null|true|false|package|import"
+            "java", "c", "cc", "cpp", "cxx", "h", "hh", "hpp", "hxx", "cs", "swift", "m", "mm" -> "class|interface|struct|enum|public|private|protected|static|final|const|void|int|long|double|float|char|boolean|bool|if|else|for|while|switch|case|break|continue|return|new|null|true|false|try|catch|finally|throw|using|namespace|package|import"
+            "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "vue", "svelte" -> "const|let|var|function|class|interface|type|enum|import|export|from|async|await|if|else|for|while|switch|case|break|continue|return|new|null|undefined|true|false|try|catch|finally|throw|extends|implements|typeof|instanceof"
+            "py", "pyi", "pyw", "pyx" -> "def|class|import|from|as|async|await|if|elif|else|for|while|break|continue|return|yield|try|except|finally|raise|with|lambda|None|True|False|and|or|not|in|is|pass|global|nonlocal"
+            "sh", "bash", "zsh", "fish", "shell", "csh", "ps1", "psm1", "bat", "cmd" -> "if|then|else|elif|fi|for|while|until|do|done|case|esac|function|in|export|local|readonly|set|unset|shift|return|break|continue|true|false"
+            "json", "jsonl", "ndjson", "json5", "jsonc", "geojson", "yaml", "yml", "toml", "config" -> "true|false|null|yes|no|on|off"
+            "gradle", "groovy", "build" -> "plugins|pluginManagement|id|version|apply|repositories|dependencies|implementation|api|compileOnly|runtimeOnly|testImplementation|android|namespace|compileSdk|minSdk|targetSdk|buildTypes|release|debug|def|class|interface|if|else|for|while|return|import|package|true|false|null"
+            "go" -> "package|import|func|type|struct|interface|map|chan|go|defer|select|case|switch|if|else|for|range|break|continue|return|var|const|nil|true|false"
+            "rs" -> "fn|let|mut|const|static|struct|enum|trait|impl|type|mod|use|pub|crate|self|Self|super|async|await|move|match|if|else|for|while|loop|break|continue|return|where|dyn|ref|true|false"
+            "php", "rb", "ruby", "dart", "lua", "pl", "pm", "r" -> "class|module|interface|function|def|end|var|val|const|local|import|require|include|if|elseif|elif|else|unless|for|foreach|while|do|then|switch|case|when|break|continue|return|yield|try|catch|rescue|finally|throw|raise|async|await|new|null|nil|true|false"
+            "sql" -> "select|from|where|join|left|right|inner|outer|on|group|by|order|having|limit|offset|insert|into|values|update|set|delete|create|alter|drop|table|index|view|primary|foreign|key|constraint|and|or|not|null|is|as|distinct|union|all|case|when|then|else|end|true|false"
+            "html", "htm", "xml", "xsd", "xsl", "svg", "css", "scss", "sass", "less", "md", "mdx", "markdown" -> "true|false|null|important"
+            else -> "class|interface|struct|enum|function|fun|def|const|let|var|if|else|for|while|return|import|export|package|true|false|null|nil"
+        }
+        val keywordColor = if (lightTheme) Color.rgb(104, 73, 184) else Color.rgb(197, 154, 255)
+        val stringColor = if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
+        val numberColor = if (lightTheme) Color.rgb(176, 83, 27) else Color.rgb(244, 176, 112)
+        val commentColor = if (lightTheme) Color.rgb(103, 112, 124) else Color.rgb(132, 145, 153)
+        Regex("\\b(?:$keywordSet)\\b").findAll(value).forEach { match ->
+            value.setSpan(ForegroundColorSpan(keywordColor), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            value.setSpan(StyleSpan(Typeface.BOLD), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        Regex("""\b(?:0x[0-9a-fA-F]+|\d+(?:\.\d+)?)\b""").findAll(value).forEach { match ->
+            value.setSpan(ForegroundColorSpan(numberColor), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        Regex("""\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`""").findAll(value).forEach { match ->
+            value.setSpan(ForegroundColorSpan(stringColor), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        Regex("(?m)^\\s*(?://|#|--|;).*$").findAll(value).forEach { match ->
+            value.setSpan(ForegroundColorSpan(commentColor), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        Regex("(?s)/\\*.*?\\*/|<!--.*?-->").findAll(value).forEach { match ->
+            value.setSpan(ForegroundColorSpan(commentColor), match.range.first, match.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        if (extension in setOf("html", "htm", "xml", "xsd", "xsl", "svg", "vue", "svelte")) {
+            Regex("</?([A-Za-z][A-Za-z0-9:_-]*)").findAll(value).forEach { match ->
+                val group = match.groups[1] ?: return@forEach
+                value.setSpan(ForegroundColorSpan(keywordColor), group.range.first, group.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                value.setSpan(StyleSpan(Typeface.BOLD), group.range.first, group.range.last + 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        return value
+    }
+
+    private fun highlightedCodeLine(path: String, source: String): SpannableString =
+        highlightedCode(path, source.ifEmpty { " " })
+
+    private fun showDiffPreview(entry: FileChangeEntry) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = rounded(PANEL, dp(14), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        header.addView(ImageView(this).apply {
+            setImageResource(fileIconResource(entry.path))
+            imageTintList = null
+            contentDescription = fileGlyph(entry.path)
+        }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(7) })
+        header.addView(label(entry.path.substringAfterLast('/'), 13, TEXT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, LinearLayout.LayoutParams(0, dp(34), 1f))
+        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
+        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
+        header.addView(iconButton("close", "关闭修改预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
+        layout.addView(header, widthWrap())
+
+        val lines = numberDiffLines(entry.diff)
+        if (lines.isEmpty()) {
+            layout.addView(label("这条编辑记录没有保存可审核的差异片段。", 12, MUTED).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(18), dp(90), dp(18), dp(90))
+            }, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        } else {
+            val visibleLines = lines.take(MAX_DIFF_PREVIEW_LINES)
+            val code = SpannableStringBuilder()
+            visibleLines.forEach { line ->
+                val backgroundColor = when (line.kind) {
+                    "added" -> if (lightTheme) Color.rgb(223, 246, 228) else Color.rgb(24, 58, 36)
+                    "deleted" -> if (lightTheme) Color.rgb(252, 226, 229) else Color.rgb(67, 31, 38)
+                    "hunk" -> if (lightTheme) Color.rgb(231, 236, 250) else Color.rgb(36, 43, 63)
+                    else -> Color.TRANSPARENT
+                }
+                val lineStart = code.length
+                val oldNumber = line.oldLine?.toString().orEmpty().padStart(5)
+                val newNumber = line.newLine?.toString().orEmpty().padStart(5)
+                val marker = when (line.kind) { "added" -> "+"; "deleted" -> "-"; else -> " " }
+                val gutter = if (line.kind == "hunk") "           │ " else "$oldNumber $newNumber │$marker"
+                code.append(gutter)
+                val gutterEnd = code.length
+                if (line.kind == "hunk") code.append(line.content) else code.append(highlightedCodeLine(entry.path, line.content))
+                val contentEnd = code.length
+                code.append('\n')
+                code.setSpan(ForegroundColorSpan(MUTED), lineStart, gutterEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                if (line.kind == "hunk") {
+                    code.setSpan(ForegroundColorSpan(ACCENT), gutterEnd, contentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    code.setSpan(StyleSpan(Typeface.BOLD), gutterEnd, contentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+                if (backgroundColor != Color.TRANSPARENT) {
+                    code.setSpan(BackgroundColorSpan(backgroundColor), lineStart, contentEnd, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
+            if (lines.size > visibleLines.size) {
+                val start = code.length
+                code.append("           │ 其余 ${lines.size - visibleLines.size} 行未显示")
+                code.setSpan(ForegroundColorSpan(WARNING), start, code.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+            val codeView = label("", 11, TEXT).apply {
+                text = code
+                typeface = Typeface.MONOSPACE
+                includeFontPadding = false
+                setTextIsSelectable(true)
+                setPadding(dp(5), dp(5), dp(12), dp(8))
+                setHorizontallyScrolling(false)
+                minimumWidth = (resources.displayMetrics.widthPixels - dp(20)).coerceAtLeast(dp(300))
+            }
+            val horizontal = HorizontalScrollView(this).apply {
+                isHorizontalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(codeView, FrameLayout.LayoutParams(WRAP, WRAP))
+            }
+            val vertical = ScrollView(this).apply {
+                isVerticalScrollBarEnabled = false
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(horizontal, FrameLayout.LayoutParams(WRAP, WRAP))
+            }
+            layout.addView(vertical, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(5) })
+        }
+        dialog.setContentView(layout)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(MATCH, (resources.displayMetrics.heightPixels * .86f).toInt())
+            setGravity(Gravity.BOTTOM)
+        }
     }
 
     private fun showFilePreview(path: String, cwd: String?) {
@@ -3583,6 +4056,8 @@ class MainActivity : Activity() {
                         val data = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
                         decodeSampledBitmap(data, 1600) ?: throw IOException("图片内容无法解析")
                     } else null
+                    val content = if (isImage) null else file.optString("content")
+                    val highlightedContent = content?.let { highlightedCode(requestPath, it) }
                     handler.post {
                         if (!dialog.isShowing) return@post
                         state.visibility = View.GONE
@@ -3592,7 +4067,7 @@ class MainActivity : Activity() {
                             imagePreview.visibility = View.VISIBLE
                         } else {
                             previewInput.tag = file.optString("revision")
-                            previewInput.setText(file.optString("content"))
+                            previewInput.setText(highlightedContent)
                             previewInput.visibility = View.VISIBLE
                             saveButton.visibility = View.VISIBLE
                         }
@@ -3846,19 +4321,62 @@ class MainActivity : Activity() {
         return sent
     }
 
-    private fun fileGlyph(name: String): String = when (name.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
-        "kt", "kts" -> "K"
-        "java" -> "J"
-        "js", "jsx", "mjs" -> "JS"
-        "ts", "tsx" -> "TS"
-        "py" -> "Py"
-        "json", "jsonl" -> "{}"
-        "md", "mdx" -> "M"
-        "sh", "bash", "zsh" -> "${'$'}_"
-        "html", "htm" -> "<>"
-        "css", "scss" -> "#"
-        "yml", "yaml" -> "Y"
-        else -> "·"
+    private fun fileIconResource(path: String): Int {
+        val name = path.substringAfterLast('/').substringAfterLast('\\').lowercase(Locale.ROOT)
+        val extension = name.substringAfterLast('.', "")
+        return when {
+            name == "agents.md" -> R.drawable.file_icon_agents
+            name == "package.json" || name == "package-lock.json" || name == ".npmrc" -> R.drawable.file_icon_npm
+            name == "pnpm-lock.yaml" -> R.drawable.file_icon_pnpm
+            name in setOf(".gitignore", ".gitattributes", ".gitconfig") -> R.drawable.file_icon_git
+            name == "dockerfile" || name.startsWith("dockerfile.") -> R.drawable.file_icon_docker
+            name == "gradlew" || name == "gradlew.bat" || name.endsWith(".gradle") || name.endsWith(".gradle.kts") -> R.drawable.file_icon_gradle
+            name == "readme" || name.startsWith("readme.") || name.startsWith("changelog") || name.startsWith("license") -> R.drawable.file_icon_markdown
+            name.startsWith(".env") -> R.drawable.file_icon_config
+            extension in setOf("js", "jsx", "mjs", "cjs") -> R.drawable.file_icon_js
+            extension in setOf("ts", "tsx", "mts", "cts") -> R.drawable.file_icon_ts
+            extension in setOf("json", "json5", "jsonc", "jsonl", "ndjson", "geojson", "ipynb") -> R.drawable.file_icon_json
+            extension in setOf("py", "pyi", "pyw", "pyx", "pxd", "pxi") -> R.drawable.file_icon_python
+            extension in setOf("sh", "bash", "zsh", "fish", "csh", "ps1", "psm1", "psd1", "bat", "cmd") -> R.drawable.file_icon_shell
+            extension in setOf("kt", "kts") -> R.drawable.file_icon_kotlin
+            extension in setOf("java", "class", "jar") -> R.drawable.file_icon_java
+            extension in setOf("md", "mdx", "markdown", "qmd") -> R.drawable.file_icon_markdown
+            extension in setOf("css", "scss", "sass", "less") -> R.drawable.file_icon_css
+            extension in setOf("html", "htm", "ejs", "erb", "hbs", "handlebars", "vue", "svelte") -> R.drawable.file_icon_html
+            extension in setOf("png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg") -> R.drawable.file_icon_image
+            extension in setOf("zip", "rar", "7z", "tar", "gz", "bz2", "xz", "tgz") -> R.drawable.file_icon_archive
+            extension in setOf("db", "sqlite", "sqlite3", "sql") -> R.drawable.file_icon_database
+            extension in setOf("yaml", "yml") -> R.drawable.file_icon_yaml
+            extension in setOf("toml") -> R.drawable.file_icon_toml
+            extension in setOf("ini", "conf", "config", "properties", "lock", "pro") -> R.drawable.file_icon_config
+            extension in setOf("csv", "tsv") -> R.drawable.file_icon_csv
+            extension in setOf("xml", "xsd", "xsl", "plist") -> R.drawable.file_icon_xml
+            extension == "c" || extension in setOf("h") -> R.drawable.file_icon_c
+            extension in setOf("cc", "cpp", "cxx", "hh", "hpp", "hxx") -> R.drawable.file_icon_cpp
+            extension == "go" -> R.drawable.file_icon_go
+            extension == "rs" -> R.drawable.file_icon_rust
+            extension == "pdf" -> R.drawable.file_icon_pdf
+            extension in setOf("txt", "text", "log") -> R.drawable.file_icon_text
+            else -> R.drawable.file_icon_default
+        }
+    }
+
+    private fun fileGlyph(name: String): String = when (fileIconResource(name)) {
+        R.drawable.file_icon_js -> "JavaScript 文件"
+        R.drawable.file_icon_ts -> "TypeScript 文件"
+        R.drawable.file_icon_json -> "JSON 数据文件"
+        R.drawable.file_icon_python -> "Python 文件"
+        R.drawable.file_icon_shell -> "终端脚本"
+        R.drawable.file_icon_kotlin -> "Kotlin 文件"
+        R.drawable.file_icon_java -> "Java 文件"
+        R.drawable.file_icon_markdown -> "Markdown 文档"
+        R.drawable.file_icon_css -> "样式文件"
+        R.drawable.file_icon_html, R.drawable.file_icon_xml -> "标记文件"
+        R.drawable.file_icon_image -> "图片文件"
+        R.drawable.file_icon_archive -> "压缩文件"
+        R.drawable.file_icon_database -> "数据库文件"
+        R.drawable.file_icon_yaml, R.drawable.file_icon_toml, R.drawable.file_icon_config -> "配置文件"
+        else -> "文件"
     }
 
     private fun formatFileSize(size: Long): String = when {
@@ -4334,6 +4852,9 @@ class MainActivity : Activity() {
         "refresh" -> R.drawable.ic_refresh
         "arrow_up" -> R.drawable.ic_arrow_up
         "file" -> R.drawable.ic_file
+        "file_add" -> R.drawable.ic_file_add
+        "folder_add" -> R.drawable.ic_folder_add
+        "paste" -> R.drawable.ic_paste
         "open" -> R.drawable.ic_open
         "edit" -> R.drawable.ic_edit
         "pin" -> R.drawable.ic_pin
@@ -4428,6 +4949,7 @@ class MainActivity : Activity() {
         private const val MAX_HISTORY_CACHE_DEPTH = 64
         private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
+        private const val MAX_DIFF_PREVIEW_LINES = 2500
     }
 }
 

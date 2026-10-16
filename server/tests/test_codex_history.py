@@ -8,7 +8,7 @@ from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_remote.app import enrich_thread_images, enrich_user_message_item
+from codex_remote.app import enrich_thread_images, enrich_user_message_item, workspace_image_preview
 from codex_remote.codex_history import CodexHistoryStore
 
 
@@ -123,6 +123,94 @@ class CodexHistoryStoreTests(unittest.TestCase):
                 [(item["type"], item.get("content", item.get("text"))) for item in thread["turns"][0]["items"]],
             )
 
+    def test_reads_recent_turns_from_synced_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            session_dir = codex_home / "sessions" / "2026" / "10" / "16"
+            session_dir.mkdir(parents=True)
+            session_id = "projected-tail-session"
+            session_path = session_dir / "rollout-projected-tail-session.jsonl"
+            session_path.write_text(json.dumps({
+                "timestamp": "2026-10-16T01:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": session_id, "cwd": "/workspace"},
+            }) + "\n", encoding="utf-8")
+            (codex_home / "session_index.jsonl").write_text(json.dumps({
+                "id": session_id,
+                "thread_name": "投影会话",
+                "updated_at": "2026-10-16T01:03:00Z",
+            }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+            with closing(sqlite3.connect(codex_home / "thread_history_1.sqlite")) as connection, connection:
+                connection.executescript("""
+                    CREATE TABLE thread_history_projection_state (
+                        thread_id TEXT PRIMARY KEY,
+                        next_rollout_byte_offset INTEGER NOT NULL,
+                        next_rollout_ordinal INTEGER NOT NULL
+                    );
+                    CREATE TABLE thread_turns (
+                        thread_id TEXT NOT NULL,
+                        turn_id TEXT NOT NULL,
+                        rollout_ordinal INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        error_json TEXT,
+                        started_at INTEGER,
+                        completed_at INTEGER,
+                        duration_ms INTEGER,
+                        first_user_item_id TEXT,
+                        final_agent_item_id TEXT,
+                        rollout_byte_offset INTEGER,
+                        rollout_end_ordinal INTEGER,
+                        rollout_end_byte_offset INTEGER,
+                        root_turn_id TEXT,
+                        PRIMARY KEY (thread_id, turn_id)
+                    );
+                    CREATE TABLE thread_items (
+                        thread_id TEXT NOT NULL,
+                        turn_id TEXT NOT NULL,
+                        item_id TEXT NOT NULL,
+                        rollout_ordinal INTEGER NOT NULL,
+                        created_at_ms INTEGER NOT NULL,
+                        item_json TEXT NOT NULL,
+                        item_type TEXT NOT NULL DEFAULT '',
+                        updated_at_ordinal INTEGER NOT NULL DEFAULT 0,
+                        PRIMARY KEY (thread_id, turn_id, item_id)
+                    );
+                """)
+                connection.execute(
+                    "INSERT INTO thread_history_projection_state VALUES (?, ?, ?)",
+                    (session_id, session_path.stat().st_size, 10),
+                )
+                for index in range(1, 4):
+                    turn_id = f"turn-{index}"
+                    connection.execute(
+                        "INSERT INTO thread_turns "
+                        "(thread_id, turn_id, rollout_ordinal, status, started_at, completed_at, duration_ms) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        (session_id, turn_id, index * 10, "completed", 1_792_099_200 + index, 1_792_099_210 + index, 10_000),
+                    )
+                    for item_offset, item in enumerate((
+                        {"type": "UserMessage", "id": f"user-{index}", "content": [{"type": "text", "text": f"问题 {index}"}]},
+                        {"type": "AgentMessage", "id": f"agent-{index}", "text": f"回答 {index}"},
+                    )):
+                        connection.execute(
+                            "INSERT INTO thread_items "
+                            "(thread_id, turn_id, item_id, rollout_ordinal, created_at_ms, item_json, item_type) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                            (session_id, turn_id, item["id"], index * 10 + item_offset, 1_792_099_200_000 + index, json.dumps(item), item["type"]),
+                        )
+
+            thread = CodexHistoryStore(codex_home).read_thread(session_id, tail_turns=2)
+
+            self.assertIsNotNone(thread)
+            assert thread is not None
+            self.assertEqual(["turn-2", "turn-3"], [turn["id"] for turn in thread["turns"]])
+            self.assertEqual(3, thread["totalTurns"])
+            self.assertTrue(thread["historyPartial"])
+            self.assertTrue(thread["historyWindowed"])
+            self.assertEqual("问题 3", thread["preview"])
+            self.assertEqual("userMessage", thread["turns"][-1]["items"][0]["type"])
+
     def test_normalizes_native_local_image_history_items(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)
@@ -188,6 +276,20 @@ class CodexHistoryStoreTests(unittest.TestCase):
                 enriched = enrich_user_message_item(item, root / "remote-images")
 
             self.assertEqual("bGl2ZS1pbWFnZQ==", enriched["content"][0]["data"])
+
+    def test_previews_allowed_clipboard_image_by_absolute_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            clipboard_image = root / "codex-clipboard-preview.png"
+            clipboard_image.write_bytes(b"\x89PNG\r\n\x1a\npreview")
+
+            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+                preview = workspace_image_preview(workspace, str(clipboard_image), root / "remote-images")
+
+            self.assertEqual("image/png", preview["mediaType"])
+            self.assertEqual("iVBORw0KGgpwcmV2aWV3", preview["data"])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ from typing import Any
 
 MAX_PREVIEW_LENGTH = 4_000
 SUMMARY_SCAN_LINES = 120
+MAX_PROJECTION_LAG_BYTES = 64 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -106,6 +107,7 @@ class CodexHistoryStore:
         self.archived_sessions = self.codex_home / "archived_sessions"
         self.session_index = self.codex_home / "session_index.jsonl"
         self.state_index = self.codex_home / "state_5.sqlite"
+        self.history_index = self.codex_home / "thread_history_1.sqlite"
         self._path_index: dict[str, Path] | None = None
         self._index_entries: dict[str, dict[str, Any]] | None = None
 
@@ -227,13 +229,17 @@ class CodexHistoryStore:
             # running desktop process may temporarily hold an index lock.
             logger.warning("Could not remove deleted thread %s from %s", thread_id, path, exc_info=True)
 
-    def read_thread(self, thread_id: str) -> dict[str, Any] | None:
+    def read_thread(self, thread_id: str, *, tail_turns: int | None = None) -> dict[str, Any] | None:
         path = self._load_path_index().get(thread_id)
         if path is None:
             return None
 
         entries = self._load_index_entries()
         index_entry = entries.get(thread_id, {})
+        if tail_turns is not None:
+            projected = self._read_projected_tail(thread_id, path, index_entry, tail_turns)
+            if projected is not None:
+                return projected
         turns: dict[str, dict[str, Any]] = {}
         turn_order: list[str] = []
         session_meta: dict[str, Any] = {}
@@ -388,6 +394,139 @@ class CodexHistoryStore:
             "status": {"type": turns_list[-1].get("status", "completed")} if turns_list else {"type": "notLoaded"},
             "turns": turns_list,
         }
+
+    def _read_projected_tail(
+        self,
+        thread_id: str,
+        path: Path,
+        index_entry: dict[str, Any],
+        limit: int,
+    ) -> dict[str, Any] | None:
+        """Read a bounded history window from Codex's own rollout projection.
+
+        A small lag is allowed while an active turn is being projected because
+        live WebSocket events fill that edge. Missing or materially stale data
+        falls back to the JSONL source of truth.
+        """
+        if not self.history_index.is_file():
+            return None
+        bounded_limit = max(1, min(int(limit), 100))
+        try:
+            rollout_size = path.stat().st_size
+            with closing(sqlite3.connect(
+                f"file:{self.history_index.as_posix()}?mode=ro", uri=True, timeout=5,
+            )) as connection:
+                connection.row_factory = sqlite3.Row
+                projection = connection.execute(
+                    "SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id = ?",
+                    (thread_id,),
+                ).fetchone()
+                if projection is None:
+                    return None
+                projection_offset = int(projection["next_rollout_byte_offset"])
+                if projection_offset < 0 or projection_offset > rollout_size:
+                    return None
+                if rollout_size - projection_offset > MAX_PROJECTION_LAG_BYTES:
+                    return None
+                total_turns = int(connection.execute(
+                    "SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?",
+                    (thread_id,),
+                ).fetchone()[0])
+                turn_rows = list(connection.execute(
+                    """SELECT turn_id, rollout_ordinal, status, error_json, started_at,
+                              completed_at, duration_ms, root_turn_id
+                       FROM thread_turns
+                       WHERE thread_id = ?
+                       ORDER BY rollout_ordinal DESC
+                       LIMIT ?""",
+                    (thread_id, bounded_limit),
+                ))
+                if total_turns > 0 and not turn_rows:
+                    return None
+                turn_rows.reverse()
+                turn_ids = [row["turn_id"] for row in turn_rows]
+                items_by_turn: dict[str, list[dict[str, Any]]] = {turn_id: [] for turn_id in turn_ids}
+                if turn_ids:
+                    placeholders = ",".join("?" for _ in turn_ids)
+                    item_rows = connection.execute(
+                        f"""SELECT turn_id, created_at_ms, item_json
+                            FROM thread_items
+                            WHERE thread_id = ? AND turn_id IN ({placeholders})
+                            ORDER BY rollout_ordinal, updated_at_ordinal""",
+                        (thread_id, *turn_ids),
+                    )
+                    for row in item_rows:
+                        try:
+                            item = json.loads(row["item_json"])
+                        except (json.JSONDecodeError, TypeError):
+                            continue
+                        if not isinstance(item, dict):
+                            continue
+                        normalized = _normalise_item(item)
+                        normalized.setdefault("createdAt", _iso_time(row["created_at_ms"]))
+                        items_by_turn[row["turn_id"]].append(normalized)
+        except (OSError, sqlite3.Error, TypeError, ValueError):
+            return None
+
+        turns: list[dict[str, Any]] = []
+        latest_time: str | None = None
+        for row in turn_rows:
+            error: Any = None
+            if isinstance(row["error_json"], str) and row["error_json"]:
+                try:
+                    error = json.loads(row["error_json"])
+                except json.JSONDecodeError:
+                    error = row["error_json"]
+            started_at = _iso_time(row["started_at"])
+            completed_at = _iso_time(row["completed_at"])
+            latest_time = completed_at or started_at or latest_time
+            turns.append({
+                "id": row["turn_id"],
+                "rootTurnId": row["root_turn_id"],
+                "items": items_by_turn.get(row["turn_id"], []),
+                "status": row["status"],
+                "error": error,
+                "startedAt": started_at,
+                "completedAt": completed_at,
+                "durationMs": row["duration_ms"],
+            })
+
+        session_meta = self._read_file_summary(path) or {}
+        latest_user_text = ""
+        for turn in reversed(turns):
+            for item in reversed(turn["items"]):
+                if item.get("type") != "userMessage":
+                    continue
+                latest_user_text = _text_from_content(item.get("content"))
+                if latest_user_text:
+                    break
+            if latest_user_text:
+                break
+        title = index_entry.get("thread_name")
+        if not isinstance(title, str) or not title.strip():
+            title = _short_text(latest_user_text, 240) or thread_id
+        updated_at = index_entry.get("updated_at") if isinstance(index_entry.get("updated_at"), str) else latest_time
+        created_at = session_meta.get("timestamp") if isinstance(session_meta.get("timestamp"), str) else None
+        result: dict[str, Any] = {
+            "id": thread_id,
+            "sessionId": session_meta.get("id") or session_meta.get("session_id") or thread_id,
+            "name": title,
+            "preview": _short_text(latest_user_text or title),
+            "cwd": session_meta.get("cwd") if isinstance(session_meta.get("cwd"), str) else None,
+            "createdAt": created_at,
+            "updatedAt": updated_at,
+            "path": str(path),
+            "originator": session_meta.get("originator"),
+            "source": session_meta.get("source"),
+            "cliVersion": session_meta.get("cli_version"),
+            "status": {"type": turns[-1].get("status", "completed")} if turns else {"type": "notLoaded"},
+            "turns": turns,
+            "totalTurns": total_turns,
+            "historyWindowed": True,
+        }
+        if total_turns > len(turns):
+            result["historyPartial"] = True
+        return result
 
     def _thread_summary(self, session_id: str, entry: dict[str, Any], path: Path | None) -> dict[str, Any]:
         title = entry.get("thread_name")

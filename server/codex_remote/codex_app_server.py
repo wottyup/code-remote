@@ -468,9 +468,20 @@ class CodexAppServer:
     def thread_history_revision(self, thread_id: str) -> str | None:
         return self._history.thread_revision(thread_id)
 
-    async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
+    async def read_thread(
+        self,
+        thread_id: str,
+        *,
+        include_turns: bool = True,
+        tail_turns: int | None = None,
+    ) -> dict[str, Any]:
         active_before = self._active_turn_ids.get(thread_id)
-        history_thread = self._history.read_thread(thread_id)
+        history_limit = tail_turns if include_turns else 1
+        history_thread = await asyncio.to_thread(
+            self._history.read_thread,
+            thread_id,
+            tail_turns=history_limit,
+        )
         runtime_turn_id = self._active_turn_ids.get(thread_id)
         thread: dict[str, Any] | None = None
         read_error: CodexRuntimeError | None = None
@@ -485,7 +496,7 @@ class CodexAppServer:
                     thread = candidate
             except CodexRuntimeError as error:
                 read_error = error
-        elif runtime_turn_id is None and isinstance(history_thread, dict):
+        elif (tail_turns is not None or runtime_turn_id is None) and isinstance(history_thread, dict):
             thread = history_thread
         else:
             try:

@@ -23,6 +23,7 @@ class BrowserPayloadTests(unittest.TestCase):
         diff = [{"path": "/workspace/file.py", "diff": "-before\n+after", "additions": 1, "deletions": 1}]
         original = {"id": "thread", "turns": [{"id": "turn", "status": "completed", "items": [
             message,
+            {"id": "reasoning", "type": "reasoning", "summary": ["large historical reasoning"]},
             {"id": "command", "type": "commandExecution", "command": "cat file.py", "status": "completed",
              "stdout": output, "aggregated_output": output, "formatted_output": output},
             {"id": "edit", "type": "fileChange", "status": "completed", "changes": diff},
@@ -31,12 +32,14 @@ class BrowserPayloadTests(unittest.TestCase):
         result = browser_thread(original)
         items = result["turns"][0]["items"]
         self.assertEqual(items[0], message)
+        self.assertNotIn("reasoning", [item["type"] for item in items])
         self.assertEqual(items[1]["command"], "cat file.py")
         self.assertEqual(items[2]["changes"], diff)
         self.assertEqual(items[3]["text"], "完整回复")
         self.assertEqual(result["codexRemoteWorkspaceChanges"], {"turn": diff})
         self.assertLess(len(json.dumps(result)), 1_500)
-        self.assertEqual(original["turns"][0]["items"][1]["stdout"], output)
+        original_command = next(item for item in original["turns"][0]["items"] if item.get("type") == "commandExecution")
+        self.assertEqual(original_command["stdout"], output)
 
     def test_tool_paths_survive_without_sending_large_arguments_or_results(self) -> None:
         item = {"type": "mcpToolCall", "id": "tool", "server": "files", "tool": "write_file", "status": "completed",
@@ -76,11 +79,16 @@ class BrowserPayloadTests(unittest.TestCase):
 
     def test_list_summary_is_bounded_and_never_carries_turns(self) -> None:
         result = browser_thread_summary({"id": "thread", "name": "长" * 10_000, "preview": "文" * 1_000_000,
-                                         "updatedAt": 123, "turns": [{"items": ["large"]}]})
+                                         "updatedAt": 123, "historyPartial": True, "historyWindowed": True,
+                                         "totalTurns": 321,
+                                         "turns": [{"items": ["large"]}]})
         self.assertNotIn("turns", result)
         self.assertLessEqual(len(result["name"]), 240)
         self.assertLessEqual(len(result["preview"]), 400)
         self.assertEqual(result["updatedAt"], 123)
+        self.assertTrue(result["historyPartial"])
+        self.assertTrue(result["historyWindowed"])
+        self.assertEqual(result["totalTurns"], 321)
 
 
 class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
@@ -96,11 +104,19 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
                 server = app.state.codex
                 revision = ["before"]
                 server.thread_history_revision = lambda _thread_id: revision[0]
-                original = {"id": "thread", "preview": "p" * 1_000, "turns": [{"id": "turn", "items": [
-                    {"id": "command", "type": "commandExecution", "command": "pwd", "stdout": "x" * 1_000_000},
-                ]}]}
+                image_path = images / "message.png"
+                image_path.write_bytes(b"history-image")
+                original = {"id": "thread", "preview": "p" * 1_000, "turns": [
+                    {"id": "turn", "items": [
+                        {"id": "command", "type": "commandExecution", "command": "pwd", "stdout": "x" * 1_000_000},
+                        {"id": "user", "type": "userMessage", "content": [
+                            {"type": "localImage", "path": str(image_path), "mediaType": "image/png"},
+                        ]},
+                    ]},
+                    {"id": "latest", "items": [{"id": "reply", "type": "agentMessage", "text": "最新回复"}]},
+                ]}
 
-                async def read(_thread_id):
+                async def read(_thread_id, **_kwargs):
                     revision[0] = "after"
                     return original
 
@@ -112,6 +128,14 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
                 result = await read_endpoint("thread")
                 self.assertEqual(result["historyRevision"], "before")
                 self.assertNotIn("stdout", result["turns"][0]["items"][0])
+                self.assertEqual(result["turns"][0]["items"][1]["content"][0]["data"], "aGlzdG9yeS1pbWFnZQ==")
+                lightweight = await read_endpoint("thread", include_images=False)
+                self.assertNotIn("data", lightweight["turns"][0]["items"][1]["content"][0])
+                self.assertEqual(lightweight["turns"][0]["items"][1]["content"][0]["path"], str(image_path))
+                tail = await read_endpoint("thread", include_images=False, tail_turns=1)
+                self.assertTrue(tail["historyPartial"])
+                self.assertEqual(2, tail["totalTurns"])
+                self.assertEqual(["latest"], [turn["id"] for turn in tail["turns"]])
                 self.assertNotIn("turns", (await list_endpoint())[0])
                 self.assertTrue(any(middleware.cls is GZipMiddleware for middleware in app.user_middleware))
             finally:

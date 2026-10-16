@@ -20,7 +20,10 @@ def _records(value: Any) -> list[dict[str, Any]]:
 
 
 def browser_thread_summary(thread: dict[str, Any]) -> dict[str, Any]:
-    result = _pick(thread, ("id", "engine", "name", "preview", "cwd", "createdAt", "updatedAt", "status", "historyRevision"))
+    result = _pick(thread, (
+        "id", "engine", "name", "preview", "cwd", "createdAt", "updatedAt",
+        "status", "historyRevision", "historyPartial", "historyWindowed", "totalTurns",
+    ))
     for key, limit in (("name", 240), ("preview", 400)):
         text = result.get(key)
         if isinstance(text, str) and len(text) > limit:
@@ -133,7 +136,11 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
 def browser_turn(turn: dict[str, Any], *, include_items: bool) -> dict[str, Any]:
     result = _pick(turn, ("id", "threadId", "status", "startedAt", "completedAt", "durationMs", "error"))
     if include_items:
-        result["items"] = [browser_item(item) for item in _records(turn.get("items"))]
+        result["items"] = [
+            browser_item(item)
+            for item in _records(turn.get("items"))
+            if str(item.get("type", "")).replace("_", "").replace("-", "").lower() not in {"reasoning", "plan"}
+        ]
     return result
 
 
