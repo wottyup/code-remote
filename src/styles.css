@@ -1616,3 +1616,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   --syntax-added: #a6e3a1;
   --syntax-deleted: #f38ba8;
 }
+
+.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #c8d0ff; }
+.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #f38662; }
