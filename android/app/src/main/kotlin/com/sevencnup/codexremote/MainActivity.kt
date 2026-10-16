@@ -299,6 +299,7 @@ class MainActivity : Activity() {
     private var currentMode = "codex"
     private var activeThreadId: String? = null
     private var activeThread: JSONObject? = null
+    private val displayedThreadTitles = mutableMapOf<String, String>()
     private var runtime = JSONObject()
     private var threads = JSONArray()
     internal var models = JSONArray()
@@ -1556,10 +1557,18 @@ class MainActivity : Activity() {
         sidebarBrandMark.contentDescription = "Codex Remote"
     }
 
-    private fun threadTitle(thread: JSONObject): String = listOf(
-        thread.optString("name"),
-        thread.optString("preview"),
-    ).firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
+    private fun threadTitleKey(threadId: String) = "$activeConnectionId:$threadId"
+
+    private fun threadTitle(thread: JSONObject): String {
+        val title = listOf(thread.optString("name"), thread.optString("preview"))
+            .firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
+        val threadId = thread.optString("id")
+        if (threadId.isBlank()) return title
+        val key = threadTitleKey(threadId)
+        displayedThreadTitles[key]?.let { return it }
+        if (title != "新对话" && title != threadId) displayedThreadTitles[key] = title
+        return title
+    }
 
     private fun updateSidebarModeAccent() {
         if (!::sidebarNewThreadButton.isInitialized) return
@@ -3571,7 +3580,6 @@ class MainActivity : Activity() {
                     if (activeThreadId == oldSelected || activeThreadId == threadId) {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
-                        renderMessages(true)
                     }
                     queuedMessages = response.optJSONArray("queue") ?: JSONArray()
                     selectedFiles.clear()
@@ -3816,6 +3824,7 @@ class MainActivity : Activity() {
             val name = input.text.toString().trim()
             if (name.isBlank()) return@showInputDialog false
             runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/threads/${RemoteApi.encodePath(thread.optString("id"))}/name", JSONObject().put("name", name)) }, {
+                displayedThreadTitles[threadTitleKey(thread.optString("id"))] = name
                 refreshThreads(false)
                 if (activeThreadId == thread.optString("id")) { activeThread?.put("name", name); renderHeader() }
             })
@@ -3850,6 +3859,7 @@ class MainActivity : Activity() {
                     renderHeader()
                 }
                 syncRevisions.remove(id)
+                displayedThreadTitles.remove(threadTitleKey(id))
                 refreshThreads(false)
             })
         }
@@ -6149,7 +6159,23 @@ class MainActivity : Activity() {
                     else backgroundThreadDirty = true
                 }
             }
-            "thread/name/updated", "thread/deleted", "remote.pins.changed" -> {
+            "thread/name/updated" -> {
+                handler.post {
+                    eventThreadId(params)?.let { threadId ->
+                        val name = params.optString("threadName")
+                        if (name.isNotBlank()) displayedThreadTitles[threadTitleKey(threadId)] = name
+                        else displayedThreadTitles.remove(threadTitleKey(threadId))
+                    }
+                    if (foreground) refreshThreads(false) else backgroundListDirty = true
+                }
+            }
+            "thread/deleted" -> {
+                handler.post {
+                    eventThreadId(params)?.let { displayedThreadTitles.remove(threadTitleKey(it)) }
+                    if (foreground) refreshThreads(false) else backgroundListDirty = true
+                }
+            }
+            "remote.pins.changed" -> {
                 if (foreground) handler.post { refreshThreads(false) }
                 else backgroundListDirty = true
             }
