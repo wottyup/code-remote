@@ -47,6 +47,7 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
+import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -1775,6 +1776,32 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     const pastedText = event.clipboardData.getData('text/plain')
+    const pastedTable = clipboardTableToMarkdown(event.clipboardData.getData('text/html'), pastedText)
+    if (pastedTable) {
+      event.preventDefault()
+      if (pastedTable.length >= longPasteThreshold) {
+        appendDocument({ name: 'pasted-table.md', content: pastedTable })
+        return
+      }
+
+      const textarea = composer.current
+      const current = draftRef.current
+      const start = textarea?.selectionStart ?? current.length
+      const end = textarea?.selectionEnd ?? start
+      const before = current.slice(0, start)
+      const after = current.slice(end)
+      const prefix = before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
+      const suffix = after.length === 0 || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n'
+      updateDraft(`${before}${prefix}${pastedTable}${suffix}${after}`)
+      window.requestAnimationFrame(() => {
+        const activeTextarea = composer.current
+        if (!activeTextarea) return
+        const cursor = before.length + prefix.length + pastedTable.length
+        activeTextarea.focus({ preventScroll: true })
+        activeTextarea.setSelectionRange(cursor, cursor)
+      })
+      return
+    }
     if (pastedText.length < longPasteThreshold) return
     event.preventDefault()
     appendDocument({ name: 'pasted-content.md', content: pastedText })
