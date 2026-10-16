@@ -156,6 +156,7 @@ class MainActivity : Activity() {
         else -> Color.rgb(170, 186, 255)
     }
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
+    private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
@@ -290,6 +291,7 @@ class MainActivity : Activity() {
     private lateinit var sidebarNewThreadButton: LinearLayout
     private lateinit var sidebarNewThreadIcon: ImageView
     private lateinit var sidebarNewThreadLabel: TextView
+    private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
     private lateinit var sidebarBrandMark: ImageView
     private lateinit var sendButton: TextView
     private lateinit var modelButton: TextView
@@ -1159,6 +1161,7 @@ class MainActivity : Activity() {
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
+        val actionColor = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else SUBTLE
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(9), 0, dp(7), 0)
@@ -1167,11 +1170,14 @@ class MainActivity : Activity() {
         isFocusable = true
         contentDescription = title
         setOnClickListener { action() }
-        addView(ImageView(this@MainActivity).apply {
+        val iconView = ImageView(this@MainActivity).apply {
             setImageResource(sidebarIconResource(icon))
-            imageTintList = ColorStateList.valueOf(SUBTLE)
-        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(7) })
-        addView(label(title, 11, SUBTLE, true), widthWrap())
+            imageTintList = ColorStateList.valueOf(actionColor)
+        }
+        val labelView = label(title, 11, actionColor, true)
+        sidebarActionAccentViews += iconView to labelView
+        addView(iconView, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(7) })
+        addView(labelView, widthWrap())
     }
 
     private fun renderHeader() {
@@ -1218,12 +1224,8 @@ class MainActivity : Activity() {
     private fun updateSidebarModeAccent() {
         if (!::sidebarNewThreadButton.isInitialized) return
         val claudeMode = currentMode == "claude-code"
-        val fill = when {
-            lightTheme -> if (claudeMode) ACCENT_WARM else Color.rgb(57, 75, 132)
-            claudeMode -> Color.rgb(255, 198, 172)
-            else -> Color.rgb(199, 208, 255)
-        }
-        val foreground = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+        val fill = if (claudeMode) CLAUDE_MODE_ACCENT else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+        val foreground = if (claudeMode) Color.rgb(24, 27, 37) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
         sidebarNewThreadButton.background = rounded(fill, dp(10))
         sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
         sidebarNewThreadIcon.background = rounded(
@@ -1231,6 +1233,11 @@ class MainActivity : Activity() {
             dp(7),
         )
         sidebarNewThreadLabel.setTextColor(foreground)
+        val actionColor = if (claudeMode) CLAUDE_MODE_ACCENT else SUBTLE
+        sidebarActionAccentViews.forEach { (icon, label) ->
+            icon.imageTintList = ColorStateList.valueOf(actionColor)
+            label.setTextColor(actionColor)
+        }
     }
 
     private fun renderSidebar(force: Boolean = false) {
@@ -1275,7 +1282,8 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), dp(5), dp(5), dp(5))
-                background = if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(ACCENT, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
+                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
+                background = if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 contentDescription = threadTitle(thread)
@@ -1283,7 +1291,7 @@ class MainActivity : Activity() {
             val engine = thread.optString("engine", "codex")
             val icon = ImageView(this).apply {
                 setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                setColorFilter(if (engine == "claude-code") ACCENT_WARM else ACCENT)
+                setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT)
                 contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
@@ -2347,6 +2355,7 @@ class MainActivity : Activity() {
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
+            val activityAccent = if (currentMode == "claude-code" && socketConnected) CLAUDE_MODE_ACCENT else ACCENT
             val activity = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -2355,10 +2364,10 @@ class MainActivity : Activity() {
             }
             activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
-                indeterminateTintList = ColorStateList.valueOf(ACCENT)
+                indeterminateTintList = ColorStateList.valueOf(activityAccent)
                 contentDescription = activityLabel
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-            activity.addView(label(activityLabel, 12, ACCENT), LinearLayout.LayoutParams(0, WRAP, 1f))
+            activity.addView(label(activityLabel, 12, activityAccent), LinearLayout.LayoutParams(0, WRAP, 1f))
             activity.addView(label(currentMessageTime(), 10, MUTED).apply {
                 gravity = Gravity.END
                 contentDescription = "思考开始时间 ${currentMessageTime()}"

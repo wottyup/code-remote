@@ -3530,7 +3530,7 @@ function RemoteChatPane({
           {remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
-                <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+                <OperationActivityLine className={`running-indicator__activity${remote.activeEngine === 'claude-code' && !currentRunningOperation && (!remote.activity || remote.activity.label === '正在思考') ? ' running-indicator__activity--claude-thinking' : ''}`} operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
                 {activeTurnStartedAt !== null ? <TurnElapsed startedAt={activeTurnStartedAt} /> : null}
               </div>
               {!hasStreamingAssistant && runningOperations.length > 0 ? (
@@ -4801,7 +4801,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
