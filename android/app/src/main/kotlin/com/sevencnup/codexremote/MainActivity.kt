@@ -1465,7 +1465,7 @@ class MainActivity : Activity() {
         footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(42), 1f))
         footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(42), 1f))
         footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        drawer.addView(footer, widthWrap())
+        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(42)))
 
         sidebarHost = createEdgeDrawer(drawer, Gravity.START) { setSidebarVisible(false) }
         updateInsetAwareOverlays()
@@ -1552,7 +1552,7 @@ class MainActivity : Activity() {
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
         val actionColor = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else SUBTLE
         orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
+        gravity = Gravity.CENTER
         setPadding(dp(4), 0, dp(4), 0)
         background = rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
@@ -4576,11 +4576,14 @@ class MainActivity : Activity() {
         val popup = PopupWindow(menu, popupWidth, WRAP, true).apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             elevation = dp(12).toFloat()
+            animationStyle = R.style.SidebarMenuAnimation
             isOutsideTouchable = true
             isClippingEnabled = true
             setOnDismissListener {
                 if (preferencePopup === this) preferencePopup = null
-                if (sidebarRenderDirty && sidebarVisible) renderSidebar(force = true)
+                if (sidebarRenderDirty && sidebarVisible) root.post {
+                    if (sidebarRenderDirty && preferencePopup?.isShowing != true) renderSidebar(force = true)
+                }
             }
         }
         preferencePopup = popup
@@ -4704,7 +4707,7 @@ class MainActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(4), dp(12), dp(4))
-                background = rounded(if (themeName == "custom") colorWithAlpha(blendColors(OPAQUE_PANEL, settingsAccent, .035f), .72f) else blendColors(OPAQUE_PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
+                background = rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
             }
             val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val expanded = title in expandedSettingsSections
@@ -4751,7 +4754,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
                 background = if (selected) {
-                    rounded(colorWithAlpha(blendColors(OPAQUE_PANEL, settingsAccent, .2f), if (themeName == "custom") .38f else 1f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
+                    rounded(colorWithAlpha(settingsAccent, if (lightTheme) .12f else .18f), dp(10))
                 } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
                 isFocusable = false
@@ -4864,7 +4867,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), 0, dp(12), 0)
-                background = rounded(if (selected) colorWithAlpha(settingsAccent, .16f) else PANEL_INSET, dp(9))
+                background = rounded(if (selected) colorWithAlpha(settingsAccent, .12f) else Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
@@ -4910,7 +4913,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(7), dp(5), dp(2), dp(5))
-                background = if (selected) rounded(colorWithAlpha(ACCENT, .13f), dp(10)) else rounded(PANEL_INSET, dp(10))
+                background = rounded(if (selected) colorWithAlpha(ACCENT, .12f) else Color.TRANSPARENT, dp(10))
             }
             val copy = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
