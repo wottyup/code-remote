@@ -432,6 +432,7 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         persistCurrentDraft()
+        if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
         backgroundedAt = System.currentTimeMillis()
         handler.removeCallbacks(refreshRunnable)
@@ -440,6 +441,14 @@ class MainActivity : Activity() {
         handler.removeCallbacks(socketHeartbeatRunnable)
         outstandingSocketPing = null
         super.onPause()
+    }
+
+    private fun parkActivityInputFocus() {
+        if (!::root.isInitialized) return
+        val focusedInput = window.currentFocus as? EditText ?: return
+        if (!focusedInput.isAttachedToWindow) return
+        root.isFocusableInTouchMode = true
+        root.requestFocus()
     }
 
     override fun onDestroy() {
@@ -758,7 +767,7 @@ class MainActivity : Activity() {
     }
 
     private fun renderHome() {
-        root = ChatRootLayout(this).apply { setBackgroundColor(DARK) }
+        root = ChatRootLayout(this).apply { setBackgroundColor(DARK); isFocusableInTouchMode = true }
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
@@ -822,6 +831,7 @@ class MainActivity : Activity() {
         buildComposer()
         buildSidebar()
         setContentView(root)
+        root.requestFocus()
         installWindowInsets(root, page)
         root.post { if (::root.isInitialized && workspaceOverlay == null) ensureWorkspaceBrowser() }
         renderHeader()
@@ -2846,9 +2856,13 @@ class MainActivity : Activity() {
     }
 
     private fun showImageDialog(bitmap: android.graphics.Bitmap) {
+        parkActivityInputFocus()
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val frame = FrameLayout(this).apply { background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1)) }
+        val frame = FrameLayout(this).apply {
+            isFocusableInTouchMode = true
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
         frame.addView(ImageView(this).apply {
             setImageBitmap(bitmap)
             adjustViewBounds = true
@@ -2859,6 +2873,8 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(18))
         }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(8) })
         dialog.setContentView(frame)
+        frame.requestFocus()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         dialog.show()
         dialog.window?.apply {
             setBackgroundDrawableResource(android.R.color.transparent)
@@ -4881,6 +4897,7 @@ class MainActivity : Activity() {
     }
 
     private fun showFilePreview(path: String, cwd: String?) {
+        parkActivityInputFocus()
         val effectiveCwd = cwd?.takeIf { it.isNotBlank() && it != "null" }
             ?: activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             ?: runtime.optString("workspace").takeIf { it.isNotBlank() && it != "null" }
@@ -4889,6 +4906,7 @@ class MainActivity : Activity() {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            isFocusableInTouchMode = true
             setPadding(dp(12), dp(9), dp(12), dp(10))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
@@ -4936,6 +4954,8 @@ class MainActivity : Activity() {
         layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(6) })
         scroll.visibility = View.GONE
         dialog.setContentView(layout)
+        layout.requestFocus()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
         dialog.show()
         dialog.window?.apply { setBackgroundDrawableResource(android.R.color.transparent); setLayout(MATCH, (resources.displayMetrics.heightPixels * .86f).toInt()); setGravity(Gravity.BOTTOM) }
 
