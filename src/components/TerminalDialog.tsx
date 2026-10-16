@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
+import { restoreTerminalTouchSelection, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
@@ -340,8 +341,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
       dispatchInput(`\x1b${cursorPrefix}${code}`)
     }
-    const showContextMenu = (clientX: number, clientY: number) => {
-      const selectedText = terminal.getSelection()
+    const showContextMenu = (clientX: number, clientY: number, selectedText = terminal.getSelection()) => {
       const menuHost = container.parentElement ?? container
       const bounds = menuHost.getBoundingClientRect()
       setContextMenu({
@@ -358,22 +358,23 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     container.addEventListener('contextmenu', handleContextMenu)
 
     let longPressTimer = 0
+    let selectionRestoreVersion = 0
     let touchStart: { x: number; y: number } | null = null
-    let longPressPoint: { x: number; y: number } | null = null
+    let longPressSelection: TerminalTouchSelection | null = null
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
+      longPressSelection = null
     }
     const handleTouchStart = (event: TouchEvent) => {
+      selectionRestoreVersion += 1
       if (event.touches.length !== 1) {
         clearLongPress()
-        longPressPoint = null
         return
       }
       clearLongPress()
       setContextMenu(null)
-      longPressPoint = null
       const touch = event.touches[0]
       const point = { x: touch.clientX, y: touch.clientY }
       touchStart = point
@@ -381,7 +382,9 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         longPressTimer = 0
         const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
         if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
-          longPressPoint = point
+          const text = terminal.getSelection()
+          const range = terminal.getSelectionPosition()
+          if (text && range) longPressSelection = { point, text, range }
         }
       }, 500)
     }
@@ -394,12 +397,20 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
-      if (longPressPoint) showContextMenu(longPressPoint.x, longPressPoint.y)
-      longPressPoint = null
+      const selection = longPressSelection
+      longPressSelection = null
+      if (!selection) return
+
+      const restoreVersion = ++selectionRestoreVersion
+      queueMicrotask(() => {
+        if (disposed || restoreVersion !== selectionRestoreVersion) return
+        const selectedText = restoreTerminalTouchSelection(terminal, selection)
+        showContextMenu(selection.point.x, selection.point.y, selectedText)
+      })
     }
     const handleTouchCancel = () => {
+      selectionRestoreVersion += 1
       clearLongPress()
-      longPressPoint = null
     }
     container.addEventListener('touchstart', handleTouchStart, { passive: true })
     container.addEventListener('touchmove', handleTouchMove, { passive: true })
@@ -473,6 +484,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       container.removeEventListener('touchmove', handleTouchMove)
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
+      selectionRestoreVersion += 1
       clearLongPress()
       stopControlRepeat()
       activeModifierRef.current = null
