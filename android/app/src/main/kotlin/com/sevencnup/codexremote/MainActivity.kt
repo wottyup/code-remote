@@ -1417,6 +1417,7 @@ class MainActivity : Activity() {
         drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(42), 1f))
         footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
         drawer.addView(footer, widthWrap())
 
@@ -4572,6 +4573,61 @@ class MainActivity : Activity() {
         showToast("系统通知已开启")
     }
 
+    private fun showConnectionPicker() {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(15), dp(16), dp(12))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        card.addView(label("切换电脑连接", 15, TEXT, true), widthWrap())
+        val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        connectionProfiles.toList().forEach { profile ->
+            val selected = profile.id == activeConnectionId
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(7), dp(12), dp(7))
+                background = rounded(if (selected) colorWithAlpha(ACCENT, .13f) else PANEL_INSET, dp(9))
+                isClickable = true
+                isFocusable = true
+                contentDescription = if (selected) "当前连接 ${profile.name}" else "切换到 ${profile.name}"
+                setOnClickListener {
+                    dialog.dismiss()
+                    if (!selected) {
+                        setSidebarVisible(false)
+                        switchConnection(profile.id)
+                    }
+                }
+            }
+            row.addView(label(if (selected) "${profile.name} · 当前" else profile.name, 12, if (selected) ACCENT else TEXT, selected), widthWrap())
+            row.addView(label(profile.endpoint, 10, MUTED).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            }, widthWrap())
+            list.addView(row, LinearLayout.LayoutParams(MATCH, dp(54)).apply { topMargin = dp(7) })
+        }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            addView(list)
+        }
+        val listHeight = min(connectionProfiles.size * dp(61), min(dp(320), resources.displayMetrics.heightPixels / 2))
+        card.addView(scroll, LinearLayout.LayoutParams(MATCH, listHeight).apply { topMargin = dp(6) })
+        card.addView(settingsActionRow("添加电脑连接", "填写地址和匹配码") {
+            dialog.dismiss()
+            setSidebarVisible(false)
+            showChangeConnectionDialog()
+        }, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(9) })
+        dialog.setContentView(card)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(min(dp(360), resources.displayMetrics.widthPixels - dp(28)), WRAP)
+            setGravity(Gravity.CENTER)
+        }
+    }
+
     private fun renameConnection(profileId: String) {
         val profile = connectionProfiles.firstOrNull { it.id == profileId } ?: return
         val input = editField("连接名称", profile.name, InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
@@ -4664,7 +4720,7 @@ class MainActivity : Activity() {
                         val paired = RemoteApi(normalized).post("/api/v1/pair", JSONObject().put("code", pairingCode))
                         val newToken = paired.getString("token")
                         handler.post {
-                            val scrollY = settingsScroll?.scrollY ?: 0
+                            val scrollY = settingsScroll?.scrollY
                             dialog.dismiss()
                             switchConnection(saveConnectionProfile(normalized, newToken, name.text.toString()), scrollY)
                         }
