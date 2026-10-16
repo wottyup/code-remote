@@ -4164,6 +4164,9 @@ class MainActivity : Activity() {
 
     private fun ensureWorkspaceBrowser() {
         if (workspaceOverlay != null) return
+        val expandedDirectories = linkedSetOf<String>()
+        lateinit var renderTree: () -> Unit
+        lateinit var dispatchRender: () -> Unit
         val panel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
@@ -4186,8 +4189,15 @@ class MainActivity : Activity() {
         panel.addView(header, widthWrap())
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val parentButton = sidebarIconButton("back", "返回上级目录") { handleWorkspaceBack() }
-        pathNavigation.addView(parentButton, LinearLayout.LayoutParams(dp(32), dp(32)))
+        val parentButton = sidebarIconButton("back", "返回上级目录或收起展开的文件夹") {
+            if (workspaceCurrentPath.isNotBlank()) {
+                handleWorkspaceBack()
+            } else if (expandedDirectories.isNotEmpty()) {
+                expandedDirectories.clear()
+                dispatchRender()
+            }
+        }
+        pathNavigation.addView(parentButton, LinearLayout.LayoutParams(dp(40), dp(40)))
         val pathInput = editField("输入路径", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
             setSingleLine(true)
             textSize = adjustedTextSize(11)
@@ -4228,16 +4238,14 @@ class MainActivity : Activity() {
         val directoryTruncated = mutableSetOf<String>()
         val directoryErrors = mutableMapOf<String, String>()
         val loadingDirectories = mutableSetOf<String>()
-        val expandedDirectories = linkedSetOf<String>()
         var loadedWorkspaceKey: String? = null
-        lateinit var renderTree: () -> Unit
         lateinit var loadDirectory: (String, Boolean) -> Unit
         lateinit var addDirectoryRows: (String, Int) -> Unit
 
         fun currentCwd(): String? = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
         fun workspaceKey(): String = currentCwd() ?: runtime.optString("workspace", "<default>")
         fun parentPath(value: String): String = value.trim('/').substringBeforeLast('/', "")
-        fun dispatchRender() {
+        dispatchRender = {
             if (workspaceGestureActive || workspaceAnimator?.isRunning == true) workspacePendingRender = renderTree
             else renderTree()
         }
@@ -4363,7 +4371,7 @@ class MainActivity : Activity() {
             pathTitle.text = workspaceRootPath.ifBlank { currentCwd() ?: runtime.optString("workspace", "工作区") }
             if (currentPath.isNotBlank()) pathTitle.text = "$currentPath · ${pathTitle.text}"
             if (!pathInput.hasFocus()) pathInput.setText(absolutePath(currentPath))
-            parentButton.isEnabled = currentPath.isNotBlank()
+            parentButton.isEnabled = currentPath.isNotBlank() || expandedDirectories.isNotEmpty()
             parentButton.alpha = if (parentButton.isEnabled) 1f else .45f
             entries.removeAllViews()
             when {
