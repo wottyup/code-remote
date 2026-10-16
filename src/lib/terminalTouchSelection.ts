@@ -1,5 +1,5 @@
 export interface TerminalTouchSelection {
-  point: { x: number; y: number }
+  point?: { x: number; y: number }
   text: string
   range: {
     start: { x: number; y: number }

@@ -341,6 +341,18 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
       dispatchInput(`\x1b${cursorPrefix}${code}`)
     }
+    let lastTerminalSelection: TerminalTouchSelection | null = null
+    const cacheTerminalSelection = (point?: { x: number; y: number }) => {
+      const text = terminal.getSelection()
+      const range = terminal.getSelectionPosition()
+      if (!text || !range) return null
+      const selection = { point, text, range }
+      lastTerminalSelection = selection
+      return selection
+    }
+    const selectionSubscription = terminal.onSelectionChange(() => {
+      cacheTerminalSelection()
+    })
     const showContextMenu = (clientX: number, clientY: number, selectedText = terminal.getSelection()) => {
       const menuHost = container.parentElement ?? container
       const bounds = menuHost.getBoundingClientRect()
@@ -353,14 +365,35 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     }
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault()
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      if (selection) {
+        restoreTerminalTouchSelection(terminal, selection)
+        showContextMenu(event.clientX, event.clientY, selection.text)
+        return
+      }
       showContextMenu(event.clientX, event.clientY)
     }
     container.addEventListener('contextmenu', handleContextMenu)
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button === 0) lastTerminalSelection = null
+    }
+    container.addEventListener('mousedown', handleMouseDown)
 
     let longPressTimer = 0
     let selectionRestoreVersion = 0
+    let selectionRestoreFrame = 0
     let touchStart: { x: number; y: number } | null = null
     let longPressSelection: TerminalTouchSelection | null = null
+    const restoreSelectionAfterRelease = (selection: TerminalTouchSelection) => {
+      const restoreVersion = ++selectionRestoreVersion
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = window.requestAnimationFrame(() => {
+        selectionRestoreFrame = 0
+        if (!disposed && restoreVersion === selectionRestoreVersion) {
+          restoreTerminalTouchSelection(terminal, selection)
+        }
+      })
+    }
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
@@ -382,9 +415,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         longPressTimer = 0
         const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
         if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
-          const text = terminal.getSelection()
-          const range = terminal.getSelectionPosition()
-          if (text && range) longPressSelection = { point, text, range }
+          longPressSelection = cacheTerminalSelection(point)
         }
       }, 500)
     }
@@ -400,22 +431,25 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       const selection = longPressSelection
       longPressSelection = null
       if (!selection) return
-
-      const restoreVersion = ++selectionRestoreVersion
-      queueMicrotask(() => {
-        if (disposed || restoreVersion !== selectionRestoreVersion) return
-        const selectedText = restoreTerminalTouchSelection(terminal, selection)
-        showContextMenu(selection.point.x, selection.point.y, selectedText)
-      })
+      restoreSelectionAfterRelease(selection)
+    }
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button !== 0) return
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      if (selection) restoreSelectionAfterRelease(selection)
     }
     const handleTouchCancel = () => {
       selectionRestoreVersion += 1
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = 0
+      lastTerminalSelection = null
       clearLongPress()
     }
     container.addEventListener('touchstart', handleTouchStart, { passive: true })
     container.addEventListener('touchmove', handleTouchMove, { passive: true })
     container.addEventListener('touchend', handleTouchEnd, { passive: true })
     container.addEventListener('touchcancel', handleTouchCancel, { passive: true })
+    container.addEventListener('mouseup', handleMouseUp)
 
     socket.addEventListener('open', () => {
       fitAndResize()
@@ -480,11 +514,14 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       compactTerminal.removeEventListener('change', updateFontSize)
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      container.removeEventListener('mousedown', handleMouseDown)
       container.removeEventListener('touchstart', handleTouchStart)
       container.removeEventListener('touchmove', handleTouchMove)
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
+      container.removeEventListener('mouseup', handleMouseUp)
       selectionRestoreVersion += 1
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
       clearLongPress()
       stopControlRepeat()
       activeModifierRef.current = null
@@ -497,6 +534,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         selectAll: () => '',
       }
       dataSubscription.dispose()
+      selectionSubscription.dispose()
       send({ type: 'close' })
       socket.close()
       terminal.dispose()
