@@ -2132,7 +2132,11 @@ class MainActivity : Activity() {
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                     maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
-                bubble.addView(content, widthWrap())
+                // The bubble itself is WRAP_CONTENT. Giving its TextView MATCH_PARENT
+                // creates a circular width measurement on narrow screens and can
+                // collapse the bubble to one character per line. Let the text measure
+                // to its content; maxWidth above still constrains long messages.
+                bubble.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
             }
             addMessageImages(bubble, item)
             if (role == "user") item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
