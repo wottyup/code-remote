@@ -289,6 +289,7 @@ class MainActivity : Activity() {
     private lateinit var sidebarNewThreadButton: LinearLayout
     private lateinit var sidebarNewThreadIcon: ImageView
     private lateinit var sidebarNewThreadLabel: TextView
+    private lateinit var sidebarBrandMark: ImageView
     private lateinit var sendButton: TextView
     private lateinit var modelButton: TextView
     private lateinit var effortButton: TextView
@@ -974,14 +975,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(2), 0, 0, dp(2))
         }
-        val brandMark = ImageView(this).apply {
-            setImageResource(R.drawable.ic_brand_codex)
-            setColorFilter(ACCENT)
+        sidebarBrandMark = ImageView(this).apply {
+            setBrandIcon(this, currentMode)
             background = rounded(PANEL_INSET, dp(10))
             setPadding(dp(8), dp(8), dp(8), dp(8))
-            contentDescription = "Codex Remote"
+            contentDescription = if (currentMode == "claude-code") "Claude Code" else "Codex"
         }
-        brand.addView(brandMark, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
+        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
         brandCopy.addView(label("Codex Remote", 15, TEXT, true), widthWrap())
         brandCopy.addView(label("对话工作台", 10, MUTED), widthWrap())
@@ -1163,6 +1163,7 @@ class MainActivity : Activity() {
             setBrandIcon(modeButton, modeSwitchTarget())
             modeButton.contentDescription = modeSwitchDescription()
         }
+        updateSidebarBrand()
         updateSidebarModeAccent()
         val path = page.findViewWithTag<TextView>("workspace_path")
         path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
@@ -1181,6 +1182,12 @@ class MainActivity : Activity() {
     private fun modeSwitchTarget(): String = if (currentMode == "codex") "claude-code" else "codex"
 
     private fun modeSwitchDescription(): String = if (modeSwitchTarget() == "claude-code") "切换到 Claude Code" else "切换到 Codex"
+
+    private fun updateSidebarBrand() {
+        if (!::sidebarBrandMark.isInitialized) return
+        setBrandIcon(sidebarBrandMark, currentMode)
+        sidebarBrandMark.contentDescription = if (currentMode == "claude-code") "Claude Code" else "Codex"
+    }
 
     private fun threadTitle(thread: JSONObject): String = listOf(
         thread.optString("name"),
@@ -3123,6 +3130,7 @@ class MainActivity : Activity() {
         persistCurrentDraft()
         currentMode = targetMode
         prefs.edit().putString(KEY_MODE, currentMode).apply()
+        updateSidebarBrand()
         val currentEngine = activeThread?.optString("engine", "codex") ?: ""
         if (currentEngine != currentMode) {
             activeThreadId = null
