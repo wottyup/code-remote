@@ -269,6 +269,7 @@ class MainActivity : Activity() {
     private var imeInsetVisible = false
     private var imeFollowMessageBottom = false
     private var imeFollowScrollQueued = false
+    private var messageNearBottomBeforeIme = false
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
     private var completionNoticeDismissRunnable: Runnable? = null
@@ -649,8 +650,8 @@ class MainActivity : Activity() {
                 view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
             } else {
                 if (keyboardJustOpened && ::messageScroll.isInitialized) {
-                    val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
-                    imeFollowMessageBottom = ::composerInput.isInitialized && composerInput.hasFocus() && distanceToBottom <= dp(180)
+                    imeFollowMessageBottom = ::composerInput.isInitialized &&
+                        composerInput.hasFocus() && messageNearBottomBeforeIme
                 }
                 systemInsetLeft = systemBars.left
                 systemInsetTop = systemBars.top
@@ -670,12 +671,8 @@ class MainActivity : Activity() {
                     else -> terminalImeHiddenUntil
                 }
                 terminalImeVisible = terminalKeyboardVisible
-                if (keyboardJustOpened && imeFollowMessageBottom && !imeFollowScrollQueued && ::messageScroll.isInitialized) {
-                    imeFollowScrollQueued = true
-                    messageScroll.postOnAnimation {
-                        imeFollowScrollQueued = false
-                        if (imeInsetVisible && imeFollowMessageBottom) messageScroll.scrollTo(0, messageList.height)
-                    }
+                if (keyboardVisible && imeFollowMessageBottom) {
+                    scheduleImeMessageBottomFollow()
                 } else if (!keyboardVisible) {
                     imeFollowMessageBottom = false
                     imeFollowScrollQueued = false
@@ -698,6 +695,23 @@ class MainActivity : Activity() {
             }
         })
         view.requestApplyInsets()
+    }
+
+    private fun isMessageListNearBottom(): Boolean {
+        if (!::messageScroll.isInitialized || !::messageList.isInitialized) return false
+        val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
+        return distanceToBottom <= dp(180)
+    }
+
+    private fun scheduleImeMessageBottomFollow() {
+        if (imeFollowScrollQueued || !::messageScroll.isInitialized || !::messageList.isInitialized) return
+        imeFollowScrollQueued = true
+        messageScroll.postOnAnimation {
+            imeFollowScrollQueued = false
+            if (imeInsetVisible && imeFollowMessageBottom) {
+                messageScroll.scrollTo(0, messageList.height)
+            }
+        }
     }
 
     private fun updateInsetAwareOverlays() {
@@ -769,7 +783,17 @@ class MainActivity : Activity() {
             rightMargin = dp(16)
             bottomMargin = dp(12)
         })
-        messageScroll.setOnScrollChangeListener { _, _, _, _, _ -> updateScrollToBottomButton() }
+        messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
+            if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+            updateScrollToBottomButton()
+        }
+        messageScroll.setOnTouchListener { _, event ->
+            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                if (imeInsetVisible) imeFollowMessageBottom = false
+                else messageNearBottomBeforeIme = isMessageListNearBottom()
+            }
+            false
+        }
         page.addView(chatArea, LinearLayout.LayoutParams(MATCH, 0, 1f))
         buildQueuePanel()
         buildCompletionNotice()
@@ -939,6 +963,15 @@ class MainActivity : Activity() {
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_SEND
             setPadding(dp(2), dp(5), dp(2), dp(4))
             background = null
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus && !imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+            }
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN && !imeInsetVisible) {
+                    messageNearBottomBeforeIme = isMessageListNearBottom()
+                }
+                false
+            }
             setOnEditorActionListener { _, action, event ->
                 val enter = event?.keyCode == android.view.KeyEvent.KEYCODE_ENTER && event.isShiftPressed != true
                 if (action == EditorInfo.IME_ACTION_SEND || enter) {
