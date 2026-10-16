@@ -3139,7 +3139,7 @@ class MainActivity : Activity() {
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
             card.addView(label("${index + 1}.  ${text.ifBlank { "（附件消息）" }}", 12, TEXT).apply {
-                maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
+                maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
