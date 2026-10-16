@@ -1376,9 +1376,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-dark { color: #fff; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #000; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #fff; }
-.remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #242a3e; }
-.remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #e8e8e8; }
-.remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > :is(span, small) { color: #f1e5d6; }
+.remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > span { color: #c3cad7; }
+.remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > small { color: #929baa; }
+.remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > span { color: #303030; }
+.remote-shell--theme-light :is(.remote-shell *) .operation-log > summary > small { color: #777; }
+.remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > span { color: #514335; }
+.remote-shell--theme-warm :is(.remote-shell *) .operation-log > summary > small { color: #8b7d6d; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #000; opacity: 1; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *)::placeholder { color: #fff; opacity: 1; }
 .remote-shell--theme-light :is(.remote-shell *) .operation-activity__text { background-image: none; color: #000; animation: none; -webkit-text-fill-color: #000; }
