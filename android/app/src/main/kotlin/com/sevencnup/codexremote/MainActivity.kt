@@ -15,6 +15,7 @@ import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Bitmap
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
@@ -52,6 +53,7 @@ import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import android.util.LruCache
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -102,6 +104,9 @@ class MainActivity : Activity() {
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
         .build()
+    private val messageImageCache = object : LruCache<String, Bitmap>(24 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
 
     private var endpoint = ""
     private var token = ""
@@ -132,6 +137,8 @@ class MainActivity : Activity() {
     private var workspacePendingRender: (() -> Unit)? = null
     private var messageRenderDeferred = false
     private var deferredMessageScrollToEnd = false
+    private var deferredMessageRequiresFullRender = false
+    private val deferredMessageTurnIds = mutableSetOf<String>()
     private var settingsOverlay: View? = null
     private var settingsDialog: Dialog? = null
     private var settingsNotificationButton: TextView? = null
@@ -147,6 +154,7 @@ class MainActivity : Activity() {
     private var queueExpanded = false
     private var expandedOperationIds = mutableSetOf<String>()
     private var fullyExpandedOperationIds = mutableSetOf<String>()
+    private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
     private var workspaceClipboard = mutableListOf<String>()
     private var workspaceClipboardMode = "copy"
@@ -173,6 +181,8 @@ class MainActivity : Activity() {
     private var systemInsetTop = 0
     private var systemInsetRight = 0
     private var systemInsetBottom = 0
+    private var activeThreadRefreshScheduled = false
+    private var lastActiveThreadRefreshAt = 0L
 
     private lateinit var root: FrameLayout
     private lateinit var page: LinearLayout
@@ -227,7 +237,11 @@ class MainActivity : Activity() {
             }
         }
     }
-    private val activeThreadRefreshRunnable = Runnable { refreshActiveThread(false) }
+    private val activeThreadRefreshRunnable = Runnable {
+        activeThreadRefreshScheduled = false
+        lastActiveThreadRefreshAt = android.os.SystemClock.uptimeMillis()
+        refreshActiveThread(false)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -279,6 +293,7 @@ class MainActivity : Activity() {
         foreground = false
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
+        activeThreadRefreshScheduled = false
         handler.removeCallbacks(socketHeartbeatRunnable)
         outstandingSocketPing = null
         super.onPause()
@@ -430,6 +445,10 @@ class MainActivity : Activity() {
         historyLoadingThreadId = null
         historyLoadError = null
         historySelectionGeneration += 1
+        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+        handler.removeCallbacks(activeThreadRefreshRunnable)
+        activeThreadRefreshScheduled = false
+        lastActiveThreadRefreshAt = 0L
         sidebarVisible = false
         sidebarProgress = 0f
         workspaceVisible = false
@@ -444,6 +463,10 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
+        messageRenderDeferred = false
+        deferredMessageScrollToEnd = false
+        deferredMessageRequiresFullRender = false
+        deferredMessageTurnIds.clear()
         syncRevisions.clear()
         renderHome()
         refreshRuntime()
@@ -649,14 +672,17 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
-        sendButton = label("↑", 23, DARK, true).apply {
+        sendButton = label("↑", 20, DARK, true).apply {
             gravity = Gravity.CENTER
             includeFontPadding = false
-            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(20))
+            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             setOnClickListener { if (running) interruptTurn() else sendCurrentMessage() }
             contentDescription = "发送消息"
         }
-        footer.addView(sendButton, LinearLayout.LayoutParams(dp(40), dp(40)).apply { leftMargin = dp(5) })
+        footer.addView(sendButton, LinearLayout.LayoutParams(dp(34), dp(34)).apply {
+            leftMargin = dp(6)
+            gravity = Gravity.CENTER_VERTICAL
+        })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
         dock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(dock, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -822,7 +848,7 @@ class MainActivity : Activity() {
         sendButton.text = if (running) "Ⅱ" else "↑"
         sendButton.contentDescription = if (running) "暂停回复" else "发送消息"
         sendButton.setTextColor(if (running) TEXT else DARK)
-        sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(20))
+        sendButton.background = rounded(if (running) PANEL_INSET else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
         updateComposerPreferences()
     }
 
@@ -1200,6 +1226,7 @@ class MainActivity : Activity() {
         historyLoadingThreadId = if ((activeThread?.optJSONArray("turns")?.length() ?: 0) > 0) null else id
         historyLoadError = null
         historySelectionGeneration += 1
+        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
         prefs.edit().putString(KEY_MODE, currentMode).putString("$KEY_ACTIVE_THREAD_PREFIX$currentMode", id).apply()
         running = isThreadRunning(activeThread ?: thread)
@@ -1340,11 +1367,20 @@ class MainActivity : Activity() {
                 val api = RemoteApi(endpoint, token)
                 val encodedId = RemoteApi.encodePath(threadId)
                 var response = api.get("/api/v1/codex/threads/$encodedId" + if (revision.isNullOrBlank()) "" else "?since=${RemoteApi.encodePath(revision)}")
+                val changedTurnIds = if (revision != null) {
+                    val changedTurns = response.optJSONArray("turns") ?: JSONArray()
+                    (0 until changedTurns.length()).mapNotNull { changedTurns.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
+                } else emptyList()
                 val merged = if (revision != null) mergeHistory(threadId, activeThread, response, revision) else response
                 if (merged == null) {
                     response = api.get("/api/v1/codex/threads/$encodedId")
                 }
                 val resolved = merged ?: response
+                val usedDelta = revision != null && merged != null
+                val resolvedTurns = resolved.optJSONArray("turns") ?: JSONArray()
+                val lastTurnId = resolvedTurns.optJSONObject(resolvedTurns.length() - 1)?.optString("id")
+                val incrementalTurnId = changedTurnIds.singleOrNull()?.takeIf { usedDelta && it == lastTurnId }
+                val historyChanged = !usedDelta || changedTurnIds.isNotEmpty()
                 val sync = resolved.optJSONObject("historySync") ?: response.optJSONObject("historySync")
                 val newRevision = sync?.optString("revision")?.takeIf { !it.isNullOrBlank() && it != "null" }
                 if (resolved.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
@@ -1358,7 +1394,7 @@ class MainActivity : Activity() {
                     historyLoadError = null
                     running = isThreadRunning(resolved)
                     renderHeader()
-                    renderMessages(!showLoading)
+                    if (historyChanged) renderMessages(!showLoading, incrementalTurnId)
                 }
             } catch (error: Exception) {
                 handler.post {
@@ -1375,12 +1411,15 @@ class MainActivity : Activity() {
 
     private fun finishThreadRead(threadId: String) {
         threadReadsInFlight.remove(threadId)
-        if (pendingThreadReads.remove(threadId) && activeThreadId == threadId) refreshActiveThread(false)
+        if (pendingThreadReads.remove(threadId) && activeThreadId == threadId) scheduleActiveThreadRefresh()
     }
 
     private fun scheduleActiveThreadRefresh() {
-        handler.removeCallbacks(activeThreadRefreshRunnable)
-        handler.postDelayed(activeThreadRefreshRunnable, 650)
+        if (activeThreadRefreshScheduled) return
+        val elapsed = android.os.SystemClock.uptimeMillis() - lastActiveThreadRefreshAt
+        val delay = (900L - elapsed).coerceAtLeast(0L)
+        activeThreadRefreshScheduled = true
+        handler.postDelayed(activeThreadRefreshRunnable, delay)
     }
 
     private fun mergeHistory(threadId: String, previous: JSONObject?, delta: JSONObject, baseRevision: String): JSONObject? {
@@ -1450,20 +1489,37 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun renderMessages(scrollToEnd: Boolean) {
+    private fun renderMessages(scrollToEnd: Boolean, incrementalTurnId: String? = null) {
         if (!::messageList.isInitialized) return
-        if (sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) {
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) {
             messageRenderDeferred = true
             deferredMessageScrollToEnd = deferredMessageScrollToEnd || scrollToEnd
+            if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
             return
         }
         val wasNearEnd = messageScroll.scrollY + messageScroll.height >= messageList.height - dp(120)
-        messageList.removeAllViews()
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
+        val incrementalTurnIndex = incrementalTurnId?.let { requestedId ->
+            (0 until turns.length()).firstOrNull { turns.optJSONObject(it)?.optString("id") == requestedId }
+        }
+        val useIncrementalRender = incrementalTurnIndex != null && incrementalTurnIndex == turns.length() - 1 && messageList.childCount > 0
+        val effectiveIncrementalTurnId = incrementalTurnId?.takeIf { useIncrementalRender }
+        if (effectiveIncrementalTurnId == null) {
+            messageList.removeAllViews()
+        } else {
+            val turnTag = "$TAG_MESSAGE_TURN_PREFIX$effectiveIncrementalTurnId"
+            for (childIndex in messageList.childCount - 1 downTo 0) {
+                val tag = messageList.getChildAt(childIndex).tag
+                if (tag == turnTag || tag == TAG_MESSAGE_DYNAMIC) messageList.removeViewAt(childIndex)
+            }
+        }
         val messages = mutableListOf<Pair<String, JSONObject>>()
         val turnsById = mutableMapOf<String, JSONObject>()
-        for (turnIndex in 0 until turns.length()) {
+        val firstVisibleTurnIndex = effectiveIncrementalTurnId?.let { incrementalTurnIndex!! }
+            ?: (turns.length() - visibleHistoryTurnCount).coerceAtLeast(0)
+        val lastVisibleTurnIndex = effectiveIncrementalTurnId?.let { incrementalTurnIndex!! + 1 } ?: turns.length()
+        for (turnIndex in firstVisibleTurnIndex until lastVisibleTurnIndex) {
             val turn = turns.optJSONObject(turnIndex) ?: continue
             val turnId = turn.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: "history-turn-$turnIndex"
             turnsById[turnId] = turn
@@ -1514,12 +1570,12 @@ class MainActivity : Activity() {
             }
         }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
-        if (!hasConversationMessages && activeThreadId == null) {
+        if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId == null) {
             messageList.addView(label("与 Codex Remote 一起完成项目", 19, TEXT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(14), dp(36), dp(14), dp(30))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
-        } else if (!hasConversationMessages && activeThreadId != null) {
+        } else if (effectiveIncrementalTurnId == null && !hasConversationMessages && activeThreadId != null) {
             when {
                 historyLoadingThreadId == activeThreadId -> {
                     messageList.addView(label("正在加载聊天记录…", 13, MUTED).apply {
@@ -1551,6 +1607,28 @@ class MainActivity : Activity() {
             }
         }
 
+        if (effectiveIncrementalTurnId == null && firstVisibleTurnIndex > 0) {
+            val hiddenTurnCount = firstVisibleTurnIndex
+            messageList.addView(label("显示更早的 $hiddenTurnCount 轮对话", 11, ACCENT, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
+                setOnClickListener {
+                    val previousHeight = messageList.height
+                    val previousScrollY = messageScroll.scrollY
+                    visibleHistoryTurnCount += DEFAULT_VISIBLE_HISTORY_TURNS
+                    renderMessages(false)
+                    messageScroll.post {
+                        messageScroll.scrollTo(0, previousScrollY + (messageList.height - previousHeight).coerceAtLeast(0))
+                    }
+                }
+            }, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+                leftMargin = dp(4)
+                rightMargin = dp(4)
+                bottomMargin = dp(8)
+            })
+        }
+
         val lastAssistantByTurn = messages.filter { it.first == "assistant" }.groupBy { it.second.optString("_turnId") }
             .mapValues { (_, values) -> values.lastOrNull()?.second }
         val renderedFileChangeTurns = mutableSetOf<String>()
@@ -1568,7 +1646,7 @@ class MainActivity : Activity() {
                 }
                 addOperationLog(turnId, groupedOperations)
                 if (lastAssistantByTurn[turnId] == null && renderedFileChangeTurns.add(turnId)) {
-                    addFileChangeSummary(fileChangesForTurn(turnId, turnsById[turnId], thread))
+                    addFileChangeSummary(turnId, fileChangesForTurn(turnId, turnsById[turnId], thread))
                 }
                 continue
             }
@@ -1617,12 +1695,13 @@ class MainActivity : Activity() {
                 maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
             }, widthWrap())
             row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+            val turnId = item.optString("_turnId")
+            row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
 
-            val turnId = item.optString("_turnId")
             if (role == "assistant" && lastAssistantByTurn[turnId] === item) {
                 renderedFileChangeTurns.add(turnId)
-                addFileChangeSummary(fileChangesForTurn(turnId, turnsById[turnId], thread))
+                addFileChangeSummary(turnId, fileChangesForTurn(turnId, turnsById[turnId], thread))
             }
             messageIndex++
         }
@@ -1633,6 +1712,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), dp(8), dp(12), dp(8))
+                tag = TAG_MESSAGE_DYNAMIC
             }
             activity.addView(ImageView(this).apply {
                 setImageResource(R.drawable.ic_progress)
@@ -1694,7 +1774,9 @@ class MainActivity : Activity() {
     private fun addOperationLog(turnId: String, operations: List<JSONObject>) {
         val viewportWidth = messageScroll.width.takeIf { it > 0 } ?: root.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
         val maxWidth = (viewportWidth - messageScroll.paddingLeft - messageScroll.paddingRight - dp(8)).coerceAtLeast(dp(160))
-        messageList.addView(operationLogView(turnId, operations, maxWidth), widthWrap())
+        messageList.addView(operationLogView(turnId, operations, maxWidth).apply {
+            tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
+        }, widthWrap())
     }
 
     private fun operationLogView(turnId: String, operations: List<JSONObject>, maximumWidth: Int): LinearLayout {
@@ -1703,8 +1785,6 @@ class MainActivity : Activity() {
                 ?: operation.optString("id").takeIf { it.isNotBlank() }
         } ?: "empty"
         val logId = "$turnId:$operationKey"
-        val expanded = logId in expandedOperationIds
-        val showAll = logId in fullyExpandedOperationIds
         val failed = operations.count { normalizedOperationStatus(it) == "failed" }
         val runningCount = operations.count { normalizedOperationStatus(it) == "running" }
         val statusText = when {
@@ -1720,19 +1800,42 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(2), dp(2), dp(2), dp(2))
-            setOnClickListener {
-                if (expanded) expandedOperationIds.remove(logId) else expandedOperationIds.add(logId)
-                renderMessages(false)
-            }
         }
-        header.addView(ImageView(this).apply {
-            setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+        val chevron = ImageView(this).apply {
             imageTintList = ColorStateList.valueOf(MUTED)
-        }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
+        }
+        header.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
         header.addView(label("操作记录", 12, SUBTLE, true), LinearLayout.LayoutParams(WRAP, dp(25)))
         header.addView(label(statusText, 11, if (failed > 0) ERROR else MUTED).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(0, dp(25), 1f))
         container.addView(header, LinearLayout.LayoutParams(maximumWidth, WRAP))
-        if (!expanded) return container
+
+        lateinit var refreshDetails: () -> Unit
+        refreshDetails = {
+            val expanded = logId in expandedOperationIds
+            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            if (container.childCount > 1) container.removeViews(1, container.childCount - 1)
+            if (expanded) {
+                container.addView(
+                    operationDetailsView(logId, operations, maximumWidth, refreshDetails),
+                    LinearLayout.LayoutParams(maximumWidth, WRAP),
+                )
+            }
+        }
+        header.setOnClickListener {
+            if (logId in expandedOperationIds) expandedOperationIds.remove(logId) else expandedOperationIds.add(logId)
+            refreshDetails()
+        }
+        refreshDetails()
+        return container
+    }
+
+    private fun operationDetailsView(
+        logId: String,
+        operations: List<JSONObject>,
+        maximumWidth: Int,
+        refreshDetails: () -> Unit,
+    ): LinearLayout {
+        val showAll = logId in fullyExpandedOperationIds
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, 0, dp(3)) }
         val visibleOperations = if (showAll) operations else operations.take(8)
         visibleOperations.forEach { operation ->
@@ -1758,13 +1861,13 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { topMargin = dp(3); rightMargin = dp(7) })
             val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             copy.addView(label(operationLabel(operation), 12, TEXT, true), widthWrap())
-            val detail = operationDetail(operation)
+            val paths = operationPaths(operation)
+            val detail = operationDetail(operation, paths)
             if (detail.isNotBlank()) copy.addView(label(detail, 10, MUTED).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
             }, widthWrap())
-            val paths = operationPaths(operation)
             if (paths.isNotEmpty()) {
                 val path = paths.first()
                 copy.addView(label("打开 · ${path.substringAfterLast('/')}", 10, ACCENT).apply {
@@ -1781,12 +1884,11 @@ class MainActivity : Activity() {
                 setPadding(dp(21), dp(4), 0, dp(4))
                 setOnClickListener {
                     fullyExpandedOperationIds.add(logId)
-                    renderMessages(false)
+                    refreshDetails()
                 }
             }, widthWrap())
         }
-        container.addView(list, LinearLayout.LayoutParams(maximumWidth, WRAP))
-        return container
+        return list
     }
 
     private fun normalizedOperationStatus(operation: JSONObject): String {
@@ -1804,8 +1906,8 @@ class MainActivity : Activity() {
         if (type == "commandexecution") {
             val command = operation.optString("command")
             return when {
-                Regex("(?:^|\\s)(?:rg|grep|find|fd)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "搜索文件"
-                Regex("(?:^|\\s)(?:cat|head|tail|sed|less|bat)(?:\\s|$)", RegexOption.IGNORE_CASE).containsMatchIn(command) -> "查看文件"
+                SEARCH_COMMAND_PATTERN.containsMatchIn(command) -> "搜索文件"
+                VIEW_COMMAND_PATTERN.containsMatchIn(command) -> "查看文件"
                 else -> "执行命令"
             }
         }
@@ -1822,17 +1924,17 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun operationDetail(operation: JSONObject): String {
+    private fun operationDetail(operation: JSONObject, knownPaths: List<String>? = null): String {
         val type = normalizedType(operation.optString("type"))
         val raw = when (type) {
             "commandexecution" -> operation.optString("command")
             "websearch" -> operation.optString("query")
-            "filechange" -> operationPaths(operation).take(3).joinToString("、")
+            "filechange" -> (knownPaths ?: operationPaths(operation)).take(3).joinToString("、")
             else -> listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"), operation.optString("path"))
                 .firstOrNull { it.isNotBlank() }.orEmpty()
         }
-        return raw.replace(Regex("[\\u0000-\\u001f\\u007f]+"), " ")
-            .replace(Regex("\\s+"), " ")
+        return raw.replace(CONTROL_CHARACTER_PATTERN, " ")
+            .replace(WHITESPACE_PATTERN, " ")
             .trim()
             .let { if (it.length > 120) it.take(119) + "…" else it }
     }
@@ -1845,7 +1947,7 @@ class MainActivity : Activity() {
                 while (keys.hasNext() && output.size < 8) {
                     val key = keys.next()
                     val entry = value.opt(key)
-                    if (key.matches(Regex("(?i)^(path|filepath|file_path|filename|target_path|source_path|imagepath|image_path)$")) && entry is String && entry.isNotBlank()) {
+                    if (key.lowercase(Locale.ROOT) in OPERATION_PATH_KEYS && entry is String && entry.isNotBlank()) {
                         output += entry.trim()
                     } else if (entry is JSONObject || entry is JSONArray) operationPaths(entry, depth + 1, output)
                 }
@@ -1864,13 +1966,16 @@ class MainActivity : Activity() {
             val data = dataValue.substringAfter("base64,", dataValue)
             if (data.isBlank()) continue
             try {
-                val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
-                val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                options.inSampleSize = 1
-                while (options.outWidth / options.inSampleSize > 720 || options.outHeight / options.inSampleSize > 720) options.inSampleSize *= 2
-                options.inJustDecodeBounds = false
-                val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: continue
+                val cacheKey = "${item.optString("id")}:$index:${data.length}:${data.take(48).hashCode()}"
+                val bitmap = messageImageCache.get(cacheKey) ?: run {
+                    val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
+                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                    options.inSampleSize = 1
+                    while (options.outWidth / options.inSampleSize > 720 || options.outHeight / options.inSampleSize > 720) options.inSampleSize *= 2
+                    options.inJustDecodeBounds = false
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.also { messageImageCache.put(cacheKey, it) }
+                } ?: continue
                 val image = ImageView(this).apply {
                     setImageBitmap(bitmap)
                     scaleType = ImageView.ScaleType.CENTER_CROP
@@ -1965,11 +2070,13 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun addFileChangeSummary(entries: List<FileChangeEntry>) {
+    private fun addFileChangeSummary(turnId: String, entries: List<FileChangeEntry>) {
         if (entries.isEmpty()) return
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(5), dp(5), dp(5), dp(5))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = rounded(PANEL, dp(11), BORDER, dp(1))
+            tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
         }
         val totalAdditions = entries.sumOf { it.additions }
         val totalDeletions = entries.sumOf { it.deletions }
@@ -2046,6 +2153,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(9))
             background = rounded(if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27), dp(12), if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44), dp(1))
+            tag = TAG_MESSAGE_DYNAMIC
         }
         box.addView(label("需要批准", 13, WARNING, true), widthWrap())
         val params = approval.optJSONObject("params") ?: JSONObject()
@@ -3171,6 +3279,7 @@ class MainActivity : Activity() {
         val overlay = workspaceOverlay ?: return
         val width = panel.width.takeIf { it > 0 } ?: panel.layoutParams?.width ?: dp(340)
         panel.translationX = width * (1f - workspaceProgress)
+        workspaceScrim?.alpha = workspaceProgress
         if (workspaceProgress > .001f) overlay.visibility = View.VISIBLE
         else if (!workspaceVisible) overlay.visibility = View.GONE
     }
@@ -3185,11 +3294,14 @@ class MainActivity : Activity() {
 
     private fun flushDeferredMessageRender() {
         if (!messageRenderDeferred) return
-        if (sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) return
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) return
         val scrollToEnd = deferredMessageScrollToEnd
+        val incrementalTurnId = deferredMessageTurnIds.singleOrNull().takeUnless { deferredMessageRequiresFullRender }
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
-        renderMessages(scrollToEnd)
+        deferredMessageRequiresFullRender = false
+        deferredMessageTurnIds.clear()
+        handler.post { renderMessages(scrollToEnd, incrementalTurnId) }
     }
 
     private fun handleWorkspaceBack(): Boolean {
@@ -3750,7 +3862,7 @@ class MainActivity : Activity() {
             }
             "item/started", "item/completed", "item/fileChange/patchUpdated", "turn/workspaceChanges" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) handler.post { refreshActiveThread(false) }
+                if (eventThread == activeThreadId) handler.post { scheduleActiveThreadRefresh() }
             }
             "thread/name/updated", "thread/deleted", "remote.pins.changed" -> handler.post { refreshThreads(false) }
         }
@@ -4069,6 +4181,16 @@ class MainActivity : Activity() {
         private const val KEY_LIGHT_THEME = "native_light_theme"
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
         private const val TAG_INSET_CONTENT = "inset_content"
+        private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
+        private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
+        private const val DEFAULT_VISIBLE_HISTORY_TURNS = 12
+        private val OPERATION_PATH_KEYS = setOf(
+            "path", "filepath", "file_path", "filename", "target_path", "source_path", "imagepath", "image_path",
+        )
+        private val SEARCH_COMMAND_PATTERN = Regex("(?:^|\\s)(?:rg|grep|find|fd)(?:\\s|$)", RegexOption.IGNORE_CASE)
+        private val VIEW_COMMAND_PATTERN = Regex("(?:^|\\s)(?:cat|head|tail|sed|less|bat)(?:\\s|$)", RegexOption.IGNORE_CASE)
+        private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
+        private val WHITESPACE_PATTERN = Regex("\\s+")
         private const val MAX_CACHED_THREADS = 32
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
         private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
