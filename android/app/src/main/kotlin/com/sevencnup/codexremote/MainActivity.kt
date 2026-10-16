@@ -2195,7 +2195,12 @@ class MainActivity : Activity() {
             val bubble = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
-                if (role == "user") background = rounded(USER_BUBBLE, dp(12))
+                if (role == "user") {
+                    val stroke = if (currentMode == "claude-code") {
+                        colorWithAlpha(ACCENT_WARM, if (lightTheme) .32f else .44f)
+                    } else null
+                    background = rounded(USER_BUBBLE, dp(12), stroke, if (stroke != null) dp(1) else 0)
+                }
             }
             if (role == "assistant") {
                 val meta = LinearLayout(this).apply {
