@@ -1423,6 +1423,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
 
   useEffect(() => {
+    if (!sharedQueueAuthoritative) return
+    const timer = window.setInterval(() => {
+      for (const [messageId, threadId] of editingQueuedMessageThreadById.current) {
+        void codexRemoteClient.renewQueuedEdit(token, threadId, messageId, queueControllerId.current).catch(() => {})
+      }
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [token])
+
+  useEffect(() => {
     socketRef.current?.subscribeThread(isBackground() ? null : activeThread?.id ?? null)
   }, [activeThread?.id, isBackground])
 

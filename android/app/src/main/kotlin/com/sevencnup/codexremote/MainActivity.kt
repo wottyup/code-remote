@@ -352,6 +352,8 @@ class MainActivity : Activity() {
     private var historyLoadError: String? = null
     private var historySelectionGeneration = 0L
     private var queueExpanded = false
+    private var queueTouchActive = false
+    private var queueRenderDirty = false
     private var expandedOperationIds = mutableSetOf<String>()
     private var fullyExpandedOperationIds = mutableSetOf<String>()
     private var expandedFileChangeIds = mutableSetOf<String>()
@@ -361,6 +363,8 @@ class MainActivity : Activity() {
     private var queueEditThreadId: String? = null
     private var queueEditOwnerId: String? = null
     private var queueEditPending = false
+    private var queueEditGeneration = 0L
+    private var queueEditRenewRunnable: Runnable? = null
     private var sendBusy = false
     private var queueEditDraft = ""
     private var queueEditDraftFiles = mutableListOf<JSONObject>()
@@ -599,6 +603,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        stopQueueEditRenewal()
         handler.removeCallbacksAndMessages(null)
         val closingSocket = socket
         socket = null
@@ -832,6 +837,7 @@ class MainActivity : Activity() {
     }
 
     private fun openChatHome() {
+        abandonQueueEditForHome()
         socket?.close(1000, "reconnecting")
         socket = null
         socketConnected = false
@@ -1122,6 +1128,8 @@ class MainActivity : Activity() {
     }
 
     private fun buildQueuePanel() {
+        queueTouchActive = false
+        queueRenderDirty = false
         queuePanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(3), dp(14), dp(1))
@@ -1342,6 +1350,10 @@ class MainActivity : Activity() {
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
         composerDock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
+        if (queueEditItem != null) {
+            queueEditBar.visibility = View.VISIBLE
+            composerInput.hint = tr("编辑排队消息…")
+        }
         renderAttachmentStrip()
         updateComposerPreferences()
         updateSendButton()
@@ -3786,6 +3798,11 @@ class MainActivity : Activity() {
 
     private fun renderQueue() {
         if (!::queuePanel.isInitialized || !::queueContent.isInitialized) return
+        if (queueTouchActive) {
+            queueRenderDirty = true
+            return
+        }
+        queueRenderDirty = false
         queuePanel.removeAllViews()
         val visibleQueue = (0 until queuedMessages.length()).mapNotNull { queuedMessages.optJSONObject(it) }
             .filter { item ->
@@ -3836,6 +3853,14 @@ class MainActivity : Activity() {
                 }
                 card.addView(imageScroll, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(5) })
             }
+            val queueNotice = when {
+                item.optBoolean("editing") -> "正在编辑 · 自动发送已暂停，可点铅笔取回编辑"
+                item.has("sendAttempt") && !item.isNull("sendAttempt") -> "送达状态待核对，请先查看聊天记录"
+                item.optString("blockedReason").isNotBlank() -> item.optString("blockedReason")
+                index == 0 && running -> "当前回复结束后自动发送；可点箭头尝试立即发送"
+                else -> null
+            }
+            if (queueNotice != null) card.addView(label(queueNotice, 10, WARNING), LinearLayout.LayoutParams(MATCH, WRAP))
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
             val rawEffort = item.optString(if (claudeQueueItem) "claudeEffort" else "effort")
@@ -3854,16 +3879,32 @@ class MainActivity : Activity() {
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
             controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply {
                 setImageResource(R.drawable.ic_queue_edit)
+                installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
                 setImageResource(R.drawable.ic_queue_send)
+                installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply {
                 setImageResource(R.drawable.ic_queue_delete)
+                installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
             details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
             card.addView(details, LinearLayout.LayoutParams(MATCH, dp(44)))
             queueContent.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
+        }
+    }
+
+    private fun installQueueActionTouchGuard(button: View) {
+        button.setOnTouchListener { view, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> queueTouchActive = true
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    queueTouchActive = false
+                    if (queueRenderDirty) view.post { renderQueue() }
+                }
+            }
+            false
         }
     }
 
@@ -4127,21 +4168,98 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun editQueuedMessage(item: JSONObject) {
+    private fun stopQueueEditRenewal() {
+        queueEditRenewRunnable?.let(handler::removeCallbacks)
+        queueEditRenewRunnable = null
+    }
+
+    private fun startQueueEditRenewal() {
+        stopQueueEditRenewal()
+        val itemId = queueEditItem?.optString("id") ?: return
+        val threadId = queueEditThreadId ?: return
+        val ownerId = queueEditOwnerId ?: return
+        val editGeneration = queueEditGeneration
+        val api = RemoteApi(endpoint, token)
+        val task = object : Runnable {
+            override fun run() {
+                if (queueEditGeneration != editGeneration || queueEditItem?.optString("id") != itemId || queueEditOwnerId != ownerId) return
+                io.execute {
+                    runCatching {
+                        api.post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/edit/renew", JSONObject()
+                            .put("message_id", itemId).put("owner_id", ownerId))
+                    }
+                    handler.post {
+                        if (queueEditGeneration == editGeneration && queueEditItem?.optString("id") == itemId && queueEditOwnerId == ownerId) {
+                            handler.postDelayed(this, 60_000L)
+                        }
+                    }
+                }
+            }
+        }
+        queueEditRenewRunnable = task
+        handler.postDelayed(task, 60_000L)
+    }
+
+    private fun abandonQueueEditForHome() {
+        queueEditGeneration++
+        stopQueueEditRenewal()
+        val itemId = queueEditItem?.optString("id")
+        val threadId = queueEditThreadId
+        val ownerId = queueEditOwnerId
+        if (!itemId.isNullOrBlank() && !threadId.isNullOrBlank() && !ownerId.isNullOrBlank()) {
+            val api = RemoteApi(endpoint, token)
+            io.execute { runCatching {
+                api.post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/edit/end", JSONObject()
+                    .put("message_id", itemId).put("owner_id", ownerId))
+            } }
+        }
+        queueEditItem = null
+        queueEditThreadId = null
+        queueEditOwnerId = null
+        queueEditPending = false
+        queueEditDraftFiles.clear()
+        queueEditPreferences.clear()
+    }
+
+    private fun editQueuedMessage(item: JSONObject, recoverEditing: Boolean = false) {
         val threadId = activeThreadId ?: return
-        if (queueEditPending || queueEditItem != null) return
+        if (queueEditPending) { showStatus("正在处理排队消息，请稍候"); return }
+        if (queueEditItem != null) { showStatus("已有一条排队消息在输入框中编辑"); return }
+        if (item.optString("deliveryState", "pending") != "pending" || item.has("sendAttempt") && !item.isNull("sendAttempt")) {
+            showStatus("这条消息的送达状态待核对，暂不能编辑")
+            return
+        }
+        if (item.optBoolean("editing") && !recoverEditing) {
+            showConfirmDialog("取回排队编辑", "这条消息可能正在另一设备编辑。取回后，原编辑页面将无法再保存。", "取回") {
+                editQueuedMessage(item, recoverEditing = true)
+            }
+            return
+        }
         val ownerId = "android-${UUID.randomUUID()}"
+        val editConnection = connectionGeneration
+        val editGeneration = queueEditGeneration
+        val editEndpoint = endpoint
+        val editToken = token
         queueEditPending = true
         io.execute {
             try {
                 val base = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
-                RemoteApi(endpoint, token).post("$base/edit/begin", JSONObject()
+                val api = RemoteApi(editEndpoint, editToken)
+                if (recoverEditing) api.post("$base/edit/end", JSONObject()
+                    .put("message_id", item.optString("id")).put("owner_id", ownerId))
+                api.post("$base/edit/begin", JSONObject()
                     .put("message_id", item.optString("id")).put("owner_id", ownerId))
                 handler.post {
                     queueEditPending = false
+                    if (editConnection != connectionGeneration || editGeneration != queueEditGeneration || activeThreadId != threadId) {
+                        io.execute { runCatching { api.post("$base/edit/end", JSONObject()
+                            .put("message_id", item.optString("id")).put("owner_id", ownerId)) } }
+                        return@post
+                    }
                     queueEditItem = shallowCopyObject(item)
                     queueEditThreadId = threadId
                     queueEditOwnerId = ownerId
+                    startQueueEditRenewal()
                     queueEditDraft = composerInput.text.toString()
                     queueEditDraftFiles = selectedFiles.toMutableList()
                     queueEditPreferences.clear()
@@ -4209,6 +4327,7 @@ class MainActivity : Activity() {
                 api.post("$base/edit/end", JSONObject().put("message_id", item.optString("id")).put("owner_id", ownerId))
                 handler.post {
                     queueEditPending = false
+                    stopQueueEditRenewal()
                     queueEditItem = null
                     queueEditThreadId = null
                     queueEditOwnerId = null
@@ -4232,20 +4351,43 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun sendQueuedNow(item: JSONObject) = queueAction("send-now", item) { refreshActiveThread(false) }
+    private fun sendQueuedNow(item: JSONObject) {
+        if (queueEditPending || queueEditItem != null) {
+            showStatus("请先保存或取消正在编辑的排队消息")
+            return
+        }
+        if (item.has("sendAttempt") && !item.isNull("sendAttempt")) {
+            showStatus("这条消息可能已经发送，请先核对聊天记录")
+            return
+        }
+        if (item.optBoolean("editing")) {
+            showConfirmDialog("结束排队编辑", "这条消息正在编辑。结束旧编辑并按原内容立即发送？", "结束并发送") {
+                queueAction("edit/end", item) { queueAction("send-now", item) { refreshActiveThread(false) } }
+            }
+            return
+        }
+        queueAction("send-now", item) { refreshActiveThread(false) }
+    }
 
     private fun removeQueuedMessage(item: JSONObject) = queueAction("remove", item) { }
 
     private fun queueAction(action: String, item: JSONObject, after: () -> Unit) {
         val threadId = activeThreadId ?: return
+        val actionConnection = connectionGeneration
         io.execute {
             try {
                 val result = RemoteApi(endpoint, token).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/$action", queueIdBody(item))
                 handler.post {
+                    if (actionConnection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = result.optJSONArray("queue") ?: JSONArray()
                     renderQueue()
                     if (result.optBoolean("sent", false)) refreshActiveThread(false)
-                    after()
+                    if (action == "send-now" && !result.optBoolean("sent", false)) {
+                        val first = queuedMessages.optJSONObject(0)
+                        showStatus(first?.optString("blockedReason")?.takeIf { it.isNotBlank() }
+                            ?: if (running) "当前回复仍在运行，暂未发送；消息保留在队列中" else "暂未确认发送，消息保留在队列中")
+                    }
+                    if (action != "send-now" || result.optBoolean("sent", false)) after()
                 }
             } catch (error: Exception) { handler.post { showStatus(error.message ?: "队列操作失败") } }
         }

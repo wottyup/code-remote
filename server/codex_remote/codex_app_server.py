@@ -949,6 +949,27 @@ class CodexAppServer:
             pending_turn_id = None
         return self._active_turn_ids.get(thread_id) or pending_turn_id
 
+    async def recover_active_turn_id(self, thread_id: str) -> str | None:
+        """Recover a turn started before this remote server connected."""
+        active_turn_id = await self._active_turn_id(thread_id)
+        if active_turn_id:
+            return active_turn_id
+        result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": False})
+        live_thread = result.get("thread")
+        live_status = live_thread.get("status") if isinstance(live_thread, dict) else None
+        if not isinstance(live_status, dict) or live_status.get("type") not in {"active", "inProgress", "running", "started"}:
+            return None
+        history = await asyncio.to_thread(self._history.read_thread, thread_id, tail_turns=1)
+        turns = history.get("turns") if isinstance(history, dict) else None
+        latest = turns[-1] if isinstance(turns, list) and turns else None
+        if not isinstance(latest, dict) or latest.get("status") not in {"active", "inProgress", "running", "started"}:
+            return None
+        turn_id = latest.get("id")
+        if not isinstance(turn_id, str) or not turn_id:
+            return None
+        self._active_turn_ids[thread_id] = turn_id
+        return turn_id
+
     async def steer_turn(
         self,
         thread_id: str,

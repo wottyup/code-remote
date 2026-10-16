@@ -734,6 +734,12 @@ export const codexRemoteClient = {
       body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
     }, { networkRetries: 3 })
   },
+  renewQueuedEdit(token: string, threadId: string, messageId: string, ownerId: string) {
+    return request<{ renewed: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/renew`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
+    })
+  },
   startQueuedIfIdle(token: string, threadId: string, messageId: string) {
     return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/start-if-idle`, {
       method: 'POST', body: JSON.stringify({ message_id: messageId }),

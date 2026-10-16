@@ -1719,6 +1719,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
 
+    @app.post("/api/v1/codex/queue/{thread_id}/edit/renew")
+    async def renew_queued_edit(thread_id: str, body: QueueMessageIdRequest) -> dict[str, bool]:
+        try:
+            shared_state.renew_edit(thread_id, body.message_id, body.owner_id or "legacy")
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"renewed": True}
+
     @app.post("/api/v1/codex/queue/{thread_id}/edit/update")
     async def update_queued_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
         if not body.requestText.strip() and not body.images and not body.documents:

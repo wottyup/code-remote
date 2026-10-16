@@ -10,7 +10,7 @@ import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ from .codex_app_server import CodexAppServer, CodexRuntimeError
 from .claude_code import ClaudeCodeServer, is_claude_thread_id
 
 logger = logging.getLogger(__name__)
+EDIT_LEASE_SECONDS = 600
 
 
 def _now() -> str:
@@ -43,6 +44,7 @@ class SharedStateStore:
                 state TEXT NOT NULL DEFAULT 'pending',
                 editing INTEGER NOT NULL DEFAULT 0,
                 edit_owner TEXT,
+                edit_started_at TEXT,
                 attempt_at TEXT
             );
             CREATE INDEX IF NOT EXISTS queued_messages_thread ON queued_messages(thread_id, sequence);
@@ -61,6 +63,12 @@ class SharedStateStore:
         columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queued_messages)")}
         if "edit_owner" not in columns:
             self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_owner TEXT")
+        if "edit_started_at" not in columns:
+            self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_started_at TEXT")
+        # An editor from an older process cannot renew its lock after a restart.
+        self.connection.execute(
+            "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE editing = 1 AND edit_started_at IS NULL"
+        )
         # A process may have died after Codex accepted a turn but before it
         # received an acknowledgement. Never turn such an item into "pending".
         self.connection.execute("UPDATE queued_messages SET state = 'unverified' WHERE state = 'sending'")
@@ -144,8 +152,8 @@ class SharedStateStore:
             if row and row["state"] == "pending" and row["editing"] and row["edit_owner"] == owner:
                 return
             changed = self.connection.execute(
-                "UPDATE queued_messages SET editing = 1, edit_owner = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
-                (owner, thread_id, message_id),
+                "UPDATE queued_messages SET editing = 1, edit_owner = ?, edit_started_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+                (owner, _now(), thread_id, message_id),
             ).rowcount
         else:
             existing = self.connection.execute(
@@ -155,7 +163,7 @@ class SharedStateStore:
             if not existing:
                 return
             changed = self.connection.execute(
-                "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE thread_id = ? AND id = ? AND editing = 1",
+                "UPDATE queued_messages SET editing = 0, edit_owner = NULL, edit_started_at = NULL WHERE thread_id = ? AND id = ? AND editing = 1",
                 (thread_id, message_id),
             ).rowcount
             if not changed and self.connection.execute(
@@ -165,6 +173,26 @@ class SharedStateStore:
                 return
         if not changed:
             raise QueueConflictError("这条排队消息已变更，请刷新后重试。")
+
+    def renew_edit(self, thread_id: str, message_id: str, owner: str) -> None:
+        changed = self.connection.execute(
+            "UPDATE queued_messages SET edit_started_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 1 AND edit_owner = ?",
+            (_now(), thread_id, message_id, owner),
+        ).rowcount
+        if not changed:
+            raise QueueConflictError("排队消息的编辑占用已失效，请重新打开编辑。")
+
+    def expire_stale_edits(self) -> list[str]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=EDIT_LEASE_SECONDS)).isoformat()
+        rows = self.connection.execute(
+            "SELECT DISTINCT thread_id FROM queued_messages WHERE editing = 1 AND edit_started_at < ?", (cutoff,),
+        ).fetchall()
+        if rows:
+            self.connection.execute(
+                "UPDATE queued_messages SET editing = 0, edit_owner = NULL, edit_started_at = NULL WHERE editing = 1 AND edit_started_at < ?",
+                (cutoff,),
+            )
+        return [row[0] for row in rows]
 
     def remove(self, thread_id: str, message_id: str) -> None:
         existing = self.connection.execute(
@@ -376,6 +404,8 @@ class SharedQueueService:
     async def _run(self) -> None:
         while not self._closed:
             self._wake.clear()
+            for thread_id in self.store.expire_stale_edits():
+                await self.changed(thread_id)
             for thread_id in self.store.thread_ids():
                 try:
                     await self.advance(thread_id)
@@ -508,6 +538,8 @@ class SharedQueueService:
             status_type = status.get("type") if isinstance(status, dict) else None
         active_turn = await self._active_turn_id(thread_id)
         busy = status_type in {"active", "inProgress", "running", "started"}
+        if busy and not active_turn and not is_claude:
+            active_turn = await self.codex.recover_active_turn_id(thread_id)
         if not active_turn and status_type not in {"idle", "notLoaded"}:
             # Older App Server versions may omit the summary status. Fall back
             # conservatively rather than treating an unknown status as idle.
@@ -530,7 +562,8 @@ class SharedQueueService:
         if (active_turn or busy) and (not allow_steer or is_claude):
             return False
         if busy and not active_turn:
-            raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
+            await self._block(thread_id, "正在确认当前回复，暂时无法立即发送；确认后可重试")
+            return False
         if not active_turn and status_type != "idle":
             await self._resume_thread(thread_id)
         payload = self.store.claim(thread_id, message_id)
