@@ -3384,7 +3384,12 @@ class MainActivity : Activity() {
     private fun renderQueue() {
         if (!::queuePanel.isInitialized || !::queueContent.isInitialized) return
         queuePanel.removeAllViews()
-        val count = queuedMessages.length()
+        val visibleQueue = (0 until queuedMessages.length()).mapNotNull { queuedMessages.optJSONObject(it) }
+            .filter { item ->
+                val state = item.optString("deliveryState")
+                state != "submitting" && state != "sending"
+            }
+        val count = visibleQueue.size
         if (count == 0) {
             queuePanel.visibility = View.GONE
             queueContent.visibility = View.GONE
@@ -3402,7 +3407,7 @@ class MainActivity : Activity() {
         queueContent.visibility = if (queueExpanded) View.VISIBLE else View.GONE
         if (!queueExpanded) return
         for (index in 0 until count) {
-            val item = queuedMessages.optJSONObject(index) ?: continue
+            val item = visibleQueue[index]
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(7), dp(5), dp(7), dp(5))
