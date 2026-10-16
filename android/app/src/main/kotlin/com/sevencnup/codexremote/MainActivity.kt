@@ -1470,8 +1470,7 @@ class MainActivity : Activity() {
 
             var target = deepest(this, x, y)
             while (target != null && target !== this) {
-                if (target is EditText || target is SeekBar || target is ScrollView ||
-                    target is HorizontalScrollView || (target is TextView && target.isTextSelectable) ||
+                if (target is EditText || target is SeekBar || target is HorizontalScrollView ||
                     target.isClickable || target.isLongClickable
                 ) return true
                 target = target.parent as? View
