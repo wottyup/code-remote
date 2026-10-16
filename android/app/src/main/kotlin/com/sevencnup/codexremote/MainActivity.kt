@@ -293,6 +293,9 @@ class MainActivity : Activity() {
     private val connectionDraftFiles = mutableMapOf<String, MutableList<JSONObject>>()
     private var activeConnectionId = ""
     @Volatile private var connectionGeneration = 0L
+    @Volatile private var backgroundThreadDirty = false
+    @Volatile private var backgroundListDirty = false
+    @Volatile private var backgroundQueueDirty = false
     private var currentMode = "codex"
     private var activeThreadId: String? = null
     private var activeThread: JSONObject? = null
@@ -355,10 +358,10 @@ class MainActivity : Activity() {
     private var workspaceClipboard = mutableListOf<String>()
     private var workspaceClipboardMode = "copy"
     @Volatile private var socket: WebSocket? = null
-    private var socketConnected = false
+    @Volatile private var socketConnected = false
     private var outstandingSocketPing: String? = null
     private var socketPingSentAt = 0L
-    private var lastSocketActivityAt = 0L
+    @Volatile private var lastSocketActivityAt = 0L
     private var backgroundedAt = 0L
     private var pendingApproval: JSONObject? = null
     private var terminalOverlay: LinearLayout? = null
@@ -528,25 +531,32 @@ class MainActivity : Activity() {
         foreground = true
         if (token.isNotBlank()) {
             val now = System.currentTimeMillis()
-            val resumedFromLongPause = backgroundedAt > 0L && now - backgroundedAt > 30_000L
+            val wasBackgrounded = backgroundedAt > 0L
+            val backgroundDuration = if (wasBackgrounded) now - backgroundedAt else 0L
             val socketIsStale = lastSocketActivityAt > 0L && now - lastSocketActivityAt > 45_000L
-            if (socket != null && (!socketConnected || resumedFromLongPause || socketIsStale)) {
+            if (socket != null && (!socketConnected || socketIsStale)) {
                 socket?.cancel()
                 socket = null
                 socketConnected = false
                 outstandingSocketPing = null
             }
+            val shouldCatchUp = wasBackgrounded &&
+                (backgroundDuration > 5_000L || backgroundThreadDirty || backgroundListDirty || backgroundQueueDirty || !socketConnected)
             backgroundedAt = 0L
             connectSocket()
             handler.removeCallbacks(socketHeartbeatRunnable)
             handler.postDelayed(socketHeartbeatRunnable, 20_000)
-            if (activeThreadId != null) {
+            if (shouldCatchUp) {
+                if (activeThreadId != null) refreshActiveThread(false)
                 refreshThreads(false)
-                refreshActiveThread(false)
-                refreshQueue(false)
+                if (backgroundListDirty) refreshPins()
+                if (activeThreadId != null) refreshQueue(false)
             }
+            backgroundThreadDirty = false
+            backgroundListDirty = false
+            backgroundQueueDirty = false
             handler.removeCallbacks(refreshRunnable)
-            handler.post(refreshRunnable)
+            handler.postDelayed(refreshRunnable, if (socketConnected) 30_000L else 15_000L)
         }
     }
 
@@ -866,7 +876,7 @@ class MainActivity : Activity() {
         refreshModels()
         connectSocket()
         handler.removeCallbacks(refreshRunnable)
-        handler.post(refreshRunnable)
+        handler.postDelayed(refreshRunnable, 15_000L)
     }
 
     private fun installWindowInsets(view: View, content: View? = null) {
@@ -1688,6 +1698,7 @@ class MainActivity : Activity() {
         private var swipeTarget: String? = null
         private var interceptingSwipe = false
         private var selectableTextGesture = false
+        private var edgeSwipeOrigin = false
         private var velocityTracker: VelocityTracker? = null
 
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
@@ -1698,15 +1709,17 @@ class MainActivity : Activity() {
                     velocityTracker?.recycle()
                     velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
                     selectableTextGesture = touchesSelectableText(event.x, event.y)
+                    edgeSwipeOrigin = event.x <= dp(40) || event.x >= width - dp(40)
                     swipeTarget = when {
-                        // Keep controls that need uninterrupted drags. Ordinary
-                        // chat text and clickable rows can still begin a horizontal swipe.
-                        settingsOverlay != null || isGestureProtectedTouchTarget(event.x, event.y) -> null
+                        settingsOverlay != null || terminalOverlay != null -> null
                         sidebarVisible || sidebarProgress > .02f -> if (event.x <= (drawer.width.takeIf { it > 0 } ?: dp(320))) "sidebar" else null
                         workspaceVisible || workspaceProgress > .02f -> "workspace"
                         !isChatSwipeOrigin(event.y) -> null
-                        event.x >= dp(24).toFloat() && event.x < width / 2f -> "sidebar"
-                        event.x >= width / 2f && event.x <= width - dp(24) -> "workspace"
+                        isGestureProtectedTouchTarget(event.x, event.y) -> null
+                        edgeSwipeOrigin && event.x < width / 2f -> "sidebar"
+                        edgeSwipeOrigin -> "workspace"
+                        event.x < width / 2f -> "sidebar"
+                        event.x >= width / 2f -> "workspace"
                         else -> null
                     }
                     startProgress = if (swipeTarget == "workspace") workspaceProgress else sidebarProgress
@@ -1746,7 +1759,7 @@ class MainActivity : Activity() {
             if (selectableTextGesture && event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()) return false
             val dx = event.x - startX
             val dy = event.y - startY
-            val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * 1.25f
+            val horizontal = abs(dx) > touchSlop && abs(dx) > abs(dy) * (if (edgeSwipeOrigin) .85f else 1.25f)
             val isOpen = if (target == "workspace") workspaceVisible else sidebarVisible
             val opens = !isOpen && if (target == "workspace") dx < -touchSlop else dx > touchSlop
             val closes = isOpen && if (target == "workspace") dx > touchSlop else dx < -touchSlop
@@ -1823,6 +1836,7 @@ class MainActivity : Activity() {
             interceptingSwipe = false
             swipeTarget = null
             selectableTextGesture = false
+            edgeSwipeOrigin = false
             velocityTracker?.recycle()
             velocityTracker = null
         }
@@ -5585,11 +5599,6 @@ class MainActivity : Activity() {
             contentDescription = "本机终端"
         }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
         header.addView(label("本机终端", 13, TEXT, true), LinearLayout.LayoutParams(0, dp(34), 1f))
-        header.addView(smallButton("复制到输入框") {
-            val value = terminalOutput?.text?.toString().orEmpty()
-            composerInput.append(value.takeLast(120_000))
-            closeTerminal()
-        })
         header.addView(iconButton("close", "关闭终端") { closeTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         header.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(1)))
         shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(44)))
@@ -5637,6 +5646,19 @@ class MainActivity : Activity() {
         inputRow.addView(terminalDraftInput, LinearLayout.LayoutParams(0, dp(42), 1f))
         inputRow.addView(smallButton("发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
         shell.addView(inputRow, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(5) })
+        val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+        transferRow.addView(smallButton("复制到输入框") {
+            val output = terminalOutput ?: return@smallButton
+            val fullText = output.text.toString()
+            val start = output.selectionStart
+            val end = output.selectionEnd
+            val value = if (start >= 0 && end > start && end <= fullText.length) fullText.substring(start, end) else fullText
+            if (value.isNotBlank()) {
+                composerInput.append(value.takeLast(120_000))
+                closeTerminal()
+            }
+        }, LinearLayout.LayoutParams(WRAP, dp(36)))
+        shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(38)))
         terminalReady = false
         terminalImeVisible = false
         terminalOverlay = shell
@@ -6014,9 +6036,15 @@ class MainActivity : Activity() {
                     handler.post { renderMessages(false) }
                 }
             }
-            "threads.changed" -> handler.post { refreshThreads(false) }
+            "threads.changed" -> {
+                if (foreground) handler.post { refreshThreads(false) }
+                else backgroundListDirty = true
+            }
             "remote.queue.changed" -> {
-                if (event.optString("threadId") == activeThreadId) handler.post { refreshQueue(false) }
+                if (event.optString("threadId") == activeThreadId) {
+                    if (foreground) handler.post { refreshQueue(false) }
+                    else backgroundQueueDirty = true
+                }
             }
             "notification" -> handleNotificationEvent(event)
         }
@@ -6028,28 +6056,43 @@ class MainActivity : Activity() {
         when (method) {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) { running = true; handler.post { renderHeader(); renderMessages(false) } }
+                if (eventThread == activeThreadId) {
+                    running = true
+                    if (foreground) handler.post { renderHeader(); renderMessages(false) }
+                    else backgroundThreadDirty = true
+                }
             }
             "turn/completed" -> {
                 val eventThread = eventThreadId(params)
                 if (eventThread == activeThreadId) {
                     running = false
-                    handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    if (foreground) handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
                     pendingCompletionNoticeThreadId = eventThread
                 }
                 if (!foreground && eventThread != null) showSystemNotification(eventThread)
-                handler.post { refreshThreads(false) }
+                if (foreground) handler.post { refreshThreads(false) }
+                else backgroundListDirty = true
             }
             "item/agentMessage/delta" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) handler.post { scheduleActiveThreadRefresh() }
+                if (eventThread == activeThreadId) {
+                    if (foreground) handler.post { scheduleActiveThreadRefresh() }
+                    else backgroundThreadDirty = true
+                }
             }
             "item/started", "item/completed", "item/fileChange/patchUpdated", "turn/workspaceChanges" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) handler.post { scheduleActiveThreadRefresh() }
+                if (eventThread == activeThreadId) {
+                    if (foreground) handler.post { scheduleActiveThreadRefresh() }
+                    else backgroundThreadDirty = true
+                }
             }
-            "thread/name/updated", "thread/deleted", "remote.pins.changed" -> handler.post { refreshThreads(false) }
+            "thread/name/updated", "thread/deleted", "remote.pins.changed" -> {
+                if (foreground) handler.post { refreshThreads(false) }
+                else backgroundListDirty = true
+            }
         }
     }
 
