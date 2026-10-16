@@ -118,6 +118,10 @@ class MainActivity : Activity() {
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
         else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
     }
+    private val OPAQUE_PANEL: Int get() = when (themeName) {
+        "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
+        else -> PANEL
+    }
     private val PANEL_INSET: Int get() = when (themeName) {
         "warm" -> Color.rgb(241, 231, 216)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
@@ -1123,7 +1127,9 @@ class MainActivity : Activity() {
             .coerceAtLeast(dp(248))
             .coerceAtMost((availableWidth - dp(28)).coerceAtLeast(dp(220)))
         panel.apply {
-            background = ColorDrawable(PANEL)
+            // Drawers sit above a live chat view. Keep their base fully opaque so
+            // streamed message updates cannot show through custom-theme surfaces.
+            background = ColorDrawable(OPAQUE_PANEL)
             elevation = dp(5).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
@@ -2788,7 +2794,7 @@ class MainActivity : Activity() {
     private fun showImageDialog(bitmap: android.graphics.Bitmap) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
-        val frame = FrameLayout(this).apply { background = rounded(PANEL, dp(14), BORDER, dp(1)) }
+        val frame = FrameLayout(this).apply { background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1)) }
         frame.addView(ImageView(this).apply {
             setImageBitmap(bitmap)
             adjustViewBounds = true
@@ -3542,7 +3548,7 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(15), dp(18), dp(12))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         card.addView(label(title, 15, TEXT, true), widthWrap())
         card.addView(input, LinearLayout.LayoutParams(MATCH, if (input.minLines > 1) dp(112) else dp(46)).apply { topMargin = dp(12) })
@@ -3568,7 +3574,7 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(15), dp(18), dp(12))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         card.addView(label(title, 15, TEXT, true), widthWrap())
         card.addView(label(message, 12, SUBTLE).apply {
@@ -3642,7 +3648,7 @@ class MainActivity : Activity() {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(14), dp(13), dp(14), dp(12))
-                background = rounded(blendColors(PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
+                background = rounded(blendColors(OPAQUE_PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
             }
             card.addView(label(title, 14, TEXT, true), widthWrap())
             card.addView(label(description, 11, MUTED).apply {
@@ -3666,7 +3672,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
                 background = if (selected) {
-                    rounded(blendColors(PANEL_INSET, settingsAccent, .2f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
+                    rounded(blendColors(OPAQUE_PANEL, settingsAccent, .2f), dp(10), colorWithAlpha(settingsAccent, .68f), dp(1))
                 } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
                 isFocusable = false
@@ -3854,7 +3860,7 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(15), dp(18), dp(12))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         card.addView(label(title, 15, TEXT, true), widthWrap())
         val previewRow = LinearLayout(this).apply {
@@ -4033,7 +4039,7 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(18), dp(15), dp(18), dp(12))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         card.addView(label("更改电脑地址", 15, TEXT, true), widthWrap())
         card.addView(form, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -4695,7 +4701,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         header.addView(ImageView(this).apply {
@@ -4792,7 +4798,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(9), dp(12), dp(10))
-            background = rounded(PANEL, dp(14), BORDER, dp(1))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         val previewInput = EditText(this).apply {
             setTextColor(TEXT); setHintTextColor(MUTED); textSize = adjustedTextSize(13); setTag(R.id.base_text_size, 13f)
