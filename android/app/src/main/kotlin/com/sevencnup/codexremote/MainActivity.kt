@@ -4539,11 +4539,11 @@ class MainActivity : Activity() {
             setPadding(0, dp(11), 0, 0)
         }
         val name = editField("连接名称（可选）", "", InputType.TYPE_CLASS_TEXT).apply { setSingleLine(true) }
-        val address = editField("电脑网页地址", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
+        val address = editField("电脑 IP 或网页地址", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI).apply { setSingleLine(true) }
         val code = editField("电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
         form.addView(label("连接名称", 11, SUBTLE, true), widthWrap())
         form.addView(name, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
-        form.addView(label("电脑网页地址", 11, SUBTLE, true), widthWrap())
+        form.addView(label("电脑网页地址 · 只填 IP 时默认使用 4173 端口", 11, SUBTLE, true), widthWrap())
         form.addView(address, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4); bottomMargin = dp(12) })
         form.addView(label("匹配码", 11, SUBTLE, true), widthWrap())
         form.addView(code, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(4) })
