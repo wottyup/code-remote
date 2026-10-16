@@ -48,6 +48,7 @@ import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, ty
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
+import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -5272,6 +5273,48 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
+function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  const elements: ReactNode[] = []
+  let plainLines: string[] = []
+  let plainIndex = 0
+  let tableIndex = 0
+  let lineIndex = 0
+
+  const flushPlainText = () => {
+    if (plainLines.length === 0) return
+    elements.push(<div className="chat-message__text" key={`${keyPrefix}-text-${plainIndex++}`}>{plainLines.join('\n')}</div>)
+    plainLines = []
+  }
+
+  while (lineIndex < lines.length) {
+    const table = parseMarkdownTableBlock(lines, lineIndex)
+    if (!table) {
+      plainLines.push(lines[lineIndex])
+      lineIndex += 1
+      continue
+    }
+
+    flushPlainText()
+    elements.push(
+      <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
+        <table className="chat-message__table">
+          <thead>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{cell}</th>)}</tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{cell}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>,
+    )
+    lineIndex = table.nextLine
+  }
+
+  flushPlainText()
+  return elements
+}
+
 function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
@@ -5290,7 +5333,7 @@ function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy =
       {blocks.map((block, index) => {
         if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} showCopy={showCodeCopy} />
         const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
-        return value ? <div className="chat-message__text" key={`text-${index}`}>{value}</div> : null
+        return value ? renderMessageText(value, `text-${index}`) : null
       })}
     </div>
   )
