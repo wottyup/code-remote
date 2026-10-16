@@ -340,6 +340,7 @@ class MainActivity : Activity() {
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
     private var sidebarHost: EdgeDrawerHost? = null
+    private var sidebarLongPressActive = false
     private var workspaceHost: EdgeDrawerHost? = null
     private var workspaceOverlay: FrameLayout? = null
     private var workspacePanel: LinearLayout? = null
@@ -1862,6 +1863,48 @@ class MainActivity : Activity() {
             }
             row.setOnClickListener { if (sidebarSelectionMode) choose() else selectThread(thread) }
             row.setOnLongClickListener { if (sidebarSelectionMode) choose() else showThreadActions(row, thread); true }
+            var downX = 0f
+            var downY = 0f
+            var longPressed = false
+            var pressTask: Runnable? = null
+            val pressSlop = ViewConfiguration.get(this).scaledTouchSlop * 1.5f
+            row.setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.x
+                        downY = event.y
+                        longPressed = false
+                        pressTask?.let(handler::removeCallbacks)
+                        pressTask = Runnable {
+                            if (view.isAttachedToWindow) {
+                                longPressed = view.performLongClick()
+                                if (longPressed) sidebarLongPressActive = true
+                            }
+                        }.also { handler.postDelayed(it, ViewConfiguration.getLongPressTimeout().toLong()) }
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (!longPressed && (abs(event.x - downX) > pressSlop || abs(event.y - downY) > pressSlop)) {
+                            pressTask?.let(handler::removeCallbacks)
+                            pressTask = null
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        pressTask?.let(handler::removeCallbacks)
+                        pressTask = null
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
+                        sidebarLongPressActive = false
+                        if (event.actionMasked == MotionEvent.ACTION_UP && !longPressed &&
+                            abs(event.x - downX) <= pressSlop && abs(event.y - downY) <= pressSlop
+                        ) view.performClick()
+                        true
+                    }
+                    else -> true
+                }
+            }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(5) })
             }
         }
@@ -1921,6 +1964,7 @@ class MainActivity : Activity() {
         override fun dispatchTouchEvent(event: MotionEvent): Boolean {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    sidebarLongPressActive = false
                     startX = event.x
                     startY = event.y
                     velocityTracker?.recycle()
@@ -1973,6 +2017,7 @@ class MainActivity : Activity() {
 
         private fun beginSwipeIfNeeded(event: MotionEvent): Boolean {
             val target = swipeTarget ?: return false
+            if (sidebarLongPressActive) return false
             if (selectableTextGesture && event.eventTime - event.downTime >= ViewConfiguration.getLongPressTimeout()) return false
             val dx = event.x - startX
             val dy = event.y - startY
