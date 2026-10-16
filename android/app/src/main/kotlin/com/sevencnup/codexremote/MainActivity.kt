@@ -5909,7 +5909,6 @@ class MainActivity : Activity() {
     private fun processAttachments(uris: List<Uri>) {
         if (uris.isEmpty()) return
         attachRequestActive = true
-        showToast("正在读取附件…")
         io.execute {
             try {
                 val result = uris.map { readAttachment(it) }
