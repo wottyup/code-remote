@@ -451,6 +451,30 @@ class WorkspaceFileSaveRequest(BaseModel):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class WorkspaceEntryCreateRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+    kind: Literal["file", "directory"]
+
+
+class WorkspaceEntryRenameRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+    name: str = Field(min_length=1, max_length=255)
+
+
+class WorkspaceEntriesDeleteRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    paths: list[str] = Field(min_length=1, max_length=100)
+
+
+class WorkspaceEntriesPasteRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    paths: list[str] = Field(min_length=1, max_length=100)
+    destination: str = Field(default="", max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+    mode: Literal["copy", "move"]
+
+
 def workspace_base_for_cwd(workspace: Path, raw_cwd: str | None) -> Path:
     """Resolve a browser-selected or thread working directory on the server host."""
     try:
@@ -477,6 +501,221 @@ def workspace_path(base: Path, relative_path: str) -> Path:
     except ValueError as error:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能访问工作目录以外的路径") from error
     return candidate
+
+
+def workspace_entry_name(name: str) -> str:
+    if name != name.strip() or name in {"", ".", ".."}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="名称不能为空，且首尾不能包含空格")
+    if any(character in '<>:"/\\|?*' or ord(character) < 32 for character in name):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="名称包含系统不支持的字符")
+    if name.endswith((" ", ".")) or len(name.encode("utf-8")) > 255:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="名称过长或结尾无效")
+    reserved = name.split(".", 1)[0].casefold()
+    if reserved in {"con", "prn", "aux", "nul", *(f"com{index}" for index in range(1, 10)), *(f"lpt{index}" for index in range(1, 10))}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="该名称被系统保留")
+    return name
+
+
+def workspace_mutation_path(base: Path, relative_path: str, *, allow_root: bool = False, require_exists: bool = True) -> Path:
+    if not relative_path:
+        if allow_root:
+            return base
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="不能操作工作区根目录")
+    if len(relative_path) > WORKSPACE_TREE_MAX_PATH_LENGTH or "\x00" in relative_path:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径无效或过长")
+    if relative_path.startswith(("/", "\\")) or (len(relative_path) > 1 and relative_path[1] == ":"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
+    parts = relative_path.replace("\\", "/").split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="路径无效")
+    candidate = base.joinpath(*parts)
+    try:
+        candidate.parent.resolve().relative_to(base)
+        candidate.resolve(strict=False).relative_to(base)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能操作工作目录以外的路径") from error
+    if candidate.is_symlink():
+        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="暂不支持修改符号链接")
+    if require_exists and not candidate.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件或文件夹不存在")
+    return candidate
+
+
+def workspace_entry_payload(base: Path, candidate: Path) -> dict[str, Any]:
+    kind = workspace_entry_kind(candidate)
+    if kind is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件或文件夹不存在")
+    try:
+        relative_path = candidate.relative_to(base).as_posix()
+        size = candidate.stat().st_size if kind == "file" else None
+    except (OSError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取文件信息") from error
+    return {"name": candidate.name, "path": relative_path, "kind": kind, "size": size}
+
+
+def workspace_source_paths(base: Path, paths: list[str]) -> list[Path]:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for path in paths:
+        candidate = workspace_mutation_path(base, path)
+        key = os.path.normcase(str(candidate))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    unique.sort(key=lambda item: len(item.parts))
+    selected: list[Path] = []
+    for candidate in unique:
+        if any(candidate.is_relative_to(parent) for parent in selected):
+            continue
+        selected.append(candidate)
+    return selected
+
+
+def workspace_create_entry(base: Path, relative_path: str, kind: Literal["file", "directory"]) -> dict[str, Any]:
+    parts = relative_path.replace("\\", "/").split("/")
+    if parts:
+        workspace_entry_name(parts[-1])
+    candidate = workspace_mutation_path(base, relative_path, require_exists=False)
+    if candidate.exists() or candidate.is_symlink():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名文件或文件夹已存在")
+    if not candidate.parent.is_dir():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="上级文件夹不存在")
+    try:
+        if kind == "directory":
+            candidate.mkdir()
+        else:
+            candidate.open("xb").close()
+    except FileExistsError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名文件或文件夹已存在") from error
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法创建，请检查工作区写入权限") from error
+    return workspace_entry_payload(base, candidate)
+
+
+def workspace_rename_entry(base: Path, relative_path: str, name: str) -> dict[str, Any]:
+    source = workspace_mutation_path(base, relative_path)
+    target = source.with_name(workspace_entry_name(name))
+    if source == target:
+        return {"oldPath": source.relative_to(base).as_posix(), "entry": workspace_entry_payload(base, source)}
+    try:
+        target.resolve(strict=False).relative_to(base)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="不能移动到工作目录以外") from error
+    if target.exists() or target.is_symlink():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名文件或文件夹已存在")
+    try:
+        source.rename(target)
+    except FileExistsError as error:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="同名文件或文件夹已存在") from error
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法重命名，请检查工作区写入权限") from error
+    return {"oldPath": relative_path.replace("\\", "/"), "entry": workspace_entry_payload(base, target)}
+
+
+def workspace_delete_entries(base: Path, paths: list[str]) -> dict[str, Any]:
+    sources = workspace_source_paths(base, paths)
+    deleted = [source.relative_to(base).as_posix() for source in sources]
+    for source in sorted(sources, key=lambda item: len(item.parts), reverse=True):
+        try:
+            if source.is_dir():
+                shutil.rmtree(source)
+            else:
+                source.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"无法删除 {source.name}，请检查工作区写入权限") from error
+    return {"deleted": deleted}
+
+
+def workspace_copy_entry(source: Path, target: Path) -> None:
+    if source.is_dir():
+        try:
+            shutil.copytree(source, target, symlinks=True)
+        except FileExistsError:
+            raise
+        except OSError:
+            with suppress(OSError):
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                elif target.exists() or target.is_symlink():
+                    target.unlink()
+            raise
+        return
+
+    created = False
+    try:
+        with source.open("rb") as source_file, target.open("xb") as target_file:
+            created = True
+            shutil.copyfileobj(source_file, target_file)
+        shutil.copystat(source, target)
+    except OSError:
+        if created:
+            with suppress(OSError):
+                target.unlink()
+        raise
+
+
+def workspace_paste_entries(
+    base: Path,
+    paths: list[str],
+    destination_path: str,
+    mode: Literal["copy", "move"],
+) -> dict[str, Any]:
+    destination = workspace_mutation_path(base, destination_path, allow_root=True)
+    if not destination.is_dir():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="粘贴目标不是文件夹")
+    sources = workspace_source_paths(base, paths)
+    plans: list[tuple[Path, Path]] = []
+    unchanged: list[Path] = []
+    destination_resolved = destination.resolve()
+    for source in sources:
+        source_resolved = source.resolve()
+        if source.is_dir() and (destination_resolved == source_resolved or destination_resolved.is_relative_to(source_resolved)):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"不能把 {source.name} 粘贴到自身内部")
+        target = destination / source.name
+        if os.path.normcase(str(target)) == os.path.normcase(str(source)):
+            if mode == "move":
+                unchanged.append(source)
+                continue
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {source.name}")
+        if target.exists() or target.is_symlink():
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {source.name}")
+        plans.append((source, target))
+
+    completed: list[tuple[Path, Path]] = []
+    failure_cause: OSError | None = None
+    try:
+        for source, target in plans:
+            if mode == "copy":
+                workspace_copy_entry(source, target)
+            else:
+                shutil.move(str(source), str(target))
+            completed.append((source, target))
+    except FileExistsError as error:
+        failure_cause = error
+        detail = "粘贴时发现同名文件或文件夹，未覆盖原内容"
+        failure = HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail)
+    except OSError as error:
+        failure_cause = error
+        failure = HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="粘贴失败，请检查工作区写入权限")
+    else:
+        entries = [workspace_entry_payload(base, target) for _, target in completed]
+        entries.extend(workspace_entry_payload(base, source) for source in unchanged)
+        changed_paths = [source.relative_to(base).as_posix() for source, _ in completed]
+        return {"mode": mode, "entries": entries, "changedPaths": changed_paths}
+
+    for source, target in reversed(completed):
+        with suppress(OSError):
+            if mode == "move":
+                if not source.exists() and target.exists():
+                    shutil.move(str(target), str(source))
+            elif target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+    raise failure from failure_cause
 
 
 def workspace_entry_kind(path: Path) -> str | None:
@@ -586,9 +825,14 @@ def workspace_image_preview(base: Path, relative_path: str, managed_image_root: 
         try:
             candidate = Path(relative_path).expanduser().resolve()
             allowed_root = managed_image_root.resolve() if managed_image_root is not None else None
-            if allowed_root is None:
+            in_managed_image_root = allowed_root is not None and candidate.is_relative_to(allowed_root)
+            in_codex_clipboard = (
+                candidate.parent == Path(tempfile.gettempdir()).resolve()
+                and candidate.stem.startswith("codex-clipboard-")
+                and candidate.suffix.lower() in IMAGE_MEDIA_TYPES
+            )
+            if not in_managed_image_root and not in_codex_clipboard:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请使用工作目录内的相对路径")
-            candidate.relative_to(allowed_root)
         except HTTPException:
             raise
         except (OSError, RuntimeError, ValueError) as error:
@@ -853,6 +1097,27 @@ def enrich_user_message_item(item: dict[str, Any], image_directory: Path) -> dic
     wrapper = {"turns": [{"items": [{**item, "type": "userMessage"}]}]}
     enrich_thread_images(wrapper, image_directory)
     return wrapper["turns"][0]["items"][0]
+
+
+def tail_thread_history(response: dict[str, Any], limit: int | None) -> dict[str, Any]:
+    """Return a bounded first screen while retaining a full-history sync revision."""
+    if limit is None:
+        return response
+    turns = response.get("turns")
+    if not isinstance(turns, list):
+        return response
+    bounded_limit = max(1, min(limit, 100))
+    if len(turns) <= bounded_limit:
+        return response
+    visible_turns = turns[-bounded_limit:]
+    visible_ids = {turn.get("id") for turn in visible_turns if isinstance(turn, dict) and isinstance(turn.get("id"), str)}
+    result = {**response, "turns": visible_turns, "historyPartial": True, "totalTurns": len(turns)}
+    workspace_changes = response.get("codexRemoteWorkspaceChanges")
+    if isinstance(workspace_changes, dict):
+        result["codexRemoteWorkspaceChanges"] = {
+            turn_id: changes for turn_id, changes in workspace_changes.items() if turn_id in visible_ids
+        }
+    return result
 
 
 class PairingAuth:
@@ -1122,7 +1387,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.15.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.21.7-dev.19", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1224,6 +1489,26 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         base = workspace_base_for_cwd(app_server.workspace, request.cwd)
         return workspace_file_save(base, request.path, request.content, request.revision)
 
+    @app.post("/api/v1/codex/workspace/entries")
+    async def create_workspace_entry(request: WorkspaceEntryCreateRequest) -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, request.cwd)
+        return workspace_create_entry(base, request.path, request.kind)
+
+    @app.patch("/api/v1/codex/workspace/entry")
+    async def rename_workspace_entry(request: WorkspaceEntryRenameRequest) -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, request.cwd)
+        return workspace_rename_entry(base, request.path, request.name)
+
+    @app.post("/api/v1/codex/workspace/delete")
+    async def delete_workspace_entries(request: WorkspaceEntriesDeleteRequest) -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, request.cwd)
+        return workspace_delete_entries(base, request.paths)
+
+    @app.post("/api/v1/codex/workspace/paste")
+    async def paste_workspace_entries(request: WorkspaceEntriesPasteRequest) -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, request.cwd)
+        return workspace_paste_entries(base, request.paths, request.destination, request.mode)
+
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
         await claude_code.refresh_native_threads()
@@ -1297,24 +1582,32 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.get("/api/v1/codex/threads/{thread_id}")
-    async def read_thread(thread_id: str, since: str | None = None) -> dict[str, Any]:
+    async def read_thread(
+        thread_id: str,
+        since: str | None = None,
+        include_images: bool = True,
+        tail_turns: int | None = None,
+    ) -> dict[str, Any]:
         if is_claude_thread_id(thread_id):
             try:
                 thread = await claude_code.read_thread(thread_id)
-                return browser_history_sync.response(thread, since)
+                response = browser_history_sync.response(thread, since)
+                return tail_thread_history(response, tail_turns if since is None else None)
             except ClaudeThreadNotFoundError as error:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
             # Capture before reading: a concurrent append must leave this
             # response stale, rather than claiming to contain the new data.
             revision = app_server.thread_history_revision(thread_id)
-            thread = browser_thread(await app_server.read_thread(thread_id))
+            thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns))
             if revision is not None:
                 thread["historyRevision"] = revision
             bound_cwd = shared_state.thread_workspace(thread_id)
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
-            return enrich_thread_images(browser_history_sync.response(thread, since), image_directory)
+            response = browser_history_sync.response(thread, since)
+            response = tail_thread_history(response, tail_turns if since is None else None)
+            return enrich_thread_images(response, image_directory) if include_images else response
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -1459,7 +1752,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/queue/{thread_id}/start-if-idle")
     async def start_queued_message_if_idle(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
         try:
-            sent = await shared_queue.send_now(thread_id, body.message_id, allow_steer=False, require_head=True)
+            # An explicit user click may prioritize any queued item. Automatic
+            # queue advancement remains FIFO in SharedQueueService.advance().
+            sent = await shared_queue.send_now(thread_id, body.message_id, allow_steer=False)
         except QueueConflictError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:

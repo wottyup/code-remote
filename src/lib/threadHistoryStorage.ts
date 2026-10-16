@@ -1,6 +1,6 @@
 const databaseName = 'codex-remote-thread-history'
-const databaseVersion = 1
-const objectStoreName = 'threads'
+const databaseVersion = 2
+type CacheStore = 'threads' | 'transport'
 
 export const threadHistoryCacheMaxEntries = 5
 export const threadHistoryCacheMaxBytes = 50 * 1024 * 1024
@@ -70,8 +70,10 @@ function openDatabase() {
 
     request.onupgradeneeded = () => {
       const database = request.result
-      if (!database.objectStoreNames.contains(objectStoreName)) {
-        database.createObjectStore(objectStoreName, { keyPath: 'threadId' })
+      for (const name of ['threads', 'transport']) {
+        if (!database.objectStoreNames.contains(name)) {
+          database.createObjectStore(name, { keyPath: 'threadId' })
+        }
       }
     }
     request.onsuccess = () => {
@@ -104,7 +106,7 @@ function validRecord<T>(value: unknown): value is ThreadHistoryCacheRecord<T> {
     && 'snapshot' in record
 }
 
-async function writeRecord<T>(threadId: string, snapshot: T, sizeBytes: number) {
+async function writeRecord<T>(threadId: string, snapshot: T, sizeBytes: number, objectStoreName: CacheStore) {
   if (!threadId || !Number.isFinite(sizeBytes) || sizeBytes <= 0 || sizeBytes > threadHistoryCacheMaxBytes) return false
   const database = await openDatabase()
   if (!database) return false
@@ -152,21 +154,22 @@ async function writeRecord<T>(threadId: string, snapshot: T, sizeBytes: number) 
   })
 }
 
-export function writeThreadHistoryCache<T>(threadId: string, snapshot: T, sizeBytes: number) {
-  const previous = pendingWrites.get(threadId) ?? Promise.resolve(true)
+export function writeThreadHistoryCache<T>(threadId: string, snapshot: T, sizeBytes: number, store: CacheStore = 'threads') {
+  const key = JSON.stringify([store, threadId])
+  const previous = pendingWrites.get(key) ?? Promise.resolve(true)
   const next = previous
     .catch(() => false)
-    .then(() => writeRecord(threadId, snapshot, sizeBytes))
+    .then(() => writeRecord(threadId, snapshot, sizeBytes, store))
     .catch(() => false)
-  pendingWrites.set(threadId, next)
+  pendingWrites.set(key, next)
   void next.then(() => {
-    if (pendingWrites.get(threadId) === next) pendingWrites.delete(threadId)
+    if (pendingWrites.get(key) === next) pendingWrites.delete(key)
   })
   return next
 }
 
-export async function readThreadHistoryCache<T>(threadId: string): Promise<T | null> {
-  await pendingWrites.get(threadId)?.catch(() => false)
+export async function readThreadHistoryCache<T>(threadId: string, objectStoreName: CacheStore = 'threads'): Promise<T | null> {
+  await pendingWrites.get(JSON.stringify([objectStoreName, threadId]))?.catch(() => false)
   const database = await openDatabase()
   if (!database) return null
 
@@ -197,8 +200,8 @@ export async function readThreadHistoryCache<T>(threadId: string): Promise<T | n
   })
 }
 
-export async function deleteThreadHistoryCache(threadId: string): Promise<boolean> {
-  await pendingWrites.get(threadId)?.catch(() => false)
+export async function deleteThreadHistoryCache(threadId: string, objectStoreName: CacheStore = 'threads'): Promise<boolean> {
+  await pendingWrites.get(JSON.stringify([objectStoreName, threadId]))?.catch(() => false)
   const database = await openDatabase()
   if (!database) return false
 

@@ -1,5 +1,6 @@
 import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
   AlertTriangle,
   ArrowUp,
@@ -11,13 +12,15 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsUpDown,
+  ClipboardPaste,
   Copy,
   Download,
   Eye,
-  File,
+  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   ImagePlus,
   Link2,
   LoaderCircle,
@@ -31,6 +34,8 @@ import {
   Quote,
   RefreshCw,
   RotateCcw,
+  Search,
+  Scissors,
   Send,
   Settings2,
   ShieldCheck,
@@ -39,7 +44,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type QueuedTurnMessage } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
@@ -52,6 +57,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 
 interface Props {
   token: string
@@ -83,6 +89,61 @@ type ChatEngine = 'codex' | 'claude-code'
 
 function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
+}
+
+function WelcomeTypingTitle({ text }: { text: string }) {
+  const [visibleText, setVisibleText] = useState('')
+  const [cursorVisible, setCursorVisible] = useState(true)
+
+  useEffect(() => {
+    const characters = Array.from(text)
+    let index = 0
+    let completedBlinks = 0
+    let showCursor = true
+    let timer = 0
+
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      setVisibleText(text)
+      setCursorVisible(false)
+      return
+    }
+
+    setVisibleText('')
+    setCursorVisible(true)
+    const typeNext = () => {
+      if (index < characters.length) {
+        index += 1
+        setVisibleText(characters.slice(0, index).join(''))
+        timer = window.setTimeout(typeNext, index === characters.length ? 440 : 72)
+        return
+      }
+
+      if (completedBlinks < 3) {
+        showCursor = !showCursor
+        setCursorVisible(showCursor)
+        if (showCursor) completedBlinks += 1
+        timer = window.setTimeout(typeNext, 320)
+        return
+      }
+
+      index = 0
+      completedBlinks = 0
+      showCursor = true
+      setVisibleText('')
+      setCursorVisible(true)
+      timer = window.setTimeout(typeNext, 220)
+    }
+
+    timer = window.setTimeout(typeNext, 160)
+    return () => window.clearTimeout(timer)
+  }, [text])
+
+  return (
+    <h1 aria-label={text}>
+      <span aria-hidden="true">{visibleText}</span>
+      <span className="welcome-state__cursor" aria-hidden="true">{cursorVisible ? '_' : '\u00a0'}</span>
+    </h1>
+  )
 }
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
@@ -150,8 +211,6 @@ const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
 const compactLandscapeComposerHeight = 50
-const compactLandscapeMediaQuery = '(orientation: landscape) and (pointer: coarse)'
-const mobileLayoutMediaQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
@@ -164,10 +223,11 @@ interface PersistedPaneLayout {
   openPaneIndexes: number[]
   selectedPaneIndex: number
   threadIdsByPane: Record<string, string>
+  enginesByPane: Record<string, ChatEngine>
 }
 
 function readPersistedPaneLayout(): PersistedPaneLayout {
-  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {} }
+  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {}, enginesByPane: {} }
   if (typeof window === 'undefined') return fallback
   try {
     const value = window.localStorage.getItem(paneLayoutStorageKey)
@@ -194,7 +254,15 @@ function readPersistedPaneLayout(): PersistedPaneLayout {
         ? [[String(index), threadId.trim()]]
         : []
     }))
-    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane }
+    const savedEngines = parsed.enginesByPane && typeof parsed.enginesByPane === 'object' && !Array.isArray(parsed.enginesByPane)
+      ? parsed.enginesByPane as Record<string, unknown>
+      : {}
+    const enginesByPane: Record<string, ChatEngine> = {}
+    for (const index of openPaneIndexes) {
+      const engine = savedEngines[String(index)]
+      if (engine === 'codex' || engine === 'claude-code') enginesByPane[String(index)] = engine
+    }
+    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
   } catch {
     return fallback
   }
@@ -235,9 +303,10 @@ interface ComposerPreferences {
 }
 
 type ThreadComposerPreferences = Record<string, ComposerPreferences>
+type TemporaryModelPreferences = Pick<ComposerPreferences, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 function workspacePanelsWidthLimit() {
-  if (typeof window !== 'undefined' && window.matchMedia(mobileLayoutMediaQuery).matches) {
+  if (typeof window !== 'undefined' && isMobileLayout()) {
     return workspaceExplorerMaxWidth
   }
   const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
@@ -304,6 +373,22 @@ function workspaceParentPath(path: string) {
   if (lastSeparator < 0) return path
   if (lastSeparator === 0) return normalized[0]
   return normalized.slice(0, lastSeparator)
+}
+
+function workspaceRelativeParentPath(path: string) {
+  const normalized = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const separator = normalized.lastIndexOf('/')
+  return separator < 0 ? '' : normalized.slice(0, separator)
+}
+
+function workspaceRelativeChildPath(parent: string, name: string) {
+  return parent ? `${parent.replace(/\/+$/, '')}/${name}` : name
+}
+
+function workspacePathIsWithin(path: string, parent: string) {
+  const normalizedPath = path.replace(/\\/g, '/').replace(/\/+$/, '')
+  const normalizedParent = parent.replace(/\\/g, '/').replace(/\/+$/, '')
+  return normalizedPath === normalizedParent || normalizedPath.startsWith(`${normalizedParent}/`)
 }
 
 function workspaceFileReference(cwd: string | undefined, path: string) {
@@ -625,6 +710,11 @@ interface ComposerMenuOption {
   label: string
 }
 
+interface ModelReasoningOptions {
+  options: ComposerMenuOption[]
+  defaultEffort?: string
+}
+
 function ComposerMenu({
   label,
   value,
@@ -634,6 +724,8 @@ function ComposerMenu({
   open,
   onOpenChange,
   onChange,
+  footer,
+  temporary = false,
 }: {
   label: string
   value: string
@@ -643,6 +735,8 @@ function ComposerMenu({
   open: boolean
   onOpenChange: (open: boolean) => void
   onChange: (value: string) => void
+  footer?: ReactNode
+  temporary?: boolean
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
@@ -737,39 +831,44 @@ function ComposerMenu({
         }}
         onClick={() => onOpenChange(!open)}
       >
-        <span className="composer-menu__value">{selected?.label ?? emptyLabel}</span>
+        <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
       </button>
       {open ? createPortal(
         <div
           ref={popover}
           className="composer-menu__popover composer-menu__popover--floating"
           style={position ?? { visibility: 'hidden' }}
-          role="listbox"
-          aria-label={label}
         >
-          {options.length > 0 ? options.map((option) => (
-            <button
-              className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
-              key={option.value}
-              type="button"
-              role="option"
-              aria-selected={option.value === value}
-              onClick={() => {
-                onChange(option.value)
-                onOpenChange(false)
-                const focusTarget = composerFocusBeforeOpen.current
-                composerFocusBeforeOpen.current = null
-                if (focusTarget?.isConnected) {
-                  window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
-                }
-              }}
-            >
-              <span className="composer-menu__option-copy">
-                <strong>{option.label}</strong>
-              </span>
-              {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
-            </button>
-          )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+          {footer}
+          <div className="composer-menu__options" role="listbox" aria-label={label}>
+            {options.length > 0 ? options.map((option) => (
+              <button
+                className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+                key={option.value}
+                type="button"
+                role="option"
+                aria-selected={option.value === value}
+                disabled={disabled}
+                onPointerDown={(event) => {
+                  if (composerFocusBeforeOpen.current) event.preventDefault()
+                }}
+                onClick={() => {
+                  onChange(option.value)
+                  onOpenChange(false)
+                  const focusTarget = composerFocusBeforeOpen.current
+                  composerFocusBeforeOpen.current = null
+                  if (focusTarget?.isConnected) {
+                    window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                  }
+                }}
+              >
+                <span className="composer-menu__option-copy">
+                  <strong>{option.label}</strong>
+                </span>
+                {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+              </button>
+            )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+          </div>
         </div>,
         root.current?.closest('.remote-shell') ?? document.body,
       ) : null}
@@ -790,6 +889,9 @@ interface ComposerSendInput {
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
 }
+
+type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 interface ComposerHandle {
   replaceDraft(value: string): void
@@ -818,8 +920,11 @@ interface MessageComposerProps {
   selectedEffort: string
   selectedApprovalPolicy: CodexApprovalPolicy
   selectedClaudePermissionMode: ClaudeCodePermissionMode
+  temporaryPreferences: boolean
+  onTemporaryPreferencesChange: (enabled: boolean) => void
   modelOptions: ComposerMenuOption[]
   reasoningOptions: ComposerMenuOption[]
+  reasoningOptionsByModel: Record<string, ModelReasoningOptions>
   authorizationOptions: ComposerMenuOption[]
   claudeModelOptions: ComposerMenuOption[]
   claudeEffortOptions: ComposerMenuOption[]
@@ -834,7 +939,7 @@ interface MessageComposerProps {
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
-  onUpdateQueuedMessage: (messageId: string, input: Pick<ComposerSendInput, 'prompt' | 'images' | 'documents'>) => boolean | Promise<boolean>
+  onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
   onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
@@ -859,8 +964,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   selectedEffort,
   selectedApprovalPolicy,
   selectedClaudePermissionMode,
+  temporaryPreferences,
+  onTemporaryPreferencesChange,
   modelOptions,
   reasoningOptions,
+  reasoningOptionsByModel,
   authorizationOptions,
   claudeModelOptions,
   claudeEffortOptions,
@@ -890,19 +998,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && window.matchMedia(compactLandscapeMediaQuery).matches)
+  const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
-    window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+    isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
     if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
     if (typeof window === 'undefined') return defaultComposerHeight
-    return window.matchMedia(compactLandscapeMediaQuery).matches ? compactLandscapeComposerHeight : defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
+  const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
@@ -919,6 +1028,25 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
+  const keyboardFallbackTimer = useRef<number | undefined>(undefined)
+  const requestComposerKeyboard = useCallback(() => {
+    if (!window.CodexRemoteAndroid?.showKeyboard) return
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+    const beforeHeight = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+    // Let the normal WebView focus open the IME first. The native fallback
+    // restarts the input connection, so only use it if focus did not open it.
+    keyboardFallbackTimer.current = window.setTimeout(() => {
+      keyboardFallbackTimer.current = undefined
+      if (document.activeElement !== composer.current) return
+      if ((window.CodexRemoteAndroid?.getKeyboardInsetDp?.() ?? 0) > 0) return
+      const height = Math.min(window.innerHeight, window.visualViewport?.height ?? window.innerHeight)
+      if (beforeHeight - height > 80) return
+      window.CodexRemoteAndroid?.showKeyboard?.()
+    }, 500)
+  }, [])
+  useEffect(() => () => {
+    if (keyboardFallbackTimer.current !== undefined) window.clearTimeout(keyboardFallbackTimer.current)
+  }, [])
   const editingDraftSnapshot = useRef<{
     draft: string
     images: CodexImageAttachment[]
@@ -931,16 +1059,19 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [composerHeight, composerHeightMemory])
 
   useEffect(() => {
-    const mediaQuery = window.matchMedia(compactLandscapeMediaQuery)
+    const mediaQuery = window.matchMedia('(pointer: coarse)')
     const syncComposerHeight = () => {
-      setCompactLandscape(mediaQuery.matches)
+      const landscape = isCompactLandscape()
+      setCompactLandscape(landscape)
       if (composerHeightWasResized.current) return
-      setComposerHeight(mediaQuery.matches ? compactLandscapeComposerHeight : defaultComposerHeight)
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
     }
     syncComposerHeight()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
     else mediaQuery.addListener(syncComposerHeight)
+    window.addEventListener(mobileLayoutChangedEvent, syncComposerHeight)
     return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncComposerHeight)
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
       else mediaQuery.removeListener(syncComposerHeight)
     }
@@ -949,12 +1080,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useEffect(() => {
     const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
     const syncMobileLayout = () => {
-      setMobileLayout(mediaQuery.matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint))
+      setMobileLayout(isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint))
     }
     syncMobileLayout()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncMobileLayout)
     else mediaQuery.addListener(syncMobileLayout)
+    window.addEventListener(mobileLayoutChangedEvent, syncMobileLayout)
     return () => {
+      window.removeEventListener(mobileLayoutChangedEvent, syncMobileLayout)
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncMobileLayout)
       else mediaQuery.removeListener(syncMobileLayout)
     }
@@ -1083,18 +1216,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
       updateDraft(value)
-      window.requestAnimationFrame(() => composer.current?.focus())
+      window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
     appendDraft(value, focus = true) {
       const current = draftRef.current
       const additions = workspacePathsMissingFromDraft(current, value.split(/\r?\n/))
       if (additions.length === 0) {
-        if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+        if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
         return
       }
       const separator = current && !/\s$/.test(current) ? '\n' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
-      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
     insertDraftAtCursor(value, focus = true) {
       const textarea = composer.current
@@ -1107,7 +1240,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         window.requestAnimationFrame(() => {
           const activeTextarea = composer.current
           if (!activeTextarea) return
-          activeTextarea.focus()
+          activeTextarea.focus({ preventScroll: true })
           const cursor = start + value.length
           activeTextarea.setSelectionRange(cursor, cursor)
         })
@@ -1115,7 +1248,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     },
     addDocumentAttachment(document, focus = true) {
       const added = appendDocument(document)
-      if (focus) window.requestAnimationFrame(() => composer.current?.focus())
+      if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
       return added
     },
     adoptUnassignedDraft(threadId, includeImages = true) {
@@ -1228,7 +1361,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [])
 
   const canCompose = !sending && !writerConflict && connection === 'connected'
-  const canConfigure = canCompose && !isRunning
+  const canConfigure = canCompose
   const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
     && !readingDocuments
     && !readingImages
@@ -1236,6 +1369,53 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
+    && !draft.trim() && attachedImages.length === 0 && attachedDocuments.length === 0
+  const temporaryPreferencesToggle = (
+    <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
+      aria-checked={temporaryPreferences} disabled={!canConfigure}
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => onTemporaryPreferencesChange(!temporaryPreferences)}>
+      <span className="composer-menu__option-copy"><strong>仅本次</strong><small>发送后恢复原模型和思考等级</small></span>
+      {temporaryPreferences ? <Check size={14} aria-hidden="true" /> : null}
+    </button>
+  )
+  const composerSelectedModel = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.model ?? selectedModel : editingQueuedPreferences?.claudeModel ?? 'default'
+    : selectedModel
+  const composerSelectedEffort = editingQueuedMessageId
+    ? showCodexPreferences ? editingQueuedPreferences?.effort ?? selectedEffort : editingQueuedPreferences?.claudeEffort ?? 'default'
+    : selectedEffort
+  const composerReasoningOptions = showCodexPreferences
+    ? editingQueuedMessageId ? reasoningOptionsByModel[composerSelectedModel]?.options ?? reasoningOptions : reasoningOptions
+    : claudeEffortOptions
+  const changeComposerModel = useCallback((model: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onModelChange(model)
+      return
+    }
+    if (!showCodexPreferences) {
+      setEditingQueuedPreferences((current) => ({ ...current, claudeModel: model }))
+      return
+    }
+    const modelReasoning = reasoningOptionsByModel[model]
+    setEditingQueuedPreferences((current) => {
+      const currentEffort = current?.effort ?? selectedEffort
+      if (!modelReasoning) return { ...current, model }
+      const effort = modelReasoning.options.some((option) => option.value === currentEffort)
+        ? currentEffort
+        : modelReasoning.defaultEffort ?? modelReasoning.options[0]?.value
+      return { ...current, model, effort }
+    })
+  }, [onModelChange, reasoningOptionsByModel, selectedEffort, showCodexPreferences])
+  const changeComposerEffort = useCallback((effort: string) => {
+    if (!editingQueuedMessageIdRef.current) {
+      onEffortChange(effort)
+      return
+    }
+    setEditingQueuedPreferences((current) => showCodexPreferences
+      ? { ...current, effort }
+      : { ...current, claudeEffort: effort })
+  }, [onEffortChange, showCodexPreferences])
   const fileChangeSummaryExpanded = Boolean(
     mobileLayout && fileChangeSummary && fileChangeSummaryKey && expandedFileChangesKey === fileChangeSummaryKey,
   )
@@ -1497,6 +1677,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       documents: attachedDocuments,
       attachmentError,
     }
+    setEditingQueuedPreferences(showCodexPreferences
+      ? { model: message.model ?? selectedModel, effort: message.effort ?? selectedEffort }
+      : { claudeModel: message.claudeModel ?? 'default', claudeEffort: message.claudeEffort ?? 'default' })
     editingQueuedMessageIdRef.current = message.id
     setEditingQueuedMessageId(message.id)
     updateDraft(message.text)
@@ -1504,7 +1687,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
     setAttachmentError(null)
-    window.requestAnimationFrame(() => composer.current?.focus())
+    window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
   }
 
   async function finishQueuedEdit() {
@@ -1515,6 +1698,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     editingQueuedMessageIdRef.current = null
     setEditingQueuedMessageId(null)
+    setEditingQueuedPreferences(null)
     restoreDraftAfterQueuedEdit()
     return true
   }
@@ -1534,6 +1718,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         prompt,
         images: attachedImages,
         documents: attachedDocuments,
+        model: showCodexPreferences ? editingQueuedPreferences?.model || undefined : undefined,
+        effort: showCodexPreferences ? editingQueuedPreferences?.effort || undefined : undefined,
+        claudeModel: !showCodexPreferences && editingQueuedPreferences?.claudeModel !== 'default'
+          ? editingQueuedPreferences?.claudeModel
+          : undefined,
+        claudeEffort: !showCodexPreferences && editingQueuedPreferences?.claudeEffort !== 'default'
+          ? editingQueuedPreferences?.claudeEffort
+          : undefined,
       })) {
         setAttachmentError('排队消息更新失败，请检查连接后重试。')
         return
@@ -1554,7 +1746,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     if (sendingQueuedId) return
     setSendingQueuedId(messageId)
     try {
-      await onSendQueuedNow(messageId)
+      if (!await onSendQueuedNow(messageId)) {
+        setAttachmentError('消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
+      }
     } finally {
       setSendingQueuedId((current) => current === messageId ? null : current)
     }
@@ -1712,17 +1906,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const isEditing = editingQueuedMessageId === message.id
               const deliveryUnverified = Boolean(message.sendAttempt)
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
+              const queuedModel = showCodexPreferences ? message.model : message.claudeModel
+              const queuedEffort = showCodexPreferences ? message.effort : message.claudeEffort
+              const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
+              const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
+              const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
+              const needsSeparateTurn = Boolean(message.model || message.effort || message.claudeModel || message.claudeEffort)
               const summary = message.text || (message.documents?.length
                 ? `附件文档：${message.documents.length} 个文件`
                 : `${message.images.length} 张图片`)
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '已插入对话 · 正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : '等待自动发送')}</small></span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点立即发送优先发送此条' : '等待自动发送')}</small></span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing || (needsSeparateTurn && isRunning)} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn && isRunning ? '当前回复结束后才能按这条消息保存的模型和思考等级开始新一轮' : needsSeparateTurn && index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中' : needsSeparateTurn ? '按消息保存的模型和思考等级开始新一轮' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
                     {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>立即发送</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
@@ -1750,10 +1950,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           onKeyDown={handleInputKey}
           onPaste={handlePaste}
-          onFocus={() => window.CodexRemoteAndroid?.showKeyboard?.()}
+          onFocus={requestComposerKeyboard}
           onPointerDown={(event) => {
             if (document.activeElement === event.currentTarget) {
-              window.CodexRemoteAndroid?.showKeyboard?.()
+              requestComposerKeyboard()
             }
           }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
@@ -1765,13 +1965,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <div className="message-composer__footer">
         <div className="composer-preferences">
           {showCodexPreferences ? <>
-            <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-            <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="默认" disabled={!canConfigure || reasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
-            <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
+            <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
           </> : <>
-            <ComposerMenu label="Claude 模型" value={selectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-            <ComposerMenu label="思考等级" value={selectedEffort} options={claudeEffortOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
-            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
+            <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
+            <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
           </>}
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
@@ -1782,7 +1982,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </span>
           {writerConflict
             ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-            : isRunning && !stopWithSendButton ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
+            : isRunning && editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
           {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
@@ -1820,7 +2020,16 @@ interface WorkspaceExplorerProps {
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   mobileDragging: boolean
+  onOpenMobile: () => void
   onCloseMobile: () => void
+  panelRef: RefObject<HTMLElement | null>
+}
+
+interface WorkspaceExplorerViewState {
+  directories: Record<string, CodexWorkspaceTree>
+  expanded: Record<string, boolean>
+  selectedPaths: string[]
+  scrollTop: number
 }
 
 interface WorkspacePreviewRequest {
@@ -1845,6 +2054,24 @@ interface WorkspaceSelectionContextMenu {
   x: number
   y: number
 }
+
+interface WorkspaceEntryContextMenu {
+  entry: CodexWorkspaceEntry
+  paths: string[]
+  x: number
+  y: number
+  root?: boolean
+}
+
+interface WorkspaceClipboard {
+  mode: 'copy' | 'move'
+  paths: string[]
+}
+
+type WorkspaceMutationDialog =
+  | { action: 'create'; kind: CodexWorkspaceEntry['kind']; parentPath: string; value: string }
+  | { action: 'rename'; entry: CodexWorkspaceEntry; value: string }
+  | { action: 'delete'; paths: string[] }
 
 function selectedCodeFromPreview(root: HTMLElement) {
   const selection = window.getSelection()
@@ -1920,25 +2147,29 @@ function selectedCodeFromEditor(editor: HTMLTextAreaElement) {
 
 function desktopWorkspacePreviewAvailable() {
   return typeof window !== 'undefined'
-    && !window.matchMedia(mobileLayoutMediaQuery).matches
+    && !isMobileLayout()
 }
 
 function concurrentPaneLimit() {
   if (typeof window === 'undefined') return 5
-  const mobileLayout = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+  const mobileLayout = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onCloseMobile }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
-  const [contextMenu, setContextMenu] = useState<{ entry: CodexWorkspaceEntry; paths: string[]; x: number; y: number } | null>(null)
+  const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
+  const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
+  const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
+  const [mutationSaving, setMutationSaving] = useState(false)
+  const [mutationError, setMutationError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
@@ -1961,14 +2192,29 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const handledPreviewRequest = useRef(0)
   const previousScopeKey = useRef<string | null>(null)
   const pendingPreviewScopeReset = useRef(false)
+  const restoreMobilePanelAfterPreview = useRef(false)
+  const treeElement = useRef<HTMLDivElement>(null)
+  const viewStateCache = useRef(new Map<string, WorkspaceExplorerViewState>())
+  const pendingScrollRestore = useRef<number | null>(null)
   const browsingRoot = manualRoot || cwd
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
   const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
+  const currentViewState = useRef({ directories, expanded, selectedPaths })
+  currentViewState.current = { directories, expanded, selectedPaths }
 
   const directoryKey = (path: string) => path || '.'
-  const closePreview = useCallback(() => {
-    if (previewSaving) return
-    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
+  const rememberViewState = useCallback((key: string, state: WorkspaceExplorerViewState) => {
+    viewStateCache.current.delete(key)
+    viewStateCache.current.set(key, state)
+    while (viewStateCache.current.size > 16) {
+      const oldestKey = viewStateCache.current.keys().next().value
+      if (oldestKey === undefined) break
+      viewStateCache.current.delete(oldestKey)
+    }
+  }, [])
+  const clearPreview = useCallback(() => {
+    const shouldRestoreMobilePanel = restoreMobilePanelAfterPreview.current
+    restoreMobilePanelAfterPreview.current = false
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
@@ -1982,7 +2228,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewCopied(false)
     setPreviewEditContent(null)
     onPreviewStateChange(false)
-  }, [onPreviewStateChange, previewDirty, previewSaving])
+    if (shouldRestoreMobilePanel) onOpenMobile()
+  }, [onOpenMobile, onPreviewStateChange])
+  const closePreview = useCallback(() => {
+    if (previewSaving) return
+    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
+    clearPreview()
+  }, [clearPreview, previewDirty, previewSaving])
+  const forceClosePreview = useCallback(() => {
+    if (previewSaving) return
+    clearPreview()
+  }, [clearPreview, previewSaving])
 
   useEffect(() => {
     if (!previewPath) return
@@ -2036,10 +2292,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     const generation = ++previewRequestGeneration.current
     const mobileDialog = !desktopWorkspacePreviewAvailable()
     if (mobileDialog && mobileOpen) {
-      const workspaceButton = previewContainerRef.current?.querySelector<HTMLButtonElement>('.conversation-pane--selected .mobile-workspace-button')
-      const composer = document.querySelector<HTMLTextAreaElement>('.message-composer textarea')
-      const returnFocus = workspaceButton?.getClientRects().length ? workspaceButton : composer
-      if (returnFocus) previewReturnFocus.current = returnFocus
+      restoreMobilePanelAfterPreview.current = true
       onCloseMobile()
     }
     onPreviewStateChange(true, closePreview)
@@ -2163,14 +2416,27 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   useEffect(() => {
     const scopeChanged = previousScopeKey.current !== scopeKey
     if (scopeChanged) {
+      restoreMobilePanelAfterPreview.current = false
+      const previousKey = previousScopeKey.current
+      if (previousKey) {
+        rememberViewState(previousKey, {
+          ...currentViewState.current,
+          scrollTop: treeElement.current?.scrollTop ?? viewStateCache.current.get(previousKey)?.scrollTop ?? 0,
+        })
+      }
       previousScopeKey.current = scopeKey
       requestGeneration.current += 1
       previewRequestGeneration.current += 1
-      setDirectories({})
-      setExpanded({})
+      const restoredView = viewStateCache.current.get(scopeKey)
+      pendingScrollRestore.current = restoredView?.scrollTop ?? null
+      setDirectories(restoredView?.directories ?? {})
+      setExpanded(restoredView?.expanded ?? {})
       setLoadingPaths({})
-      setSelectedPaths([])
+      setSelectedPaths(restoredView?.selectedPaths ?? [])
       setContextMenu(null)
+      setWorkspaceClipboard(null)
+      setMutationDialog(null)
+      setMutationError(null)
       setError(null)
       if (browsingRoot) void loadDirectory('')
       if (previewDirty) pendingPreviewScopeReset.current = true
@@ -2190,7 +2456,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewCopied(false)
     pendingPreviewScopeReset.current = false
     onPreviewStateChange(false)
-  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, scopeKey])
+  }, [browsingRoot, loadDirectory, onPreviewStateChange, previewDirty, rememberViewState, scopeKey])
+
+  useLayoutEffect(() => {
+    if (!mobileOpen) return
+    const tree = treeElement.current
+    const restoredView = viewStateCache.current.get(scopeKey)
+    const scrollTop = pendingScrollRestore.current ?? restoredView?.scrollTop
+    if (!tree || scrollTop === undefined) return
+    tree.scrollTop = scrollTop
+    pendingScrollRestore.current = null
+  }, [directories, mobileOpen, scopeKey])
 
   useEffect(() => {
     if (!manualRoot) setRootInput(cwd ?? '')
@@ -2230,6 +2506,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     }
   }, [contextMenu, selectionContextMenu])
 
+  useEffect(() => {
+    if (!mutationDialog) return
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || mutationSaving) return
+      setMutationDialog(null)
+      setMutationError(null)
+    }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [mutationDialog, mutationSaving])
+
   useLayoutEffect(() => {
     const current = selectionContextMenu
     const menu = selectionContextMenuElement.current
@@ -2263,16 +2550,176 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
-    const menuWidth = entry.kind === 'directory' ? 236 : 176
-    const menuHeight = entry.kind === 'directory' ? 116 : 72
+    const menuWidth = 244
+    const menuHeight = entry.kind === 'directory' ? 350 : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
-    const paths = (selectedPaths.includes(entry.path) ? selectedPaths : [entry.path])
-      .filter((path) => !draftContainsWorkspacePath(draft, workspaceAbsolutePath(browsingRoot, path)))
-    if (paths.length === 0 && entry.kind !== 'directory') return
+    const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
     setSelectedPaths(paths)
     setSelectionContextMenu(null)
     setContextMenu({ entry, paths, x, y })
+  }
+
+  function openRootContextMenu(clientX: number, clientY: number) {
+    if (!browsingRoot) return
+    const menuWidth = 244
+    const menuHeight = 220
+    const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8))
+    const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8))
+    const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
+    setSelectedPaths([])
+    setSelectionContextMenu(null)
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
+  }
+
+  function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if ((event.target as HTMLElement).closest('.workspace-explorer__entry')) return
+    event.preventDefault()
+    event.stopPropagation()
+    openRootContextMenu(event.clientX, event.clientY)
+  }
+
+  function openRootMenuFromButton(event: ReactMouseEvent<HTMLButtonElement>) {
+    event.stopPropagation()
+    const bounds = event.currentTarget.getBoundingClientRect()
+    openRootContextMenu(bounds.right, bounds.bottom + 4)
+  }
+
+  function startWorkspaceCreate(kind: CodexWorkspaceEntry['kind']) {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory') return
+    setMutationDialog({ action: 'create', kind, parentPath: contextMenu.entry.path, value: '' })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceRename() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length !== 1) return
+    setMutationDialog({ action: 'rename', entry: contextMenu.entry, value: contextMenu.entry.name })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function startWorkspaceDelete() {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setMutationDialog({ action: 'delete', paths: contextMenu.paths })
+    setMutationError(null)
+    setContextMenu(null)
+  }
+
+  function closeWorkspaceMutation() {
+    if (mutationSaving) return
+    setMutationDialog(null)
+    setMutationError(null)
+  }
+
+  function rememberWorkspaceEntries(mode: WorkspaceClipboard['mode']) {
+    if (!contextMenu || contextMenu.root || contextMenu.paths.length === 0) return
+    setWorkspaceClipboard({ mode, paths: contextMenu.paths })
+    setContextMenu(null)
+    setError(null)
+  }
+
+  function pruneWorkspacePaths(paths: string[]) {
+    const affected = (path: string) => paths.some((parent) => workspacePathIsWithin(path, parent))
+    setExpanded((current) => Object.fromEntries(Object.entries(current).filter(([path]) => !affected(path))))
+    setDirectories((current) => Object.fromEntries(Object.entries(current).filter(([path]) => path === '.' || !affected(path))))
+    setSelectedPaths((current) => current.filter((path) => !affected(path)))
+  }
+
+  function previewUsesWorkspacePath(paths: string[]) {
+    return Boolean(previewPath
+      && (previewCwd ?? browsingRoot) === browsingRoot
+      && paths.some((path) => workspacePathIsWithin(previewPath, path)))
+  }
+
+  async function refreshWorkspaceDirectories(paths: string[]) {
+    await Promise.all([...new Set(paths)].map((path) => loadDirectory(path)))
+  }
+
+  async function submitWorkspaceMutation(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!mutationDialog || mutationSaving || !browsingRoot) return
+    const affectedPreviewPaths = mutationDialog.action === 'rename'
+      ? [mutationDialog.entry.path]
+      : mutationDialog.action === 'delete' ? mutationDialog.paths : []
+    if (affectedPreviewPaths.length > 0 && previewUsesWorkspacePath(affectedPreviewPaths)) {
+      if (previewSaving) {
+        setMutationError('文件正在保存，请稍后再操作')
+        return
+      }
+      if (previewDirty && !window.confirm('当前预览有未保存修改，继续会放弃这些修改。确定继续吗？')) return
+    }
+    setMutationSaving(true)
+    setMutationError(null)
+    try {
+      if (mutationDialog.action === 'create') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写名称')
+        const entry = await codexRemoteClient.createWorkspaceEntry(
+          token,
+          browsingRoot,
+          workspaceRelativeChildPath(mutationDialog.parentPath, name),
+          mutationDialog.kind,
+        )
+        await refreshWorkspaceDirectories([mutationDialog.parentPath])
+        setSelectedPaths([entry.path])
+      } else if (mutationDialog.action === 'rename') {
+        const name = mutationDialog.value.trim()
+        if (!name) throw new Error('请填写新名称')
+        const result = await codexRemoteClient.renameWorkspaceEntry(token, browsingRoot, mutationDialog.entry.path, name)
+        const oldPath = result.oldPath
+        if (previewUsesWorkspacePath([oldPath])) forceClosePreview()
+        pruneWorkspacePaths([oldPath])
+        if (workspaceClipboard?.paths.some((path) => workspacePathIsWithin(path, oldPath))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories([workspaceRelativeParentPath(oldPath)])
+        setSelectedPaths([result.entry.path])
+      } else {
+        const paths = mutationDialog.paths
+        await codexRemoteClient.deleteWorkspaceEntries(token, browsingRoot, paths)
+        if (previewUsesWorkspacePath(paths)) forceClosePreview()
+        pruneWorkspacePaths(paths)
+        if (workspaceClipboard?.paths.some((path) => paths.some((parent) => workspacePathIsWithin(path, parent)))) setWorkspaceClipboard(null)
+        await refreshWorkspaceDirectories(paths.map(workspaceRelativeParentPath))
+      }
+      setMutationDialog(null)
+      setError(null)
+    } catch (reason) {
+      setMutationError(reason instanceof Error ? reason.message : '文件操作失败')
+    } finally {
+      setMutationSaving(false)
+    }
+  }
+
+  async function pasteWorkspaceEntries() {
+    if (!contextMenu || contextMenu.entry.kind !== 'directory' || !workspaceClipboard || !browsingRoot) return
+    const destination = contextMenu.entry.path
+    const clipboard = workspaceClipboard
+    if (clipboard.mode === 'move' && previewUsesWorkspacePath(clipboard.paths)) {
+      if (previewSaving) {
+        setContextMenu(null)
+        setError('文件正在保存，请稍后再移动')
+        return
+      }
+      if (previewDirty && !window.confirm('当前预览有未保存修改，移动会放弃这些修改。确定继续吗？')) return
+    }
+    setContextMenu(null)
+    setError(null)
+    try {
+      const result = await codexRemoteClient.pasteWorkspaceEntries(token, browsingRoot, clipboard.paths, destination, clipboard.mode)
+      const changedPaths = result.changedPaths ?? clipboard.paths
+      if (clipboard.mode === 'move') {
+        if (previewUsesWorkspacePath(changedPaths)) forceClosePreview()
+        pruneWorkspacePaths(changedPaths)
+        setWorkspaceClipboard(null)
+      }
+      await refreshWorkspaceDirectories([
+        destination,
+        ...(clipboard.mode === 'move' ? changedPaths.map(workspaceRelativeParentPath) : []),
+      ])
+      setSelectedPaths(result.entries.map((entry) => entry.path))
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '粘贴失败')
+    }
   }
 
   async function bindDirectoryToCurrentThread() {
@@ -2299,7 +2746,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
 
     event.preventDefault()
     setContextMenu(null)
-    const isMobile = window.matchMedia(mobileLayoutMediaQuery).matches || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+    const isMobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
     const menuWidth = Math.min(300, window.innerWidth - 16)
     const menuHeight = isMobile ? 132 : 240
     const selectionBounds = isMobile
@@ -2375,7 +2822,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           <Fragment key={entry.path}>
           <div className="workspace-explorer__entry-row">
             <button
-              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}`}
+              className={`workspace-explorer__entry workspace-explorer__entry--${entry.kind}${isOpen ? ' workspace-explorer__entry--open' : ''}${selectedPaths.includes(entry.path) ? ' workspace-explorer__entry--selected' : ''}${workspaceClipboard?.mode === 'move' && workspaceClipboard.paths.some((path) => workspacePathIsWithin(entry.path, path)) ? ' workspace-explorer__entry--cut' : ''}`}
               type="button"
               style={{ paddingLeft: `${10 + depth * 14}px` }}
               title={entry.path}
@@ -2383,7 +2830,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
               onContextMenuCapture={(event) => openEntryContextMenu(event, entry)}
             >
               {isDirectory ? <ChevronRight className={`workspace-explorer__chevron${isOpen ? ' workspace-explorer__chevron--open' : ''}`} size={13} /> : <span className="workspace-explorer__chevron-spacer" />}
-              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <File size={14} />}
+              {isDirectory ? (isOpen ? <FolderOpen size={15} /> : <Folder size={15} />) : <WorkspaceFileTypeIcon path={entry.path} size={16} />}
               <span className="workspace-explorer__entry-name">{entry.name}</span>
               {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
             </button>
@@ -2469,10 +2916,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const previewPortalTarget = previewContainerRef.current
   return (
     <>
-      <aside className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+      <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
+            <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
             <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
@@ -2495,7 +2943,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           </div>
         </div>
         <div className="workspace-explorer__body">
-          <div className="workspace-explorer__tree">
+          <div
+            ref={treeElement}
+            className="workspace-explorer__tree"
+            onContextMenu={handleRootContextMenu}
+            onScroll={(event) => {
+              rememberViewState(scopeKey, {
+                ...currentViewState.current,
+                scrollTop: event.currentTarget.scrollTop,
+              })
+            }}
+          >
             {!browsingRoot ? <p className="workspace-explorer__empty">还没有聊天工作目录，可以输入服务端路径打开文件夹。</p> : null}
             {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
             {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
@@ -2503,7 +2961,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
             {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
           </div>
         </div>
-        <footer className="workspace-explorer__footer">Ctrl/⌘ 多选后右键加入输入框</footer>
+        <footer className="workspace-explorer__footer">{workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : 'Ctrl/⌘ 多选后可批量复制、剪切或删除'}</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
@@ -2528,8 +2986,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
           }}
           header={(
             <div className="workspace-file-preview-panel__heading">
-              <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
-              <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              <WorkspaceFileTypeIcon path={previewImage?.path ?? previewFile?.path ?? previewPath} size={19} />
+              <span className="workspace-file-preview-panel__heading-copy">
+                <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
+                <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
+              </span>
             </div>
           )}
           footer={(
@@ -2583,14 +3044,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
                   return (
                     <span className={`workspace-file-preview__line workspace-file-preview__line--${diffLine.kind}`} data-file-line={diffLine.newLine ?? diffLine.oldLine ?? ''} data-diff-kind={diffLine.kind} key={`diff-${index}`}>
                       <span className="workspace-file-preview__line-number" aria-hidden="true">{diffLine.newLine ?? diffLine.oldLine ?? ''}</span>
-                      <span className="workspace-file-preview__line-content">{diffLine.kind !== 'deleted' && highlightedLine?.length
+                      <span className="workspace-file-preview__line-content syntax-highlighted">{diffLine.kind !== 'deleted' && highlightedLine?.length
                         ? highlightedLine.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
                         : content || ' '}</span>
                     </span>
                   )
                 })
                 : previewLines.map((line, index) => (
-                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content">{highlightedPreviewLines[index]?.length
+                  <span className="workspace-file-preview__line" data-file-line={index + 1} key={`file-${index}`}><span className="workspace-file-preview__line-number" aria-hidden="true">{index + 1}</span><span className="workspace-file-preview__line-content syntax-highlighted">{highlightedPreviewLines[index]?.length
                     ? highlightedPreviewLines[index].map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
                     : line || ' '}</span></span>
                 ))}</code></pre>
@@ -2600,17 +3061,78 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-context-menu workspace-file-context-menu${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div className={`thread-context-menu workspace-file-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
           {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
+          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button> : null}
+          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button> : null}
+          {!contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {contextMenu.entry.kind === 'directory' && workspaceClipboard ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
+          {!contextMenu.root && contextMenu.paths.length > 0 ? <button className="thread-context-menu__danger" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+        </div>,
+        document.body,
+      ) : null}
+      {mutationDialog && typeof document !== 'undefined' ? createPortal(
+        <div className={`thread-rename-backdrop remote-shell--theme-${theme}`} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeWorkspaceMutation() }}>
+          <form className={`thread-rename-dialog workspace-mutation-dialog${mutationDialog.action === 'delete' ? ' thread-delete-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="workspace-mutation-title" onSubmit={(event) => { void submitWorkspaceMutation(event) }} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              {mutationDialog.action === 'delete' ? (
+                <>
+                  <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="workspace-mutation-title">删除所选内容</h2></div>
+                  <p>将永久删除所选内容，非空文件夹也会一并删除。此操作无法恢复。</p>
+                </>
+              ) : (
+                <>
+                  <h2 id="workspace-mutation-title">{mutationDialog.action === 'rename' ? '重命名' : mutationDialog.kind === 'directory' ? '新建文件夹' : '新建文件'}</h2>
+                  <p>{mutationDialog.action === 'rename' ? '请输入新的文件或文件夹名称。' : `将在 ${mutationDialog.parentPath || '当前根目录'} 中创建。`}</p>
+                </>
+              )}
+            </div>
+            {mutationDialog.action === 'delete' ? (
+              <div className="thread-delete-dialog__thread" title={mutationDialog.paths.join('\n')}>{mutationDialog.paths.length === 1 ? mutationDialog.paths[0] : `${mutationDialog.paths[0]} 等 ${mutationDialog.paths.length} 项`}</div>
+            ) : (
+              <>
+                <label htmlFor="workspace-mutation-input">名称</label>
+                <input
+                  id="workspace-mutation-input"
+                  type="text"
+                  value={mutationDialog.value}
+                  maxLength={255}
+                  autoComplete="off"
+                  autoFocus
+                  disabled={mutationSaving}
+                  aria-describedby={mutationError ? 'workspace-mutation-error' : undefined}
+                  onFocus={(event) => {
+                    if (mutationDialog.action !== 'rename') return
+                    const dot = event.currentTarget.value.lastIndexOf('.')
+                    event.currentTarget.setSelectionRange(0, dot > 0 ? dot : event.currentTarget.value.length)
+                  }}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value
+                    setMutationDialog((current) => current && current.action !== 'delete' ? { ...current, value } : current)
+                    setMutationError(null)
+                  }}
+                />
+              </>
+            )}
+            {mutationError ? <p className="thread-rename-dialog__error" id="workspace-mutation-error" role="alert">{mutationError}</p> : null}
+            <div className={`thread-rename-dialog__actions${mutationDialog.action === 'delete' ? ' thread-delete-dialog__actions' : ''}`}>
+              <button type="button" onClick={closeWorkspaceMutation} disabled={mutationSaving}>取消</button>
+              <button type="submit" disabled={mutationSaving || (mutationDialog.action !== 'delete' && !mutationDialog.value.trim())}>
+                {mutationSaving ? <><LoaderCircle className="spin" size={14} />处理中</> : mutationDialog.action === 'delete' ? <><Trash2 size={14} />确认删除</> : '确定'}
+              </button>
+            </div>
+          </form>
         </div>,
         document.body,
       ) : null}
       {selectionContextMenu && typeof document !== 'undefined' ? createPortal(
         <div
           ref={selectionContextMenuElement}
-          className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
+          className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
           style={{ left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
@@ -2687,6 +3209,14 @@ function RemoteChatPane({
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
 
   const activeThreadId = remote.activeThread?.id
+  const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
+    ? remote.approval.params.threadId
+    : null
+  const approvalThread = approvalThreadId
+    ? remote.threads.find((thread) => thread.id === approvalThreadId)
+      ?? (remote.activeThread?.id === approvalThreadId ? remote.activeThread : null)
+    : null
+  const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? '其他对话' : null
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
   const visibleMessages = remote.messages.slice(visibleStartIndex)
@@ -2838,6 +3368,7 @@ function RemoteChatPane({
       if (forceToBottom) settleForcedMessageStreamBottom()
     })
     observer.observe(content)
+    if (messageContainer.current) observer.observe(messageContainer.current)
     return () => observer.disconnect()
   }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
 
@@ -2850,8 +3381,8 @@ function RemoteChatPane({
   const currentConnectionLabel = remote.handedOff
     ? '已交还给本机'
     : connectionLabel[remote.connection]
-  const activeEngineLabel = remote.activeThread?.engine === 'claude-code' ? 'Claude Code' : 'Codex'
-  const targetEngine = remote.activeThread?.engine === 'claude-code' ? 'codex' : 'claude-code'
+  const activeEngineLabel = remote.activeEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const targetEngine = remote.activeEngine === 'claude-code' ? 'codex' : 'claude-code'
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
   const engineSwitchLabel = claudeCodeUnavailable
@@ -2880,7 +3411,7 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -2933,7 +3464,7 @@ function RemoteChatPane({
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
-          <h1>{remote.activeThread?.engine === 'claude-code' ? '与 Claude Code 一起完成项目' : '与 Codex Remote 一起完成项目'}</h1>
+              <WelcomeTypingTitle text={remote.activeEngine === 'claude-code' ? '与 Claude Code 完成一个伟大项目' : '与 Codex 完成一个伟大项目'} />
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
@@ -2959,6 +3490,7 @@ function RemoteChatPane({
               <Fragment key={message.id}>
                 <MessageBubble
                   message={message}
+                  assistantName={activeEngineLabel}
                   operations={operations}
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
@@ -2975,6 +3507,17 @@ function RemoteChatPane({
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
+              {approvalSource ? (
+                <button
+                  className="approval-card__source"
+                  type="button"
+                  onClick={() => {
+                    if (approvalThreadId && approvalThreadId !== activeThreadId) window.CodexRemoteOpenThread?.(approvalThreadId)
+                  }}
+                  disabled={approvalThreadId === activeThreadId}
+                  title={approvalThreadId === activeThreadId ? '来自当前对话' : '打开请求审批的对话'}
+                >来自：{approvalSource}</button>
+              ) : null}
               <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
               {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
               {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
@@ -2987,7 +3530,7 @@ function RemoteChatPane({
           {remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
-                <OperationActivityLine className="running-indicator__activity" operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
+                <OperationActivityLine className={`running-indicator__activity${remote.activeEngine === 'claude-code' && !currentRunningOperation && (!remote.activity || remote.activity.label === '正在思考') ? ' running-indicator__activity--claude-thinking' : ''}`} operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
                 {activeTurnStartedAt !== null ? <TurnElapsed startedAt={activeTurnStartedAt} /> : null}
               </div>
               {!hasStreamingAssistant && runningOperations.length > 0 ? (
@@ -3043,22 +3586,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
   const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
-  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], initialEngine: initialPaneLayout.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], initialEngine: initialPaneLayout.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
+  const remotesRef = useRef(remotes)
+  remotesRef.current = remotes
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
-  const isClaudeCodeThread = activeRemote.activeThread?.engine === 'claude-code'
+  const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
       const threadId = remotes[paneIndex]?.activeThread?.id
       return threadId ? [[String(paneIndex), threadId]] : []
     }))
-    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane })
-  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id])
+    const enginesByPane = Object.fromEntries(openPaneIndexes.map((paneIndex) => [String(paneIndex), remotes[paneIndex].activeEngine]))
+    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane })
+  }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id, remote0.activeEngine, remote1.activeEngine, remote2.activeEngine, remote3.activeEngine, remote4.activeEngine])
 
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
@@ -3072,6 +3618,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [sidebarSearch, setSidebarSearch] = useState('')
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
@@ -3082,7 +3629,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
-  const [completionToast, setCompletionToast] = useState<{ threadId: string; completedAt: number } | null>(null)
+  const [completionToast, setCompletionToast] = useState<CodexThreadCompletion | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
@@ -3134,6 +3681,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
+  const panelDragFrame = useRef<number | null>(null)
+  const pendingPanelDragStyles = useRef<{
+    sidebarOffset?: number
+    sidebarBackdropOpacity?: number
+    workspaceOffset?: number
+    workspaceBackdropOpacity?: number
+  } | null>(null)
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
@@ -3143,11 +3697,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const paneRects = useRef(new Map<number, DOMRect>())
   const remoteShell = useRef<HTMLDivElement>(null)
   const sidebarPanel = useRef<HTMLElement>(null)
+  const workspacePanel = useRef<HTMLElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
   const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
+
+  useEffect(() => () => {
+    if (panelDragFrame.current !== null) window.cancelAnimationFrame(panelDragFrame.current)
+  }, [])
 
   const notifySystemOnce = useCallback((eventKey: string, title: string, body: string, threadId: string) => {
     if (!themePreferences.systemNotificationsEnabled || notifiedSystemEvents.current.has(eventKey)) return false
@@ -3176,7 +3735,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function handleThreadTouchStart(event: ReactTouchEvent<HTMLButtonElement>, thread: CodexThread) {
     clearThreadLongPress()
-    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) return
+    if (!isMobileLayout() || event.touches.length !== 1) return
     const touch = event.touches[0]
     if (!touch) return
     const pending = {
@@ -3260,7 +3819,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadDeleteError(null)
     try {
       const result = await codexRemoteClient.deleteThread(token, thread.id)
-      if (deletedPaneIndex !== undefined && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
+      if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
       for (const remote of remotes) remote.removeDeletedThread(thread.id)
       setPinnedThreadIds(new Set(result.thread_ids))
       setCompletionToast((current) => current?.threadId === thread.id ? null : current)
@@ -3284,8 +3843,37 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }
 
+  function applyPendingPanelDragStyles() {
+    const pending = pendingPanelDragStyles.current
+    pendingPanelDragStyles.current = null
+    if (!pending) return
+    if (pending.sidebarOffset !== undefined) sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', `${pending.sidebarOffset}px`)
+    if (pending.sidebarBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(pending.sidebarBackdropOpacity))
+    if (pending.workspaceOffset !== undefined) workspacePanel.current?.style.setProperty('--workspace-drag-offset', `${pending.workspaceOffset}px`)
+    if (pending.workspaceBackdropOpacity !== undefined) remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(pending.workspaceBackdropOpacity))
+  }
+
+  function cancelPanelDragFrame(flush = false) {
+    if (panelDragFrame.current !== null) {
+      window.cancelAnimationFrame(panelDragFrame.current)
+      panelDragFrame.current = null
+    }
+    if (flush) applyPendingPanelDragStyles()
+    else pendingPanelDragStyles.current = null
+  }
+
+  function schedulePanelDragStyles(styles: NonNullable<typeof pendingPanelDragStyles.current>) {
+    pendingPanelDragStyles.current = styles
+    if (panelDragFrame.current !== null) return
+    panelDragFrame.current = window.requestAnimationFrame(() => {
+      panelDragFrame.current = null
+      applyPendingPanelDragStyles()
+    })
+  }
+
   function handleSidebarTouchStart(event: ReactTouchEvent<HTMLDivElement>) {
-    if (!window.matchMedia(mobileLayoutMediaQuery).matches || event.touches.length !== 1) {
+    cancelPanelDragFrame()
+    if (!isMobileLayout() || event.touches.length !== 1) {
       const previousStart = sidebarTouchStart.current
       sidebarTouchStart.current = null
       if (sidebarDrag.current?.active) {
@@ -3373,20 +3961,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
     if (drag) {
       drag.offset = mobileSidebarDragOffset(sidebarOpen, drag.panelWidth, deltaX)
-      sidebarPanel.current?.style.setProperty('--sidebar-drag-offset', String(drag.offset) + 'px')
       const visibleRatio = Math.max(0, Math.min(1, (drag.panelWidth + drag.offset) / drag.panelWidth))
-      remoteShell.current?.style.setProperty('--sidebar-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+      schedulePanelDragStyles({
+        sidebarOffset: drag.offset,
+        sidebarBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
     }
     if (workspace) {
       workspace.offset = mobileWorkspaceDragOffset(workspaceOpen, workspace.panelWidth, deltaX)
-      remoteShell.current?.querySelector<HTMLElement>('.workspace-explorer')?.style.setProperty('--workspace-drag-offset', String(workspace.offset) + 'px')
       const visibleRatio = Math.max(0, Math.min(1, 1 - workspace.offset / (workspace.panelWidth * 1.05)))
-      remoteShell.current?.style.setProperty('--workspace-backdrop-opacity', String(mobileSidebarBackdropOpacity(visibleRatio)))
+      schedulePanelDragStyles({
+        workspaceOffset: workspace.offset,
+        workspaceBackdropOpacity: mobileSidebarBackdropOpacity(visibleRatio),
+      })
     }
     if (event.cancelable) event.preventDefault()
   }
 
   function handleSidebarTouchEnd(event: ReactTouchEvent<HTMLDivElement>) {
+    cancelPanelDragFrame(true)
     const start = sidebarTouchStart.current
     const drag = sidebarDrag.current
     const workspace = workspaceDrag.current
@@ -3443,6 +4036,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   function handleSidebarTouchCancel() {
+    cancelPanelDragFrame()
     const start = sidebarTouchStart.current
     sidebarTouchStart.current = null
     const drag = sidebarDrag.current
@@ -3468,9 +4062,26 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const syncWorkspaceDraft = useCallback((draft: string) => {
     setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
   }, [composerDraftScope])
-  const activeComposerPreferences = activeThreadId
+  const savedComposerPreferences = useMemo(() => activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
-    : defaultComposerPreferences
+    : defaultComposerPreferences, [activeThreadId, defaultComposerPreferences, threadComposerPreferences])
+  const [temporaryPreferencesByScope, setTemporaryPreferencesByScope] = useState<Record<string, TemporaryModelPreferences>>({})
+  const preferencesScope = `${selectedPaneIndex}:${activeRemote.activeEngine}:${activeThreadId ?? 'new'}`
+  const temporaryPreferences = temporaryPreferencesByScope[preferencesScope]
+  const activeComposerPreferences = temporaryPreferences ? { ...savedComposerPreferences, ...temporaryPreferences } : savedComposerPreferences
+  const changeTemporaryPreferences = useCallback((enabled: boolean) => {
+    setTemporaryPreferencesByScope((current) => {
+      const next = { ...current }
+      if (enabled) next[preferencesScope] = {
+        model: savedComposerPreferences.model,
+        effort: savedComposerPreferences.effort,
+        claudeModel: savedComposerPreferences.claudeModel,
+        claudeEffort: savedComposerPreferences.claudeEffort,
+      }
+      else delete next[preferencesScope]
+      return next
+    })
+  }, [preferencesScope, savedComposerPreferences])
   const selectedModel = isClaudeCodeThread
     ? activeComposerPreferences.claudeModel ?? 'default'
     : activeComposerPreferences.model ?? ''
@@ -3496,6 +4107,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [darkStatusBarIcons])
 
   const updateComposerPreferences = useCallback((changes: Partial<ComposerPreferences>) => {
+    if (temporaryPreferences && ('model' in changes || 'effort' in changes || 'claudeModel' in changes || 'claudeEffort' in changes)) {
+      setTemporaryPreferencesByScope((current) => ({
+        ...current,
+        [preferencesScope]: { ...current[preferencesScope], ...changes },
+      }))
+      return
+    }
     if (!activeThreadId) {
       setDefaultComposerPreferences((current) => mergeComposerPreferences(current, changes))
       return
@@ -3507,7 +4125,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         changes,
       ),
     }))
-  }, [activeThreadId, defaultComposerPreferences])
+  }, [activeThreadId, defaultComposerPreferences, preferencesScope, temporaryPreferences])
 
   const rememberThreadComposerPreferences = useCallback((threadId: string, preferences: ComposerPreferences) => {
     if (!threadId) return
@@ -3542,7 +4160,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!settingsOpen) return
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
-      if (window.matchMedia(mobileLayoutMediaQuery).matches) return
+      if (isMobileLayout()) return
       event.preventDefault()
       event.stopPropagation()
       closeSettingsPanel()
@@ -3668,7 +4286,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     const completions = remotes
       .map((remote) => remote.latestThreadCompletion)
-      .filter((completion): completion is { threadId: string; completedAt: number } => Boolean(completion))
+      .filter((completion): completion is CodexThreadCompletion => Boolean(completion))
       .sort((left, right) => right.completedAt - left.completedAt)
     const latest = completions[0]
     if (!latest) return
@@ -3874,11 +4492,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
     const target = remotes[paneIndex] ?? remote0
-    const selectedEngine = engine ?? (target.activeThread?.engine === 'claude-code' ? 'claude-code' : 'codex')
+    const selectedEngine = engine ?? target.activeEngine
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
-      : activeComposerPreferences
+      : savedComposerPreferences
     const thread = await target.createThread(
       selectedEngine === 'codex' ? targetPreferences.model : undefined,
       selectedEngine === 'codex' ? targetPreferences.approvalPolicy : undefined,
@@ -3899,7 +4517,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           claudeEffort: targetPreferences.claudeEffort ?? 'default',
           claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
         })
-    if (paneIndex !== 0) await remote0.refreshThreads()
+    if (paneIndex !== 0) await remote0.refreshThreads(true)
     return thread
   }
 
@@ -3912,7 +4530,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       .find((thread) => thread && (thread.engine ?? 'codex') === engine && (!cwd || thread.cwd === cwd))
     let targetThreads = threadsForEngine(remote0.threads)
     if (targetThreads.length === 0) {
-      const refreshedThreads = await remote0.refreshThreads()
+      const refreshedThreads = await remote0.refreshThreads(true)
       targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
     }
     const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
@@ -3936,17 +4554,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     await createThreadForPane(selectedPaneIndex)
   }
 
-  async function selectThread(thread: CodexThread) {
+  async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
       setSelectedPaneIndex(existingPane)
+      if (options?.refreshHistory) await remotes[existingPane].selectThread(thread, options)
       return
     }
     const targetIndex = openPaneIndexes.includes(selectedPaneIndex) ? selectedPaneIndex : (openPaneIndexes[0] ?? 0)
     setSelectedPaneIndex(targetIndex)
-    await remotes[targetIndex].selectThread(thread)
+    await remotes[targetIndex].selectThread(thread, options)
   }
 
   function openSystemNotificationThread(threadId: string) {
@@ -4012,8 +4631,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function openCompletedThread() {
     if (!completionToast) return
-    const thread = findCompletedThread() ?? { id: completionToast.threadId }
-    void selectThread(thread)
+    const thread = findCompletedThread() ?? { id: completionToast.threadId, engine: completionToast.engine }
+    void selectThread(thread, { refreshHistory: true })
     setCompletionToast(null)
   }
 
@@ -4028,17 +4647,38 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
   }, [])
 
-  const sendComposerMessage = useCallback((input: ComposerSendInput) => {
-    const target = remotes[selectedPaneIndex] ?? remote0
-    const preferences = composerPreferencesFrom(input)
-    return target.sendMessage({
+  const sendComposerMessage = useCallback(async (input: ComposerSendInput) => {
+    const target = remotesRef.current[selectedPaneIndex] ?? remotesRef.current[0]
+    if (!target) return false
+    const preferences = temporaryPreferences ? savedComposerPreferences : composerPreferencesFrom(input)
+    let submittedPreferencesScope = preferencesScope
+    const sent = await target.sendMessage({
       ...input,
       onThreadCreated: (thread) => {
         composerHandle.current?.adoptUnassignedDraft(thread.id, false)
         rememberThreadComposerPreferences(thread.id, preferences)
+        if (temporaryPreferences) {
+          submittedPreferencesScope = `${selectedPaneIndex}:${target.activeEngine}:${thread.id}`
+          const nextScope = submittedPreferencesScope
+          setTemporaryPreferencesByScope((current) => {
+            if (current[preferencesScope] !== temporaryPreferences) return current
+            const next = { ...current, [nextScope]: temporaryPreferences }
+            delete next[preferencesScope]
+            return next
+          })
+        }
       },
     })
-  }, [rememberThreadComposerPreferences, remote0, remote1, remote2, remote3, remote4, selectedPaneIndex])
+    if (sent && temporaryPreferences) {
+      setTemporaryPreferencesByScope((current) => {
+        if (current[submittedPreferencesScope] !== temporaryPreferences) return current
+        const next = { ...current }
+        delete next[submittedPreferencesScope]
+        return next
+      })
+    }
+    return sent
+  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
@@ -4129,6 +4769,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
   })), [effortOptions])
+  const reasoningOptionsByModel = useMemo<Record<string, ModelReasoningOptions>>(() => {
+    const byModel: Record<string, ModelReasoningOptions> = {}
+    for (const model of availableModels) {
+      const id = modelIdOf(model)
+      if (!id) continue
+      byModel[id] = {
+        options: (model.supportedReasoningEfforts ?? []).map((option) => ({
+          value: option.reasoningEffort,
+          label: effortLabelOf(option.reasoningEffort),
+        })),
+        defaultEffort: model.defaultReasoningEffort,
+      }
+    }
+    return byModel
+  }, [availableModels])
   const sidebarThreads = useMemo(() => remote0.threads
     .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
     .sort((left, right) => {
@@ -4136,12 +4791,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       const rightPinned = pinnedThreadIds.has(right.id)
       return Number(rightPinned) - Number(leftPinned)
     }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
+  const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
+  const visibleSidebarThreads = useMemo(() => normalizedSidebarSearch
+    ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
+      .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
+    : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
   const completedThread = findCompletedThread()
 
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -4151,8 +4811,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {completionToast ? (
         <div className="thread-completion-toast" role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
-            <span className="thread-completion-toast__icon"><Check size={15} strokeWidth={2.8} /></span>
-            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>点击查看这条对话</small></span>
+            <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
+            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} · 点击查看这条对话</small></span>
           </button>
           <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={() => setCompletionToast(null)}><X size={15} /></button>
         </div>
@@ -4161,17 +4821,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
-          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) setSidebarSearch(''); setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
+        <div className="sidebar-search">
+          <Search size={15} aria-hidden="true" />
+          <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />
+          {sidebarSearch ? <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => setSidebarSearch('')}><X size={14} /></button> : null}
+        </div>
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads()} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading"><span>{normalizedSidebarSearch ? '搜索结果' : sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
         <nav className="thread-list">
-          {sidebarThreads.map((thread) => {
+          {visibleSidebarThreads.map((thread) => {
             const paneIndex = paneIndexForThread(thread.id)
             const isActive = paneIndex === selectedPaneIndex
             const isPinned = pinnedThreadIds.has(thread.id)
@@ -4186,14 +4851,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 clearThreadLongPress()
                 void selectThread(thread)
               }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
-                <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />
+                <span className="thread-row__icon"><EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} /></span>
                 <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                 {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
               </button>
             )
           })}
-          {sidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
-          {remote0.loadingHistory && sidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
+          {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
@@ -4308,8 +4973,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               selectedEffort={selectedEffort}
               selectedApprovalPolicy={selectedApprovalPolicy}
               selectedClaudePermissionMode={selectedClaudePermissionMode}
+              temporaryPreferences={Boolean(temporaryPreferences)}
+              onTemporaryPreferencesChange={changeTemporaryPreferences}
               modelOptions={modelOptions}
               reasoningOptions={reasoningOptions}
+              reasoningOptionsByModel={reasoningOptionsByModel}
               authorizationOptions={approvalPolicyOptions}
               claudeModelOptions={claudeModelOptions}
               claudeEffortOptions={claudeEffortOptions}
@@ -4383,7 +5051,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
             mobileDragging={workspaceDragging}
+            onOpenMobile={openWorkspacePanel}
             onCloseMobile={() => setWorkspaceOpen(false)}
+            panelRef={workspacePanel}
           />
         </>
       )}
@@ -4601,7 +5271,25 @@ function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy =
 
 function CodeBlock({ value, language, showCopy = true }: { value: string; language?: string; showCopy?: boolean }) {
   const [copied, setCopied] = useState(false)
+  const [highlighted, setHighlighted] = useState<{
+    value: string
+    language?: string
+    lines: Array<Array<{ text: string; className: string }>>
+  } | null>(null)
   const resetTimer = useRef<number | undefined>(undefined)
+
+  useEffect(() => {
+    let cancelled = false
+    setHighlighted(null)
+    void import('../lib/codeHighlight').then(({ highlightCodeLines }) => highlightCodeLines('', value, language, false)).then((lines) => {
+      if (!cancelled) setHighlighted({ value, language, lines })
+    }).catch(() => {
+      if (!cancelled) setHighlighted(null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [value, language])
 
   useEffect(() => () => {
     if (resetTimer.current !== undefined) window.clearTimeout(resetTimer.current)
@@ -4614,9 +5302,20 @@ function CodeBlock({ value, language, showCopy = true }: { value: string; langua
     resetTimer.current = window.setTimeout(() => setCopied(false), 1600)
   }
 
+  const highlightedLines = highlighted?.value === value && highlighted.language === language ? highlighted.lines : null
+
   return (
     <pre className="chat-message__code">
-      <code data-language={language}>{value}</code>
+      <code className="syntax-highlighted" data-language={language}>{highlightedLines
+        ? highlightedLines.map((line, lineIndex) => (
+          <Fragment key={lineIndex}>
+            {line.length > 0
+              ? line.map((segment, segmentIndex) => <span className={segment.className || undefined} key={segmentIndex}>{segment.text}</span>)
+              : ' '}
+            {lineIndex < highlightedLines.length - 1 ? '\n' : null}
+          </Fragment>
+        ))
+        : value}</code>
       {showCopy ? <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
         {copied ? <Check size={13} /> : <Copy size={13} />}
         {copied ? '已复制' : '复制'}
@@ -4831,12 +5530,12 @@ const OperationLog = memo(function OperationLog({
               ) : null}
               {fileChange?.changes.map((change) => (
                 <span className="operation-log__actions" key={`${operation.id}:${change.path}`}>
-                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><FileText size={12} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
+                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><WorkspaceFileTypeIcon path={change.path} size={13} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
                 </span>
               ))}
               {additionalPaths.map((path) => (
                 <span className="operation-log__actions" key={`${operation.id}:path:${path}`}>
-                  <button type="button" onClick={() => onOpenFile(path)} title={path}><FileText size={12} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
+                  <button type="button" onClick={() => onOpenFile(path)} title={path}><WorkspaceFileTypeIcon path={path} size={13} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
                 </span>
               ))}
               {operation.steps?.length ? (
@@ -4963,8 +5662,9 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
+  assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
@@ -4986,7 +5686,7 @@ const MessageBubble = memo(function MessageBubble({ message, operations, fileCha
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
-          {message.role === 'assistant' ? <strong>Codex</strong> : null}
+          {message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>

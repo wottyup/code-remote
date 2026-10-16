@@ -1,5 +1,6 @@
 plugins {
     id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
 }
 
 android {
@@ -10,8 +11,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 126
-        versionName '0.15.0-dev.1'
+        versionCode 194
+        versionName '0.21.7-dev.19'
     }
 
     buildFeatures {
@@ -23,12 +24,24 @@ android {
         targetCompatibility JavaVersion.VERSION_17
     }
 
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
     }
+}
+
+dependencies {
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }
 
 android.applicationVariants.all { variant ->

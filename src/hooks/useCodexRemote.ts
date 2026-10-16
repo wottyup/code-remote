@@ -1,10 +1,11 @@
-import { startTransition, useCallback, useEffect, useRef, useState } from 'react'
+import { startTransition, useCallback, useEffect, useReducer, useRef, useState, type SetStateAction } from 'react'
 import {
   codexRemoteClient,
   isAmbiguousNetworkFailure,
   messagesFromThread,
   RemoteApiError,
   threadContainsNewPayload,
+  threadListRefreshIntervalMs,
   userMessageFromEventItem,
   type CodexDocumentAttachment,
   type CodexImageAttachment,
@@ -61,6 +62,11 @@ export type CodexActivityTimelineEntry =
 export interface CodexThreadCompletion {
   threadId: string
   completedAt: number
+  engine: 'codex' | 'claude-code'
+}
+
+export interface SelectThreadOptions {
+  refreshHistory?: boolean
 }
 
 export interface CodexFileChangeEntry {
@@ -82,6 +88,10 @@ export interface QueuedTurnMessage {
   text: string
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
+  model?: string
+  effort?: string
+  claudeModel?: string
+  claudeEffort?: string
   createdAt: string
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
@@ -96,11 +106,7 @@ export interface QueuedTurnMessage {
 
 interface QueuedTurnPayload extends QueuedTurnMessage {
   requestText: string
-  model?: string
-  effort?: string
   approvalPolicy?: CodexApprovalPolicy
-  claudeModel?: string
-  claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
 }
 
@@ -167,6 +173,24 @@ interface PersistedActiveThread {
   messages: CodexMessage[]
 }
 
+type ChatEngine = NonNullable<CodexThread['engine']>
+
+interface ActiveThreadSelection {
+  thread: CodexThread | null
+  engine: ChatEngine
+}
+
+function engineOfThread(thread: CodexThread): ChatEngine {
+  return thread.engine ?? (thread.id.startsWith('claude:') ? 'claude-code' : 'codex')
+}
+
+function updateActiveThreadSelection(current: ActiveThreadSelection, action: SetStateAction<CodexThread | null>): ActiveThreadSelection {
+  const thread = typeof action === 'function' ? action(current.thread) : action
+  if (thread === current.thread) return current
+  // A deleted conversation leaves an empty pane in the same engine.
+  return { thread, engine: thread ? engineOfThread(thread) : current.engine }
+}
+
 interface ThreadCacheEntry {
   thread: CodexThread
   messages: CodexMessage[]
@@ -189,6 +213,8 @@ export interface UseCodexRemoteOptions {
   persistActiveThread?: boolean
   /** Restore a pane-specific conversation without replacing the primary thread. */
   initialThreadId?: string | null
+  /** Restore the engine even when the pane no longer has a conversation. */
+  initialEngine?: ChatEngine
   /** Keep the socket and background requests closed while a pane is hidden. */
   enabled?: boolean
   /** Keep list/model/history warm-up work in the primary controller only. */
@@ -748,6 +774,7 @@ function streamingAssistantText(parts: Map<string, string>) {
 
 function sameActiveThread(left: CodexThread | null, right: CodexThread) {
   return left?.id === right.id
+    && left.engine === right.engine
     && left.name === right.name
     && left.preview === right.preview
     && left.cwd === right.cwd
@@ -1288,8 +1315,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   // Keep the saved thread ID available before its history has finished
   // loading. This gives the composer a stable draft scope and lets a new turn
   // start without waiting for a large thread/read response.
-  const [activeThread, setActiveThread] = useState<CodexThread | null>(() =>
-    initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null),
+  const [{ thread: activeThread, engine: activeEngine }, setActiveThread] = useReducer(
+    updateActiveThreadSelection,
+    null,
+    (): ActiveThreadSelection => {
+      const thread = initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null)
+      return { thread, engine: thread ? engineOfThread(thread) : options.initialEngine ?? 'codex' }
+    },
   )
   const [messages, setMessages] = useState<CodexMessage[]>(() => initialCachedThread?.messages ?? [])
   const activeThreadRef = useRef(activeThread)
@@ -1351,6 +1383,16 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const turnStartedAtById = useRef(new Map<string, number>())
   const writerConflictRef = useRef(false)
   const writerRefreshTimer = useRef<number | undefined>(undefined)
+  const lastWriterRefreshAt = useRef(0)
+  const appBackgroundRef = useRef<boolean | null>(null)
+  if (appBackgroundRef.current === null) {
+    try {
+      appBackgroundRef.current = window.CodexRemoteAndroid?.isAppInBackground?.() ?? false
+    } catch {
+      appBackgroundRef.current = false
+    }
+  }
+  const isBackground = useCallback(() => appBackgroundRef.current || document.visibilityState === 'hidden', [])
   const restoringThreadId = useRef<string | null>(null)
   const deletedThreadIds = useRef(new Set<string>())
   const threadHistoryCache = useRef(new Map<string, ThreadCacheEntry>())
@@ -1362,6 +1404,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const threadListFetchedAtRef = useRef(0)
   const threadListRequest = useRef<Promise<CodexThread[] | null> | null>(null)
   const pendingThreadHistoryRefresh = useRef(new Set<string>())
+  const threadHistoryGaps = useRef(new Set<string>())
   const prefetchingThreadIds = useRef(new Set<string>())
   const forcedPrefetchThreadIds = useRef(new Set<string>())
   const threadPrefetchTimer = useRef<number | undefined>(undefined)
@@ -1380,8 +1423,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const deferredQueueAdvanceAfterEdit = useRef(new Set<string>())
 
   useEffect(() => {
-    socketRef.current?.subscribeThread(activeThread?.id ?? null)
-  }, [activeThread?.id])
+    socketRef.current?.subscribeThread(isBackground() ? null : activeThread?.id ?? null)
+  }, [activeThread?.id, isBackground])
 
   const publishServerQueue = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
     serverQueuedMessagesByThreadRef.current = { ...serverQueuedMessagesByThreadRef.current, [threadId]: queue }
@@ -1396,6 +1439,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [publishServerQueue])
 
   const refreshServerQueue = useCallback(async (threadId: string) => {
+    if (isBackground()) return
     const revision = (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1
     serverQueueFetchVersion.current.set(threadId, revision)
     try {
@@ -1408,7 +1452,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         setError('电脑端服务尚未加载共享排队接口，请重启 Codex Remote 后端。')
       }
     }
-  }, [onUnauthorized, publishServerQueue, token])
+  }, [isBackground, onUnauthorized, publishServerQueue, token])
 
   useEffect(() => {
     if (!enabled || !activeThread?.id) return
@@ -1885,7 +1929,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [schedulePersistentThreadCacheWrite])
 
   const prefetchThread = useCallback(async (thread: CodexThread, force = false) => {
-    if (!prefetchHistory || handedOffRef.current) return
+    if (!prefetchHistory || handedOffRef.current || isBackground()) return
     if (!thread.id || thread.id === activeThreadId.current || deletedThreadIds.current.has(thread.id)) return
     const cache = threadHistoryCache.current
     const cached = cache.get(thread.id)
@@ -1927,7 +1971,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         void prefetchThread({ id: thread.id }, true)
       }
     }
-  }, [cacheThreadSnapshot, onUnauthorized, prefetchHistory, token])
+  }, [cacheThreadSnapshot, isBackground, onUnauthorized, prefetchHistory, token])
 
   const scheduleThreadPrefetch = useCallback((nextThreads: CodexThread[]) => {
     if (!prefetchHistory || handedOffRef.current) return
@@ -1958,6 +2002,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     clearThreadCompletion(threadId)
 
     threadHistoryCache.current.delete(threadId)
+    threadHistoryGaps.current.delete(threadId)
+    pendingThreadHistoryRefresh.current.delete(threadId)
     pendingPersistentThreadCache.current.delete(threadId)
     persistentThreadCacheKnown.current.delete(threadId)
     const cacheTimer = persistentThreadCacheTimers.current.get(threadId)
@@ -2029,17 +2075,18 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [clearThreadCompletion, clearTurnTimer, persistActiveThread, resetStreamingAssistant, setActiveTurnId, updateQueuedMessages])
 
   const markThreadCompletion = useCallback((threadId: string) => {
-    if (!threadId || threadId === activeThreadId.current) return
+    if (!threadId || (threadId === activeThreadId.current && !isBackground())) return
+    const thread = threadListRef.current.find((candidate) => candidate.id === threadId) ?? { id: threadId }
     setCompletedThreadIds((current) => current.includes(threadId) ? current : [...current, threadId])
-    setLatestThreadCompletion({ threadId, completedAt: Date.now() })
-  }, [])
+    setLatestThreadCompletion({ threadId, completedAt: Date.now(), engine: engineOfThread(thread) })
+  }, [isBackground])
 
-  const refreshThreads = useCallback(async () => {
-    if (handedOffRef.current) return null
+  const refreshThreads = useCallback(async (force = false) => {
+    if (handedOffRef.current || isBackground()) return null
     if (threadListRequest.current) return threadListRequest.current
     const request = (async () => {
       try {
-        const next = (await codexRemoteClient.threads(token)).filter((thread) => !deletedThreadIds.current.has(thread.id))
+        const next = (await codexRemoteClient.threads(token, force)).filter((thread) => !deletedThreadIds.current.has(thread.id))
         threadListRef.current = next
         threadListLoadedRef.current = true
         threadListFetchedAtRef.current = Date.now()
@@ -2047,6 +2094,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         scheduleThreadPrefetch(next)
         return next
       } catch (reason) {
+        if (isBackground() || (reason instanceof Error && reason.name === 'AbortError')) return null
         if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
         setError(reason instanceof Error ? reason.message : '无法读取对话记录')
         return null
@@ -2058,7 +2106,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       if (threadListRequest.current === request) threadListRequest.current = null
     }
-  }, [loadThreads, onUnauthorized, scheduleThreadPrefetch, token])
+  }, [isBackground, loadThreads, onUnauthorized, scheduleThreadPrefetch, token])
 
   const applyThreadName = useCallback((threadId: string, name: string | null) => {
     const updateName = (thread: CodexThread) => thread.id === threadId ? { ...thread, name } : thread
@@ -2143,7 +2191,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     preserveRunningTurnId: string | null = null,
     snapshot?: CodexThreadDetails,
   ) => {
-    if (handedOffRef.current) return false
+    if (handedOffRef.current || isBackground()) {
+      pendingThreadHistoryRefresh.current.add(threadId)
+      return false
+    }
     const readSequence = ++historyReadSequence.current
     try {
       const thread = snapshot ?? await codexRemoteClient.readThread(token, threadId)
@@ -2274,8 +2325,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         const nextActivity = running ? { label: '正在思考' } : null
         setActivity((current) => sameActivity(current, nextActivity) ? current : nextActivity)
       }
+      if (threadHistoryGaps.current.delete(threadId)) pendingThreadHistoryRefresh.current.delete(threadId)
       return true
     } catch (reason) {
+      if (isBackground() || (reason instanceof Error && reason.name === 'AbortError')) return false
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (activeThreadId.current !== threadId || revision !== historyRevision.current) return false
       if (isActiveWriterError(reason)) {
@@ -2289,7 +2342,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       return false
     }
-  }, [cacheThreadSnapshot, finishTurnTimer, onUnauthorized, persistActiveThread, reconcileQueuedHistory, resetStreamingAssistant, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [cacheThreadSnapshot, finishTurnTimer, isBackground, onUnauthorized, persistActiveThread, reconcileQueuedHistory, resetStreamingAssistant, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const refreshThreadForRemoteMessage = useCallback((threadId: string, turnId: string | null, messageItemId?: string, recoverImages = false) => {
     if (!threadId || threadId !== activeThreadId.current) return
@@ -2318,7 +2371,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const refreshActiveThreadIfChanged = useCallback(async () => {
     const threadId = activeThreadId.current
-    if (handedOffRef.current) return
+    if (handedOffRef.current || isBackground()) return
     const nextThreads = await refreshThreads()
     if (!threadId || !nextThreads || activeThreadId.current !== threadId) return
     const latestThread = nextThreads.find((thread) => thread.id === threadId)
@@ -2327,14 +2380,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const cached = threadHistoryCache.current.get(threadId)
     const locallyRunning = isRunningRef.current || activeTurnId.current !== null
     const serverIdle = ['idle', 'completed', 'interrupted', 'failed'].includes(latestThread.status?.type ?? '')
-    if (locallyRunning && !serverIdle) return
-    if (threadIsRunning(latestThread)) {
+    const hasHistoryGap = threadHistoryGaps.current.has(threadId)
+    if (locallyRunning && !serverIdle && !hasHistoryGap) return
+    if (threadIsRunning(latestThread) && !hasHistoryGap) {
       pendingThreadHistoryRefresh.current.add(threadId)
       return
     }
 
     const currentThread = cached?.thread ?? (activeThreadRef.current?.id === threadId ? activeThreadRef.current : null)
-    const needsHistoryRefresh = (locallyRunning && serverIdle)
+    const needsHistoryRefresh = hasHistoryGap || (locallyRunning && serverIdle)
       || pendingThreadHistoryRefresh.current.has(threadId)
       || !currentThread
       || threadHistoryVersionChanged(currentThread, latestThread)
@@ -2344,10 +2398,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } else {
       applyActiveThreadMetadata(latestThread)
     }
-  }, [applyActiveThreadMetadata, loadThread, refreshThreads])
+  }, [applyActiveThreadMetadata, isBackground, loadThread, refreshThreads])
+
+  const scheduleMetadataRefresh = useCallback(() => {
+    if (isBackground() || writerRefreshTimer.current !== undefined) return
+    // File/WAL watchers emit continuously while Codex works. A debounce alone
+    // still downloads the entire list every second (or starves on a busy file).
+    // Keep a trailing refresh, bounded across bursts and shared across panes.
+    const delay = Math.max(1_000, threadListRefreshIntervalMs - (Date.now() - lastWriterRefreshAt.current))
+    writerRefreshTimer.current = window.setTimeout(() => {
+      writerRefreshTimer.current = undefined
+      if (isBackground()) return
+      lastWriterRefreshAt.current = Date.now()
+      void refreshActiveThreadIfChanged()
+    }, delay)
+  }, [isBackground, refreshActiveThreadIfChanged])
 
   const cacheVisibleThread = useCallback(() => {
     if (!activeThread || activeThread.id !== activeThreadId.current) return
+    if (threadHistoryGaps.current.has(activeThread.id)) return
     // An unopened thread has no history to restore yet; keep its loading state truthful.
     if (messages.length === 0 && !threadHistoryCache.current.has(activeThread.id)) return
     cacheThreadSnapshot(activeThread, messages, {
@@ -2364,8 +2433,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     // streams, every new chunk changes messages; scanning and scheduling a
     // whole-thread snapshot for each chunk makes long conversations jank.
     // Switching threads still calls cacheVisibleThread() explicitly.
-    if (!isRunning) cacheVisibleThread()
-  }, [cacheVisibleThread, isRunning])
+    if (!isRunning && !isBackground()) cacheVisibleThread()
+  }, [cacheVisibleThread, isBackground, isRunning])
 
   const dispatchInterrupt = useCallback(async (threadId: string, turnId: string) => {
     if (handedOffRef.current) return false
@@ -2534,7 +2603,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return true
   }, [queueRecoveryReadyThreadId])
 
-  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
     const text = input.prompt.trim()
@@ -2551,6 +2620,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           requestText: queuedRequestText(text, documents),
           images,
           ...(documents.length > 0 ? { documents } : { documents: undefined }),
+          model: input.model,
+          effort: input.effort,
+          claudeModel: input.claudeModel,
+          claudeEffort: input.claudeEffort,
         }
         : message)
     })
@@ -2683,6 +2756,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [appendQueuedMessageToActiveThread, finalizeTurnOperations, finalizeVisibleStreamingTurn, loadThread, onUnauthorized, persistActiveThread, recordQueuedSendAttempt, requestTurnStart, setActiveTurnId, setQueueRecoveryBarrier, startTurnTimerForTurn, updateQueuedMessages])
 
   const startNextQueuedMessage = useCallback(async (threadId: string) => {
+    if (isBackground()) return false
     if (editingQueuedMessageByThread.current[threadId]) {
       deferredQueueAdvanceAfterEdit.current.add(threadId)
       return false
@@ -2695,7 +2769,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return false
     }
     return next ? startQueuedMessage(threadId, next.id) : false
-  }, [startQueuedMessage])
+  }, [isBackground, startQueuedMessage])
 
   const sendQueuedMessageNow = useCallback(async (messageId: string) => {
     if (handedOffRef.current) {
@@ -2812,7 +2886,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return began
   }, [sharedQueueAction])
 
-  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents'>) => {
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
     if (!threadId || !previous) return false
@@ -2825,6 +2899,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         requestText: queuedRequestText(text, documents),
         images: input.images,
         documents,
+        model: input.model,
+        effort: input.effort,
+        claudeModel: input.claudeModel,
+        claudeEffort: input.claudeEffort,
         sendAttempt: undefined,
         editing: undefined,
       })
@@ -2878,8 +2956,24 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
 
   const sharedSendQueuedMessageNow = useCallback(async (messageId: string) => {
     const threadId = activeThreadId.current
-    return threadId ? sharedQueueAction(threadId, 'send-now', messageId) : false
-  }, [sharedQueueAction])
+    if (!threadId) return false
+    const message = serverQueuedMessagesByThreadRef.current[threadId]?.find((item) => item.id === messageId)
+    // turn/steer cannot apply a message's model/effort overrides. The idle-only
+    // endpoint also protects against another client starting a turn meanwhile.
+    const needsSeparateTurn = Boolean(message?.model || message?.effort || message?.claudeModel || message?.claudeEffort)
+    if (!needsSeparateTurn) return sharedQueueAction(threadId, 'send-now', messageId)
+    try {
+      const result = await codexRemoteClient.startQueuedIfIdle(token, threadId, messageId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return result.sent
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '发送排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, sharedQueueAction, token])
 
   useEffect(() => {
     const threadId = activeThread?.id
@@ -2905,7 +2999,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   }, [activeThread?.id, connection, handedOff, isInterrupting, isRunning, loadingHistory, queueEditRevision, queueRecoveryReadyThreadId, queuedMessagesByThread, startNextQueuedMessage, writerConflict])
 
   const restoreActiveThread = useCallback(async () => {
-    if (handedOffRef.current) return
+    if (handedOffRef.current || isBackground()) return
     const threadId = activeThreadId.current
     if (!threadId || restoringThreadId.current === threadId) return
     restoringThreadId.current = threadId
@@ -2941,20 +3035,20 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         latestThread,
         metadataIsFresh,
         hasQueuedMessages,
-      ) && !hasQueuedMessages) {
+      ) && !hasQueuedMessages && !pendingThreadHistoryRefresh.current.has(threadId)) {
         setQueueRecoveryReadyThreadId(threadId)
         return
       }
-      await loadThread(threadId)
+      if (await loadThread(threadId)) pendingThreadHistoryRefresh.current.delete(threadId)
     } finally {
       if (restoringThreadId.current !== threadId) return
       restoringThreadId.current = null
       if (activeThreadId.current === threadId) setLoadingHistory(false)
     }
-  }, [loadThread, refreshThreads, restorePersistentThreadCache, setActiveTurnId])
+  }, [isBackground, loadThread, refreshThreads, restorePersistentThreadCache, setActiveTurnId])
 
   const verifyQueuedThreadAndAdvance = useCallback(async (threadId: string) => {
-    if (handedOffRef.current || !queuedMessagesByThreadRef.current[threadId]?.length) return false
+    if (handedOffRef.current || isBackground() || !queuedMessagesByThreadRef.current[threadId]?.length) return false
     if (activeThreadId.current !== threadId
       && (!persistActiveThread || threadHasAnotherActiveController(threadId, queueControllerId.current))) return false
     try {
@@ -2997,7 +3091,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       return false
     }
-  }, [loadThread, onUnauthorized, persistActiveThread, reconcileQueuedHistory, setQueueRecoveryBarrier, startNextQueuedMessage, token, updateQueuedMessages])
+  }, [isBackground, loadThread, onUnauthorized, persistActiveThread, reconcileQueuedHistory, setQueueRecoveryBarrier, startNextQueuedMessage, token, updateQueuedMessages])
 
   const handleEvent = useCallback((event: RemoteEvent) => {
     if (handedOffRef.current && event.type !== 'connection') return
@@ -3009,16 +3103,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setPinRevision((revision) => revision + 1)
       return
     }
-    if (event.type === 'claude.threads.changed') {
-      void refreshThreads()
-      return
-    }
-    if (event.type === 'threads.changed') {
-      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
-      writerRefreshTimer.current = window.setTimeout(() => {
-        writerRefreshTimer.current = undefined
-        void refreshActiveThreadIfChanged()
-      }, 1000)
+    if (event.type === 'claude.threads.changed' || event.type === 'threads.changed') {
+      scheduleMetadataRefresh()
       return
     }
     if (event.type === 'connection') {
@@ -3047,6 +3133,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError(event.message ?? 'Codex 请求失败')
       return
     }
+    if (event.type === 'server_request.resolved') {
+      const requestId = event.request_id
+      setApproval((current) => current && current.requestId === requestId ? null : current)
+      return
+    }
     if (event.type === 'turn.delivery') {
       const requestId = typeof event.request_id === 'string' ? event.request_id : null
       const delivery = requestId ? pendingTurnDeliveries.current.get(requestId) : undefined
@@ -3072,6 +3163,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (event.type !== 'notification' || !event.method) return
 
+    // A subscription update and in-flight events can cross on the wire. Keep
+    // lightweight lifecycle notifications, but defer rendering missed details
+    // to the single history reconciliation on foreground recovery.
+    if (isBackground() && event.method !== 'turn/started' && event.method !== 'turn/completed'
+      && event.method !== 'thread/name/updated' && event.method !== 'thread/deleted') return
+
     const params = event.params ?? {}
     const eventTurn = params.turn as Record<string, unknown> | undefined
     const eventThreadId = typeof params.threadId === 'string'
@@ -3080,9 +3177,42 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventTurnId = typeof eventTurn?.id === 'string'
       ? eventTurn.id
       : typeof params.turnId === 'string' ? params.turnId : null
+    const applyRemoteUserItem = (item: Record<string, unknown> | undefined, turnId: string | null) => {
+      if (!activeThreadId.current) return
+      const itemId = typeof item?.id === 'string' ? item.id : undefined
+      const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
+        .some((delivery) => delivery.threadId === activeThreadId.current)
+      const remoteUserMessage = userMessageFromEventItem(item, turnId)
+      const alreadyVisible = itemId ? messagesRef.current.some((message) =>
+        message.id === itemId || message.sourceItemId === itemId,
+      ) : false
+      if (remoteUserMessage && !pendingLocalDelivery && !alreadyVisible) {
+        const continuesTurn = Boolean(turnId && messagesRef.current.some((message) =>
+          message.role === 'user' && message.turnId === turnId,
+        ))
+        if (continuesTurn && streamingAssistantTurnId.current === turnId) {
+          finalizeVisibleStreamingTurn(turnId)
+        }
+        setMessages((current) => {
+          const next = insertRemoteUserMessage(current, remoteUserMessage)
+          return sameMessages(current, next) ? current : next
+        })
+      }
+      const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
+        if (!part || typeof part !== 'object') return false
+        const content = part as Record<string, unknown>
+        return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
+      })
+      if (hasUnresolvedImages && !pendingLocalDelivery) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
+      } else if (!remoteUserMessage) {
+        refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
+      }
+    }
     if (event.method === 'thread/name/updated') {
       const threadId = typeof params.threadId === 'string' ? params.threadId : null
       if (threadId && (typeof params.threadName === 'string' || params.threadName === null)) {
+        codexRemoteClient.updateThreadListEntry(token, threadId, { name: params.threadName })
         applyThreadName(threadId, params.threadName)
       }
       return
@@ -3090,6 +3220,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (event.method === 'thread/deleted') {
       const threadId = typeof params.threadId === 'string' ? params.threadId : null
       if (threadId) {
+        codexRemoteClient.updateThreadListEntry(token, threadId, null)
         removeDeletedThread(threadId)
         void refreshThreads()
       }
@@ -3103,6 +3234,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           if (delivery.threadId === completedThreadId) delivery.completedTurnIds.add(completedTurnId)
         }
       }
+    }
+    if (eventThreadId && (event.method === 'turn/started' || event.method === 'turn/completed')) {
+      codexRemoteClient.updateThreadListEntry(token, eventThreadId, {
+        status: { type: event.method === 'turn/started' ? 'active' : 'idle' },
+      })
     }
     // Older app-server notifications can omit threadId on item deltas. When
     // that happens, use the active turn as the second routing key so a second
@@ -3228,6 +3364,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         : typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       const completedAt = eventTimestamp(turn?.completedAt) ?? Date.now()
       const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
+      if (turnThreadId && isBackground()) markThreadCompletion(turnThreadId)
       finalizeTurnOperations(turnThreadId ?? activeThreadId.current, completedTurnId, completedStatus === 'running' ? 'completed' : completedStatus)
       const currentTurnId = activeTurnId.current
       if (completedTurnId && currentTurnId && completedTurnId !== currentTurnId) {
@@ -3289,13 +3426,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       // the optimistic queued user message while its new turn is starting.
       if (queuedThreadId && canReleaseQueue && !needsHistoryCheck) void startNextQueuedMessage(queuedThreadId)
       if (refreshThreadId) {
-        pendingThreadHistoryRefresh.current.delete(refreshThreadId)
+        if (!isBackground() && !threadHistoryGaps.current.has(refreshThreadId)) pendingThreadHistoryRefresh.current.delete(refreshThreadId)
         void refreshThreads().then((nextThreads) => {
           if (!nextThreads || activeThreadId.current !== refreshThreadId || historyRevision.current !== refreshRevision) return
           const latestThread = nextThreads.find((thread) => thread.id === refreshThreadId)
           if (latestThread) applyActiveThreadMetadata(latestThread)
         })
-        if (needsHistoryCheck) void loadThread(refreshThreadId, refreshRevision, true)
+        if (needsHistoryCheck || threadHistoryGaps.current.has(refreshThreadId)) void loadThread(refreshThreadId, refreshRevision, true)
       }
       return
     }
@@ -3320,35 +3457,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (turnId && activeTurnId.current === null) setActiveTurnId(turnId)
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType === 'usermessage' && activeThreadId.current) {
-        const itemId = typeof item?.id === 'string' ? item.id : undefined
-        const pendingLocalDelivery = [...pendingTurnDeliveries.current.values()]
-          .some((delivery) => delivery.threadId === activeThreadId.current)
-        const remoteUserMessage = userMessageFromEventItem(item, turnId)
-        const alreadyVisible = itemId ? messagesRef.current.some((message) =>
-          message.id === itemId || message.sourceItemId === itemId,
-        ) : false
-        if (remoteUserMessage && !pendingLocalDelivery && !alreadyVisible) {
-          const continuesTurn = Boolean(turnId && messagesRef.current.some((message) =>
-            message.role === 'user' && message.turnId === turnId,
-          ))
-          if (continuesTurn && streamingAssistantTurnId.current === turnId) {
-            finalizeVisibleStreamingTurn(turnId)
-          }
-          setMessages((current) => {
-            const next = insertRemoteUserMessage(current, remoteUserMessage)
-            return sameMessages(current, next) ? current : next
-          })
-        }
-        const hasUnresolvedImages = Array.isArray(item?.content) && item.content.some((part: unknown) => {
-          if (!part || typeof part !== 'object') return false
-          const content = part as Record<string, unknown>
-          return content.type === 'localImage' && (typeof content.data !== 'string' || !content.data)
-        })
-        if (hasUnresolvedImages && !pendingLocalDelivery) {
-          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId, true)
-        } else if (!remoteUserMessage) {
-          refreshThreadForRemoteMessage(activeThreadId.current, turnId, itemId)
-        }
+        applyRemoteUserItem(item, turnId)
       }
       if (fileChange) addFileChangeToTurn(turnId, fileChange)
       const operation = operationForItem(item, 'running')
@@ -3413,6 +3522,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (operation) commitTurnOperation(activeThreadId.current, turnId, operation)
       const itemId = typeof item?.id === 'string' ? item.id : null
       const itemType = typeof item?.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
+      if (itemType === 'usermessage') {
+        applyRemoteUserItem(item, turnId)
+      }
       if (itemType === 'agentmessage' && itemId && turnId) {
         const text = assistantItemText(item?.text)
         commitTurnActivityMessage(activeThreadId.current, turnId, itemId, text.length || streamingAssistantParts.current.get(itemId)?.length || 0)
@@ -3436,7 +3548,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshActiveThreadIfChanged, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -3453,7 +3565,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     let socketGeneration = 0
 
     const connect = (force = false) => {
-      if (disposed || handedOffRef.current) return
+      if (disposed || handedOffRef.current || isBackground()) return
       if (!force && socketRef.current && connectionRef.current === 'connected') return
       if (retryTimer !== undefined) {
         window.clearTimeout(retryTimer)
@@ -3472,17 +3584,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         const wasConnected = connectionRef.current === 'connected'
         setConnectionState(nextState)
         if (nextState !== 'connected') {
+          if (wasConnected && activeThreadId.current) {
+            threadHistoryGaps.current.add(activeThreadId.current)
+            pendingThreadHistoryRefresh.current.add(activeThreadId.current)
+          }
           resumedThreadId.current = null
           if (stableTimer !== undefined) window.clearTimeout(stableTimer)
           stableTimer = undefined
         }
         if (nextState === 'connected') {
+          socketRef.current?.subscribeThread(isBackground() ? null : activeThreadId.current)
           if (wasConnected) return
           stableTimer = window.setTimeout(() => { retryDelay = 500 }, 30_000)
           void restoreActiveThread()
+          if (activeThreadId.current) void refreshServerQueue(activeThreadId.current)
           if (loadThreads) void refreshThreads()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
-          if (retryTimer !== undefined) return
+          if (retryTimer !== undefined || isBackground()) return
           retryTimer = window.setTimeout(() => {
             retryTimer = undefined
             connect()
@@ -3493,12 +3611,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     reconnectRef.current = connect
 
-    let wasHidden = document.visibilityState === 'hidden'
+    let wasHidden = isBackground()
     let lastBackgroundReconnectAt = 0
     let lastRecoveryAt = 0
     let recoveryInFlight = false
     const resumeFromBackground = (force = false) => {
-      if (disposed || handedOffRef.current) return
+      if (disposed || handedOffRef.current || isBackground()) return
       // Mobile browsers can fire visibilitychange and pageshow back-to-back.
       // Avoid replacing a healthy socket (and reloading the whole history)
       // merely because the page returned to the foreground.
@@ -3510,7 +3628,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       connect(force)
     }
     const recoverConnection = async () => {
-      if (disposed || handedOffRef.current || document.hidden || recoveryInFlight) return
+      if (disposed || handedOffRef.current || isBackground() || recoveryInFlight) return
+      codexRemoteClient.resumeHistorySync(token)
+      socketRef.current?.subscribeThread(activeThreadId.current)
       const now = Date.now()
       if (now - lastRecoveryAt < 800) return
       lastRecoveryAt = now
@@ -3523,36 +3643,69 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const generation = socketGeneration
       try {
         const healthy = await socket.checkConnection()
-        if (disposed || generation !== socketGeneration || socketRef.current !== socket || document.visibilityState === 'hidden') return
+        if (disposed || generation !== socketGeneration || socketRef.current !== socket || isBackground()) return
         if (!healthy) {
           resumeFromBackground(true)
           return
         }
         const threadId = activeThreadId.current
+        if (threadId) void refreshServerQueue(threadId)
         const hasQueuedMessages = Boolean(threadId && queuedMessagesByThreadRef.current[threadId]?.length)
-        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current) void restoreActiveThread()
+        if (hasQueuedMessages || isRunningRef.current || activeTurnId.current || (threadId && pendingThreadHistoryRefresh.current.has(threadId))) void restoreActiveThread()
         else void refreshActiveThreadIfChanged()
       } finally {
         recoveryInFlight = false
       }
     }
+    const suspendHistorySync = () => {
+      wasHidden = true
+      codexRemoteClient.pauseHistorySync(token)
+      if (activeThreadId.current) {
+        pendingThreadHistoryRefresh.current.add(activeThreadId.current)
+        threadHistoryGaps.current.add(activeThreadId.current)
+      }
+      // The socket retains turn completion/approval notifications. Removing
+      // the detail subscription stops hidden token, patch and image traffic.
+      socketRef.current?.subscribeThread(null)
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      retryTimer = undefined
+      if (writerRefreshTimer.current !== undefined) window.clearTimeout(writerRefreshTimer.current)
+      writerRefreshTimer.current = undefined
+      if (threadPrefetchTimer.current !== undefined) window.clearTimeout(threadPrefetchTimer.current)
+      threadPrefetchTimer.current = undefined
+      if (cachedActiveThreadRefreshTimer.current !== undefined) window.clearTimeout(cachedActiveThreadRefreshTimer.current)
+      cachedActiveThreadRefreshTimer.current = undefined
+    }
+    const handleAppBackground = () => {
+      appBackgroundRef.current = true
+      suspendHistorySync()
+    }
+    const handleAppResume = () => {
+      appBackgroundRef.current = false
+      if (document.visibilityState !== 'hidden') wasHidden = false
+      void recoverConnection()
+    }
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'hidden') {
-        wasHidden = true
+        suspendHistorySync()
         return
       }
       if (!wasHidden) return
       wasHidden = false
+      appBackgroundRef.current = false
       void recoverConnection()
     }
     const handlePageShow = (event: PageTransitionEvent) => {
-      if (event.persisted) void recoverConnection()
+      if (event.persisted) handleAppResume()
     }
     const handleOnline = () => { void recoverConnection() }
     document.addEventListener('visibilitychange', handleVisibilityChange)
     window.addEventListener('pageshow', handlePageShow)
     window.addEventListener('online', handleOnline)
-    window.addEventListener('codex-remote:resume', handleOnline)
+    window.addEventListener('codex-remote:resume', handleAppResume)
+    window.addEventListener('codex-remote-app-background', handleAppBackground)
+    if (isBackground()) suspendHistorySync()
+    else codexRemoteClient.resumeHistorySync(token)
 
     void (async () => {
       try {
@@ -3601,15 +3754,26 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       document.removeEventListener('visibilitychange', handleVisibilityChange)
       window.removeEventListener('pageshow', handlePageShow)
       window.removeEventListener('online', handleOnline)
-      window.removeEventListener('codex-remote:resume', handleOnline)
+      window.removeEventListener('codex-remote:resume', handleAppResume)
+      window.removeEventListener('codex-remote-app-background', handleAppBackground)
     }
-  }, [enabled, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
+  }, [enabled, isBackground, loadModels, loadThreads, onUnauthorized, refreshActiveThreadIfChanged, refreshModels, refreshServerQueue, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
-  const selectThread = useCallback(async (thread: CodexThread) => {
+  const selectThread = useCallback(async (thread: CodexThread, options: SelectThreadOptions = {}) => {
     if (handedOffRef.current) return
     if (!thread.id) return
+    const refreshHistory = options.refreshHistory ?? false
     if (thread.id === activeThreadId.current) {
       clearThreadCompletion(thread.id)
+      if (!refreshHistory) return
+      const threadRevision = ++historyRevision.current
+      if (messagesRef.current.length === 0) setLoadingHistory(true)
+      try {
+        const loaded = await loadThread(thread.id, threadRevision)
+        if (loaded) setError(null)
+      } finally {
+        if (activeThreadId.current === thread.id && historyRevision.current === threadRevision) setLoadingHistory(false)
+      }
       return
     }
     if (cachedActiveThreadRefreshTimer.current !== undefined) {
@@ -3692,7 +3856,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     writerConflictRef.current = false
     setWriterConflict(false)
     activityItemId.current = null
-    setApproval(null)
     setLoadingHistory(!cachedThread)
     if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
 
@@ -3708,7 +3871,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       || latestThread.updatedAt !== undefined
     )
     const cachedIsFresh = () => Boolean(
-      cachedThread
+      !refreshHistory
+      && cachedThread
+      && !threadHistoryGaps.current.has(thread.id)
       && cachedHistoryMatchesThreadMetadata(
         cachedThread,
         latestThread,
@@ -3742,7 +3907,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       return
     }
 
-    if (cachedThread) {
+    if (cachedThread && !refreshHistory) {
       scheduleBackgroundRefresh()
       return
     }
@@ -3764,7 +3929,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     approvalPolicy?: CodexApprovalPolicy,
     requestId = queuedMessageId(),
     cwd?: string,
-    engine: 'codex' | 'claude-code' = 'codex',
+    engine: ChatEngine = activeEngine,
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3804,7 +3969,6 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       writerConflictRef.current = false
       setWriterConflict(false)
       activityItemId.current = null
-      setApproval(null)
       setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
       setError(null)
       return thread
@@ -3815,7 +3979,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       setLoadingHistory(false)
     }
-  }, [activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
+  }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
 
   const sendMessage = useCallback(async (input: SendMessageInput) => {
     if (handedOffRef.current) {
@@ -4134,6 +4298,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     threads,
     models,
     activeThread,
+    activeEngine,
     messages,
     queuedMessages: activeThread ? serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages,
     pinRevision,

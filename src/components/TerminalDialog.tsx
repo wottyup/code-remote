@@ -1,12 +1,21 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import { Clipboard, Copy, LoaderCircle, Terminal as TerminalIcon } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { copyTextToClipboard } from '../lib/clipboard'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
+import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
+import { restoreTerminalTouchSelection, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
-const compactTerminalQuery = '(max-width: 700px), (orientation: landscape) and (pointer: coarse)'
+const terminalControlKeys = [
+  { label: '向左', code: 'D', icon: ArrowLeft },
+  { label: '向上', code: 'A', icon: ArrowUp },
+  { label: '向下', code: 'B', icon: ArrowDown },
+  { label: '向右', code: 'C', icon: ArrowRight },
+  { label: '退格', code: 'Backspace', icon: Delete },
+] as const
+type TerminalControlCode = (typeof terminalControlKeys)[number]['code']
+type TerminalModifier = 'ctrl' | 'alt'
 
 interface TerminalDialogProps {
   token: string
@@ -22,6 +31,28 @@ interface ContextMenuState {
   x: number
   y: number
   text: string
+}
+
+interface TerminalActions {
+  clear: () => void
+  focus: () => void
+  paste: (value: string) => void
+  selectAll: () => string
+}
+
+function applyTerminalModifier(data: string, modifier: TerminalModifier | null) {
+  if (!modifier || !data) return data
+
+  const cursorMatch = /^\x1b(?:\[|O)([ABCD])$/u.exec(data)
+  if (cursorMatch) return `\x1b[1;${modifier === 'ctrl' ? '5' : '3'}${cursorMatch[1]}`
+
+  if (modifier === 'alt') return `\x1b${data}`
+  if (data.length !== 1) return data
+
+  const code = data.toUpperCase().charCodeAt(0)
+  if (code >= 64 && code <= 95) return String.fromCharCode(code - 64)
+  if (data === '?') return '\x7f'
+  return data
 }
 
 function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clientX: number, clientY: number) {
@@ -82,19 +113,130 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [activeModifier, setActiveModifier] = useState<TerminalModifier | null>(null)
+  const [manualPasteOpen, setManualPasteOpen] = useState(false)
+  const [manualPasteText, setManualPasteText] = useState('')
+  const [desktopPasteHintVisible, setDesktopPasteHintVisible] = useState(false)
+  const [connectionRound, setConnectionRound] = useState(0)
+  const activeModifierRef = useRef<TerminalModifier | null>(null)
+  const desktopPasteHintTimer = useRef<number | undefined>(undefined)
+  const terminalActions = useRef<TerminalActions>({
+    clear: () => {},
+    focus: () => {},
+    paste: () => {},
+    selectAll: () => '',
+  })
+  const sendTerminalInput = useRef<(data: string) => void>(() => {})
+  const sendControlInput = useRef<(code: TerminalControlCode) => void>(() => {})
+  const controlRepeatDelay = useRef<number | undefined>(undefined)
+  const controlRepeatInterval = useRef<number | undefined>(undefined)
+  const controlPointer = useRef<number | null>(null)
+
+  const resetModifier = () => {
+    activeModifierRef.current = null
+    setActiveModifier(null)
+  }
+
+  const toggleModifier = (modifier: TerminalModifier) => {
+    const nextModifier = activeModifierRef.current === modifier ? null : modifier
+    activeModifierRef.current = nextModifier
+    setActiveModifier(nextModifier)
+    terminalActions.current.focus()
+  }
+
+  const sendQuickInput = (data: string) => {
+    sendTerminalInput.current(data)
+  }
+
+  const pasteIntoTerminal = async () => {
+    setContextMenu(null)
+    const value = await readTextFromClipboard()
+    if (value === null) {
+      if (window.matchMedia('(pointer: coarse)').matches) {
+        setManualPasteText('')
+        setManualPasteOpen(true)
+      } else {
+        terminalActions.current.focus()
+        setDesktopPasteHintVisible(true)
+        if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+        desktopPasteHintTimer.current = window.setTimeout(() => {
+          setDesktopPasteHintVisible(false)
+          desktopPasteHintTimer.current = undefined
+        }, 3_500)
+      }
+      return
+    }
+    setDesktopPasteHintVisible(false)
+    if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+    desktopPasteHintTimer.current = undefined
+    if (value) terminalActions.current.paste(value)
+    terminalActions.current.focus()
+  }
+
+  const submitManualPaste = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (manualPasteText) terminalActions.current.paste(manualPasteText)
+    setManualPasteOpen(false)
+    setManualPasteText('')
+    window.requestAnimationFrame(() => terminalActions.current.focus())
+  }
+
+  const reconnect = () => {
+    stopControlRepeat()
+    resetModifier()
+    setContextMenu(null)
+    setManualPasteOpen(false)
+    setStatus('connecting')
+    setConnectionRound((value) => value + 1)
+  }
+
+  const stopControlRepeat = () => {
+    if (controlRepeatDelay.current !== undefined) window.clearTimeout(controlRepeatDelay.current)
+    if (controlRepeatInterval.current !== undefined) window.clearInterval(controlRepeatInterval.current)
+    controlRepeatDelay.current = undefined
+    controlRepeatInterval.current = undefined
+    controlPointer.current = null
+  }
+
+  const beginControlRepeat = (event: ReactPointerEvent<HTMLButtonElement>, code: TerminalControlCode) => {
+    event.preventDefault()
+    event.stopPropagation()
+    stopControlRepeat()
+    const pointerId = event.pointerId
+    controlPointer.current = pointerId
+    event.currentTarget.setPointerCapture(pointerId)
+    sendControlInput.current(code)
+    controlRepeatDelay.current = window.setTimeout(() => {
+      controlRepeatDelay.current = undefined
+      if (controlPointer.current !== pointerId) return
+      controlRepeatInterval.current = window.setInterval(() => sendControlInput.current(code), 80)
+    }, 360)
+  }
+
+  const endControlRepeat = (event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (controlPointer.current !== event.pointerId) return
+    stopControlRepeat()
+  }
 
   useEffect(() => {
     const container = screen.current
     if (!container) return
 
-    const compactTerminal = window.matchMedia(compactTerminalQuery)
+    setStatus('connecting')
+    setWorkingDirectory(cwd ?? '')
+    activeModifierRef.current = null
+    setActiveModifier(null)
+    const readFontSize = () => {
+      const fontSize = Number.parseFloat(window.getComputedStyle(container).fontSize)
+      return Number.isFinite(fontSize) && fontSize > 0 ? fontSize : 14
+    }
 
     const terminal = new Terminal({
       allowProposedApi: false,
       cursorBlink: true,
       convertEol: false,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
-      fontSize: compactTerminal.matches ? 12 : 13,
+      fontSize: readFontSize(),
       lineHeight: 1.2,
       scrollback: 5_000,
       theme: {
@@ -146,65 +288,153 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         // The dialog can briefly have no measurable size while the pane is switching.
       }
     }
-    const updateFontSize = () => {
-      const fontSize = compactTerminal.matches ? 12 : 13
-      if (terminal.options.fontSize === fontSize) return
-      terminal.options.fontSize = fontSize
+    const scheduleFit = () => {
       window.cancelAnimationFrame(fitFrame)
       fitFrame = window.requestAnimationFrame(fitAndResize)
     }
-    compactTerminal.addEventListener('change', updateFontSize)
+    const updateFontSize = () => {
+      const fontSize = readFontSize()
+      if (terminal.options.fontSize === fontSize) return
+      terminal.options.fontSize = fontSize
+      scheduleFit()
+    }
+    const appRoot = container.closest('.app-root')
+    const fontPreferenceObserver = typeof MutationObserver === 'undefined' || !appRoot
+      ? null
+      : new MutationObserver(updateFontSize)
+    if (fontPreferenceObserver && appRoot) {
+      fontPreferenceObserver.observe(appRoot, { attributes: true, attributeFilter: ['style'] })
+    }
+    window.addEventListener('resize', updateFontSize)
     const resizeObserver = typeof ResizeObserver === 'undefined'
       ? null
       : new ResizeObserver(() => {
-        window.cancelAnimationFrame(fitFrame)
-        fitFrame = window.requestAnimationFrame(fitAndResize)
+        updateFontSize()
+        scheduleFit()
       })
     resizeObserver?.observe(container)
 
-    const dataSubscription = terminal.onData((data) => {
+    const sendInput = (data: string) => {
       if (!ready) {
         pendingInput.push(data)
         return
       }
       send({ type: 'input', data })
+    }
+    const dispatchInput = (data: string) => {
+      const modifier = activeModifierRef.current
+      sendInput(applyTerminalModifier(data, modifier))
+      if (modifier) resetModifier()
+    }
+    sendTerminalInput.current = dispatchInput
+    terminalActions.current = {
+      clear: () => {
+        terminal.clear()
+        terminal.focus()
+      },
+      focus: () => terminal.focus(),
+      paste: (value) => terminal.paste(value),
+      selectAll: () => {
+        terminal.selectAll()
+        return terminal.getSelection()
+      },
+    }
+    const dataSubscription = terminal.onData(dispatchInput)
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown' || (!event.ctrlKey && !event.metaKey) || event.altKey) return true
+
+      const key = event.key.toLowerCase()
+      if (key === 'c' && terminal.hasSelection()) {
+        const selection = terminal.getSelection()
+        if (!selection) return true
+        event.preventDefault()
+        event.stopPropagation()
+        void copyTextToClipboard(selection).finally(() => terminal.focus())
+        return false
+      }
+
+      if (key === 'v') {
+        // Let the browser dispatch its native paste event to xterm's clipboard handler.
+        return false
+      }
+
+      return true
     })
-    const showContextMenu = (clientX: number, clientY: number) => {
-      const selectedText = terminal.getSelection()
-      if (!selectedText) return false
-      const menuHost = container.closest<HTMLElement>('.chat-overlay-panel') ?? container
+    sendControlInput.current = (code) => {
+      if (code === 'Backspace') {
+        dispatchInput('\x7f')
+        return
+      }
+      const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
+      dispatchInput(`\x1b${cursorPrefix}${code}`)
+    }
+    let lastTerminalSelection: TerminalTouchSelection | null = null
+    const cacheTerminalSelection = (point?: { x: number; y: number }) => {
+      const text = terminal.getSelection()
+      const range = terminal.getSelectionPosition()
+      if (!text || !range) return null
+      const selection = { point, text, range }
+      lastTerminalSelection = selection
+      return selection
+    }
+    const selectionSubscription = terminal.onSelectionChange(() => {
+      cacheTerminalSelection()
+    })
+    const showContextMenu = (clientX: number, clientY: number, selectedText = terminal.getSelection()) => {
+      const menuHost = container.parentElement ?? container
       const bounds = menuHost.getBoundingClientRect()
       setContextMenu({
         x: Math.min(Math.max(8, clientX - bounds.left), Math.max(8, bounds.width - 200)),
-        y: Math.min(Math.max(8, clientY - bounds.top), Math.max(8, bounds.height - 92)),
+        y: Math.min(Math.max(8, clientY - bounds.top), Math.max(8, bounds.height - 190)),
         text: selectedText,
       })
       return true
     }
     const handleContextMenu = (event: MouseEvent) => {
-      if (!terminal.hasSelection()) return
       event.preventDefault()
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      if (selection) {
+        restoreTerminalTouchSelection(terminal, selection)
+        showContextMenu(event.clientX, event.clientY, selection.text)
+        return
+      }
       showContextMenu(event.clientX, event.clientY)
     }
     container.addEventListener('contextmenu', handleContextMenu)
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button === 0) lastTerminalSelection = null
+    }
+    container.addEventListener('mousedown', handleMouseDown)
 
     let longPressTimer = 0
+    let selectionRestoreVersion = 0
+    let selectionRestoreFrame = 0
     let touchStart: { x: number; y: number } | null = null
-    let longPressPoint: { x: number; y: number } | null = null
+    let longPressSelection: TerminalTouchSelection | null = null
+    const restoreSelectionAfterRelease = (selection: TerminalTouchSelection) => {
+      const restoreVersion = ++selectionRestoreVersion
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = window.requestAnimationFrame(() => {
+        selectionRestoreFrame = 0
+        if (!disposed && restoreVersion === selectionRestoreVersion) {
+          restoreTerminalTouchSelection(terminal, selection)
+        }
+      })
+    }
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
+      longPressSelection = null
     }
     const handleTouchStart = (event: TouchEvent) => {
+      selectionRestoreVersion += 1
       if (event.touches.length !== 1) {
         clearLongPress()
-        longPressPoint = null
         return
       }
       clearLongPress()
       setContextMenu(null)
-      longPressPoint = null
       const touch = event.touches[0]
       const point = { x: touch.clientX, y: touch.clientY }
       touchStart = point
@@ -212,7 +442,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         longPressTimer = 0
         const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
         if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
-          longPressPoint = point
+          longPressSelection = cacheTerminalSelection(point)
         }
       }, 500)
     }
@@ -225,17 +455,28 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
-      if (longPressPoint) showContextMenu(longPressPoint.x, longPressPoint.y)
-      longPressPoint = null
+      const selection = longPressSelection
+      longPressSelection = null
+      if (!selection) return
+      restoreSelectionAfterRelease(selection)
+    }
+    const handleMouseUp = (event: MouseEvent) => {
+      if (event.button !== 0) return
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      if (selection) restoreSelectionAfterRelease(selection)
     }
     const handleTouchCancel = () => {
+      selectionRestoreVersion += 1
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = 0
+      lastTerminalSelection = null
       clearLongPress()
-      longPressPoint = null
     }
     container.addEventListener('touchstart', handleTouchStart, { passive: true })
     container.addEventListener('touchmove', handleTouchMove, { passive: true })
     container.addEventListener('touchend', handleTouchEnd, { passive: true })
     container.addEventListener('touchcancel', handleTouchCancel, { passive: true })
+    container.addEventListener('mouseup', handleMouseUp)
 
     socket.addEventListener('open', () => {
       fitAndResize()
@@ -260,19 +501,35 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
         for (const data of pendingInput.splice(0)) send({ type: 'input', data })
         fitAndResize()
       } else if (payload.type === 'error') {
+        ready = false
+        stopControlRepeat()
+        resetModifier()
         setStatus('disconnected')
         terminal.writeln(`\r\n\x1b[31m${payload.message || '无法启动终端。'}\x1b[0m`)
       } else if (payload.type === 'exit') {
+        ready = false
         exited = true
+        stopControlRepeat()
+        resetModifier()
         setStatus('exited')
         terminal.writeln('\r\n\x1b[90m[终端会话已结束]\x1b[0m')
       }
     })
     socket.addEventListener('close', () => {
-      if (!disposed && ready && !exited) setStatus('disconnected')
+      if (!disposed && !exited) {
+        ready = false
+        stopControlRepeat()
+        resetModifier()
+        setStatus('disconnected')
+      }
     })
     socket.addEventListener('error', () => {
-      if (!disposed) setStatus('disconnected')
+      if (!disposed) {
+        ready = false
+        stopControlRepeat()
+        resetModifier()
+        setStatus('disconnected')
+      }
     })
 
     if (!window.matchMedia('(pointer: coarse)').matches) terminal.focus()
@@ -281,20 +538,38 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
     return () => {
       disposed = true
       window.cancelAnimationFrame(fitFrame)
-      compactTerminal.removeEventListener('change', updateFontSize)
+      window.removeEventListener('resize', updateFontSize)
+      fontPreferenceObserver?.disconnect()
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu)
+      container.removeEventListener('mousedown', handleMouseDown)
       container.removeEventListener('touchstart', handleTouchStart)
       container.removeEventListener('touchmove', handleTouchMove)
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
+      container.removeEventListener('mouseup', handleMouseUp)
+      selectionRestoreVersion += 1
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
       clearLongPress()
+      stopControlRepeat()
+      if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
+      desktopPasteHintTimer.current = undefined
+      activeModifierRef.current = null
+      sendTerminalInput.current = () => {}
+      sendControlInput.current = () => {}
+      terminalActions.current = {
+        clear: () => {},
+        focus: () => {},
+        paste: () => {},
+        selectAll: () => '',
+      }
       dataSubscription.dispose()
+      selectionSubscription.dispose()
       send({ type: 'close' })
       socket.close()
       terminal.dispose()
     }
-  }, [cwd, threadId, token])
+  }, [connectionRound, cwd, threadId, token])
 
   const statusLabel = {
     connecting: '正在启动',
@@ -313,6 +588,101 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       onPanelPointerDown={(event) => {
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
+      footer={(
+        <div className="terminal-dialog__navigation" role="group" aria-label="终端快捷键">
+          <div className="terminal-dialog__navigation-row terminal-dialog__navigation-row--primary">
+            <button
+              className="terminal-dialog__navigation-button"
+              type="button"
+              disabled={status !== 'connected'}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                sendQuickInput('\x1b')
+              }}
+              onClick={(event) => { if (event.detail === 0) sendQuickInput('\x1b') }}
+            >
+              Esc
+            </button>
+            <button
+              className="terminal-dialog__navigation-button"
+              type="button"
+              disabled={status !== 'connected'}
+              onPointerDown={(event) => {
+                event.preventDefault()
+                sendQuickInput('\t')
+              }}
+              onClick={(event) => { if (event.detail === 0) sendQuickInput('\t') }}
+            >
+              Tab
+            </button>
+            {(['ctrl', 'alt'] as const).map((modifier) => (
+              <button
+                className="terminal-dialog__navigation-button"
+                type="button"
+                key={modifier}
+                disabled={status !== 'connected'}
+                aria-pressed={activeModifier === modifier}
+                onPointerDown={(event) => {
+                  event.preventDefault()
+                  toggleModifier(modifier)
+                }}
+                onClick={(event) => { if (event.detail === 0) toggleModifier(modifier) }}
+              >
+                {modifier === 'ctrl' ? 'Ctrl' : 'Alt'}
+              </button>
+            ))}
+            <button
+              className="terminal-dialog__navigation-button"
+              type="button"
+              disabled={status !== 'connected'}
+              aria-label="粘贴到终端"
+              title="粘贴到终端"
+              onPointerDown={(event) => {
+                event.preventDefault()
+                void pasteIntoTerminal()
+              }}
+              onClick={(event) => { if (event.detail === 0) void pasteIntoTerminal() }}
+            >
+              <ClipboardPaste size={17} aria-hidden="true" />
+            </button>
+            <button
+              className="terminal-dialog__navigation-button"
+              type="button"
+              disabled={status !== 'connected'}
+              aria-label="终端回车"
+              title="终端回车"
+              onPointerDown={(event) => {
+                event.preventDefault()
+                sendQuickInput('\r')
+              }}
+              onClick={(event) => { if (event.detail === 0) sendQuickInput('\r') }}
+            >
+              <CornerDownLeft size={18} aria-hidden="true" />
+            </button>
+          </div>
+          <div className="terminal-dialog__navigation-row terminal-dialog__navigation-row--secondary">
+            {terminalControlKeys.map(({ label, code, icon: ControlIcon }) => (
+              <button
+                className="terminal-dialog__navigation-button"
+                type="button"
+                key={label}
+                disabled={status !== 'connected'}
+                aria-label={`终端${label}`}
+                title={code === 'Backspace' ? '终端退格，长按连续删除' : `终端${label}，长按连续输入`}
+                onPointerDown={(event) => beginControlRepeat(event, code)}
+                onPointerUp={endControlRepeat}
+                onPointerCancel={endControlRepeat}
+                onPointerLeave={endControlRepeat}
+                onLostPointerCapture={endControlRepeat}
+                onClick={(event) => { if (event.detail === 0) sendControlInput.current(code) }}
+                onContextMenu={(event) => event.preventDefault()}
+              >
+                <ControlIcon size={18} aria-hidden="true" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       header={(
         <div className="terminal-dialog__title">
           <TerminalIcon size={16} aria-hidden="true" />
@@ -321,11 +691,22 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
             {status === 'connecting' ? <LoaderCircle className="spin" size={12} /> : <i />}
             {statusLabel}
           </span>
+          {status === 'disconnected' || status === 'exited' ? (
+            <button className="terminal-dialog__reconnect" type="button" onClick={reconnect}>
+              <RotateCw size={13} aria-hidden="true" />
+              重连
+            </button>
+          ) : null}
           {workingDirectory ? <code title={workingDirectory}>{workingDirectory}</code> : null}
         </div>
       )}
     >
       <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
+      {desktopPasteHintVisible ? (
+        <div className="terminal-dialog__paste-hint" role="status">
+          终端已聚焦，请按 Ctrl/⌘+V 粘贴
+        </div>
+      ) : null}
       {contextMenu ? (
         <div
           className="terminal-context-menu"
@@ -335,6 +716,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
           <button
             type="button"
             role="menuitem"
+            disabled={!contextMenu.text}
             onClick={() => {
               void copyTextToClipboard(contextMenu.text).then((copied) => {
                 if (copied) setContextMenu(null)
@@ -347,6 +729,27 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
           <button
             type="button"
             role="menuitem"
+            disabled={status !== 'connected'}
+            onClick={() => void pasteIntoTerminal()}
+          >
+            <ClipboardPaste size={14} />
+            粘贴到终端
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const text = terminalActions.current.selectAll()
+              setContextMenu((current) => current ? { ...current, text } : current)
+            }}
+          >
+            <TextSelect size={14} />
+            全选
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            disabled={!contextMenu.text}
             onClick={() => {
               onInsertText(contextMenu.text)
               setContextMenu(null)
@@ -355,6 +758,45 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
             <Clipboard size={14} />
             粘贴到输入框
           </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              terminalActions.current.clear()
+              setContextMenu(null)
+            }}
+          >
+            <Eraser size={14} />
+            清空显示
+          </button>
+        </div>
+      ) : null}
+      {manualPasteOpen ? (
+        <div className="terminal-manual-paste" role="dialog" aria-modal="true" aria-label="手动粘贴到终端">
+          <form onSubmit={submitManualPaste}>
+            <strong>手动粘贴</strong>
+            <p>浏览器无法直接读取剪贴板，请把内容粘贴到这里。</p>
+            <textarea
+              autoFocus
+              value={manualPasteText}
+              onChange={(event) => setManualPasteText(event.target.value)}
+              placeholder="在此粘贴终端输入"
+              rows={5}
+            />
+            <div>
+              <button
+                type="button"
+                onClick={() => {
+                  setManualPasteOpen(false)
+                  setManualPasteText('')
+                  window.requestAnimationFrame(() => terminalActions.current.focus())
+                }}
+              >
+                取消
+              </button>
+              <button type="submit" disabled={!manualPasteText}>粘贴到终端</button>
+            </div>
+          </form>
         </div>
       ) : null}
     </ChatOverlayPanel>

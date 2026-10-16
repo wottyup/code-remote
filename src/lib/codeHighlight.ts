@@ -25,6 +25,7 @@ import sql from 'highlight.js/lib/languages/sql'
 import typescript from 'highlight.js/lib/languages/typescript'
 import xml from 'highlight.js/lib/languages/xml'
 import yaml from 'highlight.js/lib/languages/yaml'
+import { workspaceFileType } from './workspaceFileTypes'
 
 const batchWithStrings: LanguageFn = (highlighter) => {
   const language = dos(highlighter)
@@ -33,6 +34,89 @@ const batchWithStrings: LanguageFn = (highlighter) => {
     contains: [highlighter.QUOTE_STRING_MODE, ...(language.contains ?? [])],
   }
 }
+
+const jsonWithComments: LanguageFn = (highlighter) => ({
+  name: 'JSON with comments and JSON5',
+  contains: [
+    highlighter.C_LINE_COMMENT_MODE,
+    highlighter.C_BLOCK_COMMENT_MODE,
+    {
+      className: 'attr',
+      begin: /(?:[A-Za-z_$][\w$-]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*')(?=\s*:)/,
+      relevance: 0,
+    },
+    {
+      className: 'string',
+      begin: /"/,
+      end: /"/,
+      contains: [highlighter.BACKSLASH_ESCAPE],
+      relevance: 0,
+    },
+    {
+      className: 'string',
+      begin: /'/,
+      end: /'/,
+      contains: [highlighter.BACKSLASH_ESCAPE],
+      relevance: 0,
+    },
+    {
+      className: 'literal',
+      begin: /\b(?:true|false|null|undefined)\b/,
+      relevance: 0,
+    },
+    {
+      className: 'number',
+      begin: /[+-]?(?:0[xX][\da-fA-F]+|(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?|Infinity|NaN)\b/,
+      relevance: 0,
+    },
+    { className: 'punctuation', begin: /[{}\[\],:]/, relevance: 0 },
+  ],
+})
+
+const toml: LanguageFn = (highlighter) => ({
+  name: 'TOML',
+  contains: [
+    highlighter.HASH_COMMENT_MODE,
+    { className: 'section', begin: /^\s*\[\[/, end: /\]\]/, relevance: 0 },
+    { className: 'section', begin: /^\s*\[/, end: /\]/, relevance: 0 },
+    {
+      className: 'attr',
+      begin: /^[\t ]*(?:[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|"(?:\\.|[^"\\])*"|'[^']*')(?=[\t ]*=)/,
+      relevance: 0,
+    },
+    { className: 'string', begin: /"""/, end: /"""/, contains: [highlighter.BACKSLASH_ESCAPE], relevance: 0 },
+    { className: 'string', begin: /'''/, end: /'''/, relevance: 0 },
+    { className: 'string', begin: /"/, end: /"/, contains: [highlighter.BACKSLASH_ESCAPE], relevance: 0 },
+    { className: 'string', begin: /'/, end: /'/, relevance: 0 },
+    { className: 'literal', begin: /\b(?:true|false)\b/, relevance: 0 },
+    {
+      className: 'number',
+      begin: /\b\d{4}-\d\d-\d\d(?:[Tt ]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|[+-]\d\d:\d\d)?)?\b/,
+      relevance: 0,
+    },
+    highlighter.C_NUMBER_MODE,
+    { className: 'punctuation', begin: /[=,.{}\[\]]/, relevance: 0 },
+  ],
+})
+
+const proguard: LanguageFn = (highlighter) => ({
+  name: 'ProGuard',
+  case_insensitive: true,
+  contains: [
+    highlighter.HASH_COMMENT_MODE,
+    highlighter.QUOTE_STRING_MODE,
+    { className: 'meta-keyword', begin: /^\s*-[A-Za-z][\w-]*/, relevance: 0 },
+    {
+      className: 'keyword',
+      begin: /\b(?:class|interface|enum|extends|implements|public|protected|private|static|final|abstract|native|synchronized|volatile|transient|strictfp|annotation)\b/,
+      relevance: 0,
+    },
+    { className: 'built_in', begin: /\b(?:void|boolean|byte|char|short|int|long|float|double)\b/, relevance: 0 },
+    { className: 'title', begin: /(?:[A-Za-z_$][\w$]*\.)*[A-Za-z_$][\w$]*(?=\s*(?:\(|\{|;))/, relevance: 0 },
+    highlighter.C_NUMBER_MODE,
+    { className: 'punctuation', begin: /[{}()[\],;:*?=]/, relevance: 0 },
+  ],
+})
 
 const languages = {
   bash,
@@ -49,14 +133,18 @@ const languages = {
   java,
   javascript,
   json,
+  json5: jsonWithComments,
+  jsonc: jsonWithComments,
   kotlin,
   makefile,
   markdown,
   php,
   powershell,
   python,
+  proguard,
   rust,
   sql,
+  toml,
   typescript,
   xml,
   yaml,
@@ -66,67 +154,109 @@ for (const [name, language] of Object.entries(languages)) {
   hljs.registerLanguage(name, language)
 }
 
+const lazyLanguages: Record<string, () => Promise<{ default: LanguageFn }>> = {
+  '1c': () => import('highlight.js/lib/languages/1c'),
+  clojure: () => import('highlight.js/lib/languages/clojure'),
+  dart: () => import('highlight.js/lib/languages/dart'),
+  diff: () => import('highlight.js/lib/languages/diff'),
+  elixir: () => import('highlight.js/lib/languages/elixir'),
+  erb: () => import('highlight.js/lib/languages/erb'),
+  erlang: () => import('highlight.js/lib/languages/erlang'),
+  fsharp: () => import('highlight.js/lib/languages/fsharp'),
+  glsl: () => import('highlight.js/lib/languages/glsl'),
+  graphql: () => import('highlight.js/lib/languages/graphql'),
+  handlebars: () => import('highlight.js/lib/languages/handlebars'),
+  haskell: () => import('highlight.js/lib/languages/haskell'),
+  ini: () => import('highlight.js/lib/languages/ini'),
+  latex: () => import('highlight.js/lib/languages/latex'),
+  less: () => import('highlight.js/lib/languages/less'),
+  lisp: () => import('highlight.js/lib/languages/lisp'),
+  lua: () => import('highlight.js/lib/languages/lua'),
+  nginx: () => import('highlight.js/lib/languages/nginx'),
+  nix: () => import('highlight.js/lib/languages/nix'),
+  objectivec: () => import('highlight.js/lib/languages/objectivec'),
+  perl: () => import('highlight.js/lib/languages/perl'),
+  properties: () => import('highlight.js/lib/languages/properties'),
+  protobuf: () => import('highlight.js/lib/languages/protobuf'),
+  r: () => import('highlight.js/lib/languages/r'),
+  ruby: () => import('highlight.js/lib/languages/ruby'),
+  scala: () => import('highlight.js/lib/languages/scala'),
+  scheme: () => import('highlight.js/lib/languages/scheme'),
+  scss: () => import('highlight.js/lib/languages/scss'),
+  swift: () => import('highlight.js/lib/languages/swift'),
+  tcl: () => import('highlight.js/lib/languages/tcl'),
+  vbnet: () => import('highlight.js/lib/languages/vbnet'),
+  vbscript: () => import('highlight.js/lib/languages/vbscript'),
+  vim: () => import('highlight.js/lib/languages/vim'),
+  wasm: () => import('highlight.js/lib/languages/wasm'),
+  x86asm: () => import('highlight.js/lib/languages/x86asm'),
+}
+
+const languageAliases: Record<string, string> = {
+  asm: 'x86asm',
+  batch: 'dos',
+  bat: 'dos',
+  csharp: 'csharp',
+  'c#': 'csharp',
+  'c++': 'cpp',
+  cxx: 'cpp',
+  fish: 'bash',
+  gql: 'graphql',
+  h: 'c',
+  hpp: 'cpp',
+  html: 'xml',
+  htm: 'xml',
+  js: 'javascript',
+  jsx: 'javascript',
+  javascriptreact: 'javascript',
+  jsonl: 'json',
+  ndjson: 'json',
+  kt: 'kotlin',
+  kts: 'kotlin',
+  md: 'markdown',
+  mdx: 'markdown',
+  objc: 'objectivec',
+  'objective-c': 'objectivec',
+  ps1: 'powershell',
+  py: 'python',
+  rb: 'ruby',
+  rs: 'rust',
+  sh: 'bash',
+  shell: 'bash',
+  ts: 'typescript',
+  tsx: 'typescript',
+  typescriptreact: 'typescript',
+  yml: 'yaml',
+  zsh: 'bash',
+}
+
+const plainLanguageHints = new Set(['plain', 'plaintext', 'text', 'txt', 'none'])
+
+function normalizeLanguageHint(languageHint: string | undefined): { language: string | null; plainText: boolean } | null {
+  if (!languageHint) return null
+  const name = languageHint.trim().toLowerCase().replace(/^language-/, '').split(/[\s,]+/, 1)[0]
+  if (!name) return null
+  if (plainLanguageHints.has(name)) return { language: null, plainText: true }
+  return { language: languageAliases[name] ?? name, plainText: false }
+}
+
+async function ensureLanguage(language: string) {
+  if (hljs.getLanguage(language)) return true
+  const loader = lazyLanguages[language]
+  if (!loader) return false
+  try {
+    hljs.registerLanguage(language, (await loader()).default)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export interface HighlightedCodeSegment {
   text: string
   className: string
 }
 
-const languageByExtension: Record<string, string> = {
-  bash: 'bash',
-  bat: 'dos',
-  c: 'c',
-  cc: 'cpp',
-  cjs: 'javascript',
-  cmd: 'dos',
-  cpp: 'cpp',
-  cs: 'csharp',
-  csh: 'bash',
-  css: 'css',
-  cts: 'typescript',
-  cxx: 'cpp',
-  dockerfile: 'dockerfile',
-  go: 'go',
-  gradle: 'gradle',
-  groovy: 'groovy',
-  h: 'c',
-  hpp: 'cpp',
-  hxx: 'cpp',
-  htm: 'xml',
-  html: 'xml',
-  java: 'java',
-  js: 'javascript',
-  json: 'json',
-  jsonc: 'json',
-  jsx: 'javascript',
-  kt: 'kotlin',
-  kts: 'kotlin',
-  less: 'css',
-  md: 'markdown',
-  markdown: 'markdown',
-  mjs: 'javascript',
-  mts: 'typescript',
-  php: 'php',
-  ps1: 'powershell',
-  psd1: 'powershell',
-  psm1: 'powershell',
-  py: 'python',
-  pyw: 'python',
-  rs: 'rust',
-  sass: 'css',
-  scss: 'css',
-  sh: 'bash',
-  sql: 'sql',
-  svg: 'xml',
-  ts: 'typescript',
-  tsx: 'typescript',
-  xml: 'xml',
-  xsd: 'xml',
-  xsl: 'xml',
-  yaml: 'yaml',
-  yml: 'yaml',
-}
-
-const plainTextExtensions = new Set(['csv', 'log', 'text', 'tsv', 'txt'])
 const autoDetectionSampleLength = 16 * 1024
 
 const escapedEntities: Record<string, string> = {
@@ -186,18 +316,6 @@ function plainTextLines(content: string): HighlightedCodeSegment[][] {
   return lines.map((text) => text ? [{ text, className: '' }] : [])
 }
 
-function languageForPath(path: string) {
-  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
-  if (filename === 'dockerfile' || filename.startsWith('dockerfile.')) return 'dockerfile'
-  if (filename === 'makefile' || filename === 'gnumakefile') return 'makefile'
-  if (filename === 'cmakelists.txt') return 'cmake'
-  if (filename === 'jenkinsfile') return 'groovy'
-  if (filename === 'gradlew') return 'bash'
-
-  const extension = filename.split('.').at(-1) ?? ''
-  return languageByExtension[extension] ?? null
-}
-
 function isConfidentAutoDetection(result: AutoHighlightResult, content: string) {
   if (!result.language || result.relevance < 3) return false
 
@@ -221,9 +339,12 @@ function highlightedLines(markup: string, content: string): HighlightedCodeSegme
   return lines
 }
 
-export async function highlightCodeLines(path: string, content: string): Promise<HighlightedCodeSegment[][]> {
-  const language = languageForPath(path)
-  if (language) {
+export async function highlightCodeLines(path: string, content: string, languageHint?: string, allowAutoDetection = true): Promise<HighlightedCodeSegment[][]> {
+  const fileType = workspaceFileType(path)
+  const normalizedHint = normalizeLanguageHint(languageHint)
+  if (normalizedHint?.plainText) return plainTextLines(content)
+  const language = normalizedHint?.language ?? fileType.language
+  if (language && await ensureLanguage(language)) {
     try {
       const result = hljs.highlight(content, { language, ignoreIllegals: true })
       return highlightedLines(result.value, content)
@@ -232,9 +353,8 @@ export async function highlightCodeLines(path: string, content: string): Promise
     }
   }
 
-  const filename = path.split(/[\\/]/).at(-1)?.toLowerCase() ?? ''
-  const extension = filename.split('.').at(-1) ?? ''
-  if (!content.trim() || plainTextExtensions.has(extension)) return plainTextLines(content)
+  if (!allowAutoDetection) return plainTextLines(content)
+  if (!content.trim() || fileType.plainText) return plainTextLines(content)
 
   try {
     // Keep the full language bundle out of the normal preview path; it is
