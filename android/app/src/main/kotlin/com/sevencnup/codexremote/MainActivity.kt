@@ -328,6 +328,7 @@ class MainActivity : Activity() {
     private var deferredMessageRequiresFullRender = false
     private val deferredMessageTurnIds = mutableSetOf<String>()
     private var settingsOverlay: View? = null
+    private val expandedSettingsSections = mutableSetOf("主题")
     private var settingsScroll: ScrollView? = null
     private var settingsDialog: Dialog? = null
     private var settingsNotificationButton: TextView? = null
@@ -377,6 +378,8 @@ class MainActivity : Activity() {
     private var terminalImeVisible = false
     private var terminalImeHiddenUntil = 0L
     private var attachRequestActive = false
+    private var restoreImeAfterAttachment = false
+    private val deliveredQueueIds = mutableSetOf<String>()
     private var workspaceCurrentPath = ""
     private var workspaceRootPath = ""
     private var claudeAvailable = false
@@ -602,7 +605,7 @@ class MainActivity : Activity() {
         when {
             settingsDialog?.isShowing == true -> settingsDialog?.dismiss()
             preferencePopup?.isShowing == true -> preferencePopup?.dismiss()
-            settingsOverlay != null -> closeSettings()
+            settingsOverlay != null -> closeSettings(animated = true)
             terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
                 val input = terminalDraftInput
@@ -1675,7 +1678,7 @@ class MainActivity : Activity() {
             }
             val moreButton = sidebarIconButton("more", "对话操作") { }
             moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
-            row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
+            row.addView(moreButton, LinearLayout.LayoutParams(dp(44), dp(44)))
             row.setOnClickListener { selectThread(thread) }
             row.setOnLongClickListener { showThreadActions(row, thread); true }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
@@ -2407,7 +2410,7 @@ class MainActivity : Activity() {
                 val next = response.optJSONArray("queue") ?: JSONArray()
                 handler.post {
                     if (connection != connectionGeneration || activeThreadId != threadId) return@post
-                    queuedMessages = next
+                    queuedMessages = withoutDeliveredQueueItems(next)
                     renderQueue()
                 }
             } catch (error: Exception) {
@@ -3496,6 +3499,16 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun withoutDeliveredQueueItems(queue: JSONArray): JSONArray = JSONArray().also { result ->
+        val serverIds = mutableSetOf<String>()
+        for (index in 0 until queue.length()) {
+            val item = queue.optJSONObject(index) ?: continue
+            serverIds += item.optString("id")
+            if (item.optString("id") !in deliveredQueueIds) result.put(item)
+        }
+        deliveredQueueIds.retainAll(serverIds)
+    }
+
     private fun queuedImageThumbnail(file: JSONObject): ImageView {
         val encoded = file.optString("data")
         val cacheKey = "attachment:${file.optString("name")}:${encoded.length}:${encoded.take(40).hashCode()}"
@@ -3535,8 +3548,11 @@ class MainActivity : Activity() {
         val threadId = activeThreadId
         val requestId = UUID.randomUUID().toString()
         val payload = queuedPayload(text, requestId)
+        val outgoingFiles = selectedFiles.toList()
         (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)?.hideSoftInputFromWindow(composerInput.windowToken, 0)
         composerInput.setText("")
+        selectedFiles.clear()
+        renderAttachmentStrip()
         if (threadId == null) {
             io.execute {
                 try {
@@ -3550,13 +3566,18 @@ class MainActivity : Activity() {
                             for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
                         }
                         selectThread(created)
-                        submitPayload(created.optString("id"), payload)
+                        submitPayload(created.optString("id"), payload, outgoingFiles)
                     }
                 } catch (error: Exception) {
-                    handler.post { composerInput.setText(text); showStatus(error.message ?: "新建对话失败") }
+                    handler.post {
+                        composerInput.setText(text)
+                        selectedFiles.addAll(0, outgoingFiles)
+                        renderAttachmentStrip()
+                        showStatus(error.message ?: "新建对话失败")
+                    }
                 }
             }
-        } else submitPayload(threadId, payload)
+        } else submitPayload(threadId, payload, outgoingFiles)
     }
 
     private fun queuedPayload(text: String, id: String, files: List<JSONObject> = selectedFiles): JSONObject {
@@ -3595,7 +3616,7 @@ class MainActivity : Activity() {
         return payload
     }
 
-    private fun submitPayload(threadId: String, payload: JSONObject) {
+    private fun submitPayload(threadId: String, payload: JSONObject, outgoingFiles: List<JSONObject>) {
         val oldSelected = activeThreadId
         setSendBusy(true)
         io.execute {
@@ -3610,10 +3631,9 @@ class MainActivity : Activity() {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
                     }
-                    queuedMessages = response.optJSONArray("queue") ?: JSONArray()
+                    if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
+                    queuedMessages = withoutDeliveredQueueItems(response.optJSONArray("queue") ?: JSONArray())
                     pausedThreadKeys.remove(threadTitleKey(threadId))
-                    selectedFiles.clear()
-                    renderAttachmentStrip()
                     renderQueue()
                     setSendBusy(false)
                     refreshActiveThread(false)
@@ -3622,6 +3642,8 @@ class MainActivity : Activity() {
             } catch (error: Exception) {
                 handler.post {
                     if (::composerInput.isInitialized && composerInput.text.isBlank()) composerInput.setText(payload.optString("text"))
+                    selectedFiles.addAll(0, outgoingFiles)
+                    renderAttachmentStrip()
                     showStatus(error.message ?: "发送失败")
                     setSendBusy(false)
                 }
@@ -4237,7 +4259,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
         }
-        header.addView(iconButton("back", "返回聊天") { closeSettings() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
         titleCopy.addView(label("设置", 17, TEXT, true), widthWrap())
         titleCopy.addView(label("偏好保存在本机", 10, MUTED), widthWrap())
@@ -4263,16 +4285,39 @@ class MainActivity : Activity() {
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(14), dp(13), dp(14), dp(12))
+                setPadding(dp(12), dp(4), dp(12), dp(4))
                 background = rounded(if (themeName == "custom") colorWithAlpha(blendColors(OPAQUE_PANEL, settingsAccent, .035f), .72f) else blendColors(OPAQUE_PANEL, settingsAccent, .035f), dp(14), colorWithAlpha(settingsAccent, .24f), dp(1))
             }
-            card.addView(label(title, 14, TEXT, true), widthWrap())
-            card.addView(label(description, 11, MUTED).apply {
-                setPadding(0, dp(4), 0, dp(10))
-                setLineSpacing(dp(1).toFloat(), 1.1f)
+            val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            val expanded = title in expandedSettingsSections
+            val heading = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                isClickable = true
+                isFocusable = true
+                contentDescription = "$title，${if (expanded) "收起" else "展开"}"
+            }
+            heading.addView(label(title, 14, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+            val arrow = ImageView(this).apply {
+                setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+                imageTintList = ColorStateList.valueOf(MUTED)
+            }
+            heading.addView(arrow, LinearLayout.LayoutParams(dp(18), dp(18)))
+            heading.setOnClickListener {
+                val open = body.visibility != View.VISIBLE
+                body.visibility = if (open) View.VISIBLE else View.GONE
+                arrow.setImageResource(if (open) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+                heading.contentDescription = "$title，${if (open) "收起" else "展开"}"
+                if (open) expandedSettingsSections += title else expandedSettingsSections -= title
+            }
+            card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(44)))
+            body.addView(label(description, 11, MUTED).apply {
+                setPadding(0, 0, 0, dp(7))
             }, widthWrap())
-            content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(10) })
-            return card
+            body.visibility = if (expanded) View.VISIBLE else View.GONE
+            card.addView(body, widthWrap())
+            content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(7) })
+            return body
         }
 
         val appearance = section("主题", "选择工作区色彩；自定义主题支持背景图片与颜色。")
@@ -4489,8 +4534,16 @@ class MainActivity : Activity() {
         if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
     }
 
-    private fun closeSettings() {
+    private fun closeSettings(animated: Boolean = false) {
         val overlay = settingsOverlay ?: return
+        if (animated) {
+            overlay.isClickable = false
+            overlay.animate().alpha(0f).translationX(dp(24).toFloat()).setDuration(190)
+                .setInterpolator(DecelerateInterpolator())
+                .withEndAction { if (settingsOverlay === overlay) closeSettings() }.start()
+            return
+        }
+        overlay.animate().cancel()
         if (::root.isInitialized) root.removeView(overlay)
         settingsOverlay = null
         settingsScroll = null
@@ -6115,13 +6168,17 @@ class MainActivity : Activity() {
 
     private fun chooseAttachment() {
         if (attachRequestActive) return
+        restoreImeAfterAttachment = imeInsetVisible && ::composerInput.isInitialized && composerInput.hasFocus()
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "*/*"
             putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
-        try { startActivityForResult(intent, REQUEST_ATTACH) } catch (_: Exception) { showToast("没有可用的文件选择器") }
+        try { startActivityForResult(intent, REQUEST_ATTACH) } catch (_: Exception) {
+            restoreImeAfterAttachment = false
+            showToast("没有可用的文件选择器")
+        }
     }
 
     @Deprecated("Use Activity Result APIs when the Android module adopts AndroidX")
@@ -6139,7 +6196,17 @@ class MainActivity : Activity() {
             }
             return
         }
-        if (requestCode != REQUEST_ATTACH || resultCode != RESULT_OK || data == null) return
+        if (requestCode != REQUEST_ATTACH) return
+        val restoreKeyboard = restoreImeAfterAttachment
+        restoreImeAfterAttachment = false
+        if (restoreKeyboard && ::composerInput.isInitialized) composerInput.postDelayed({
+            if (!isFinishing && !isDestroyed && settingsOverlay == null && !sidebarVisible) {
+                composerInput.requestFocus()
+                (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.showSoftInput(composerInput, InputMethodManager.SHOW_IMPLICIT)
+            }
+        }, 120)
+        if (resultCode != RESULT_OK || data == null) return
         val uris = mutableListOf<Uri>()
         data.clipData?.let { clip -> for (i in 0 until clip.itemCount) uris += clip.getItemAt(i).uri }
         if (uris.isEmpty()) data.data?.let(uris::add)
@@ -6562,6 +6629,13 @@ class MainActivity : Activity() {
                     bitmap?.let(::setImageBitmap)
                     contentDescription = file.optString("name")
                     clipToOutline = true
+                    isClickable = true
+                    setOnClickListener {
+                        val full = runCatching {
+                            decodeSampledBitmap(android.util.Base64.decode(file.optString("data"), android.util.Base64.DEFAULT), 2048)
+                        }.getOrNull()
+                        if (full != null) showImageDialog(full)
+                    }
                 }
                 frame.addView(image, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START))
                 val remove = label("×", 15, TEXT, true).apply {
