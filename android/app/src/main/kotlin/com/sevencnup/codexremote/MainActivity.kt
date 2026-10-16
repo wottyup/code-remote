@@ -5549,7 +5549,11 @@ class MainActivity : Activity() {
 
     private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
         setImageResource(iconResource(icon))
-        imageTintList = ColorStateList.valueOf(if (icon == "codex") ACCENT else if (icon == "claude") ACCENT_WARM else SUBTLE)
+        imageTintList = ColorStateList.valueOf(when (icon) {
+            "codex" -> codexBrandAccent()
+            "claude" -> ACCENT_WARM
+            else -> SUBTLE
+        })
         scaleType = ImageView.ScaleType.FIT_CENTER
         setPadding(dp(9), dp(9), dp(9), dp(9))
         contentDescription = description
@@ -5582,7 +5586,7 @@ class MainActivity : Activity() {
     private fun setBrandIcon(view: ImageView, engine: String) {
         val claude = engine == "claude-code"
         view.setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-        view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else ACCENT)
+        view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
     }
 
     private fun codexBrandAccent(): Int = when (themeName) {
