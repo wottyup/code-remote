@@ -48,6 +48,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.PopupWindow
+import android.widget.ProgressBar
 import android.widget.RelativeLayout
 import android.widget.SeekBar
 import android.widget.ScrollView
@@ -103,6 +104,7 @@ class MainActivity : Activity() {
     private val socketClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
+        .pingInterval(15, TimeUnit.SECONDS)
         .build()
     private val messageImageCache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
@@ -118,6 +120,7 @@ class MainActivity : Activity() {
     internal var models = JSONArray()
     private var queuedMessages = JSONArray()
     private var syncRevisions = mutableMapOf<String, String>()
+    private val uncacheableHistoryThreadIds = mutableSetOf<String>()
     private val threadReadsInFlight = mutableSetOf<String>()
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
@@ -154,6 +157,7 @@ class MainActivity : Activity() {
     private var queueExpanded = false
     private var expandedOperationIds = mutableSetOf<String>()
     private var fullyExpandedOperationIds = mutableSetOf<String>()
+    private var expandedFileChangeIds = mutableSetOf<String>()
     private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
     private var workspaceClipboard = mutableListOf<String>()
@@ -162,6 +166,8 @@ class MainActivity : Activity() {
     private var socketConnected = false
     private var outstandingSocketPing: String? = null
     private var socketPingSentAt = 0L
+    private var lastSocketActivityAt = 0L
+    private var backgroundedAt = 0L
     private var pendingApproval: JSONObject? = null
     private var terminalDialog: Dialog? = null
     private var terminalSocket: WebSocket? = null
@@ -181,6 +187,8 @@ class MainActivity : Activity() {
     private var systemInsetTop = 0
     private var systemInsetRight = 0
     private var systemInsetBottom = 0
+    private var imeInsetVisible = false
+    private var imeFollowMessageBottom = false
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
 
@@ -208,7 +216,7 @@ class MainActivity : Activity() {
         override fun run() {
             if (!foreground || !socketConnected) return
             val now = System.currentTimeMillis()
-            if (outstandingSocketPing != null && now - socketPingSentAt > 45_000) {
+            if (outstandingSocketPing != null && now - socketPingSentAt > 35_000) {
                 socket?.cancel()
                 return
             }
@@ -275,6 +283,16 @@ class MainActivity : Activity() {
         super.onResume()
         foreground = true
         if (token.isNotBlank()) {
+            val now = System.currentTimeMillis()
+            val resumedFromLongPause = backgroundedAt > 0L && now - backgroundedAt > 30_000L
+            val socketIsStale = lastSocketActivityAt > 0L && now - lastSocketActivityAt > 45_000L
+            if (socket != null && (!socketConnected || resumedFromLongPause || socketIsStale)) {
+                socket?.cancel()
+                socket = null
+                socketConnected = false
+                outstandingSocketPing = null
+            }
+            backgroundedAt = 0L
             connectSocket()
             handler.removeCallbacks(socketHeartbeatRunnable)
             handler.postDelayed(socketHeartbeatRunnable, 20_000)
@@ -291,6 +309,7 @@ class MainActivity : Activity() {
     override fun onPause() {
         persistCurrentDraft()
         foreground = false
+        backgroundedAt = System.currentTimeMillis()
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
         activeThreadRefreshScheduled = false
@@ -486,17 +505,34 @@ class MainActivity : Activity() {
                 WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
             )
             val ime = insets.getInsets(WindowInsets.Type.ime())
-            val bottom = if (insets.isVisible(WindowInsets.Type.ime())) max(systemBars.bottom, ime.bottom) else systemBars.bottom
+            val keyboardVisible = insets.isVisible(WindowInsets.Type.ime())
+            val bottom = if (keyboardVisible) max(systemBars.bottom, ime.bottom) else systemBars.bottom
             if (content == null) {
                 view.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
             } else {
+                if (keyboardVisible && !imeInsetVisible && ::messageScroll.isInitialized) {
+                    val distanceToBottom = messageList.height - messageScroll.scrollY - messageScroll.height
+                    imeFollowMessageBottom = ::composerInput.isInitialized && composerInput.hasFocus() && distanceToBottom <= dp(180)
+                }
                 systemInsetLeft = systemBars.left
                 systemInsetTop = systemBars.top
                 systemInsetRight = systemBars.right
                 systemInsetBottom = systemBars.bottom
                 view.setPadding(0, 0, 0, 0)
-                content.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+                if (content.paddingLeft != systemBars.left || content.paddingTop != systemBars.top ||
+                    content.paddingRight != systemBars.right || content.paddingBottom != bottom
+                ) {
+                    content.setPadding(systemBars.left, systemBars.top, systemBars.right, bottom)
+                }
                 updateInsetAwareOverlays()
+                imeInsetVisible = keyboardVisible
+                if (keyboardVisible && imeFollowMessageBottom && ::messageScroll.isInitialized) {
+                    messageScroll.postOnAnimation {
+                        if (imeInsetVisible && imeFollowMessageBottom) messageScroll.scrollTo(0, messageList.height)
+                    }
+                } else if (!keyboardVisible) {
+                    imeFollowMessageBottom = false
+                }
             }
         }
         view.setOnApplyWindowInsetsListener { _, insets ->
@@ -891,7 +927,7 @@ class MainActivity : Activity() {
             empty.addView(label(if (query.isBlank()) "当前模式暂无对话" else "没有匹配的对话", 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
             drawerThreads.addView(empty, widthWrap())
         }
-        filtered.forEach { thread ->
+        filtered.take(MAX_VISIBLE_SIDEBAR_THREADS).forEach { thread ->
             val id = thread.optString("id")
             val selected = id == activeThreadId
             val row = LinearLayout(this).apply {
@@ -911,27 +947,30 @@ class MainActivity : Activity() {
             }
             row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
             val title = threadTitle(thread)
-            val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-            val titleView = label(title, 12, if (selected) TEXT else SUBTLE, selected).apply {
+            val titleView = label(title, 13, if (selected) TEXT else SUBTLE, selected).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            copy.addView(titleView, widthWrap())
-            val preview = thread.optString("preview").takeIf { it.isNotBlank() && it != title }
-                ?: if (pinnedThreadIds.contains(id)) "已置顶" else if (selected) "当前对话" else ""
-            if (preview.isNotBlank()) {
-                copy.addView(label(preview.take(56), 10, MUTED).apply {
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                }, widthWrap())
+            row.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (pinnedThreadIds.contains(id)) {
+                row.addView(ImageView(this).apply {
+                    setImageResource(R.drawable.ic_pin)
+                    imageTintList = ColorStateList.valueOf(MUTED)
+                    contentDescription = "已置顶"
+                }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5); rightMargin = dp(3) })
             }
-            row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             val moreButton = iconButton("more", "对话操作") { }
             moreButton.setOnClickListener { showThreadActions(moreButton, thread) }
             row.addView(moreButton, LinearLayout.LayoutParams(dp(32), dp(32)))
             row.setOnClickListener { selectThread(thread) }
             row.setOnLongClickListener { showThreadActions(row, thread); true }
             drawerThreads.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
+        }
+        if (filtered.size > MAX_VISIBLE_SIDEBAR_THREADS) {
+            drawerThreads.addView(label("继续输入名称可搜索其余对话", 11, MUTED).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(8), dp(10), dp(8), dp(10))
+            }, widthWrap())
         }
     }
 
@@ -1290,11 +1329,17 @@ class MainActivity : Activity() {
 
     private fun writeThreadHistoryCache(threadId: String, thread: JSONObject, revision: String?) {
         try {
+            if (threadId in uncacheableHistoryThreadIds) return
+            if (!jsonFitsHistoryCache(thread)) {
+                uncacheableHistoryThreadIds += threadId
+                return
+            }
             val directory = historyCacheDirectory()
             if (!directory.exists() && !directory.mkdirs()) return
             val file = historyCacheFile(threadId)
             val temporary = File(directory, "${file.name}.tmp")
-            val threadSnapshot = JSONObject(thread.toString()).apply { remove("historySync") }
+            temporary.delete()
+            val threadSnapshot = shallowCopyObject(thread, setOf("historySync"))
             val wrapper = JSONObject()
                 .put("threadId", threadId)
                 .put("revision", revision.orEmpty())
@@ -1316,6 +1361,7 @@ class MainActivity : Activity() {
                 }
             }
             file.setLastModified(System.currentTimeMillis())
+            uncacheableHistoryThreadIds.remove(threadId)
             pruneThreadHistoryCache(file)
         } catch (_: Exception) { }
     }
@@ -1452,14 +1498,14 @@ class MainActivity : Activity() {
                 val item = items[order.optString(itemIndex)] ?: return null
                 ordered.put(item)
             }
-            turns[id] = JSONObject(changed.toString()).put("items", ordered)
+            turns[id] = shallowCopyObject(changed).put("items", ordered)
         }
         val order = sync.optJSONArray("turnIds") ?: return null
         val mergedTurns = JSONArray()
         for (index in 0 until order.length()) mergedTurns.put(turns[order.optString(index)] ?: return null)
-        val result = JSONObject(delta.toString()).put("turns", mergedTurns)
+        val result = shallowCopyObject(delta).put("turns", mergedTurns)
         val oldChanges = old.optJSONObject("codexRemoteWorkspaceChanges") ?: JSONObject()
-        val changes = JSONObject(oldChanges.toString())
+        val changes = shallowCopyObject(oldChanges)
         val freshChanges = delta.optJSONObject("codexRemoteWorkspaceChanges") ?: JSONObject()
         val workspaceOrder = sync.optJSONArray("workspaceTurnIds")
         if (workspaceOrder != null) {
@@ -1516,6 +1562,8 @@ class MainActivity : Activity() {
         }
         val messages = mutableListOf<Pair<String, JSONObject>>()
         val turnsById = mutableMapOf<String, JSONObject>()
+        val assistantTextBuilders = java.util.IdentityHashMap<JSONObject, StringBuilder>()
+        val timelineTextBuilders = java.util.IdentityHashMap<JSONObject, StringBuilder>()
         val firstVisibleTurnIndex = effectiveIncrementalTurnId?.let { incrementalTurnIndex!! }
             ?: (turns.length() - visibleHistoryTurnCount).coerceAtLeast(0)
         val lastVisibleTurnIndex = effectiveIncrementalTurnId?.let { incrementalTurnIndex!! + 1 } ?: turns.length()
@@ -1533,32 +1581,42 @@ class MainActivity : Activity() {
                             (0 until content.length()).any { content.optJSONObject(it)?.optString("type") in setOf("image", "localImage") }
                         } == true
                         if (messageText(item, "user").isNotBlank() || hasImage) {
-                            messages += "user" to JSONObject(item.toString()).put("_turnId", turnId)
+                            messages += "user" to shallowCopyObject(item).put("_turnId", turnId)
                         }
                         assistantInTurn = null
                     }
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
                         if (text.isNotBlank()) {
-                            val message = assistantInTurn ?: JSONObject(item.toString())
+                            val message = assistantInTurn ?: shallowCopyObject(item)
                                 .put("_turnId", turnId)
                                 .put("_duration", turn.optLong("durationMs", 0))
                                 .put("_activityTimeline", JSONArray())
-                                .also { assistantInTurn = it; messages += "assistant" to it }
+                                .also {
+                                    assistantTextBuilders[it] = StringBuilder()
+                                    assistantInTurn = it
+                                    messages += "assistant" to it
+                                }
+                            val assistantBuilder = assistantTextBuilders.getOrPut(message) { StringBuilder() }
+                            if (assistantBuilder.isNotEmpty()) assistantBuilder.append("\n\n")
+                            assistantBuilder.append(text)
                             val timeline = message.optJSONArray("_activityTimeline") ?: JSONArray().also { message.put("_activityTimeline", it) }
                             val lastBlock = timeline.optJSONObject(timeline.length() - 1)
-                            if (lastBlock?.optString("type") == "message") {
-                                lastBlock.put("text", listOf(lastBlock.optString("text"), text).filter { it.isNotBlank() }.joinToString("\n\n"))
+                            val messageBlock = if (lastBlock?.optString("type") == "message") {
+                                lastBlock
                             } else {
-                                timeline.put(JSONObject().put("type", "message").put("text", text))
+                                JSONObject().put("type", "message").also { timeline.put(it) }
                             }
-                            val previousText = messageText(message, "assistant")
-                            message.put("text", listOf(previousText, text).filter { it.isNotBlank() }.distinct().joinToString("\n\n"))
+                            val timelineBuilder = timelineTextBuilders.getOrPut(messageBlock) {
+                                StringBuilder(messageBlock.optString("text"))
+                            }
+                            if (timelineBuilder.isNotEmpty()) timelineBuilder.append("\n\n")
+                            timelineBuilder.append(text)
                         }
                     }
                     "reasoning", "plan" -> Unit
                     else -> {
-                        val operation = JSONObject(item.toString()).put("_turnId", turnId).put("_activityIndex", itemIndex)
+                        val operation = shallowCopyObject(item).put("_turnId", turnId).put("_activityIndex", itemIndex)
                         val assistantTimeline = assistantInTurn?.optJSONArray("_activityTimeline")
                         if (assistantTimeline != null) {
                             assistantTimeline.put(JSONObject().put("type", "operation").put("item", operation))
@@ -1567,6 +1625,15 @@ class MainActivity : Activity() {
                         }
                     }
                 }
+            }
+        }
+        messages.forEach { (role, message) ->
+            if (role != "assistant") return@forEach
+            assistantTextBuilders[message]?.let { message.put("text", it.toString()) }
+            val timeline = message.optJSONArray("_activityTimeline") ?: return@forEach
+            for (index in 0 until timeline.length()) {
+                val block = timeline.optJSONObject(index) ?: continue
+                timelineTextBuilders[block]?.let { block.put("text", it.toString()) }
             }
         }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
@@ -1714,10 +1781,11 @@ class MainActivity : Activity() {
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 tag = TAG_MESSAGE_DYNAMIC
             }
-            activity.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_progress)
-                imageTintList = ColorStateList.valueOf(ACCENT)
-            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(7) })
+            activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+                isIndeterminate = true
+                indeterminateTintList = ColorStateList.valueOf(ACCENT)
+                contentDescription = activityLabel
+            }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             activity.addView(label(activityLabel, 12, ACCENT), widthWrap())
             messageList.addView(activity, widthWrap())
         }
@@ -1965,16 +2033,17 @@ class MainActivity : Activity() {
             val dataValue = if (type == "image") part.optString("image_url") else if (type == "localImage") part.optString("data") else ""
             val data = dataValue.substringAfter("base64,", dataValue)
             if (data.isBlank()) continue
+            if (data.length > MAX_INLINE_IMAGE_BASE64_CHARS) {
+                container.addView(label("图片过大，已跳过内嵌预览", 11, WARNING).apply {
+                    setPadding(0, dp(5), 0, dp(3))
+                }, widthWrap())
+                continue
+            }
             try {
                 val cacheKey = "${item.optString("id")}:$index:${data.length}:${data.take(48).hashCode()}"
                 val bitmap = messageImageCache.get(cacheKey) ?: run {
                     val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
-                    val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                    options.inSampleSize = 1
-                    while (options.outWidth / options.inSampleSize > 720 || options.outHeight / options.inSampleSize > 720) options.inSampleSize *= 2
-                    options.inJustDecodeBounds = false
-                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.also { messageImageCache.put(cacheKey, it) }
+                    decodeSampledBitmap(bytes, 720)?.also { messageImageCache.put(cacheKey, it) }
                 } ?: continue
                 val image = ImageView(this).apply {
                     setImageBitmap(bitmap)
@@ -1983,8 +2052,23 @@ class MainActivity : Activity() {
                     setOnClickListener { showImageDialog(bitmap) }
                 }
                 container.addView(image, LinearLayout.LayoutParams(MATCH, dp(190)).apply { topMargin = dp(5) })
-            } catch (_: Exception) { }
+            } catch (_: IllegalArgumentException) { }
+            catch (_: OutOfMemoryError) { messageImageCache.evictAll() }
         }
+    }
+
+    private fun decodeSampledBitmap(bytes: ByteArray, maximumDimension: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sampleSize = 1
+        while (bounds.outWidth / sampleSize > maximumDimension || bounds.outHeight / sampleSize > maximumDimension) {
+            sampleSize *= 2
+        }
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        })
     }
 
     private fun showImageDialog(bitmap: android.graphics.Bitmap) {
@@ -2052,7 +2136,7 @@ class MainActivity : Activity() {
                     while (keys.hasNext()) {
                         val path = keys.next()
                         val detail = value.opt(path)
-                        raw += if (detail is JSONObject) JSONObject(detail.toString()).putIfAbsentCompat("path", path) else JSONObject().put("path", path)
+                        raw += if (detail is JSONObject) shallowCopyObject(detail).putIfAbsentCompat("path", path) else JSONObject().put("path", path)
                     }
                 }
             }
@@ -2072,6 +2156,7 @@ class MainActivity : Activity() {
 
     private fun addFileChangeSummary(turnId: String, entries: List<FileChangeEntry>) {
         if (entries.isEmpty()) return
+        val summaryId = "files:$turnId"
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -2080,18 +2165,23 @@ class MainActivity : Activity() {
         }
         val totalAdditions = entries.sumOf { it.additions }
         val totalDeletions = entries.sumOf { it.deletions }
-        val heading = RelativeLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            contentDescription = "展开或收起最近编辑文件"
+        }
         val headingIcon = ImageView(this).apply {
-            id = View.generateViewId()
             setImageResource(R.drawable.ic_edit)
             imageTintList = ColorStateList.valueOf(MUTED)
         }
-        heading.addView(headingIcon, RelativeLayout.LayoutParams(dp(15), dp(15)).apply {
-            addRule(RelativeLayout.ALIGN_PARENT_START)
-            addRule(RelativeLayout.CENTER_VERTICAL)
-        })
+        heading.addView(headingIcon, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
+        heading.addView(label("最近编辑文件 · ${entries.size}", 12, SUBTLE, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, dp(25), 1f))
         val headingStats = LinearLayout(this).apply {
-            id = View.generateViewId()
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             if (totalAdditions > 0) addView(label("+$totalAdditions", 11, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
@@ -2099,52 +2189,59 @@ class MainActivity : Activity() {
                 setPadding(dp(7), 0, 0, 0)
             }, LinearLayout.LayoutParams(WRAP, MATCH))
         }
-        heading.addView(headingStats, RelativeLayout.LayoutParams(WRAP, dp(25)).apply {
-            addRule(RelativeLayout.ALIGN_PARENT_END)
-            addRule(RelativeLayout.CENTER_VERTICAL)
-        })
-        heading.addView(label("最近编辑文件 · ${entries.size}", 12, SUBTLE, true).apply {
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }, RelativeLayout.LayoutParams(MATCH, dp(25)).apply {
-            addRule(RelativeLayout.END_OF, headingIcon.id)
-            addRule(RelativeLayout.START_OF, headingStats.id)
-            marginStart = dp(6)
-            marginEnd = dp(8)
-        })
+        heading.addView(headingStats, LinearLayout.LayoutParams(WRAP, dp(25)).apply { leftMargin = dp(7) })
+        val chevron = ImageView(this).apply { imageTintList = ColorStateList.valueOf(MUTED) }
+        heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(8) })
         card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(25)))
-        entries.take(8).forEach { item ->
-            val line = RelativeLayout(this).apply {
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(21), dp(3), 0, dp(3))
-                setOnClickListener { showFilePreview(item.path, null) }
+
+        lateinit var refreshFileRows: () -> Unit
+        refreshFileRows = {
+            val expanded = summaryId in expandedFileChangeIds
+            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            if (card.childCount > 1) card.removeViews(1, card.childCount - 1)
+            if (expanded) {
+                entries.take(8).forEach { item ->
+                    val line = RelativeLayout(this).apply {
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(21), dp(3), 0, dp(3))
+                        setOnClickListener {
+                            val threadCwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+                            showFilePreview(item.path, threadCwd)
+                        }
+                    }
+                    val stats = LinearLayout(this).apply {
+                        id = View.generateViewId()
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        if (item.additions > 0) addView(label("+${item.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
+                        if (item.deletions > 0) addView(label("-${item.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
+                            setPadding(dp(6), 0, 0, 0)
+                        }, LinearLayout.LayoutParams(WRAP, MATCH))
+                    }
+                    line.addView(stats, RelativeLayout.LayoutParams(WRAP, dp(22)).apply {
+                        addRule(RelativeLayout.ALIGN_PARENT_END)
+                        addRule(RelativeLayout.CENTER_VERTICAL)
+                    })
+                    line.addView(label(item.path, 11, ACCENT).apply {
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    }, RelativeLayout.LayoutParams(MATCH, dp(22)).apply {
+                        addRule(RelativeLayout.ALIGN_PARENT_START)
+                        addRule(RelativeLayout.START_OF, stats.id)
+                        marginEnd = if (item.additions > 0 || item.deletions > 0) dp(8) else 0
+                    })
+                    card.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+                if (entries.size > 8) {
+                    card.addView(label("另外 ${entries.size - 8} 个文件", 10, MUTED).apply { setPadding(dp(21), dp(3), 0, 0) }, widthWrap())
+                }
             }
-            val stats = LinearLayout(this).apply {
-                id = View.generateViewId()
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                if (item.additions > 0) addView(label("+${item.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
-                if (item.deletions > 0) addView(label("-${item.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
-                    setPadding(dp(6), 0, 0, 0)
-                }, LinearLayout.LayoutParams(WRAP, MATCH))
-            }
-            line.addView(stats, RelativeLayout.LayoutParams(WRAP, dp(22)).apply {
-                addRule(RelativeLayout.ALIGN_PARENT_END)
-                addRule(RelativeLayout.CENTER_VERTICAL)
-            })
-            line.addView(label(item.path, 11, ACCENT).apply {
-                maxLines = 1
-                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-            }, RelativeLayout.LayoutParams(MATCH, dp(22)).apply {
-                addRule(RelativeLayout.ALIGN_PARENT_START)
-                addRule(RelativeLayout.START_OF, stats.id)
-                marginEnd = if (item.additions > 0 || item.deletions > 0) dp(8) else 0
-            })
-            card.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-        if (entries.size > 8) {
-            card.addView(label("另外 ${entries.size - 8} 个文件", 10, MUTED).apply { setPadding(dp(21), dp(3), 0, 0) }, widthWrap())
+        heading.setOnClickListener {
+            if (summaryId in expandedFileChangeIds) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
+            refreshFileRows()
         }
+        refreshFileRows()
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
     }
 
@@ -2326,7 +2423,7 @@ class MainActivity : Activity() {
         showInputDialog("修改排队消息", input, "确定") {
             val threadId = activeThreadId ?: return@showInputDialog false
             val ownerId = "android-${UUID.randomUUID()}"
-            val updated = JSONObject(item.toString()).put("text", input.text.toString()).put("requestText", input.text.toString())
+            val updated = shallowCopyObject(item).put("text", input.text.toString()).put("requestText", input.text.toString())
             io.execute {
                 try {
                     val api = RemoteApi(endpoint, token)
@@ -2408,15 +2505,15 @@ class MainActivity : Activity() {
     private fun showThreadActions(anchor: View, thread: JSONObject) {
         val actions = listOf(
             MenuAction("打开", "open"),
+            MenuAction(if (pinnedThreadIds.contains(thread.optString("id"))) "取消置顶" else "置顶", "pin"),
             MenuAction("重命名", "edit"),
-            MenuAction(if (pinnedThreadIds.contains(thread.optString("id"))) "取消固定" else "固定", "pin"),
-            MenuAction("删除", "delete", destructive = true),
+            MenuAction("删除聊天", "delete", destructive = true),
         )
         showActionPopup(anchor, threadTitle(thread), actions) { which ->
             when (which) {
                 0 -> selectThread(thread)
-                1 -> renameThread(thread)
-                2 -> togglePin(thread)
+                1 -> togglePin(thread)
+                2 -> renameThread(thread)
                 3 -> deleteThread(thread)
             }
         }
@@ -3398,6 +3495,10 @@ class MainActivity : Activity() {
     }
 
     private fun showFilePreview(path: String, cwd: String?) {
+        val effectiveCwd = cwd?.takeIf { it.isNotBlank() && it != "null" }
+            ?: activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
+            ?: runtime.optString("workspace").takeIf { it.isNotBlank() && it != "null" }
+        val requestPath = workspaceRelativePath(effectiveCwd, path)
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val layout = LinearLayout(this).apply {
@@ -3410,14 +3511,33 @@ class MainActivity : Activity() {
             typeface = Typeface.MONOSPACE; gravity = Gravity.TOP or Gravity.START
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             setPadding(dp(9), dp(9), dp(9), dp(9)); background = rounded(if (lightTheme) Color.rgb(246, 247, 249) else Color.rgb(14, 16, 20), dp(8))
+            minHeight = dp(280)
+            visibility = View.GONE
         }
-        val imagePreview = ImageView(this).apply { scaleType = ImageView.ScaleType.FIT_CENTER; visibility = View.GONE }
+        val imagePreview = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            minimumHeight = dp(280)
+            visibility = View.GONE
+        }
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         header.addView(label(path.substringAfterLast('/'), 13, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(34), 1f))
-        val saveButton = smallButton("保存") { savePreviewFile(path, cwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }
+        val saveButton = smallButton("保存") { savePreviewFile(requestPath, effectiveCwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }.apply {
+            visibility = View.GONE
+        }
         header.addView(saveButton)
         header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
         layout.addView(header, widthWrap())
+        val loadingStatus = label("正在加载文件…", 12, MUTED).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(80), dp(12), dp(18))
+        }
+        val retryButton = smallButton("重新加载") { }.apply { visibility = View.GONE }
+        val state = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            addView(loadingStatus, widthWrap())
+            addView(retryButton, LinearLayout.LayoutParams(WRAP, dp(34)))
+        }
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             addView(LinearLayout(this@MainActivity).apply {
@@ -3426,31 +3546,77 @@ class MainActivity : Activity() {
                 addView(imagePreview, LinearLayout.LayoutParams(MATCH, dp(420)))
             }, FrameLayout.LayoutParams(MATCH, WRAP))
         }
+        layout.addView(state, LinearLayout.LayoutParams(MATCH, 0, 1f))
         layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(6) })
+        scroll.visibility = View.GONE
         dialog.setContentView(layout)
         dialog.show()
         dialog.window?.apply { setBackgroundDrawableResource(android.R.color.transparent); setLayout(MATCH, (resources.displayMetrics.heightPixels * .86f).toInt()); setGravity(Gravity.BOTTOM) }
-        io.execute {
-            try {
-                val query = "?path=${Uri.encode(path)}" + if (cwd.isNullOrBlank()) "" else "&cwd=${Uri.encode(cwd)}"
-                val isImage = path.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "webp", "gif")
-                val file = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/${if (isImage) "image" else "file"}$query")
-                handler.post {
-                    if (dialog.isShowing) {
+
+        val showPreviewError = { error: Throwable ->
+            handler.post {
+                if (dialog.isShowing) {
+                    loadingStatus.text = "加载失败：${error.message ?: "无法预览文件"}"
+                    loadingStatus.setTextColor(ERROR)
+                    retryButton.visibility = View.VISIBLE
+                }
+            }
+        }
+        lateinit var loadPreview: () -> Unit
+        loadPreview = {
+            state.visibility = View.VISIBLE
+            scroll.visibility = View.GONE
+            loadingStatus.text = "正在加载文件…"
+            loadingStatus.setTextColor(MUTED)
+            retryButton.visibility = View.GONE
+            previewInput.visibility = View.GONE
+            imagePreview.visibility = View.GONE
+            saveButton.visibility = View.GONE
+            io.execute {
+                try {
+                    val query = "?path=${Uri.encode(requestPath)}" + if (effectiveCwd.isNullOrBlank()) "" else "&cwd=${Uri.encode(effectiveCwd)}"
+                    val isImage = requestPath.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "webp", "gif")
+                    val file = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/${if (isImage) "image" else "file"}$query")
+                    val bitmap = if (isImage) {
+                        val encoded = file.optString("data")
+                        if (encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片过大，无法在 APP 内预览")
+                        val data = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                        decodeSampledBitmap(data, 1600) ?: throw IOException("图片内容无法解析")
+                    } else null
+                    handler.post {
+                        if (!dialog.isShowing) return@post
+                        state.visibility = View.GONE
+                        scroll.visibility = View.VISIBLE
                         if (isImage) {
-                            val data = android.util.Base64.decode(file.optString("data"), android.util.Base64.DEFAULT)
-                            imagePreview.setImageBitmap(BitmapFactory.decodeByteArray(data, 0, data.size))
+                            imagePreview.setImageBitmap(bitmap)
                             imagePreview.visibility = View.VISIBLE
-                            previewInput.visibility = View.GONE
-                            saveButton.visibility = View.GONE
                         } else {
                             previewInput.tag = file.optString("revision")
                             previewInput.setText(file.optString("content"))
+                            previewInput.visibility = View.VISIBLE
+                            saveButton.visibility = View.VISIBLE
                         }
                     }
-                }
-            } catch (error: Exception) { handler.post { if (dialog.isShowing) showStatus(error.message ?: "无法预览文件") } }
+                } catch (error: Exception) { showPreviewError(error) }
+                catch (error: OutOfMemoryError) { showPreviewError(IOException("设备内存不足，无法预览该图片")) }
+            }
         }
+        retryButton.setOnClickListener { loadPreview() }
+        loadPreview()
+    }
+
+    private fun workspaceRelativePath(cwd: String?, path: String): String {
+        val normalizedPath = path.replace('\\', '/').removePrefix("./")
+        val normalizedCwd = cwd?.replace('\\', '/')?.trimEnd('/').orEmpty()
+        if (normalizedCwd.isBlank()) return normalizedPath
+        if (normalizedPath == normalizedCwd) return ""
+        val prefix = "$normalizedCwd/"
+        val windowsPath = Regex("^[a-zA-Z]:/").containsMatchIn(prefix)
+        return if (windowsPath && normalizedPath.lowercase(Locale.ROOT).startsWith(prefix.lowercase(Locale.ROOT))) {
+            normalizedPath.substring(prefix.length)
+        } else if (!windowsPath && normalizedPath.startsWith(prefix)) {
+            normalizedPath.substring(prefix.length)
+        } else normalizedPath
     }
 
     private fun savePreviewFile(path: String, cwd: String?, content: String, revision: String, editor: EditText) {
@@ -3772,6 +3938,7 @@ class MainActivity : Activity() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 socketConnected = true
                 outstandingSocketPing = null
+                lastSocketActivityAt = System.currentTimeMillis()
                 webSocket.send(JSONObject().put("type", "codex.client.hello").put("protocol_version", 1)
                     .put("token", token).put("thread_id", activeThreadId).toString())
                 handler.post {
@@ -3782,6 +3949,7 @@ class MainActivity : Activity() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                lastSocketActivityAt = System.currentTimeMillis()
                 try { handleSocketEvent(JSONObject(text)) } catch (_: JSONException) { }
             }
 
@@ -3791,7 +3959,10 @@ class MainActivity : Activity() {
                     socket = null
                     outstandingSocketPing = null
                     handler.removeCallbacks(socketHeartbeatRunnable)
-                    handler.post { renderHeader(); handler.postDelayed({ connectSocket() }, 1800) }
+                    handler.post {
+                        renderHeader()
+                        if (foreground) handler.postDelayed({ if (foreground) connectSocket() }, 1200)
+                    }
                 }
             }
 
@@ -3801,7 +3972,7 @@ class MainActivity : Activity() {
                     socket = null
                     outstandingSocketPing = null
                     handler.removeCallbacks(socketHeartbeatRunnable)
-                    handler.post { renderHeader(); if (foreground) handler.postDelayed({ connectSocket() }, 1600) }
+                    handler.post { renderHeader(); if (foreground) handler.postDelayed({ if (foreground) connectSocket() }, 1200) }
                 }
             }
         })
@@ -3810,6 +3981,7 @@ class MainActivity : Activity() {
     private fun handleSocketEvent(event: JSONObject) {
         when (event.optString("type")) {
             "pong" -> handler.post {
+                lastSocketActivityAt = System.currentTimeMillis()
                 if (event.optString("id") == outstandingSocketPing) outstandingSocketPing = null
             }
             "connection" -> {
@@ -4052,6 +4224,62 @@ class MainActivity : Activity() {
         return this
     }
 
+    private fun shallowCopyObject(source: JSONObject, excludedKeys: Set<String> = emptySet()): JSONObject {
+        val copy = JSONObject()
+        val keys = source.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            if (key !in excludedKeys) copy.put(key, source.opt(key) ?: JSONObject.NULL)
+        }
+        return copy
+    }
+
+    private fun jsonFitsHistoryCache(value: Any?): Boolean {
+        var estimatedBytes = 0L
+
+        fun addString(text: String): Boolean {
+            if (text.length > MAX_HISTORY_CACHE_STRING_CHARS) return false
+            for (character in text) {
+                estimatedBytes += when {
+                    character.code < 0x80 -> 1
+                    character.code < 0x800 -> 2
+                    character.isHighSurrogate() -> 2
+                    else -> 3
+                }
+                if (estimatedBytes > MAX_HISTORY_CACHE_JSON_BYTES) return false
+            }
+            return true
+        }
+
+        fun scan(entry: Any?, depth: Int): Boolean {
+            if (depth > MAX_HISTORY_CACHE_DEPTH || estimatedBytes > MAX_HISTORY_CACHE_JSON_BYTES) return false
+            estimatedBytes += 2
+            return when (entry) {
+                null, JSONObject.NULL -> true
+                is String -> addString(entry)
+                is Number, is Boolean -> {
+                    estimatedBytes += 24
+                    estimatedBytes <= MAX_HISTORY_CACHE_JSON_BYTES
+                }
+                is JSONObject -> {
+                    val keys = entry.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        if (!addString(key) || !scan(entry.opt(key), depth + 1)) return false
+                    }
+                    true
+                }
+                is JSONArray -> {
+                    for (index in 0 until entry.length()) if (!scan(entry.opt(index), depth + 1)) return false
+                    true
+                }
+                else -> addString(entry.toString())
+            }
+        }
+
+        return scan(value, 0)
+    }
+
     private fun editField(hintText: String, value: String, inputTypeValue: Int): EditText = EditText(this).apply {
         hint = hintText
         setText(value)
@@ -4184,6 +4412,7 @@ class MainActivity : Activity() {
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
         private const val DEFAULT_VISIBLE_HISTORY_TURNS = 12
+        private const val MAX_VISIBLE_SIDEBAR_THREADS = 80
         private val OPERATION_PATH_KEYS = setOf(
             "path", "filepath", "file_path", "filename", "target_path", "source_path", "imagepath", "image_path",
         )
@@ -4194,7 +4423,11 @@ class MainActivity : Activity() {
         private const val MAX_CACHED_THREADS = 32
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
         private const val MAX_TOTAL_HISTORY_CACHE_BYTES = 64L * 1024 * 1024
-        private const val MAX_HISTORY_CACHE_JSON_BYTES = 96 * 1024 * 1024
+        private const val MAX_HISTORY_CACHE_JSON_BYTES = 12 * 1024 * 1024
+        private const val MAX_HISTORY_CACHE_STRING_CHARS = 3 * 1024 * 1024
+        private const val MAX_HISTORY_CACHE_DEPTH = 64
+        private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
+        private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
     }
 }
 
