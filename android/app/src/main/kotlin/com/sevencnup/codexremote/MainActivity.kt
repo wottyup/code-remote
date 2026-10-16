@@ -284,6 +284,9 @@ class MainActivity : Activity() {
     private lateinit var composerInput: EditText
     private lateinit var attachmentScroll: HorizontalScrollView
     private lateinit var attachmentStrip: LinearLayout
+    private lateinit var sidebarNewThreadButton: LinearLayout
+    private lateinit var sidebarNewThreadIcon: ImageView
+    private lateinit var sidebarNewThreadLabel: TextView
     private lateinit var sendButton: TextView
     private lateinit var modelButton: TextView
     private lateinit var effortButton: TextView
@@ -1019,26 +1022,24 @@ class MainActivity : Activity() {
         })
         drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(12) })
 
-        val newThread = LinearLayout(this).apply {
+        sidebarNewThreadButton = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(12), 0, dp(12), 0)
-            val fill = if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-            background = rounded(fill, dp(10))
             isClickable = true
             isFocusable = true
             contentDescription = "新建对话"
             setOnClickListener { createThread() }
         }
-        val newIcon = ImageView(this).apply {
+        sidebarNewThreadIcon = ImageView(this).apply {
             setImageResource(R.drawable.ic_add)
-            imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37))
-            background = rounded(if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37), dp(7))
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
-        newThread.addView(newIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
-        newThread.addView(label("新建对话", 13, if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37), true), widthWrap())
-        drawer.addView(newThread, LinearLayout.LayoutParams(MATCH, dp(43)).apply { topMargin = dp(9) })
+        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
+        sidebarNewThreadLabel = label("新建对话", 13, TEXT, true)
+        sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
+        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(43)).apply { topMargin = dp(9) })
+        updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1159,6 +1160,7 @@ class MainActivity : Activity() {
             setBrandIcon(modeButton, currentMode)
             modeButton.contentDescription = if (currentMode == "codex") "切换到 Claude Code" else "切换到 Codex"
         }
+        updateSidebarModeAccent()
         val path = page.findViewWithTag<TextView>("workspace_path")
         path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             ?: runtime.optString("workspace", "本机项目")
@@ -1178,8 +1180,27 @@ class MainActivity : Activity() {
         thread.optString("preview"),
     ).firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
 
+    private fun updateSidebarModeAccent() {
+        if (!::sidebarNewThreadButton.isInitialized) return
+        val claudeMode = currentMode == "claude-code"
+        val fill = when {
+            lightTheme -> if (claudeMode) ACCENT_WARM else Color.rgb(57, 75, 132)
+            claudeMode -> Color.rgb(255, 198, 172)
+            else -> Color.rgb(199, 208, 255)
+        }
+        val foreground = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+        sidebarNewThreadButton.background = rounded(fill, dp(10))
+        sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
+        sidebarNewThreadIcon.background = rounded(
+            if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
+            dp(7),
+        )
+        sidebarNewThreadLabel.setTextColor(foreground)
+    }
+
     private fun renderSidebar(force: Boolean = false) {
         if (!::drawerThreads.isInitialized) return
+        updateSidebarModeAccent()
         if (!force && !sidebarRenderDirty) return
         if (sidebarGestureActive || sidebarAnimator?.isRunning == true) {
             sidebarRenderDirty = true
@@ -1219,7 +1240,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), dp(5), dp(5), dp(5))
-                background = if (selected) rounded(PANEL_INSET, dp(9), if (lightTheme) ACCENT else Color.rgb(76, 84, 112), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
+                background = if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(ACCENT, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 contentDescription = threadTitle(thread)
@@ -3102,7 +3123,6 @@ class MainActivity : Activity() {
         if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
         renderSidebar(force = true)
         showModeSwitchNotice(previousMode, currentMode)
-        showToast(if (currentMode == "codex") "Codex 对话" else "Claude Code 对话")
     }
 
     private fun showThreadActions(anchor: View, thread: JSONObject) {
