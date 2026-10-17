@@ -2352,3 +2352,117 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .theme-settings-panel__close { border: 0; background: transparent; color: #00e; }
   .remote-shell--theme-retro .theme-settings-panel__close svg { display: none; }
 }
+
+/* Keep both navigation areas beside the document on desktop. */
+@media (min-width: 701px) {
+  .remote-shell--theme-retro,
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed {
+    grid-template-columns: minmax(180px, min(284px, 22vw)) minmax(0, 1fr) 8px minmax(160px, min(var(--workspace-explorer-width, 340px), calc(100vw - max(180px, min(284px, 22vw)) - 264px)));
+  }
+
+  .remote-shell--theme-retro .remote-sidebar,
+  .remote-shell--theme-retro .remote-sidebar.remote-sidebar--open {
+    position: relative;
+    inset: auto;
+    z-index: 2;
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    height: auto;
+    min-height: 0;
+    padding: 8px;
+    transform: none;
+    overflow: hidden;
+    border: 0;
+    border-right: 1px solid #aaa;
+    background: #fff;
+    color: #000;
+    box-shadow: none;
+  }
+  .remote-shell--theme-retro .remote-sidebar--dragging { transform: none; }
+  .remote-shell--theme-retro .remote-sidebar__heading { display: none; }
+  .remote-shell--theme-retro :is(.remote-sidebar__close, .remote-sidebar__collapse, .menu-button, .mobile-workspace-button) { display: none; }
+  .remote-shell--theme-retro .sidebar-backdrop { display: none; }
+  .remote-shell--theme-retro .remote-sidebar__actions { flex: 0 0 auto; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings span,
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer > span { display: inline; }
+
+  .remote-shell--theme-retro .workspace-resize-handle {
+    display: block;
+    grid-column: 3;
+    grid-row: 1;
+    min-width: 8px;
+    background: transparent;
+  }
+  .remote-shell--theme-retro .workspace-resize-handle::before { left: 3px; width: 1px; background: #aaa; }
+  .remote-shell--theme-retro .workspace-resize-handle:hover::before,
+  .remote-shell--theme-retro .workspace-resize-handle:focus-visible::before { left: 2px; width: 3px; background: #000; }
+
+  .remote-shell--theme-retro .workspace-explorer,
+  .remote-shell--theme-retro .workspace-explorer.workspace-explorer--mobile-open {
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    display: grid;
+    grid-column: 4;
+    grid-row: 1;
+    width: auto;
+    height: auto;
+    min-width: 0;
+    min-height: 0;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    transform: none;
+    overflow: hidden;
+    border: 0;
+    border-left: 1px solid #aaa;
+    background: #fff;
+    box-shadow: none;
+  }
+  .remote-shell--theme-retro .workspace-backdrop { display: none; }
+  .remote-shell--theme-retro .workspace-explorer__header { min-height: 0; padding: 4px 0 8px; border: 0; background: #fff; }
+  .remote-shell--theme-retro .workspace-explorer__header > div { display: block; }
+  .remote-shell--theme-retro .workspace-explorer__header strong { color: #000; font: bold 1.25em/normal "Times New Roman", Times, serif; }
+  .remote-shell--theme-retro .workspace-explorer__eyebrow { display: none; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions { gap: 8px; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button {
+    display: inline;
+    width: auto;
+    height: auto;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: #00e;
+    font: inherit;
+    text-decoration: underline;
+  }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button svg,
+  .remote-shell--theme-retro .workspace-explorer__close { display: none; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button:first-child::after { content: '管理'; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button:nth-child(2)::after { content: '刷新'; }
+  .remote-shell--theme-retro .workspace-explorer__root { gap: 4px; padding: 6px 0; border: 0; border-bottom: 1px solid #aaa; background: #fff; color: #000; font: inherit; }
+  .remote-shell--theme-retro .workspace-explorer__root-form { display: block; }
+  .remote-shell--theme-retro .workspace-explorer__root-form input { width: 100%; height: auto; margin-bottom: 4px; padding: 2px; border: 2px inset #aaa; border-radius: 0; background: #fff; color: #000; font: .875em/normal monospace; }
+  .remote-shell--theme-retro .workspace-explorer__root-open,
+  .remote-shell--theme-retro .workspace-explorer__root-actions button {
+    display: inline;
+    min-height: 0;
+    margin-right: 8px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #00e;
+    font: inherit;
+    text-decoration: underline;
+  }
+  .remote-shell--theme-retro .workspace-explorer__root-open svg,
+  .remote-shell--theme-retro .workspace-explorer__root-actions button svg { display: none; }
+  .remote-shell--theme-retro .workspace-explorer__tree { padding: 4px 0; }
+  .remote-shell--theme-retro .workspace-explorer__entry { min-height: 0; padding-top: 2px; padding-bottom: 2px; color: #00e; font: inherit; text-decoration: underline; }
+  .remote-shell--theme-retro .workspace-explorer__entry:hover,
+  .remote-shell--theme-retro .workspace-explorer__entry--selected { border: 0; background: #eee; color: #551a8b; }
+  .remote-shell--theme-retro .workspace-explorer__footer { min-height: 0; padding: 6px 0 0; border: 0; background: #fff; color: #000; font: .8125em/normal "Times New Roman", Times, serif; }
+
+  .remote-shell--theme-retro .theme-settings-panel { grid-column: 2 / -1; grid-row: 1; width: 100%; height: 100%; min-height: 0; overflow-y: auto; }
+}
