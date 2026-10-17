@@ -22,6 +22,7 @@ import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Outline
 import android.graphics.RadialGradient
 import android.graphics.RectF
@@ -645,6 +646,8 @@ class MainActivity : Activity() {
     private var imeFollowMessageBottom = false
     private var imeFollowScrollQueued = false
     private var messageNearBottomBeforeIme = false
+    private var messageTouchActive = false
+    private var followMessageBottom = true
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
     private var completionNoticeDismissRunnable: Runnable? = null
@@ -679,6 +682,7 @@ class MainActivity : Activity() {
     private lateinit var messageList: LinearLayout
     private var activeActivityText: TextView? = null
     private var activeActivityTimer: TextView? = null
+    private var activityShimmerAnimator: ValueAnimator? = null
     private var activeActivityStartedAt = 0L
     private var liveActivityItem: JSONObject? = null
     private var liveActivityItemCompleted = false
@@ -822,6 +826,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         foreground = true
+        activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
             val now = System.currentTimeMillis()
             val wasBackgrounded = backgroundedAt > 0L
@@ -854,6 +859,8 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         persistCurrentDraft()
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
@@ -878,6 +885,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
         stopQueueEditRenewal()
@@ -1371,6 +1380,7 @@ class MainActivity : Activity() {
         }
         chatArea.addView(welcomeTitleView, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
         scrollToBottomButton = iconButton("chevron_down", "回到底部") {
+            followMessageBottom = true
             messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
         }.apply {
             imageTintList = retroIconTint(TEXT)
@@ -1385,12 +1395,20 @@ class MainActivity : Activity() {
         })
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+            if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
             updateScrollToBottomButton()
         }
         messageScroll.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                if (imeInsetVisible) imeFollowMessageBottom = false
-                else messageNearBottomBeforeIme = isMessageListNearBottom()
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    messageTouchActive = true
+                    if (imeInsetVisible) imeFollowMessageBottom = false
+                    else messageNearBottomBeforeIme = isMessageListNearBottom()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    messageTouchActive = false
+                    messageScroll.post { if (isMessageListNearBottom()) followMessageBottom = true }
+                }
             }
             false
         }
@@ -2783,6 +2801,7 @@ class MainActivity : Activity() {
         renderSidebar(force = true)
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         restoreCurrentDraftFiles()
+        followMessageBottom = true
         renderMessages(true)
         if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
         refreshQueue(true)
@@ -3042,7 +3061,7 @@ class MainActivity : Activity() {
                     historyLoadError = null
                     running = isThreadRunning(resolved)
                     renderHeader()
-                    if (historyChanged) renderMessages(!showLoading, incrementalTurnId)
+                    if (historyChanged) renderMessages(false, incrementalTurnId)
                     updateComposerFileChanges()
                 }
             } catch (error: Exception) {
@@ -3227,7 +3246,9 @@ class MainActivity : Activity() {
             if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
             return
         }
-        val wasNearEnd = messageScroll.scrollY + messageScroll.height >= messageList.height - dp(120)
+        val previousScrollY = messageScroll.scrollY
+        val wasNearEnd = followMessageBottom && isMessageListNearBottom()
+        if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
         val incrementalTurnIndex = incrementalTurnId?.let { requestedId ->
@@ -3524,8 +3545,10 @@ class MainActivity : Activity() {
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
-            val activityAccent = if (currentMode == "claude-code" && socketConnected) CLAUDE_MODE_ACCENT else ACCENT
+            val activityColor = if (lightTheme) Color.rgb(80, 80, 80) else Color.rgb(180, 180, 180)
             val activity = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -3534,7 +3557,7 @@ class MainActivity : Activity() {
             }
             activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
-                indeterminateTintList = ColorStateList.valueOf(activityAccent)
+                indeterminateTintList = ColorStateList.valueOf(activityColor)
                 contentDescription = "正在运行"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             val lastTurn = turns.optJSONObject(turns.length() - 1)
@@ -3551,17 +3574,18 @@ class MainActivity : Activity() {
                 historyIsCurrentTurn && currentOperation != null -> runningActivityText(currentOperation)
                 else -> "正在运行"
             }
-            activeActivityText = label(activityText, 12, activityAccent).apply {
+            activeActivityText = label(activityText, 12, activityColor).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
             activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
-            activeActivityTimer = label("已用 0分0秒", 10, MUTED).apply {
+            activeActivityTimer = label("已用 0分0秒", 10, activityColor).apply {
                 setPadding(dp(8), 0, 0, 0)
                 contentDescription = "本轮已运行时间"
             }
             activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
+            activeActivityText?.let(::startActivityShimmer)
             handler.removeCallbacks(activityTick)
             handler.post(activityTick)
         } else {
@@ -3571,10 +3595,44 @@ class MainActivity : Activity() {
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
+            else messageScroll.scrollTo(0, previousScrollY)
             updateScrollToBottomButton()
         }
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
+    }
+
+    private fun startActivityShimmer(view: TextView) {
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
+        if (!foreground) return
+        view.post {
+            if (!foreground || activeActivityText !== view || !view.isAttachedToWindow) return@post
+            activityShimmerAnimator?.cancel()
+            val base = if (lightTheme) Color.rgb(105, 105, 105) else Color.rgb(155, 155, 155)
+            val highlight = if (lightTheme) Color.BLACK else Color.WHITE
+            val sweepWidth = minOf(view.width.toFloat(), view.paint.measureText(view.text.toString()))
+                .coerceAtLeast(dp(48).toFloat())
+            val gradient = LinearGradient(
+                0f, 0f, sweepWidth, 0f,
+                intArrayOf(base, base, highlight, base, base),
+                floatArrayOf(0f, .35f, .5f, .65f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            val matrix = Matrix()
+            view.paint.shader = gradient
+            activityShimmerAnimator = ValueAnimator.ofFloat(-1f, 1f).apply {
+                duration = 2600L
+                repeatCount = ValueAnimator.INFINITE
+                interpolator = android.view.animation.LinearInterpolator()
+                addUpdateListener { animator ->
+                    matrix.setTranslate((animator.animatedValue as Float) * sweepWidth, 0f)
+                    gradient.setLocalMatrix(matrix)
+                    view.invalidate()
+                }
+                start()
+            }
+        }
     }
 
     private fun updateScrollToBottomButton() {
@@ -3654,6 +3712,7 @@ class MainActivity : Activity() {
         messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         row.animate().alpha(1f).translationY(0f).setDuration(170).start()
         item.put("_animate", false)
+        followMessageBottom = true
         messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
     }
 
@@ -7859,7 +7918,10 @@ class MainActivity : Activity() {
                                     liveActivityItem = item
                                     liveActivityItemCompleted = method == "item/completed"
                                     liveActivityTurnId = turnId
-                                    activeActivityText?.text = if (liveActivityItemCompleted) "正在运行" else operationActivityLabel(item)
+                                    activeActivityText?.let { activityText ->
+                                        activityText.text = if (liveActivityItemCompleted) "正在运行" else operationActivityLabel(item)
+                                        startActivityShimmer(activityText)
+                                    }
                                 }
                             }
                         }
