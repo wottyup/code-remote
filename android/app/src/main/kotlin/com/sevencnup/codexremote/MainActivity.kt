@@ -6448,15 +6448,57 @@ class MainActivity : Activity() {
     }
 
     private fun reconnect() {
-        val codeInput = editField("输入电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
-        showInputDialog("重新配对", codeInput, "连接") {
-            val code = codeInput.text.toString().trim()
-            if (code.isBlank()) return@showInputDialog false
-            runApi({ RemoteApi(endpoint).post("/api/v1/pair", JSONObject().put("code", code)).getString("token") }, { newToken ->
-                updateActiveConnectionToken(newToken)
-                openChatHome()
-            })
-            true
+        if (endpoint.isBlank() || token.isBlank()) {
+            showConnectionPage("当前连接没有有效的配对信息，请重新配对。")
+            return
+        }
+        val savedEndpoint = endpoint
+        val savedToken = token
+        val generation = connectionGeneration
+        socket?.cancel()
+        socket = null
+        socketConnected = false
+        outstandingSocketPing = null
+        handler.removeCallbacks(socketHeartbeatRunnable)
+        handler.removeCallbacks(refreshRunnable)
+        renderHeader()
+        showStatus("正在使用已保存的连接信息重新连接…")
+        io.execute {
+            try {
+                val refreshedRuntime = RemoteApi(savedEndpoint, savedToken).get("/api/v1/codex/status")
+                handler.post {
+                    if (generation != connectionGeneration || savedToken != token) return@post
+                    runtime = refreshedRuntime
+                    renderHeader()
+                    connectSocket()
+                    refreshThreads(true)
+                    refreshPins()
+                    refreshClaudeStatus()
+                    refreshModels()
+                    if (activeThreadId != null) {
+                        refreshActiveThread(false)
+                        refreshQueue(false)
+                    }
+                    handler.postDelayed(refreshRunnable, 15_000L)
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    if (generation != connectionGeneration || savedToken != token) return@post
+                    if (error is RemoteApiException && error.statusCode == 401) {
+                        updateActiveConnectionToken("")
+                        showConnectionPage(error.message ?: "配对已失效，请重新输入匹配码。")
+                    } else {
+                        showStatus("电脑服务暂时无法连接，已保留配对信息，正在自动重试。")
+                        connectSocket()
+                        refreshThreads(false)
+                        if (activeThreadId != null) {
+                            refreshActiveThread(false)
+                            refreshQueue(false)
+                        }
+                        handler.postDelayed(refreshRunnable, 15_000L)
+                    }
+                }
+            }
         }
     }
 
