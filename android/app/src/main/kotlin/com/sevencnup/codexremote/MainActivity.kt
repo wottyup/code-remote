@@ -1680,7 +1680,7 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
-        val footerActionSize = if (themeName == "lollipop") dp(44) else dp(34)
+        val footerActionSize = if (themeName == "lollipop") dp(38) else dp(34)
         footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(footerActionSize, dp(footerHeight)).apply {
             rightMargin = dp(4)
         })
@@ -1701,7 +1701,7 @@ class MainActivity : Activity() {
             }
             contentDescription = "发送消息"
         }
-        val sendSize = if (themeName == "lollipop") dp(42) else dp(30)
+        val sendSize = if (themeName == "lollipop") dp(36) else dp(30)
         footer.addView(sendButton, LinearLayout.LayoutParams(sendSize, sendSize).apply {
             leftMargin = dp(if (themeName == "lollipop") 2 else 6)
             gravity = Gravity.CENTER_VERTICAL
@@ -3476,7 +3476,7 @@ class MainActivity : Activity() {
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                     maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
-                if (role == "assistant") assistantMarkdown.setMarkdown(content, text.ifBlank { tr("（附件消息）") })
+                if (role == "assistant") assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text.ifBlank { tr("（附件消息）") }))
                 val contentWidth = if (role == "user") {
                     val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
                     naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
@@ -3712,6 +3712,12 @@ class MainActivity : Activity() {
 
     private var assistantMarkdownAppearance = ""
     private var assistantMarkdownCache: Markwon? = null
+    private val localInstallerLink = Regex("""\[([^\]]+)]\(<?(/[^)>\n]+\.(?:apk|exe|msi|dmg))>?\)""", RegexOption.IGNORE_CASE)
+
+    private fun displayLocalInstallerPaths(text: String): String = localInstallerLink.replace(text) { match ->
+        "${match.groupValues[1]}：${match.groupValues[2]}"
+    }
+
     private val assistantMarkdown: Markwon
         get() {
             val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT"
@@ -3769,7 +3775,7 @@ class MainActivity : Activity() {
                         hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                         maxWidth = maximumWidth
                     }
-                    assistantMarkdown.setMarkdown(content, text)
+                    assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text))
                     container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
@@ -4465,7 +4471,8 @@ class MainActivity : Activity() {
                 insert.addView(label("插入对话", 10, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
                 row.addView(insert, LinearLayout.LayoutParams(WRAP, dp(28)).apply { leftMargin = dp(8) })
                 details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
-                if (reviewing) details.addView(label(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" }, 10, MUTED, translateUi = false).apply {
+                if (reviewing) details.addView(label("", 10, MUTED, translateUi = false).apply {
+                    text = highlightedReviewDiff(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" })
                     typeface = Typeface.MONOSPACE
                     maxLines = 10
                     setPadding(dp(12), dp(7), dp(12), dp(7))
@@ -4504,6 +4511,32 @@ class MainActivity : Activity() {
         }
         refreshRows()
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
+    }
+
+    private fun highlightedReviewDiff(diff: String): SpannableStringBuilder {
+        val result = SpannableStringBuilder()
+        diff.lineSequence().forEachIndexed { index, line ->
+            if (index > 0) result.append('\n')
+            val start = result.length
+            result.append(line)
+            val kind = when {
+                line.startsWith("+") && !line.startsWith("+++") -> "added"
+                line.startsWith("-") && !line.startsWith("---") -> "deleted"
+                line.startsWith("@@") -> "hunk"
+                else -> "context"
+            }
+            val colors = when (kind) {
+                "added" -> Pair(if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), if (lightTheme) Color.rgb(223, 246, 228) else Color.rgb(24, 58, 36))
+                "deleted" -> Pair(if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), if (lightTheme) Color.rgb(252, 226, 229) else Color.rgb(67, 31, 38))
+                "hunk" -> Pair(ACCENT, if (lightTheme) Color.rgb(231, 236, 250) else Color.rgb(36, 43, 63))
+                else -> null
+            }
+            if (colors != null && result.length > start) {
+                result.setSpan(ForegroundColorSpan(colors.first), start, result.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                result.setSpan(BackgroundColorSpan(colors.second), start, result.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        return result
     }
 
     private fun renderApproval(approval: JSONObject) {
