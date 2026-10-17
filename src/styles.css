@@ -2606,3 +2606,20 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   background: #fff;
   box-shadow: inset 1px 1px 0 #d4d4d4;
 }
+
+.remote-shell--theme-retro .workspace-file-preview__code {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+.remote-shell--theme-retro .workspace-file-preview__line--added {
+  background: #d6edd8;
+  box-shadow: inset 4px 0 #4a9956;
+  color: #173f20;
+}
+
+.remote-shell--theme-retro .workspace-file-preview__line--deleted {
+  background: #f2d6d4;
+  box-shadow: inset 4px 0 #c55249;
+  color: #63221d;
+}
