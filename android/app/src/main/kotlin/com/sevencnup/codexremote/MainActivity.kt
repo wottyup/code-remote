@@ -8556,8 +8556,8 @@ class MainActivity : Activity() {
 
     private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
-        setPadding(dp(7), 0, dp(7), 0)
-        minWidth = dp(44)
+        setPadding(dp(4), 0, dp(4), 0)
+        minWidth = dp(36)
         minHeight = dp(40)
         background = if (themeName == "lollipop") lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         foreground = null
