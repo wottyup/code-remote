@@ -1517,8 +1517,18 @@ class MainActivity : Activity() {
             isFocusable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        composerFrame.addView(composerGlowView, FrameLayout.LayoutParams(MATCH, MATCH))
+        // A MATCH_PARENT child makes a WRAP_CONTENT FrameLayout consume the full
+        // available screen height on some Android layouts, leaving chatArea at 0.
+        composerFrame.addView(composerGlowView, FrameLayout.LayoutParams(MATCH, 0))
         composerFrame.addView(composer, FrameLayout.LayoutParams(MATCH, WRAP))
+        composer.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+            val height = (bottom - top).coerceAtLeast(0)
+            val params = composerGlowView.layoutParams
+            if (params.height != height) {
+                params.height = height
+                composerGlowView.layoutParams = params
+            }
+        }
         composerDock.addView(composerFrame, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         if (queueEditItem != null) {
@@ -4812,27 +4822,34 @@ class MainActivity : Activity() {
             return
         }
         persistCurrentDraft()
+        activeThreadId?.let { prefs.edit().putString(activeThreadStorageKey(previousMode), it).apply() }
         currentMode = targetMode
         sidebarSelectionMode = false
         selectedSidebarThreadIds.clear()
         prefs.edit().putString(KEY_MODE, currentMode).apply()
         updateSidebarBrand()
-        val currentEngine = activeThread?.optString("engine", "codex") ?: ""
-        if (currentEngine != currentMode) {
-            activeThreadId = null
-            activeThread = null
-            queuedMessages = JSONArray()
-            historyLoadingThreadId = null
-            historyLoadError = null
-            historySelectionGeneration += 1
-            running = false
+        val rememberedId = prefs.getString(activeThreadStorageKey(targetMode), null)?.takeIf { it.isNotBlank() }
+        val rememberedThread = rememberedId?.let { id ->
+            findThread(id)?.takeIf { it.optString("engine", "codex") == targetMode }
+                ?: if (threads.length() == 0) JSONObject().put("id", id).put("engine", targetMode) else null
+        }
+        activeThreadId = null
+        activeThread = null
+        queuedMessages = JSONArray()
+        historyLoadingThreadId = null
+        historyLoadError = null
+        historySelectionGeneration += 1
+        running = false
+        if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
+        restoreCurrentDraftFiles()
+        if (rememberedThread != null) {
+            selectThread(rememberedThread, eagerDiskCache = true)
+        } else {
             renderMessages(false)
             renderQueue()
             renderHeader()
+            renderSidebar(force = true)
         }
-        if (::composerInput.isInitialized) composerInput.setText(prefs.getString(draftStorageKey(), ""))
-        restoreCurrentDraftFiles()
-        renderSidebar(force = true)
         showModeSwitchNotice(previousMode, currentMode)
     }
 
