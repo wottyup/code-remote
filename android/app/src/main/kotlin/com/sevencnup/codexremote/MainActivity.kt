@@ -392,7 +392,7 @@ private class ComposerGlowDrawable(
 class MainActivity : Activity() {
     // The legacy-theme key remains "lollipop" for preference compatibility, but
     // its appearance now follows Android 2.3 Gingerbread rather than Material.
-    private val LOLLIPOP_PRIMARY = Color.rgb(177, 139, 82)
+    private val LOLLIPOP_PRIMARY = Color.rgb(160, 171, 174)
     private val LOLLIPOP_PRIMARY_DARK = Color.rgb(185, 185, 185)
     private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(48, 60, 68)
     private val LOLLIPOP_TEXT_SECONDARY = Color.rgb(184, 190, 188)
@@ -510,7 +510,11 @@ class MainActivity : Activity() {
         themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
         else -> ACCENT
     }
-    private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
+    private val WARNING: Int get() = when {
+        themeName == "lollipop" -> Color.rgb(169, 178, 180)
+        lightTheme -> Color.rgb(135, 91, 28)
+        else -> Color.rgb(232, 190, 112)
+    }
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
     private val io: ExecutorService = Executors.newFixedThreadPool(3)
@@ -1743,13 +1747,13 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
-            "lollipop" -> Color.rgb(76, 70, 58)
+            "lollipop" -> Color.rgb(70, 78, 81)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
-            "lollipop" -> Color.rgb(105, 94, 75)
+            "lollipop" -> Color.rgb(84, 98, 103)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
@@ -1759,7 +1763,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
-        "lollipop" -> Color.rgb(177, 139, 82)
+        "lollipop" -> Color.rgb(111, 157, 197)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
@@ -1767,7 +1771,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
-        "lollipop" -> .14f
+        "lollipop" -> 0f
         "light" -> .30f
         "warm", "custom" -> .29f
         else -> .38f
@@ -3901,7 +3905,7 @@ class MainActivity : Activity() {
             }
             val statusTint = when (status) {
                 "failed" -> ERROR
-                "running" -> if (themeName == "lollipop") LOLLIPOP_PRIMARY else ACCENT
+                "running" -> if (themeName == "lollipop") codexBrandAccent() else ACCENT
                 "stopped" -> WARNING
                 else -> when {
                     themeName == "lollipop" -> ANDROID1_ADDED_COLOR
@@ -4507,7 +4511,12 @@ class MainActivity : Activity() {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(9))
-            background = rounded(if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27), dp(12), if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44), dp(1))
+            background = rounded(
+                if (themeName == "lollipop") PANEL_INSET else if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27),
+                dp(12),
+                if (themeName == "lollipop") BORDER else if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44),
+                dp(1),
+            )
             tag = TAG_MESSAGE_DYNAMIC
         }
         box.addView(label("需要批准", 13, WARNING, true), widthWrap())
@@ -7554,8 +7563,8 @@ class MainActivity : Activity() {
         R.drawable.file_icon_go, R.drawable.file_icon_rust -> Color.rgb(111, 157, 197)
         R.drawable.file_icon_json, R.drawable.file_icon_yaml, R.drawable.file_icon_toml,
         R.drawable.file_icon_config, R.drawable.file_icon_gradle, R.drawable.file_icon_npm,
-        R.drawable.file_icon_pnpm -> Color.rgb(171, 132, 73)
-        R.drawable.file_icon_shell, R.drawable.file_icon_docker, R.drawable.file_icon_database -> Color.rgb(174, 125, 66)
+        R.drawable.file_icon_pnpm -> Color.rgb(137, 157, 169)
+        R.drawable.file_icon_shell, R.drawable.file_icon_docker, R.drawable.file_icon_database -> Color.rgb(117, 147, 151)
         R.drawable.file_icon_image -> Color.rgb(159, 119, 144)
         R.drawable.file_icon_archive, R.drawable.file_icon_pdf -> Color.rgb(164, 76, 65)
         R.drawable.file_icon_markdown, R.drawable.file_icon_text, R.drawable.file_icon_agents,
@@ -8312,13 +8321,13 @@ class MainActivity : Activity() {
         themeName == "lollipop" -> when (icon) {
             "add", "arrow_up", "check", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(164, 76, 65)
-            "folder", "folder_add", "pin" -> Color.rgb(171, 132, 73)
+            "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
             "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
             "image", "palette" -> Color.rgb(159, 119, 144)
             "chat" -> Color.rgb(111, 157, 197)
             "history" -> Color.rgb(154, 171, 181)
             "notifications" -> LOLLIPOP_PRIMARY
-            "lock" -> Color.rgb(174, 125, 66)
+            "lock" -> Color.rgb(154, 166, 169)
             "terminal", "settings", "search", "more", "back", "close", "info" -> LOLLIPOP_TEXT_SECONDARY
             "menu" -> Color.rgb(66, 66, 66)
             else -> LOLLIPOP_TEXT_SECONDARY
@@ -8511,7 +8520,7 @@ class MainActivity : Activity() {
         if (themeName == "lollipop") typeface = android1BoldTypeface
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
-        setTextColor(if (themeName == "lollipop") Color.rgb(23, 29, 14) else DARK)
+        setTextColor(if (themeName == "lollipop") Color.rgb(28, 31, 33) else DARK)
         isAllCaps = false
         background = if (themeName == "lollipop") gingerbreadButtonBackground()
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
@@ -8539,9 +8548,9 @@ class MainActivity : Activity() {
 
     private fun gingerbreadButtonBackground(accent: Boolean = false): GradientDrawable = GradientDrawable().apply {
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(if (accent) intArrayOf(Color.rgb(203, 178, 130), Color.rgb(177, 139, 82), Color.rgb(119, 91, 57))
+        setColors(if (accent) intArrayOf(Color.rgb(213, 218, 219), Color.rgb(160, 171, 174), Color.rgb(111, 121, 124))
             else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
-        setStroke(dp(1), if (accent) Color.rgb(225, 207, 171) else Color.rgb(112, 119, 119))
+        setStroke(dp(1), if (accent) Color.rgb(225, 229, 230) else Color.rgb(112, 119, 119))
         cornerRadius = dp(3).toFloat()
     }
 
@@ -8555,8 +8564,8 @@ class MainActivity : Activity() {
     private fun lollipopFabBackground(color: Int): Drawable = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(203, 178, 130), color, Color.rgb(119, 91, 57)))
-        setStroke(dp(1), Color.rgb(225, 207, 171))
+        setColors(intArrayOf(Color.rgb(213, 218, 219), color, Color.rgb(111, 121, 124)))
+        setStroke(dp(1), Color.rgb(225, 229, 230))
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
