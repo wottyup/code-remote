@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.30.1-dev.3] - 将旧网页主题调整为早期 WWW 纯文档风格
+
 ## [0.30.1-dev.2] - 修正 Android 5 主题的状态栏与导航栏配色
 
 ## [0.30.1-dev.1] - 按 Android 5 Lollipop 风格调整系统主题

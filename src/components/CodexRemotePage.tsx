@@ -5281,7 +5281,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
-    { value: 'retro', label: '旧网页', description: '经典蓝白界面', previewClass: 'theme-option__preview--retro' },
+    { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
 
