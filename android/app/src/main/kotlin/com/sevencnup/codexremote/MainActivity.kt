@@ -21,7 +21,11 @@ import android.graphics.ColorFilter
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.LinearGradient
+import android.graphics.Outline
+import android.graphics.RadialGradient
 import android.graphics.RectF
+import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
@@ -201,6 +205,126 @@ private class ThemeWallpaperDrawable(
 
     @Deprecated("Deprecated in Android graphics API")
     override fun getOpacity(): Int = if (drawableAlpha == 255 && Color.alpha(baseColor) == 255) PixelFormat.OPAQUE else PixelFormat.TRANSLUCENT
+}
+
+private class ComposerGlassDrawable(
+    private val fillColors: IntArray,
+    private val highlightColor: Int,
+    private val borderColor: Int,
+    private val cornerRadius: Float,
+) : Drawable() {
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val highlightPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val reflectionPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private var drawableAlpha = 255
+    private var colorFilter: ColorFilter? = null
+
+    override fun draw(canvas: Canvas) {
+        val rect = RectF(bounds)
+        if (rect.isEmpty) return
+
+        val clip = Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) }
+        fillPaint.alpha = drawableAlpha
+        fillPaint.colorFilter = colorFilter
+        fillPaint.shader = LinearGradient(
+            rect.left, rect.top, rect.right, rect.bottom,
+            fillColors, null, Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, fillPaint)
+
+        val checkpoint = canvas.save()
+        canvas.clipPath(clip)
+        highlightPaint.alpha = drawableAlpha
+        highlightPaint.colorFilter = colorFilter
+        highlightPaint.shader = RadialGradient(
+            rect.left + rect.width() * .13f, rect.top + rect.height() * .06f,
+            rect.width() * .92f,
+            intArrayOf(withAlpha(highlightColor, .25f), withAlpha(highlightColor, .08f), Color.TRANSPARENT),
+            floatArrayOf(0f, .48f, 1f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRect(rect, highlightPaint)
+
+        reflectionPaint.alpha = drawableAlpha
+        reflectionPaint.colorFilter = colorFilter
+        reflectionPaint.shader = LinearGradient(
+            rect.left, rect.top, rect.right, rect.top + rect.height() * .34f,
+            intArrayOf(Color.TRANSPARENT, withAlpha(highlightColor, .09f), Color.TRANSPARENT),
+            floatArrayOf(0f, .5f, 1f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(rect, cornerRadius, cornerRadius, reflectionPaint)
+        canvas.restoreToCount(checkpoint)
+
+        val inset = .5f
+        borderPaint.color = borderColor
+        borderPaint.alpha = drawableAlpha
+        borderPaint.strokeWidth = 1f
+        borderPaint.colorFilter = colorFilter
+        val borderRect = RectF(rect).apply { inset(inset, inset) }
+        canvas.drawRoundRect(borderRect, cornerRadius - inset, cornerRadius - inset, borderPaint)
+        fillPaint.shader = null
+        highlightPaint.shader = null
+        reflectionPaint.shader = null
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(filter: ColorFilter?) {
+        colorFilter = filter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Android graphics API")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    override fun getOutline(outline: Outline) {
+        outline.setRoundRect(bounds, cornerRadius)
+        outline.alpha = .92f
+    }
+
+    private fun withAlpha(color: Int, fraction: Float): Int = Color.argb(
+        (Color.alpha(color) * fraction).roundToInt().coerceIn(0, 255),
+        Color.red(color), Color.green(color), Color.blue(color),
+    )
+}
+
+private class ComposerGlowDrawable(private val color: Int) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var drawableAlpha = 255
+
+    override fun draw(canvas: Canvas) {
+        val rect = RectF(bounds)
+        if (rect.isEmpty) return
+        paint.alpha = drawableAlpha
+        paint.shader = RadialGradient(
+            rect.centerX(), rect.centerY(), rect.width() * .72f,
+            intArrayOf(withAlpha(color, .23f), withAlpha(color, .11f), Color.TRANSPARENT),
+            floatArrayOf(0f, .46f, 1f), Shader.TileMode.CLAMP,
+        )
+        canvas.drawRoundRect(rect, rect.height() * .42f, rect.height() * .42f, paint)
+        paint.shader = null
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(filter: ColorFilter?) {
+        paint.colorFilter = filter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Android graphics API")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    private fun withAlpha(color: Int, fraction: Float): Int = Color.argb(
+        (Color.alpha(color) * fraction).roundToInt().coerceIn(0, 255),
+        Color.red(color), Color.green(color), Color.blue(color),
+    )
 }
 
 class MainActivity : Activity() {
@@ -429,6 +553,9 @@ class MainActivity : Activity() {
     private lateinit var page: LinearLayout
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
+    private lateinit var composerGlowView: View
+    private var composerGlowAnimator: ValueAnimator? = null
+    private var composerGlowRunning = false
     private lateinit var titleView: TextView
     private lateinit var modeButton: ImageButton
     private lateinit var statusView: TextView
@@ -607,6 +734,8 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        composerGlowAnimator?.cancel()
+        composerGlowAnimator = null
         stopQueueEditRenewal()
         handler.removeCallbacksAndMessages(null)
         val closingSocket = socket
@@ -1247,15 +1376,21 @@ class MainActivity : Activity() {
     }
 
     private fun buildComposer() {
+        composerGlowAnimator?.cancel()
+        composerGlowAnimator = null
+        composerGlowRunning = false
         composerDock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(2), dp(12), dp(12))
             background = ColorDrawable(Color.TRANSPARENT)
+            clipChildren = false
+            clipToPadding = false
         }
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            background = if (themeName == "custom") rounded(colorWithAlpha(OPAQUE_PANEL, .2f), dp(18), BORDER, dp(1)) else rounded(PANEL, dp(18), BORDER, dp(1))
+            background = composerGlassBackground()
+            elevation = dp(12).toFloat()
         }
         queueEditBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1271,6 +1406,7 @@ class MainActivity : Activity() {
             gravity = Gravity.TOP or Gravity.START
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_SEND
             setPadding(dp(2), dp(5), dp(2), dp(4))
+            setLineSpacing(dp(2).toFloat(), 1.25f)
             background = null
             setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus && !imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
@@ -1352,7 +1488,20 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
-        composerDock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
+        val composerFrame = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
+        composerGlowView = View(this).apply {
+            background = ComposerGlowDrawable(composerGlowColor())
+            alpha = 0f
+            isClickable = false
+            isFocusable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        composerFrame.addView(composerGlowView, FrameLayout.LayoutParams(MATCH, MATCH))
+        composerFrame.addView(composer, FrameLayout.LayoutParams(MATCH, WRAP))
+        composerDock.addView(composerFrame, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         if (queueEditItem != null) {
             queueEditBar.visibility = View.VISIBLE
@@ -1361,6 +1510,80 @@ class MainActivity : Activity() {
         renderAttachmentStrip()
         updateComposerPreferences()
         updateSendButton()
+        updateComposerRunningGlow(running)
+    }
+
+    private fun composerGlassBackground(): Drawable {
+        val fills = when (themeName) {
+            "light" -> intArrayOf(
+                colorWithAlpha(Color.rgb(255, 255, 255), .92f),
+                colorWithAlpha(Color.rgb(248, 249, 251), .95f),
+                colorWithAlpha(Color.rgb(255, 255, 255), .97f),
+            )
+            "warm" -> intArrayOf(
+                colorWithAlpha(Color.rgb(255, 251, 245), .94f),
+                colorWithAlpha(Color.rgb(246, 235, 221), .95f),
+            )
+            "custom" -> intArrayOf(
+                colorWithAlpha(OPAQUE_PANEL, .58f),
+                colorWithAlpha(OPAQUE_PANEL, .68f),
+                colorWithAlpha(OPAQUE_PANEL, .72f),
+            )
+            else -> intArrayOf(
+                colorWithAlpha(Color.rgb(40, 44, 54), .9f),
+                colorWithAlpha(Color.rgb(24, 26, 32), .94f),
+                colorWithAlpha(Color.rgb(18, 20, 25), .97f),
+            )
+        }
+        val highlight = when (themeName) {
+            "warm" -> Color.rgb(255, 249, 238)
+            "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+            else -> Color.rgb(229, 234, 249)
+        }
+        val border = when (themeName) {
+            "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
+            "warm" -> colorWithAlpha(Color.rgb(255, 255, 255), .62f)
+            "light" -> Color.argb(155, 255, 255, 255)
+            else -> Color.argb(48, 222, 229, 246)
+        }
+        return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
+    }
+
+    private fun composerGlowColor(): Int = when (themeName) {
+        "light" -> Color.rgb(128, 128, 128)
+        "warm" -> Color.rgb(143, 113, 86)
+        "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
+        else -> Color.WHITE
+    }
+
+    private fun updateComposerRunningGlow(isRunning: Boolean) {
+        if (!::composerGlowView.isInitialized || composerGlowRunning == isRunning) return
+        composerGlowRunning = isRunning
+        composerGlowAnimator?.cancel()
+        composerGlowAnimator = null
+        composerGlowView.animate().cancel()
+        if (!isRunning) {
+            composerGlowView.animate().alpha(0f).setDuration(220L).start()
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ValueAnimator.areAnimatorsEnabled()) {
+            composerGlowView.alpha = .36f
+            return
+        }
+        composerGlowView.alpha = .28f
+        composerGlowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 3_200L
+            repeatMode = ValueAnimator.REVERSE
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener { animator ->
+                val phase = animator.animatedValue as Float
+                composerGlowView.alpha = .32f + phase * .42f
+                composerGlowView.translationX = (phase - .5f) * dp(10)
+                composerGlowView.scaleX = .9f + phase * .2f
+            }
+            start()
+        }
     }
 
     private fun buildSidebar() {
@@ -2983,7 +3206,7 @@ class MainActivity : Activity() {
                 } else TEXT
                 val content = label(if (role == "assistant") "" else text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
                     setTextIsSelectable(true)
-                    setLineSpacing(dp(if (role == "assistant") 3 else 2).toFloat(), if (role == "assistant") 1.15f else 1.08f)
+                    setLineSpacing(dp(3).toFloat(), 1.3f)
                     typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                     setHorizontallyScrolling(false)
                     breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
@@ -3065,6 +3288,7 @@ class MainActivity : Activity() {
             if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
             updateScrollToBottomButton()
         }
+        updateComposerRunningGlow(running)
     }
 
     private fun updateScrollToBottomButton() {
@@ -3203,14 +3427,14 @@ class MainActivity : Activity() {
                 .usePlugin(object : AbstractMarkwonPlugin() {
                     override fun configureTheme(builder: MarkwonTheme.Builder) {
                         builder.linkColor(ACCENT)
-                            .blockMargin(dp(10))
+                            .blockMargin(dp(12))
                             .blockQuoteColor(MUTED)
                             .blockQuoteWidth(dp(2))
                             .codeTextColor(TEXT)
                             .codeBlockTextColor(TEXT)
                             .codeBackgroundColor(PANEL_INSET)
                             .codeBlockBackgroundColor(PANEL_INSET)
-                            .codeBlockMargin(dp(8))
+                            .codeBlockMargin(dp(9))
                             .headingBreakHeight(dp(4))
                     }
                 })
@@ -3245,7 +3469,7 @@ class MainActivity : Activity() {
                     if (text.isBlank()) continue
                     val content = label("", 14, TEXT, translateUi = false).apply {
                         setTextIsSelectable(true)
-                        setLineSpacing(dp(3).toFloat(), 1.15f)
+                        setLineSpacing(dp(3).toFloat(), 1.3f)
                         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
                         setHorizontallyScrolling(false)
                         breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
@@ -4133,6 +4357,7 @@ class MainActivity : Activity() {
     }
 
     private fun updateSendButton() {
+        updateComposerRunningGlow(running)
         if (!::sendButton.isInitialized) return
         val editingQueue = queueEditItem != null
         val hasDraft = ::composerInput.isInitialized && (composerInput.text.isNotBlank() || selectedFiles.isNotEmpty())
