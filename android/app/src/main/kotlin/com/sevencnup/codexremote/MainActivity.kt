@@ -1822,7 +1822,7 @@ class MainActivity : Activity() {
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
-        val actionColor = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else SUBTLE
+        val actionColor = SUBTLE
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         setPadding(dp(1), dp(2), dp(1), dp(2))
@@ -1903,7 +1903,7 @@ class MainActivity : Activity() {
             dp(7),
         )
         sidebarNewThreadLabel.setTextColor(foreground)
-        val actionColor = if (claudeMode) CLAUDE_MODE_ACCENT else SUBTLE
+        val actionColor = SUBTLE
         sidebarActionAccentViews.forEach { (icon, label) ->
             icon.imageTintList = ColorStateList.valueOf(actionColor)
             label.setTextColor(actionColor)
@@ -2087,7 +2087,7 @@ class MainActivity : Activity() {
             }
             empty.addView(ImageView(this).apply {
                 setImageResource(if (currentMode == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                setColorFilter(MUTED)
+                setColorFilter(if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent())
                 alpha = .55f
             }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { bottomMargin = dp(9) })
             empty.addView(label(if (query.isBlank()) "当前模式暂无对话" else "没有匹配的对话", 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
@@ -2122,7 +2122,7 @@ class MainActivity : Activity() {
                     contentDescription = if (selected) "已勾选" else "未勾选"
                 } else {
                     setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                    setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT)
+                    setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent())
                     contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
                 }
             }
@@ -4156,6 +4156,37 @@ class MainActivity : Activity() {
         }
         heading.addView(summary, LinearLayout.LayoutParams(0, WRAP, 1f))
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val detailsScroll = object : ScrollView(this) {
+            var limitHeight = false
+
+            override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                val maxHeight = minOf(dp(400), (messageScroll.height * .55f).toInt().coerceAtLeast(dp(180)))
+                val measuredHeight = if (limitHeight) View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST) else heightMeasureSpec
+                super.onMeasure(widthMeasureSpec, measuredHeight)
+            }
+        }.apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            isNestedScrollingEnabled = true
+            addView(details, FrameLayout.LayoutParams(MATCH, WRAP))
+            var previousY = 0f
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        previousY = event.y
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val direction = if (event.y < previousY) 1 else -1
+                        view.parent?.requestDisallowInterceptTouchEvent(view.canScrollVertically(direction))
+                        previousY = event.y
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                }
+                false
+            }
+        }
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val review = label("审核", 11, copyColor).apply {
             gravity = Gravity.CENTER
             setPadding(dp(10), 0, dp(10), 0)
@@ -4163,12 +4194,16 @@ class MainActivity : Activity() {
         }
         heading.addView(review, LinearLayout.LayoutParams(WRAP, dp(32)).apply { leftMargin = dp(8) })
         card.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
-        card.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
+        card.addView(detailsScroll, LinearLayout.LayoutParams(MATCH, WRAP))
+        card.addView(footer, LinearLayout.LayoutParams(MATCH, WRAP))
         var reviewing = false
         lateinit var refreshRows: () -> Unit
         refreshRows = {
             details.removeAllViews()
+            footer.removeAllViews()
             val expanded = summaryId in expandedFileChangeIds
+            detailsScroll.limitHeight = expanded || reviewing
+            detailsScroll.requestLayout()
             val visible = if (expanded || reviewing) entries else entries.take(1)
             visible.forEach { entry ->
                 details.addView(View(this).apply { setBackgroundColor(divider) }, LinearLayout.LayoutParams(MATCH, dp(1)))
@@ -4210,7 +4245,7 @@ class MainActivity : Activity() {
                 }, LinearLayout.LayoutParams(MATCH, WRAP))
             }
             if (entries.size > 1) {
-                details.addView(View(this).apply { setBackgroundColor(divider) }, LinearLayout.LayoutParams(MATCH, dp(1)))
+                footer.addView(View(this).apply { setBackgroundColor(divider) }, LinearLayout.LayoutParams(MATCH, dp(1)))
                 val more = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
@@ -4221,6 +4256,7 @@ class MainActivity : Activity() {
                         reviewing = false
                         review.text = "审核"
                         refreshRows()
+                        detailsScroll.scrollTo(0, 0)
                     }
                 }
                 more.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
@@ -4228,13 +4264,14 @@ class MainActivity : Activity() {
                     setImageResource(if (expanded || reviewing) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
                     imageTintList = ColorStateList.valueOf(copyColor)
                 }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5) })
-                details.addView(more, LinearLayout.LayoutParams(MATCH, WRAP))
+                footer.addView(more, LinearLayout.LayoutParams(MATCH, WRAP))
             }
         }
         review.setOnClickListener {
             reviewing = !reviewing
             review.text = if (reviewing) "收起审核" else "审核"
             refreshRows()
+            detailsScroll.scrollTo(0, 0)
         }
         refreshRows()
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
@@ -5376,7 +5413,7 @@ class MainActivity : Activity() {
                 setOnClickListener { applyThemeFromSettings(theme) }
             }
             val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            copy.addView(label(title, 13, if (selected) settingsAccent else TEXT, selected), widthWrap())
+            copy.addView(label(title, 13, TEXT, selected), widthWrap())
             copy.addView(label(description, 10, MUTED), widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             row.addView(ImageView(this).apply {
@@ -5407,7 +5444,7 @@ class MainActivity : Activity() {
             val transparencyHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             transparencyHeader.addView(label("背景透明度", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
             val transparencyValue = prefs.getInt(KEY_BACKGROUND_TRANSPARENCY, 0).coerceIn(0, 100)
-            val transparencyLabel = label("$transparencyValue%", 12, ACCENT, true)
+            val transparencyLabel = label("$transparencyValue%", 12, TEXT, true)
             transparencyHeader.addView(transparencyLabel, widthWrap())
             transparencyRow.addView(transparencyHeader, widthWrap())
             transparencyRow.addView(label("数值越高，全局背景图片越透明。", 10, MUTED), widthWrap())
@@ -5441,7 +5478,7 @@ class MainActivity : Activity() {
         val display = section("显示", "字体大小会同时影响聊天、输入框、侧栏、文件区和设置页面。")
         val sizeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val currentFontAdjustment = globalFontAdjustment()
-        val sizeLabel = label(if (currentFontAdjustment == 0) "标准" else "${if (currentFontAdjustment > 0) "+" else ""}${currentFontAdjustment} px", 13, ACCENT, true)
+        val sizeLabel = label(if (currentFontAdjustment == 0) "标准" else "${if (currentFontAdjustment > 0) "+" else ""}${currentFontAdjustment} px", 13, TEXT, true)
         sizeRow.addView(label("全局字体", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
         sizeRow.addView(sizeLabel, LinearLayout.LayoutParams(WRAP, WRAP))
         display.addView(sizeRow, widthWrap())
@@ -5492,7 +5529,7 @@ class MainActivity : Activity() {
                     }
                 }
             }
-            row.addView(label(title, 13, if (selected) settingsAccent else TEXT, selected), LinearLayout.LayoutParams(0, WRAP, 1f))
+            row.addView(label(title, 13, TEXT, selected), LinearLayout.LayoutParams(0, WRAP, 1f))
             if (selected) row.addView(ImageView(this).apply {
                 setImageResource(R.drawable.ic_check)
                 imageTintList = ColorStateList.valueOf(settingsAccent)
@@ -5511,7 +5548,7 @@ class MainActivity : Activity() {
             setOnClickListener { toggleSystemNotifications() }
         }
         notificationRow.addView(label("回复完成提醒", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
-        settingsNotificationButton = label("", 12, ACCENT, true).apply { gravity = Gravity.CENTER; minWidth = dp(72) }
+        settingsNotificationButton = label("", 12, TEXT, true).apply { gravity = Gravity.CENTER; minWidth = dp(72) }
         notificationRow.addView(settingsNotificationButton, LinearLayout.LayoutParams(dp(72), WRAP))
         notifications.addView(notificationRow, LinearLayout.LayoutParams(MATCH, dp(40)))
         refreshSettingsNotificationControl()
@@ -5521,7 +5558,7 @@ class MainActivity : Activity() {
         }, widthWrap())
 
         val connection = section("连接", "保存多台电脑，点击即可切换。")
-        connection.addView(label(if (runtime.optBoolean("connected", false)) "电脑服务已连接" else "电脑服务等待连接", 12, if (runtime.optBoolean("connected", false)) ACCENT else MUTED, true), widthWrap())
+        connection.addView(label(if (runtime.optBoolean("connected", false)) "电脑服务已连接" else "电脑服务等待连接", 12, if (runtime.optBoolean("connected", false)) TEXT else MUTED, true), widthWrap())
         connectionProfiles.toList().forEach { profile ->
             val selected = profile.id == activeConnectionId
             val row = LinearLayout(this).apply {
@@ -5536,7 +5573,7 @@ class MainActivity : Activity() {
                 contentDescription = if (selected) "当前连接 ${profile.name}" else "切换到 ${profile.name}"
                 setOnClickListener { switchConnection(profile.id) }
             }
-            copy.addView(label(if (selected) "${profile.name} · ${tr("当前")}" else profile.name, 12, if (selected) ACCENT else TEXT, selected, translateUi = false), widthWrap())
+            copy.addView(label(if (selected) "${profile.name} · ${tr("当前")}" else profile.name, 12, TEXT, selected, translateUi = false), widthWrap())
             copy.addView(label(profile.endpoint, 10, MUTED, translateUi = false).apply {
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
@@ -5703,7 +5740,7 @@ class MainActivity : Activity() {
         previewRow.addView(preview, LinearLayout.LayoutParams(dp(56), dp(28)))
         card.addView(previewRow, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
         card.addView(input, LinearLayout.LayoutParams(MATCH, dp(46)).apply { topMargin = dp(6) })
-        card.addView(label("常用色阶", 12, ASSISTANT_NAME_ACCENT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
+        card.addView(label("常用色阶", 12, TEXT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(10) })
         card.addView(label("点选色卡，或输入 #RRGGBB。", 10, MUTED), LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3) })
 
         val paletteColors = listOf(
@@ -5759,7 +5796,7 @@ class MainActivity : Activity() {
 
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
         actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(38)))
-        actions.addView(dialogTextButton("应用", ASSISTANT_NAME_ACCENT) {
+        actions.addView(dialogTextButton("应用", TEXT) {
             val value = input.text.toString().trim()
             if (!Regex("^#[0-9a-fA-F]{6}$").matches(value)) {
                 showToast("请输入 #RRGGBB 格式的颜色")
@@ -5831,7 +5868,7 @@ class MainActivity : Activity() {
     private fun refreshSettingsNotificationControl() {
         settingsNotificationButton?.apply {
             text = tr(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) "已开启" else "已关闭")
-            setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) ACCENT else MUTED)
+            setTextColor(if (prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) TEXT else MUTED)
         }
     }
 
@@ -7939,12 +7976,7 @@ class MainActivity : Activity() {
         view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
     }
 
-    private fun codexBrandAccent(): Int = when (themeName) {
-        "warm" -> Color.rgb(146, 114, 83)
-        "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
-        "light" -> Color.rgb(75, 96, 157)
-        else -> Color.rgb(170, 186, 255)
-    }
+    private fun codexBrandAccent(): Int = if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
 
     private fun iconResource(icon: String): Int = when (icon) {
         "codex" -> R.drawable.ic_brand_codex
