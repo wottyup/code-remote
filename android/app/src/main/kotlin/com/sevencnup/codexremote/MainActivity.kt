@@ -1566,7 +1566,7 @@ class MainActivity : Activity() {
         val border = when (themeName) {
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(213, 198, 179)
-            "light" -> Color.rgb(197, 205, 217)
+            "light" -> Color.rgb(208, 208, 208)
             else -> Color.argb(48, 222, 229, 246)
         }
         return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
