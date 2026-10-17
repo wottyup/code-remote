@@ -41,6 +41,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
@@ -3912,6 +3913,15 @@ class MainActivity : Activity() {
         val mimeType: String?,
     )
 
+    private data class WebDownloadRateSample(val bytes: Long, val timestamp: Long)
+
+    private data class WebDownloadRowUi(
+        val container: LinearLayout,
+        val title: TextView,
+        val details: TextView,
+        val progress: ProgressBar,
+    )
+
     private fun showWebAddressDialog(currentAddress: String, onLoad: (String) -> Unit) {
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -4017,6 +4027,175 @@ class MainActivity : Activity() {
             .onFailure { showToast("下载启动失败：${it.message ?: "请稍后重试"}") }
     }
 
+    private fun showWebDownloadsDialog() {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(9), dp(14), dp(10))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(label("下载", 16, TEXT, true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        header.addView(iconButton("close", "关闭下载列表") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(36), dp(36)))
+        content.addView(header, LinearLayout.LayoutParams(MATCH, dp(42)))
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val emptyState = label("暂无下载。打开网页并点击下载链接后会显示在这里。", 13, MUTED).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(34), dp(18), dp(34))
+        }
+        rows.addView(emptyState, LinearLayout.LayoutParams(MATCH, WRAP))
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(rows, ViewGroup.LayoutParams(MATCH, WRAP))
+        }
+        content.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        dialog.setContentView(content)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout((resources.displayMetrics.widthPixels - dp(28)).coerceAtLeast(dp(270)),
+                (resources.displayMetrics.heightPixels * .72f).toInt())
+            setGravity(Gravity.CENTER)
+        }
+
+        val rowViews = mutableMapOf<Long, WebDownloadRowUi>()
+        val samples = mutableMapOf<Long, WebDownloadRateSample>()
+        val updateDownloads = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                val cursor = runCatching { manager.query(DownloadManager.Query()) }.getOrNull()
+                if (cursor == null) {
+                    emptyState.text = "无法读取下载列表"
+                    emptyState.visibility = View.VISIBLE
+                    handler.postDelayed(this, 1000L)
+                    return
+                }
+                val now = SystemClock.elapsedRealtime()
+                val visibleIds = mutableSetOf<Long>()
+                cursor.use { result ->
+                    val idColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+                    val titleColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)
+                    val statusColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+                    val reasonColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
+                    val bytesColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                    val totalColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                    val mimeColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE)
+                    while (result.moveToNext()) {
+                        val id = result.getLong(idColumn)
+                        visibleIds += id
+                        val title = result.getString(titleColumn)?.takeIf { it.isNotBlank() } ?: "网页文件下载"
+                        val status = result.getInt(statusColumn)
+                        val reason = result.getInt(reasonColumn)
+                        val bytes = result.getLong(bytesColumn).coerceAtLeast(0L)
+                        val total = result.getLong(totalColumn)
+                        val mimeType = result.getString(mimeColumn).orEmpty()
+                        val previous = samples[id]
+                        val elapsed = previous?.let { (now - it.timestamp).coerceAtLeast(1L) } ?: 1L
+                        val rate = if (status == DownloadManager.STATUS_RUNNING && previous != null) {
+                            ((bytes - previous.bytes).coerceAtLeast(0L) * 1000L / elapsed)
+                        } else 0L
+                        samples[id] = WebDownloadRateSample(bytes, now)
+
+                        val row = rowViews.getOrPut(id) {
+                            val titleView = label(title, 13, TEXT, true, translateUi = false).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                            }
+                            val detailsView = label("", 11, MUTED, translateUi = false)
+                            val progressView = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                                max = 100
+                                progressTintList = ColorStateList.valueOf(ACCENT)
+                                progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+                            }
+                            val rowContent = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.VERTICAL
+                                setPadding(dp(3), dp(10), dp(3), dp(10))
+                                addView(titleView, LinearLayout.LayoutParams(MATCH, WRAP))
+                                addView(detailsView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
+                                addView(progressView, LinearLayout.LayoutParams(MATCH, dp(3)).apply { topMargin = dp(7) })
+                            }
+                            rows.addView(rowContent, LinearLayout.LayoutParams(MATCH, WRAP))
+                            rows.addView(View(this@MainActivity).apply { setBackgroundColor(BORDER) }, LinearLayout.LayoutParams(MATCH, dp(1)))
+                            WebDownloadRowUi(rowContent, titleView, detailsView, progressView)
+                        }
+                        row.title.text = title
+                        val statusText = when (status) {
+                            DownloadManager.STATUS_PENDING -> "等待下载"
+                            DownloadManager.STATUS_RUNNING -> "正在下载"
+                            DownloadManager.STATUS_PAUSED -> when (reason) {
+                                DownloadManager.PAUSED_WAITING_TO_RETRY -> "网络波动，稍后重试"
+                                DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "等待网络"
+                                DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "等待 Wi-Fi"
+                                else -> "已暂停"
+                            }
+                            DownloadManager.STATUS_SUCCESSFUL -> "下载完成 · 点击打开"
+                            DownloadManager.STATUS_FAILED -> "下载失败（$reason）"
+                            else -> "状态未知"
+                        }
+                        val totalText = if (total > 0L) formatDownloadSize(total) else "大小未知"
+                        val speedText = if (status == DownloadManager.STATUS_RUNNING) {
+                            if (previous != null) " · ${formatDownloadRate(rate)}" else " · 计算速度中…"
+                        } else ""
+                        row.details.text = "$statusText · ${formatDownloadSize(bytes)} / $totalText$speedText"
+                        row.progress.isIndeterminate = total <= 0L && status in setOf(DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING)
+                        row.progress.progress = if (total > 0L) ((bytes * 100L / total).toInt()).coerceIn(0, 100) else 0
+                        row.container.contentDescription = if (status == DownloadManager.STATUS_SUCCESSFUL) "打开下载文件：$title" else title
+                        row.container.setOnClickListener(if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            View.OnClickListener { openDownloadedWebFile(manager, id, mimeType) }
+                        } else null)
+                    }
+                }
+                emptyState.visibility = if (visibleIds.isEmpty()) View.VISIBLE else View.GONE
+                (rowViews.keys - visibleIds).forEach { id ->
+                    rowViews.remove(id)?.let { row -> rows.removeView(row.container) }
+                    samples.remove(id)
+                }
+                handler.postDelayed(this, 1000L)
+            }
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(updateDownloads) }
+        handler.post(updateDownloads)
+    }
+
+    private fun formatDownloadSize(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val units = arrayOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unit = -1
+        do {
+            value /= 1024.0
+            unit++
+        } while (value >= 1024.0 && unit < units.lastIndex)
+        return String.format(Locale.getDefault(), "%.1f %s", value, units[unit])
+    }
+
+    private fun formatDownloadRate(bytesPerSecond: Long): String = "${formatDownloadSize(bytesPerSecond)}/s"
+
+    private fun openDownloadedWebFile(manager: DownloadManager, id: Long, mimeType: String) {
+        val uri = manager.getUriForDownloadedFile(id)
+        if (uri == null) {
+            showToast("找不到已下载的文件")
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType.ifBlank { "*/*" })
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { showToast("没有可用的应用打开此文件") }
+    }
+
     private data class WebPreviewFrame(
         val x: Int,
         val y: Int,
@@ -4108,11 +4287,12 @@ class MainActivity : Activity() {
         val backButton = iconButton("back", "网页后退") { if (webView.canGoBack()) webView.goBack() }
         val forwardButton = iconButton("chevron_right", "网页前进") { if (webView.canGoForward()) webView.goForward() }
         val refreshButton = iconButton("refresh", "刷新网页") { webView.reload() }
+        val downloadButton = iconButton("download", "查看下载") { showWebDownloadsDialog() }
         val externalButton = iconButton("open", "用浏览器打开") {
             openExternalChatLink(webView.url ?: url)
         }
         val closeButton = iconButton("close", "关闭网页预览") { closeWebPreview() }
-        listOf(backButton, forwardButton, refreshButton, externalButton, closeButton).forEach { button ->
+        listOf(backButton, forwardButton, refreshButton, downloadButton, externalButton, closeButton).forEach { button ->
             button.minimumWidth = dp(34)
             button.minimumHeight = dp(36)
             toolbar.addView(button, LinearLayout.LayoutParams(dp(36), dp(38)))
@@ -9000,7 +9180,7 @@ class MainActivity : Activity() {
         icon == "codex" -> codexBrandAccent()
         icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
         themeName == "lollipop" -> when (icon) {
-            "add", "arrow_up", "check", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(164, 76, 65)
             "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
             "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
@@ -9095,6 +9275,7 @@ class MainActivity : Activity() {
             "search" -> R.drawable.ic_android1_search
             "settings" -> R.drawable.ic_android1_settings
             "refresh" -> R.drawable.ic_android1_refresh
+            "download" -> R.drawable.ic_android1_save
             "arrow_up" -> R.drawable.ic_android1_arrow_up
             "send" -> R.drawable.ic_android1_send
             "file" -> R.drawable.ic_android1_file
@@ -9141,6 +9322,7 @@ class MainActivity : Activity() {
         "search" -> R.drawable.ic_search
         "settings" -> R.drawable.ic_settings
         "refresh" -> R.drawable.ic_refresh
+        "download" -> R.drawable.ic_download
         "arrow_up" -> R.drawable.ic_arrow_up
         "send" -> R.drawable.ic_arrow_up
         "file" -> R.drawable.ic_file
