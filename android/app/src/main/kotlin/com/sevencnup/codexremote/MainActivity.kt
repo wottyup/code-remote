@@ -4156,26 +4156,52 @@ class MainActivity : Activity() {
         val summaryId = "files:$turnId"
         val additions = entries.sumOf { it.additions }
         val deletions = entries.sumOf { it.deletions }
+        val cardBorder = if (lightTheme) Color.rgb(227, 227, 230) else Color.rgb(70, 70, 74)
+        val divider = if (lightTheme) Color.rgb(237, 237, 238) else Color.rgb(69, 69, 73)
+        val controlSurface = if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(56, 56, 59)
+        val controlBorder = if (lightTheme) Color.rgb(226, 226, 229) else Color.rgb(75, 75, 80)
+        val copyColor = if (lightTheme) Color.rgb(88, 88, 94) else Color.rgb(199, 199, 203)
+        val addedColor = if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
+        val deletedColor = if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(9))
-            background = rounded(PANEL, dp(11), BORDER, dp(1))
+            background = rounded(PANEL, dp(11), cardBorder, dp(1))
+            clipToOutline = true
             tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
         }
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(61)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
         }
-        heading.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_edit)
-            imageTintList = ColorStateList.valueOf(ACCENT)
-        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(7) })
-        heading.addView(label("${if (running && turnId == activeThread?.optJSONArray("turns")?.optJSONObject((activeThread?.optJSONArray("turns")?.length() ?: 1) - 1)?.optString("id")) "正在编辑" else "本次已编辑"} ${entries.size} 个文件", 12, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(6), 0, 0, 0) })
+        val iconFrame = FrameLayout(this).apply {
+            background = rounded(if (lightTheme) Color.rgb(247, 247, 248) else Color.rgb(39, 39, 41), dp(10), cardBorder, dp(1))
+        }
+        iconFrame.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_file)
+            imageTintList = ColorStateList.valueOf(if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
+        }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
+        heading.addView(iconFrame, LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(10) })
+        val summary = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        summary.addView(label("本次已编辑 ${entries.size} 个文件", 13, TEXT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, widthWrap())
+        if (additions > 0 || deletions > 0) {
+            val stats = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            if (additions > 0) stats.addView(label("+$additions", 11, addedColor))
+            if (deletions > 0) stats.addView(label("-$deletions", 11, deletedColor).apply { setPadding(dp(7), 0, 0, 0) })
+            summary.addView(stats, widthWrap())
+        }
+        heading.addView(summary, LinearLayout.LayoutParams(0, WRAP, 1f))
         val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val review = label("审核", 11, ACCENT, true).apply { setPadding(dp(9), dp(5), 0, dp(5)) }
-        heading.addView(review, LinearLayout.LayoutParams(WRAP, WRAP))
+        val review = label("审核", 11, copyColor).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(10), 0, dp(10), 0)
+            background = rounded(controlSurface, dp(8), controlBorder, dp(1))
+        }
+        heading.addView(review, LinearLayout.LayoutParams(WRAP, dp(32)).apply { leftMargin = dp(8) })
         card.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
         card.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
         var reviewing = false
@@ -4185,38 +4211,65 @@ class MainActivity : Activity() {
             val expanded = summaryId in expandedFileChangeIds
             val visible = if (expanded || reviewing) entries else entries.take(1)
             visible.forEach { entry ->
+                details.addView(View(this).apply { setBackgroundColor(divider) }, LinearLayout.LayoutParams(MATCH, dp(1)))
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(23), dp(5), 0, dp(5))
+                    minimumHeight = dp(44)
+                    setPadding(dp(12), dp(4), dp(12), dp(4))
+                    setBackgroundColor(if (lightTheme) Color.WHITE else Color.rgb(57, 57, 60))
                 }
-                row.addView(label(entry.path, 11, ACCENT, translateUi = false).apply {
+                row.addView(label(entry.path, 11, copyColor, translateUi = false).apply {
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
                     setOnClickListener { showDiffPreview(entry) }
                 }, LinearLayout.LayoutParams(0, WRAP, 1f))
-                if (entry.additions > 0) row.addView(label("+${entry.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-                if (entry.deletions > 0) row.addView(label("-${entry.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(5), 0, 0, 0) })
-                row.addView(label("插入对话", 10, ACCENT).apply {
-                    setPadding(dp(8), dp(5), 0, dp(5))
+                if (entry.additions > 0) row.addView(label("+${entry.additions}", 10, addedColor).apply { setPadding(dp(5), 0, 0, 0) })
+                if (entry.deletions > 0) row.addView(label("-${entry.deletions}", 10, deletedColor).apply { setPadding(dp(5), 0, 0, 0) })
+                val insert = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER
+                    setPadding(dp(7), 0, dp(7), 0)
+                    background = rounded(controlSurface, dp(7), controlBorder, dp(1))
                     setOnClickListener { insertWorkspacePathIntoComposer(entry.path) }
-                })
+                    contentDescription = "插入 ${entry.path} 到对话"
+                }
+                insert.addView(ImageView(this).apply {
+                    setImageResource(R.drawable.ic_insert_conversation)
+                    imageTintList = ColorStateList.valueOf(copyColor)
+                }, LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(3) })
+                insert.addView(label("插入对话", 10, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
+                row.addView(insert, LinearLayout.LayoutParams(WRAP, dp(28)).apply { leftMargin = dp(8) })
                 details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
-                if (reviewing) details.addView(label(entry.diff.ifBlank { "暂无差异片段，点击文件名查看文件" }, 10, MUTED, translateUi = false).apply {
-                    maxLines = 7
-                    setPadding(dp(23), dp(3), 0, dp(6))
+                if (reviewing) details.addView(label(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" }, 10, MUTED, translateUi = false).apply {
+                    typeface = Typeface.MONOSPACE
+                    maxLines = 10
+                    setPadding(dp(12), dp(7), dp(12), dp(7))
+                    setBackgroundColor(if (lightTheme) Color.rgb(250, 250, 250) else Color.rgb(37, 37, 39))
                     setOnClickListener { showDiffPreview(entry) }
                 }, LinearLayout.LayoutParams(MATCH, WRAP))
             }
-            if (entries.size > 1) details.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, ACCENT, true).apply {
-                setPadding(dp(23), dp(5), 0, dp(4))
-                setOnClickListener {
-                    if (summaryId in expandedFileChangeIds) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
-                    reviewing = false
-                    review.text = "审核"
-                    refreshRows()
+            if (entries.size > 1) {
+                details.addView(View(this).apply { setBackgroundColor(divider) }, LinearLayout.LayoutParams(MATCH, dp(1)))
+                val more = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = dp(36)
+                    setPadding(dp(12), 0, dp(12), 0)
+                    setOnClickListener {
+                        if (expanded || reviewing) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
+                        reviewing = false
+                        review.text = "审核"
+                        refreshRows()
+                    }
                 }
-            }, LinearLayout.LayoutParams(MATCH, WRAP))
+                more.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
+                more.addView(ImageView(this).apply {
+                    setImageResource(if (expanded || reviewing) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+                    imageTintList = ColorStateList.valueOf(copyColor)
+                }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5) })
+                details.addView(more, LinearLayout.LayoutParams(MATCH, WRAP))
+            }
         }
         review.setOnClickListener {
             reviewing = !reviewing
