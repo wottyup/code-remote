@@ -26,7 +26,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
@@ -1387,7 +1387,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.21.7-dev.19", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.28.4-dev.3", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1677,7 +1677,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.get("/api/v1/codex/queue/{thread_id}")
     async def read_queued_messages(thread_id: str) -> dict[str, Any]:
-        return {"queue": shared_state.queue(thread_id)}
+        return {"queue": shared_state.queue(thread_id), "paused": shared_state.is_paused(thread_id)}
 
     @app.post("/api/v1/codex/queue/{thread_id}/submit")
     async def submit_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
@@ -1718,6 +1718,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/edit/renew")
+    async def renew_queued_edit(thread_id: str, body: QueueMessageIdRequest) -> dict[str, bool]:
+        try:
+            shared_state.renew_edit(thread_id, body.message_id, body.owner_id or "legacy")
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"renewed": True}
 
     @app.post("/api/v1/codex/queue/{thread_id}/edit/update")
     async def update_queued_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
@@ -1923,16 +1931,38 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")
     async def interrupt_turn(thread_id: str, body: InterruptRequest | None = None) -> dict[str, bool]:
-        if is_claude_thread_id(thread_id):
-            try:
-                return {"interrupted": await claude_code.interrupt(thread_id, body.turn_id if body else None)}
-            except ClaudeThreadNotFoundError as error:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         try:
-            await app_server.interrupt(thread_id, body.turn_id if body else None)
-            return {"interrupted": True}
+            return {"interrupted": await shared_queue.pause_thread(thread_id, body.turn_id if body else None)}
+        except ClaudeThreadNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/threads/{thread_id}/continue")
+    async def continue_interrupted_turn(thread_id: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = None
+        if is_claude_thread_id(thread_id):
+            try:
+                payload = QueuedMessageRequest.model_validate(body).model_dump(exclude_none=True)
+            except ValidationError as error:
+                raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=error.errors()) from error
+        try:
+            turn_id = await shared_queue.continue_paused(thread_id, payload)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except (CodexRuntimeError, ClaudeCodeError) as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        return {"continued": True, "turn_id": turn_id, "queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/threads/{thread_id}/stop")
+    async def stop_interrupted_turn(thread_id: str) -> dict[str, bool]:
+        try:
+            await shared_queue.stop_thread(thread_id)
+        except ClaudeThreadNotFoundError as error:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except (CodexRuntimeError, ClaudeCodeError) as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        return {"stopped": True}
 
     @app.post("/api/v1/codex/threads/{thread_id}/steer")
     async def steer_turn(thread_id: str, body: SteerRequest) -> dict[str, str | None]:

@@ -122,6 +122,10 @@ internal class RemoteApi(
             if (!uri.query.isNullOrBlank() || !uri.fragment.isNullOrBlank()) {
                 throw IllegalArgumentException("地址不要包含查询参数或片段。")
             }
+            if (uri.scheme == "http" && uri.port == -1 && uri.host?.matches(Regex("[0-9]{1,3}(\\.[0-9]{1,3}){3}")) == true &&
+                uri.path.orEmpty().trim('/').isEmpty()) {
+                return "http://${uri.host}:4173"
+            }
             return value.trimEnd('/')
         }
 

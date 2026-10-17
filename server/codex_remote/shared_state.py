@@ -10,7 +10,7 @@ import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +18,7 @@ from .codex_app_server import CodexAppServer, CodexRuntimeError
 from .claude_code import ClaudeCodeServer, is_claude_thread_id
 
 logger = logging.getLogger(__name__)
+EDIT_LEASE_SECONDS = 600
 
 
 def _now() -> str:
@@ -44,6 +45,7 @@ class SharedStateStore:
                 state TEXT NOT NULL DEFAULT 'pending',
                 editing INTEGER NOT NULL DEFAULT 0,
                 edit_owner TEXT,
+                edit_started_at TEXT,
                 attempt_at TEXT
             );
             CREATE INDEX IF NOT EXISTS queued_messages_thread ON queued_messages(thread_id, sequence);
@@ -55,6 +57,7 @@ class SharedStateStore:
             );
             CREATE TABLE IF NOT EXISTS queue_barriers (thread_id TEXT PRIMARY KEY, turn_id TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS queue_blocks (thread_id TEXT PRIMARY KEY, reason TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS paused_threads (thread_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS pinned_threads (thread_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS thread_workspaces (thread_id TEXT PRIMARY KEY, cwd TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS state_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -62,6 +65,12 @@ class SharedStateStore:
         columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queued_messages)")}
         if "edit_owner" not in columns:
             self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_owner TEXT")
+        if "edit_started_at" not in columns:
+            self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_started_at TEXT")
+        # An editor from an older process cannot renew its lock after a restart.
+        self.connection.execute(
+            "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE editing = 1 AND edit_started_at IS NULL"
+        )
         # A process may have died after Codex accepted a turn but before it
         # received an acknowledgement. Never turn such an item into "pending".
         self.connection.execute("UPDATE queued_messages SET state = 'unverified' WHERE state = 'sending'")
@@ -145,8 +154,8 @@ class SharedStateStore:
             if row and row["state"] == "pending" and row["editing"] and row["edit_owner"] == owner:
                 return
             changed = self.connection.execute(
-                "UPDATE queued_messages SET editing = 1, edit_owner = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
-                (owner, thread_id, message_id),
+                "UPDATE queued_messages SET editing = 1, edit_owner = ?, edit_started_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+                (owner, _now(), thread_id, message_id),
             ).rowcount
         else:
             existing = self.connection.execute(
@@ -156,7 +165,7 @@ class SharedStateStore:
             if not existing:
                 return
             changed = self.connection.execute(
-                "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE thread_id = ? AND id = ? AND editing = 1",
+                "UPDATE queued_messages SET editing = 0, edit_owner = NULL, edit_started_at = NULL WHERE thread_id = ? AND id = ? AND editing = 1",
                 (thread_id, message_id),
             ).rowcount
             if not changed and self.connection.execute(
@@ -166,6 +175,26 @@ class SharedStateStore:
                 return
         if not changed:
             raise QueueConflictError("这条排队消息已变更，请刷新后重试。")
+
+    def renew_edit(self, thread_id: str, message_id: str, owner: str) -> None:
+        changed = self.connection.execute(
+            "UPDATE queued_messages SET edit_started_at = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 1 AND edit_owner = ?",
+            (_now(), thread_id, message_id, owner),
+        ).rowcount
+        if not changed:
+            raise QueueConflictError("排队消息的编辑占用已失效，请重新打开编辑。")
+
+    def expire_stale_edits(self) -> list[str]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=EDIT_LEASE_SECONDS)).isoformat()
+        rows = self.connection.execute(
+            "SELECT DISTINCT thread_id FROM queued_messages WHERE editing = 1 AND edit_started_at < ?", (cutoff,),
+        ).fetchall()
+        if rows:
+            self.connection.execute(
+                "UPDATE queued_messages SET editing = 0, edit_owner = NULL, edit_started_at = NULL WHERE editing = 1 AND edit_started_at < ?",
+                (cutoff,),
+            )
+        return [row[0] for row in rows]
 
     def remove(self, thread_id: str, message_id: str) -> None:
         existing = self.connection.execute(
@@ -219,6 +248,24 @@ class SharedStateStore:
 
     def clear_barrier(self, thread_id: str) -> None:
         self.connection.execute("DELETE FROM queue_barriers WHERE thread_id = ?", (thread_id,))
+
+    def set_barrier(self, thread_id: str, turn_id: str) -> None:
+        self.connection.execute(
+            "INSERT INTO queue_barriers(thread_id, turn_id) VALUES (?, ?) "
+            "ON CONFLICT(thread_id) DO UPDATE SET turn_id = excluded.turn_id",
+            (thread_id, turn_id),
+        )
+
+    def is_paused(self, thread_id: str) -> bool:
+        return self.connection.execute(
+            "SELECT 1 FROM paused_threads WHERE thread_id = ?", (thread_id,),
+        ).fetchone() is not None
+
+    def set_paused(self, thread_id: str, paused: bool) -> None:
+        if paused:
+            self.connection.execute("INSERT OR IGNORE INTO paused_threads(thread_id) VALUES (?)", (thread_id,))
+        else:
+            self.connection.execute("DELETE FROM paused_threads WHERE thread_id = ?", (thread_id,))
 
     def set_block(self, thread_id: str, reason: str | None) -> bool:
         current = self.connection.execute("SELECT reason FROM queue_blocks WHERE thread_id = ?", (thread_id,)).fetchone()
@@ -286,6 +333,7 @@ class SharedStateStore:
                 "queue_receipts",
                 "queue_barriers",
                 "queue_blocks",
+                "paused_threads",
                 "pinned_threads",
                 "thread_workspaces",
             ):
@@ -349,6 +397,60 @@ class SharedQueueService:
         if self.store.set_block(thread_id, reason):
             await self.changed(thread_id)
 
+    async def pause_thread(self, thread_id: str, turn_id: str | None = None) -> bool:
+        async with self._lock(thread_id):
+            self.store.set_paused(thread_id, True)
+            try:
+                if is_claude_thread_id(thread_id) and self.claude is not None:
+                    interrupted = await self.claude.interrupt(thread_id, turn_id)
+                else:
+                    await self.codex.interrupt(thread_id, turn_id)
+                    interrupted = True
+            except Exception:
+                self.store.set_paused(thread_id, False)
+                raise
+            if not interrupted:
+                self.store.set_paused(thread_id, False)
+            await self.changed(thread_id)
+            return interrupted
+
+    async def continue_paused(self, thread_id: str, payload: dict[str, Any] | None = None) -> str:
+        async with self._lock(thread_id):
+            if not self.store.is_paused(thread_id):
+                raise QueueConflictError("当前回复未处于暂停状态。")
+            if await self._active_turn_id(thread_id):
+                raise QueueConflictError("上一条回复仍在停止中，请稍后再继续。")
+            await self._resume_thread(thread_id)
+            if is_claude_thread_id(thread_id) and self.claude is not None:
+                if not payload or not payload.get("requestText", "").strip():
+                    raise QueueConflictError("Claude 续接需要提供内容。")
+                turn_id = await self.send(thread_id, payload, False)
+            else:
+                # Codex accepts an empty input turn after interruption. It
+                # continues from thread context without a synthetic user item.
+                result = await self.codex.start_turn(thread_id, "", allow_empty=True)
+                turn = result.get("turn")
+                turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if not turn_id:
+                raise RuntimeError("对话引擎未确认续接的回复轮次")
+            self.store.set_barrier(thread_id, turn_id)
+            self.store.set_paused(thread_id, False)
+            self.store.set_block(thread_id, None)
+            await self.changed(thread_id)
+            return turn_id
+
+    async def stop_thread(self, thread_id: str) -> None:
+        """Cancel a pending continuation, interrupting a racing new turn first."""
+        async with self._lock(thread_id):
+            active_turn = await self._active_turn_id(thread_id)
+            if active_turn:
+                if is_claude_thread_id(thread_id) and self.claude is not None:
+                    await self.claude.interrupt(thread_id, active_turn)
+                else:
+                    await self.codex.interrupt(thread_id, active_turn)
+            self.store.set_paused(thread_id, False)
+            await self.changed(thread_id)
+
     def start(self) -> None:
         self._runner = asyncio.create_task(self._run())
         self._listener = asyncio.create_task(self._listen())
@@ -377,6 +479,8 @@ class SharedQueueService:
     async def _run(self) -> None:
         while not self._closed:
             self._wake.clear()
+            for thread_id in self.store.expire_stale_edits():
+                await self.changed(thread_id)
             for thread_id in self.store.thread_ids():
                 try:
                     await self.advance(thread_id)
@@ -397,7 +501,7 @@ class SharedQueueService:
         async with self._lock(thread_id):
             queue = self.store.queue(thread_id)
             is_claude = is_claude_thread_id(thread_id) and self.claude is not None
-            if not queue or queue[0].get("editing") or queue[0].get("sendAttempt") or (self.codex.handed_off and not is_claude):
+            if not queue or self.store.is_paused(thread_id) or queue[0].get("editing") or queue[0].get("sendAttempt") or (self.codex.handed_off and not is_claude):
                 return
             summary = await self._read_thread(thread_id, include_turns=False)
             if await self._active_turn_id(thread_id):
@@ -472,6 +576,8 @@ class SharedQueueService:
         async with self._lock(thread_id):
             self.store.enqueue(thread_id, payload, submitting=True)
             try:
+                if self.store.is_paused(thread_id):
+                    return False
                 if self.codex.handed_off and not (is_claude_thread_id(thread_id) and self.claude is not None):
                     return False
                 return await self._send_now(thread_id, payload["id"], allow_steer=False, require_head=True)
@@ -509,6 +615,8 @@ class SharedQueueService:
             status_type = status.get("type") if isinstance(status, dict) else None
         active_turn = await self._active_turn_id(thread_id)
         busy = status_type in {"active", "inProgress", "running", "started"}
+        if busy and not active_turn and not is_claude:
+            active_turn = await self.codex.recover_active_turn_id(thread_id)
         if not active_turn and status_type not in {"idle", "notLoaded"}:
             # Older App Server versions may omit the summary status. Fall back
             # conservatively rather than treating an unknown status as idle.
@@ -531,12 +639,14 @@ class SharedQueueService:
         if (active_turn or busy) and (not allow_steer or is_claude):
             return False
         if busy and not active_turn:
-            raise QueueConflictError("上一条回复仍在运行，请稍后重试。")
+            await self._block(thread_id, "正在确认当前回复，暂时无法立即发送；确认后可重试")
+            return False
         if not active_turn and status_type != "idle":
             await self._resume_thread(thread_id)
         payload = self.store.claim(thread_id, message_id)
         if not payload:
             raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
+        self.store.set_paused(thread_id, False)
         await self.changed(thread_id)
         if not active_turn:
             self.store.clear_barrier(thread_id)

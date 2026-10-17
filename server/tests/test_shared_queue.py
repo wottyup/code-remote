@@ -145,6 +145,60 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         await self.service.advance("thread")
         self.send.assert_awaited_once()
 
+    async def test_paused_codex_continues_without_user_message_before_queue(self) -> None:
+        self.store.enqueue("thread", message("queued-first", "first"))
+        self.codex.start_turn.return_value = {"turn": {"id": "continued-turn"}}
+        self.codex.read_thread.return_value = {"turns": [{"id": "original", "status": "interrupted"}]}
+
+        self.assertTrue(await self.service.pause_thread("thread", "original"))
+        self.assertTrue(self.store.is_paused("thread"))
+        await self.service.advance("thread")
+        self.send.assert_not_awaited()
+
+        self.assertEqual(await self.service.continue_paused("thread"), "continued-turn")
+        self.codex.start_turn.assert_awaited_once_with("thread", "", allow_empty=True)
+        self.send.assert_not_awaited()
+        self.assertFalse(self.store.is_paused("thread"))
+        self.assertEqual(self.store.barrier("thread"), "continued-turn")
+        self.assertEqual([item["id"] for item in self.store.queue("thread")], ["queued-first"])
+
+        self.codex.read_thread.return_value = {"turns": [{"id": "continued-turn", "status": "completed"}]}
+        await self.service.advance("thread")
+        self.send.assert_awaited_once()
+
+    async def test_second_stop_clears_pause_without_sending_queue(self) -> None:
+        self.store.enqueue("thread", message("queued-first", "first"))
+        self.store.set_paused("thread", True)
+        self.codex.read_thread.return_value = {"turns": [{"id": "original", "status": "interrupted"}]}
+
+        await self.service.stop_thread("thread")
+        self.assertFalse(self.store.is_paused("thread"))
+        await self.service.advance("thread")
+        self.send.assert_not_awaited()
+        self.assertIn("未正常完成", self.store.queue("thread")[0]["blockedReason"])
+
+    async def test_stop_racing_with_continuation_interrupts_new_turn(self) -> None:
+        self.store.set_paused("thread", True)
+        self.codex.start_turn.return_value = {"turn": {"id": "continued-turn"}}
+        await self.service.continue_paused("thread")
+        self.codex._active_turn_id.return_value = "continued-turn"
+
+        await self.service.stop_thread("thread")
+        self.codex.interrupt.assert_awaited_once_with("thread", "continued-turn")
+        self.assertFalse(self.store.is_paused("thread"))
+
+    async def test_failed_continuation_can_retry_but_success_cannot_duplicate(self) -> None:
+        self.store.set_paused("thread", True)
+        self.codex.start_turn.side_effect = [RuntimeError("engine unavailable"), {"turn": {"id": "continued-turn"}}]
+
+        with self.assertRaisesRegex(RuntimeError, "engine unavailable"):
+            await self.service.continue_paused("thread")
+        self.assertTrue(self.store.is_paused("thread"))
+        self.assertEqual(await self.service.continue_paused("thread"), "continued-turn")
+        with self.assertRaises(QueueConflictError):
+            await self.service.continue_paused("thread")
+        self.assertEqual(self.codex.start_turn.await_count, 2)
+
     async def test_unknown_delivery_is_not_retried(self) -> None:
         self.store.enqueue("thread", message("queued-first", "first"))
         self.codex.read_thread.return_value = {"turns": []}
@@ -347,6 +401,27 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
 
     def endpoint(self, path: str):
         return next(route.endpoint for route in self.app.routes if getattr(route, "path", None) == path)
+
+    async def test_continue_endpoint_accepts_empty_codex_request(self) -> None:
+        continue_turn = self.endpoint("/api/v1/codex/threads/{thread_id}/continue")
+        codex = self.app.state.codex
+        codex._active_turn_id = AsyncMock(return_value=None)
+        codex.resume_thread = AsyncMock(return_value={"id": "thread"})
+        codex.start_turn = AsyncMock(return_value={"turn": {"id": "continued-turn"}})
+        self.app.state.shared_state.set_paused("thread", True)
+
+        result = await continue_turn("thread", None)
+
+        self.assertEqual(result, {"continued": True, "turn_id": "continued-turn", "queue": []})
+        codex.start_turn.assert_awaited_once_with("thread", "", allow_empty=True)
+
+    async def test_stop_endpoint_clears_paused_state(self) -> None:
+        stop = self.endpoint("/api/v1/codex/threads/{thread_id}/stop")
+        self.app.state.codex._active_turn_id = AsyncMock(return_value=None)
+        self.app.state.shared_state.set_paused("thread", True)
+
+        self.assertEqual(await stop("thread"), {"stopped": True})
+        self.assertFalse(self.app.state.shared_state.is_paused("thread"))
 
     async def test_idle_submit_starts_immediately_and_retry_does_not_send_twice(self) -> None:
         submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")

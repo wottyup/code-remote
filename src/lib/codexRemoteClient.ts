@@ -722,6 +722,17 @@ export const codexRemoteClient = {
       body: JSON.stringify(message),
     }, { networkRetries: 3 })
   },
+  continuePausedThread(token: string, threadId: string, message?: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[]; continued: boolean; turn_id: string }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/continue`, {
+      method: 'POST',
+      ...(message ? { body: JSON.stringify(message) } : {}),
+    }, { networkRetries: 0 })
+  },
+  stopInterruptedThread(token: string, threadId: string) {
+    return request<{ stopped: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/stop`, {
+      method: 'POST',
+    }, { networkRetries: 0 })
+  },
   enqueueMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue`, {
       method: 'POST',
@@ -733,6 +744,12 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
     }, { networkRetries: 3 })
+  },
+  renewQueuedEdit(token: string, threadId: string, messageId: string, ownerId: string) {
+    return request<{ renewed: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/renew`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId, owner_id: ownerId }),
+    })
   },
   startQueuedIfIdle(token: string, threadId: string, messageId: string) {
     return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/start-if-idle`, {

@@ -47,6 +47,9 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
+import { clipboardTableToMarkdown } from '../lib/clipboardTable'
+import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
+import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -57,6 +60,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 
 interface Props {
@@ -880,6 +884,7 @@ type RemoteConnection = keyof typeof connectionLabel
 
 interface ComposerSendInput {
   prompt: string
+  continuePaused?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -908,6 +913,7 @@ interface MessageComposerProps {
   composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
   connection: RemoteConnection
   isRunning: boolean
+  isReplying: boolean
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
@@ -943,6 +949,9 @@ interface MessageComposerProps {
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
   onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
+  onContinue: () => void
+  canContinue: boolean
+  continuationPending: boolean
   onRefresh: () => void
 }
 
@@ -952,6 +961,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   composerHeightMemory,
   connection,
   isRunning,
+  isReplying,
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
@@ -987,6 +997,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onEndQueuedEdit,
   onRemoveQueued,
   onInterrupt,
+  onContinue,
+  canContinue,
+  continuationPending,
   onRefresh,
 }, ref) {
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
@@ -1369,7 +1382,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
-    && !draft.trim() && attachedImages.length === 0 && attachedDocuments.length === 0
+  const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
       aria-checked={temporaryPreferences} disabled={!canConfigure}
@@ -1764,6 +1777,33 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (readingDocuments) return
+    const pastedText = event.clipboardData.getData('text/plain')
+    const pastedTable = clipboardTableToMarkdown(event.clipboardData.getData('text/html'), pastedText)
+    if (pastedTable) {
+      event.preventDefault()
+      if (pastedTable.length >= longPasteThreshold) {
+        appendDocument({ name: 'pasted-table.md', content: pastedTable })
+        return
+      }
+
+      const textarea = composer.current
+      const current = draftRef.current
+      const start = textarea?.selectionStart ?? current.length
+      const end = textarea?.selectionEnd ?? start
+      const before = current.slice(0, start)
+      const after = current.slice(end)
+      const prefix = before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
+      const suffix = after.length === 0 || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n'
+      updateDraft(`${before}${prefix}${pastedTable}${suffix}${after}`)
+      window.requestAnimationFrame(() => {
+        const activeTextarea = composer.current
+        if (!activeTextarea) return
+        const cursor = before.length + prefix.length + pastedTable.length
+        activeTextarea.focus({ preventScroll: true })
+        activeTextarea.setSelectionRange(cursor, cursor)
+      })
+      return
+    }
     const directFiles = Array.from(event.clipboardData.files)
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
@@ -1774,7 +1814,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       void attachImages(images)
       return
     }
-    const pastedText = event.clipboardData.getData('text/plain')
     if (pastedText.length < longPasteThreshold) return
     event.preventDefault()
     appendDocument({ name: 'pasted-content.md', content: pastedText })
@@ -1860,12 +1899,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       <form
-        className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
+        className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
         onSubmit={(event) => void send(event)}
       >
+      {editingQueuedMessageId ? (
+        <div className="composer-edit-bar">
+          <span>正在修改排队消息</span>
+          <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button>
+        </div>
+      ) : null}
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
-          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><ImagePreviewButton src={`data:${image.mediaType};base64,${image.data}`} name={image.name} /><button className="composer-image__remove" type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
         </div>
       ) : null}
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
@@ -1918,7 +1963,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点立即发送优先发送此条' : '等待自动发送')}</small></span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点立即发送优先发送此条' : '等待自动发送')}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
@@ -1973,29 +2018,26 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
             <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
           </>}
-          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
+          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
-          {writerConflict
-            ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-            : isRunning && editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
-          {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button> : null}
+          {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
-              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}`}
-              type={stopWithSendButton ? 'button' : 'submit'}
-              onClick={stopWithSendButton ? onInterrupt : undefined}
-              disabled={stopWithSendButton ? isInterrupting : !canSend}
-              aria-label={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}`}
+              type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
+              onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
+              disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
+              aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
-                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : <Send size={16} />}
+                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>继续</span></> : <Send size={16} />}
             </button>
           ) : null}
         </div>
@@ -3596,6 +3638,40 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   remotesRef.current = remotes
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
+  const [continuation, setContinuation] = useState<{ paneIndex: number; threadId: string; turnId: string | null; phase: 'stopping' | 'ready' | 'continuing' } | null>(null)
+  const continuationRef = useRef(continuation)
+  continuationRef.current = continuation
+  const activeContinuation = continuation?.paneIndex === selectedPaneIndex
+    && continuation.threadId === activeRemote.activeThread?.id ? continuation : null
+  const canContinue = Boolean(activeContinuation?.phase === 'ready' && !activeRemote.isRunning && !activeRemote.isInterrupting
+    && activeRemote.connection === 'connected' && !activeRemote.writerConflict)
+
+  const updateContinuation = useCallback((next: typeof continuation) => {
+    continuationRef.current = next
+    setContinuation(next)
+  }, [])
+
+  const pauseCurrentReply = useCallback(() => {
+    if (!activeRemote.isRunning || activeRemote.isInterrupting) return
+    const threadId = activeRemote.activeThread?.id
+    if (window.CodexRemoteAndroid || !threadId) {
+      void activeRemote.interrupt()
+      return
+    }
+    const next = { paneIndex: selectedPaneIndex, threadId, turnId: activeRemote.runningTurnId, phase: 'stopping' as const }
+    updateContinuation(next)
+    void activeRemote.interrupt().then((accepted) => {
+      if (continuationRef.current !== next) return
+      updateContinuation(accepted ? { ...next, phase: 'ready' } : null)
+    })
+  }, [activeRemote, selectedPaneIndex, updateContinuation])
+
+  useEffect(() => {
+    if (activeContinuation?.turnId && activeRemote.isRunning && activeRemote.runningTurnId
+      && activeRemote.runningTurnId !== activeContinuation.turnId && !activeRemote.isInterrupting) {
+      updateContinuation(null)
+    }
+  }, [activeContinuation, activeRemote.isInterrupting, activeRemote.isRunning, activeRemote.runningTurnId, updateContinuation])
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
@@ -3619,6 +3695,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
+  const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
+  const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
@@ -3638,10 +3717,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
   const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
   const [threadRenameSaving, setThreadRenameSaving] = useState(false)
-  const [threadDeleteTarget, setThreadDeleteTarget] = useState<CodexThread | null>(null)
+  const [threadDeleteTargets, setThreadDeleteTargets] = useState<CodexThread[] | null>(null)
   const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
   const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
+  const [threadDeleteProgress, setThreadDeleteProgress] = useState(0)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+
+  useEffect(() => {
+    setSidebarSelectionMode(false)
+    setSelectedSidebarThreadIds(new Set())
+  }, [isClaudeCodeThread])
 
   useEffect(() => {
     let current = true
@@ -3666,6 +3751,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setWorkspaceOpen(false)
   }, [])
   const openSidebarPanel = useCallback(() => {
+    const focused = document.activeElement
+    if (isMobileLayout() && focused instanceof HTMLTextAreaElement && focused.closest('.message-composer')) focused.blur()
     setWorkspaceOpen(false)
     setSidebarOpen(true)
   }, [])
@@ -3800,47 +3887,77 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function startThreadDelete(thread: CodexThread) {
     setThreadContextMenu(null)
-    setThreadDeleteTarget(thread)
+    setThreadDeleteTargets([thread])
     setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
   }
 
   function closeThreadDelete() {
     if (threadDeleteSaving) return
-    setThreadDeleteTarget(null)
+    setThreadDeleteTargets(null)
     setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
+
+  function applyDeletedThread(thread: CodexThread, pinnedIds: string[]) {
+    const deletedPaneIndex = paneIndexForThread(thread.id)
+    if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex) {
+      setOpenPaneIndexes((current) => current.length > 1 ? current.filter((index) => index !== deletedPaneIndex) : current)
+    }
+    for (const remote of remotes) remote.removeDeletedThread(thread.id)
+    setPinnedThreadIds(new Set(pinnedIds))
+    setCompletionToast((current) => current?.threadId === thread.id ? null : current)
+    setThreadComposerPreferences((current) => {
+      if (!(thread.id in current)) return current
+      const next = { ...current }
+      delete next[thread.id]
+      return next
+    })
+    const draftScope = composerDraftScopeForThread(thread.id)
+    saveComposerDraft(draftScope, '')
+    forgetComposerImageDraftTarget(draftScope)
+    void saveComposerImageDraft(draftScope, []).catch(() => undefined)
+    setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
   }
 
   async function submitThreadDelete(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!threadDeleteTarget || threadDeleteSaving) return
-    const thread = threadDeleteTarget
-    const deletedPaneIndex = paneIndexForThread(thread.id)
+    if (!threadDeleteTargets?.length || threadDeleteSaving) return
+    const targets = threadDeleteTargets
+    const isBatch = sidebarSelectionMode
     setThreadDeleteSaving(true)
     setThreadDeleteError(null)
-    try {
-      const result = await codexRemoteClient.deleteThread(token, thread.id)
-      if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
-      for (const remote of remotes) remote.removeDeletedThread(thread.id)
-      setPinnedThreadIds(new Set(result.thread_ids))
-      setCompletionToast((current) => current?.threadId === thread.id ? null : current)
-      setThreadComposerPreferences((current) => {
-        if (!(thread.id in current)) return current
-        const next = { ...current }
-        delete next[thread.id]
-        return next
-      })
-      const draftScope = composerDraftScopeForThread(thread.id)
-      saveComposerDraft(draftScope, '')
-      forgetComposerImageDraftTarget(draftScope)
-      void saveComposerImageDraft(draftScope, []).catch(() => undefined)
-      setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
-      setThreadDeleteTarget(null)
-      showPaneNotice(`已删除“${titleOf(thread)}”`)
-    } catch (reason) {
-      setThreadDeleteError(reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。')
-    } finally {
-      setThreadDeleteSaving(false)
+    setThreadDeleteProgress(0)
+    const failed: CodexThread[] = []
+    let firstError = ''
+    for (const thread of targets) {
+      let pinnedIds: string[]
+      try {
+        const result = await codexRemoteClient.deleteThread(token, thread.id)
+        pinnedIds = result.thread_ids
+      } catch (reason) {
+        failed.push(thread)
+        if (!firstError) firstError = reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。'
+        setThreadDeleteProgress((count) => count + 1)
+        continue
+      }
+      // The server has already deleted this thread; local cleanup must not turn it into a retry target.
+      try { applyDeletedThread(thread, pinnedIds) } catch (reason) { console.error('Failed to clean up deleted thread locally', reason) }
+      setThreadDeleteProgress((count) => count + 1)
     }
+    const deletedCount = targets.length - failed.length
+    if (isBatch) {
+      setSelectedSidebarThreadIds(new Set(failed.map((thread) => thread.id)))
+      if (failed.length === 0) setSidebarSelectionMode(false)
+    }
+    if (failed.length > 0) {
+      setThreadDeleteTargets(failed)
+      setThreadDeleteError(isBatch ? `已删除 ${deletedCount} 个，${failed.length} 个失败：${firstError}` : firstError)
+    } else {
+      setThreadDeleteTargets(null)
+      showPaneNotice(isBatch ? `已删除 ${deletedCount} 个聊天` : `已删除“${titleOf(targets[0])}”`)
+    }
+    setThreadDeleteSaving(false)
   }
 
   function applyPendingPanelDragStyles() {
@@ -3894,7 +4011,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!touch) return
     const globalOverlayOpen = settingsOpen
       || Boolean(threadRenameTarget)
-      || Boolean(threadDeleteTarget)
+      || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
       || workspacePreviewModeRef.current === 'mobile'
     if (globalOverlayOpen) {
@@ -3925,11 +4042,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       : startedOnInteractiveSurface && !startedOnBackdrop
         ? null
         : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
+    const sidebarPanelWidth = sidebarPanel.current?.getBoundingClientRect().width || Math.min(window.innerWidth * 0.78, 320)
     sidebarTouchStart.current = start
     sidebarDrag.current = start?.panel === 'sidebar'
       ? {
-        panelWidth: Math.min(window.innerWidth * 0.67, 256),
-        offset: sidebarOpen ? 0 : -Math.min(window.innerWidth * 0.67, 256) * 1.05,
+        panelWidth: sidebarPanelWidth,
+        offset: sidebarOpen ? 0 : -sidebarPanelWidth * 1.05,
         active: false,
       }
       : null
@@ -4026,7 +4144,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (action === 'close-global') {
       if (settingsOpen) closeSettingsPanel()
       else if (threadRenameTarget) closeThreadRename()
-      else if (threadDeleteTarget) closeThreadDelete()
+      else if (threadDeleteTargets) closeThreadDelete()
       else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
       else if (threadContextMenu) setThreadContextMenu(null)
     } else if (action === 'open-sidebar') openSidebarPanel()
@@ -4200,7 +4318,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [threadRenameTarget, threadRenameSaving])
 
   useEffect(() => {
-    if (!threadDeleteTarget) return
+    if (!threadDeleteTargets) return
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       event.preventDefault()
@@ -4208,7 +4326,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [threadDeleteTarget, threadDeleteSaving])
+  }, [threadDeleteTargets, threadDeleteSaving])
 
   useLayoutEffect(() => {
     const handleBack = () => {
@@ -4220,7 +4338,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         closeThreadRename()
         return true
       }
-      if (threadDeleteTarget) {
+      if (threadDeleteTargets) {
         closeThreadDelete()
         return true
       }
@@ -4247,24 +4365,39 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTarget, threadRenameTarget, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-      if (threadRenameTarget || threadDeleteTarget) return
+      if (threadRenameTarget || threadDeleteTargets) return
       if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
         return
       }
+      if (composerHandle.current?.closeOpenMenu()) {
+        event.preventDefault()
+        return
+      }
+      const pending = continuationRef.current
+      if (pending?.paneIndex === selectedPaneIndex && pending.threadId === activeRemote.activeThread?.id) {
+        event.preventDefault()
+        if (pending.phase === 'stopping') return
+        updateContinuation({ ...pending, phase: 'stopping' })
+        void activeRemote.stopInterruptedThread(pending.threadId).then((stopped) => {
+          if (continuationRef.current?.threadId !== pending.threadId) return
+          updateContinuation(stopped ? null : { ...pending, phase: 'ready' })
+        })
+        return
+      }
       if (!activeRemote.isRunning) return
       event.preventDefault()
-      void activeRemote.interrupt()
+      pauseCurrentReply()
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTarget, threadRenameTarget])
+  }, [activeRemote.activeThread?.id, activeRemote.isRunning, activeRemote.stopInterruptedThread, pauseCurrentReply, selectedPaneIndex, threadDeleteTargets, threadRenameTarget, updateContinuation])
 
   useEffect(() => {
     if (isClaudeCodeThread || availableModels.length === 0) return
@@ -4677,8 +4810,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         return next
       })
     }
+    if (sent && continuationRef.current?.paneIndex === selectedPaneIndex
+      && continuationRef.current.threadId === target.activeThread?.id) updateContinuation(null)
     return sent
-  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
+  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences, updateContinuation])
+
+  const continueInterruptedReply = useCallback(() => {
+    if (!canContinue || !activeContinuation || continuationRef.current !== activeContinuation) return
+    const pending = { ...activeContinuation, phase: 'continuing' as const }
+    updateContinuation(pending)
+    void sendComposerMessage({ prompt: isClaudeCodeThread ? '请继续刚才中断的任务。' : '', images: [], documents: [], continuePaused: true }).then((sent) => {
+      if (!sent && continuationRef.current === pending) updateContinuation({ ...pending, phase: 'ready' })
+    })
+  }, [activeContinuation, canContinue, isClaudeCodeThread, sendComposerMessage, updateContinuation])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
@@ -4796,7 +4940,55 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
     : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
+  const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+  const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
+
+  function toggleSidebarSelectionMode() {
+    if (sidebarSelectionBusy) return
+    setSidebarSelectionMode((current) => !current)
+    setSelectedSidebarThreadIds(new Set())
+    setThreadContextMenu(null)
+    clearThreadLongPress()
+  }
+
+  function toggleSidebarThreadSelection(threadId: string) {
+    if (sidebarSelectionBusy) return
+    setSelectedSidebarThreadIds((current) => {
+      const next = new Set(current)
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      return next
+    })
+  }
+
+  async function pinSelectedSidebarThreads() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    const selected = selectedSidebarThreads
+    setSidebarSelectionBusy(true)
+    const failedIds = new Set<string>()
+    let latestPinnedIds: string[] | null = null
+    for (const thread of selected) {
+      try {
+        const result = await codexRemoteClient.setThreadPin(token, thread.id, true)
+        latestPinnedIds = result.thread_ids
+      } catch {
+        failedIds.add(thread.id)
+      }
+    }
+    if (latestPinnedIds) setPinnedThreadIds(new Set(latestPinnedIds))
+    setSelectedSidebarThreadIds(failedIds)
+    setSidebarSelectionMode(failedIds.size > 0)
+    setSidebarSelectionBusy(false)
+    showPaneNotice(failedIds.size > 0 ? `${failedIds.size} 个聊天置顶失败，仍保持选中` : `已置顶 ${selected.length} 个聊天`)
+  }
+
+  function startBulkThreadDelete() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    setThreadDeleteTargets(selectedSidebarThreads)
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
 
   return (
     <div
@@ -4821,7 +5013,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
-          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) setSidebarSearch(''); setSidebarCollapsed((collapsed) => !collapsed) }}>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
@@ -4834,29 +5026,44 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{normalizedSidebarSearch ? '搜索结果' : sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading">
+          <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
+          <div className="thread-list-heading__actions">
+            <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
+            <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
+          </div>
+        </div>
+        {sidebarSelectionMode ? <div className="sidebar-selection-bar">
+          <div className="sidebar-selection-bar__summary"><span>已选 {selectedSidebarThreads.length} 个聊天</span><button type="button" onClick={() => setSelectedSidebarThreadIds((current) => new Set([...current, ...visibleSidebarThreads.map((thread) => thread.id)]))} disabled={sidebarSelectionBusy || visibleSidebarThreads.length === 0}>全选</button><button type="button" onClick={() => setSelectedSidebarThreadIds(new Set())} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>清空</button></div>
+          <div className="sidebar-selection-bar__actions"><button type="button" onClick={() => void pinSelectedSidebarThreads()} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{sidebarSelectionBusy ? <LoaderCircle className="spin" size={14} /> : <Pin size={14} />}置顶</button><button className="sidebar-selection-bar__delete" type="button" onClick={startBulkThreadDelete} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}><Trash2 size={14} />删除</button></div>
+        </div> : null}
         <nav className="thread-list">
-          {visibleSidebarThreads.map((thread) => {
-            const paneIndex = paneIndexForThread(thread.id)
-            const isActive = paneIndex === selectedPaneIndex
-            const isPinned = pinnedThreadIds.has(thread.id)
-            return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
-                const pending = threadLongPress.current
-                if (pending?.threadId === thread.id && pending.triggered) {
-                  event.preventDefault()
+          {groupedSidebarThreads.map((section) => <Fragment key={section.label}>
+            <div className="thread-list__section">{section.label}</div>
+            {section.threads.map((thread) => {
+              const paneIndex = paneIndexForThread(thread.id)
+              const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
+              const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
+              const isPinned = pinnedThreadIds.has(thread.id)
+              return (
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
+                  const pending = threadLongPress.current
+                  if (pending?.threadId === thread.id && pending.triggered) {
+                    event.preventDefault()
+                    clearThreadLongPress()
+                    return
+                  }
                   clearThreadLongPress()
-                  return
-                }
-                clearThreadLongPress()
-                void selectThread(thread)
-              }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
-                <span className="thread-row__icon"><EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} /></span>
-                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
-                {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
-              </button>
-            )
-          })}
+                  if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
+                  else void selectThread(thread)
+                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
+                  <span className="thread-row__icon">{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />}</span>
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
+                  {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
+                </button>
+              )
+            })}
+          </Fragment>)}
           {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
           {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
@@ -4898,18 +5105,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
 
-      {threadDeleteTarget ? (
+      {threadDeleteTargets?.length ? (
         <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadDelete() }}>
           <form className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-delete-title" aria-describedby="thread-delete-description" onSubmit={(event) => { void submitThreadDelete(event) }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="thread-rename-dialog__heading">
-              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">删除聊天</h2></div>
-              <p id="thread-delete-description">这会永久删除聊天记录，删除后无法恢复。</p>
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">{sidebarSelectionMode ? '批量删除聊天' : '删除聊天'}</h2></div>
+              <p id="thread-delete-description">{sidebarSelectionMode ? `删除选中的 ${threadDeleteTargets.length} 个聊天？此操作无法撤销。` : '这会永久删除聊天记录，删除后无法恢复。'}</p>
             </div>
-            <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTarget)}>{titleOf(threadDeleteTarget)}</div>
+            {sidebarSelectionMode ? <ul className="thread-delete-dialog__list">{threadDeleteTargets.slice(0, 5).map((thread) => <li key={thread.id} title={titleOf(thread)}>{titleOf(thread)}</li>)}{threadDeleteTargets.length > 5 ? <li>另有 {threadDeleteTargets.length - 5} 个聊天</li> : null}</ul> : <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTargets[0])}>{titleOf(threadDeleteTargets[0])}</div>}
             {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{threadDeleteError}</p> : null}
             <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
               <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>取消</button>
-              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />删除中</> : <><Trash2 size={14} />确认删除</>}</button>
+              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />{sidebarSelectionMode ? `删除中 ${threadDeleteProgress}/${threadDeleteTargets.length}` : '删除中'}</> : <><Trash2 size={14} />{threadDeleteError ? '重试删除' : '确认删除'}</>}</button>
             </div>
           </form>
         </div>
@@ -4961,6 +5168,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               composerHeightMemory={composerHeightMemory}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
+              isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
@@ -4995,7 +5203,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
               onEndQueuedEdit={activeRemote.endEditQueuedMessage}
               onRemoveQueued={activeRemote.removeQueuedMessage}
-              onInterrupt={activeRemote.interrupt}
+              onInterrupt={pauseCurrentReply}
+              onContinue={continueInterruptedReply}
+              canContinue={canContinue}
+              continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
             />
           </section>
@@ -5245,6 +5456,48 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
+function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
+  const lines = value.replace(/\r\n?/g, '\n').split('\n')
+  const elements: ReactNode[] = []
+  let plainLines: string[] = []
+  let plainIndex = 0
+  let tableIndex = 0
+  let lineIndex = 0
+
+  const flushPlainText = () => {
+    if (plainLines.length === 0) return
+    elements.push(<div className="chat-message__text" key={`${keyPrefix}-text-${plainIndex++}`}>{plainLines.join('\n')}</div>)
+    plainLines = []
+  }
+
+  while (lineIndex < lines.length) {
+    const table = parseMarkdownTableBlock(lines, lineIndex)
+    if (!table) {
+      plainLines.push(lines[lineIndex])
+      lineIndex += 1
+      continue
+    }
+
+    flushPlainText()
+    elements.push(
+      <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
+        <table className="chat-message__table">
+          <thead>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{cell}</th>)}</tr>
+          </thead>
+          <tbody>
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{cell}</td>)}</tr>)}
+          </tbody>
+        </table>
+      </div>,
+    )
+    lineIndex = table.nextLine
+  }
+
+  flushPlainText()
+  return elements
+}
+
 function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
@@ -5263,7 +5516,7 @@ function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy =
       {blocks.map((block, index) => {
         if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} showCopy={showCodeCopy} />
         const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
-        return value ? <div className="chat-message__text" key={`text-${index}`}>{value}</div> : null
+        return value ? renderMessageText(value, `text-${index}`) : null
       })}
     </div>
   )
@@ -5690,7 +5943,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
-        {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <img key={`${image.name}-${index}`} src={image.previewUrl} alt={image.name} />)}</div> : null}
+        {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && activityTimeline.length > 0
           ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
