@@ -31,6 +31,7 @@ import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -293,7 +294,14 @@ private class ComposerGlassDrawable(
 
 private class ComposerGlowDrawable(private val color: Int) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private var drawableAlpha = 255
+    private var drawableAlpha = 0
+
+    fun currentIntensity(): Float = drawableAlpha / 255f
+
+    fun setIntensity(value: Float) {
+        drawableAlpha = (value.coerceIn(0f, 1f) * 255).roundToInt()
+        invalidateSelf()
+    }
 
     override fun draw(canvas: Canvas) {
         val rect = RectF(bounds)
@@ -554,7 +562,7 @@ class MainActivity : Activity() {
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
     private lateinit var composerFileChanges: LinearLayout
-    private lateinit var composerGlowView: View
+    private lateinit var composerGlowDrawable: ComposerGlowDrawable
     private var composerGlowAnimator: ValueAnimator? = null
     private var composerGlowRunning = false
     private lateinit var titleView: TextView
@@ -1407,8 +1415,8 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            background = composerGlassBackground()
-            elevation = dp(12).toFloat()
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor())
+            background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
         queueEditBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1506,30 +1514,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
         })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
-        val composerFrame = FrameLayout(this).apply {
-            clipChildren = false
-            clipToPadding = false
-        }
-        composerGlowView = View(this).apply {
-            background = ComposerGlowDrawable(composerGlowColor())
-            alpha = 0f
-            isClickable = false
-            isFocusable = false
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        // A MATCH_PARENT child makes a WRAP_CONTENT FrameLayout consume the full
-        // available screen height on some Android layouts, leaving chatArea at 0.
-        composerFrame.addView(composerGlowView, FrameLayout.LayoutParams(MATCH, 0))
-        composerFrame.addView(composer, FrameLayout.LayoutParams(MATCH, WRAP))
-        composer.addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-            val height = (bottom - top).coerceAtLeast(0)
-            val params = composerGlowView.layoutParams
-            if (params.height != height) {
-                params.height = height
-                composerGlowView.layoutParams = params
-            }
-        }
-        composerDock.addView(composerFrame, LinearLayout.LayoutParams(MATCH, WRAP))
+        composerDock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         if (queueEditItem != null) {
             queueEditBar.visibility = View.VISIBLE
@@ -1586,20 +1571,23 @@ class MainActivity : Activity() {
     }
 
     private fun updateComposerRunningGlow(isRunning: Boolean) {
-        if (!::composerGlowView.isInitialized || composerGlowRunning == isRunning) return
+        if (!::composerGlowDrawable.isInitialized || composerGlowRunning == isRunning) return
         composerGlowRunning = isRunning
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
-        composerGlowView.animate().cancel()
         if (!isRunning) {
-            composerGlowView.animate().alpha(0f).setDuration(220L).start()
+            composerGlowAnimator = ValueAnimator.ofFloat(composerGlowDrawable.currentIntensity(), 0f).apply {
+                duration = 220L
+                addUpdateListener { animator -> composerGlowDrawable.setIntensity(animator.animatedValue as Float) }
+                start()
+            }
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ValueAnimator.areAnimatorsEnabled()) {
-            composerGlowView.alpha = .36f
+            composerGlowDrawable.setIntensity(.36f)
             return
         }
-        composerGlowView.alpha = .28f
+        composerGlowDrawable.setIntensity(.28f)
         composerGlowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 3_200L
             repeatMode = ValueAnimator.REVERSE
@@ -1607,9 +1595,7 @@ class MainActivity : Activity() {
             interpolator = android.view.animation.AccelerateDecelerateInterpolator()
             addUpdateListener { animator ->
                 val phase = animator.animatedValue as Float
-                composerGlowView.alpha = .32f + phase * .42f
-                composerGlowView.translationX = (phase - .5f) * dp(10)
-                composerGlowView.scaleX = .9f + phase * .2f
+                composerGlowDrawable.setIntensity(.32f + phase * .42f)
             }
             start()
         }
