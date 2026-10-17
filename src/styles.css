@@ -2561,6 +2561,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .thread-context-menu:not(.workspace-file-context-menu) button.thread-context-menu__danger { color: #000; }
 .remote-shell--theme-retro .remote-chat__header::after { display: none; }
 .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button { color: #fff; }
+.remote-shell--theme-retro .thread-list-heading { min-height: 32px; align-items: center; margin: 6px 0; padding: 5px 6px; }
 
 @media (min-width: 701px) {
   .remote-shell--theme-retro .remote-chat__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
