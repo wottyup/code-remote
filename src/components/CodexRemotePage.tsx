@@ -912,6 +912,7 @@ interface MessageComposerProps {
   composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
   connection: RemoteConnection
   isRunning: boolean
+  isReplying: boolean
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
@@ -956,6 +957,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   composerHeightMemory,
   connection,
   isRunning,
+  isReplying,
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
@@ -1890,7 +1892,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       <form
-        className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
+        className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
         onSubmit={(event) => void send(event)}
       >
       {editingQueuedMessageId ? (
@@ -5099,6 +5101,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               composerHeightMemory={composerHeightMemory}
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
+              isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
