@@ -2369,8 +2369,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .remote-sidebar.remote-sidebar--open { transform: translate3d(0, 0, 0); }
   .remote-shell--theme-retro .remote-sidebar.remote-sidebar--dragging { transform: translate3d(var(--sidebar-drag-offset, -105%), 0, 0); }
   .remote-shell--theme-retro .sidebar-backdrop { display: block; background: #000; }
-  .remote-shell--theme-retro .remote-sidebar__heading { flex: 0 0 auto; }
-  .remote-shell--theme-retro .remote-sidebar__close { margin-bottom: .5em; }
+  .remote-shell--theme-retro .remote-sidebar__heading { display: none; }
 
   .remote-shell--theme-retro .workspace-explorer {
     inset: 0 0 0 auto;
@@ -2391,6 +2390,27 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .workspace-explorer.workspace-explorer--dragging { transform: translate3d(var(--workspace-drag-offset, 105%), 0, 0); }
   .remote-shell--theme-retro .workspace-backdrop { background: #000; }
   .remote-shell--theme-retro .workspace-explorer__close { display: inline; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions { gap: 4px; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button {
+    display: inline-flex;
+    width: 42px;
+    min-width: 42px;
+    height: 30px;
+    min-height: 30px;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px outset #d4d0c8;
+    border-radius: 0;
+    background: #000080;
+    color: #fff;
+    font: 14px/1 Arial, Helvetica, sans-serif;
+    text-decoration: none;
+  }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button svg { display: none; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button:first-child::after { content: '管理'; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .icon-button:nth-child(2)::after { content: '刷新'; }
+  .remote-shell--theme-retro .workspace-explorer__header-actions .workspace-explorer__close::after { content: '返回'; text-decoration: none; }
 
   .remote-shell--theme-retro .remote-chat__header {
     display: flex;
@@ -2412,14 +2432,26 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .composer-dock { width: auto; margin-inline: 8px; }
   .remote-shell--theme-retro .message-composer__footer {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: start;
-    gap: 6px;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 4px;
   }
-  .remote-shell--theme-retro .composer-preferences { min-width: 0; flex-wrap: wrap; gap: 2px 8px; }
-  .remote-shell--theme-retro .composer-menu { min-width: 0; max-width: 100%; }
-  .remote-shell--theme-retro .composer-menu__trigger { max-width: 100%; white-space: nowrap; }
-  .remote-shell--theme-retro .composer-actions { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
+  .remote-shell--theme-retro .composer-preferences {
+    display: grid;
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 4px;
+  }
+  .remote-shell--theme-retro .composer-menu { width: 100%; min-width: 0; max-width: 100%; }
+  .remote-shell--theme-retro .composer-menu__trigger {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    padding-inline: 2px;
+    font-size: .875em;
+    white-space: nowrap;
+  }
+  .remote-shell--theme-retro .composer-actions { flex-wrap: nowrap; justify-self: end; white-space: nowrap; }
 }
 
 /* Keep both navigation areas beside the document on desktop. */
