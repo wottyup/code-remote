@@ -4165,6 +4165,7 @@ class MainActivity : Activity() {
         val deletedColor = if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(dp(1), dp(1), dp(1), dp(1))
             background = rounded(PANEL, dp(11), cardBorder, dp(1))
             clipToOutline = true
             tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
