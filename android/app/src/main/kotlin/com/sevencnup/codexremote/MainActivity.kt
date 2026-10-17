@@ -392,9 +392,9 @@ private class ComposerGlowDrawable(
 class MainActivity : Activity() {
     // The legacy-theme key remains "lollipop" for preference compatibility, but
     // its appearance now follows Android 2.3 Gingerbread rather than Material.
-    private val LOLLIPOP_PRIMARY = Color.rgb(164, 204, 57)
+    private val LOLLIPOP_PRIMARY = Color.rgb(112, 179, 43)
     private val LOLLIPOP_PRIMARY_DARK = Color.rgb(185, 185, 185)
-    private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(53, 68, 30)
+    private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(48, 60, 68)
     private val LOLLIPOP_TEXT_SECONDARY = Color.rgb(184, 190, 188)
     private val ANDROID1_TITLE_TEXT = Color.rgb(28, 28, 28)
     private val gingerbreadTypeface: Typeface by lazy {
@@ -461,7 +461,7 @@ class MainActivity : Activity() {
     }
     private val USER_BUBBLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(240, 226, 208)
-        "lollipop" -> Color.rgb(43, 53, 29)
+        "lollipop" -> Color.rgb(39, 51, 59)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
         else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
     }
@@ -485,21 +485,21 @@ class MainActivity : Activity() {
     }
     private val ACCENT: Int get() = when {
         currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
-        themeName == "lollipop" -> LOLLIPOP_PRIMARY
+        themeName == "lollipop" -> Color.rgb(111, 157, 197)
         themeName == "warm" -> Color.rgb(146, 114, 83)
         themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
-    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") LOLLIPOP_PRIMARY else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
     private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(20, 25, 12) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
     private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
-    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "lollipop") Color.rgb(49, 64, 27) else Color.rgb(159, 166, 203)
+    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "lollipop") Color.rgb(43, 56, 65) else Color.rgb(159, 166, 203)
     private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
-    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "lollipop") Color.rgb(232, 241, 213) else Color.rgb(24, 27, 37)
+    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "lollipop") Color.rgb(230, 235, 238) else Color.rgb(24, 27, 37)
     private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
     private val CLAUDE_USER_MESSAGE_SURFACE: Int get() = if (themeName == "lollipop") Color.rgb(75, 48, 39) else CLAUDE_USER_MESSAGE_FILL
     private val CLAUDE_USER_MESSAGE_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(255, 224, 209) else CLAUDE_USER_MESSAGE_TEXT
@@ -1644,7 +1644,7 @@ class MainActivity : Activity() {
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = if (themeName == "lollipop") lollipopFabBackground(CODEX_MODE_ACCENT)
+            background = if (themeName == "lollipop") lollipopFabBackground(LOLLIPOP_PRIMARY)
                 else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             isClickable = true
             isFocusable = true
@@ -1856,7 +1856,7 @@ class MainActivity : Activity() {
         }
         if (themeName == "lollipop") recentHeading.addView(ImageView(this).apply {
             setImageResource(iconResource("history"))
-            imageTintList = ColorStateList.valueOf(LOLLIPOP_PRIMARY)
+            imageTintList = ColorStateList.valueOf(codexBrandAccent())
             contentDescription = "聊天记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
         recentHeading.addView(label("聊天记录", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
@@ -2055,14 +2055,18 @@ class MainActivity : Activity() {
         val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
         val newThreadShape = rounded(fill, dp(if (themeName == "lollipop") 2 else 10))
-        sidebarNewThreadButton.background = if (themeName == "lollipop") lollipopRipple(newThreadShape) else newThreadShape
+        sidebarNewThreadButton.background = if (themeName == "lollipop") {
+            lollipopRipple(android1MetalButtonBackground())
+        } else newThreadShape
         sidebarNewThreadButton.elevation = if (themeName == "lollipop") dp(2).toFloat() else 0f
-        sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
+        val newThreadForeground = if (themeName == "lollipop") ANDROID1_TITLE_TEXT else foreground
+        sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(newThreadForeground)
         sidebarNewThreadIcon.background = rounded(
-            if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
-            dp(7),
+            if (themeName == "lollipop") Color.rgb(178, 181, 181)
+            else if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
+            dp(if (themeName == "lollipop") 2 else 7),
         )
-        sidebarNewThreadLabel.setTextColor(foreground)
+        sidebarNewThreadLabel.setTextColor(newThreadForeground)
         val actionColor = SUBTLE
         sidebarActionAccentViews.forEach { (icon, label) ->
             icon.imageTintList = ColorStateList.valueOf(actionColor)
@@ -2279,7 +2283,7 @@ class MainActivity : Activity() {
             }
             val engine = thread.optString("engine", "codex")
             if (themeName == "lollipop") {
-                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else LOLLIPOP_PRIMARY
+                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent()
                 row.addView(View(this).apply {
                     setBackgroundColor(if (selected) selectedAccent else Color.TRANSPARENT)
                 }, LinearLayout.LayoutParams(dp(3), MATCH).apply { rightMargin = dp(8) })
@@ -2293,7 +2297,7 @@ class MainActivity : Activity() {
                     // A conversation row is a chat destination, not another copy of the model logo.
                     // Branded marks remain in the mode switch and cross-mode completion notices.
                     setImageResource(iconResource("chat"))
-                    imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else LOLLIPOP_PRIMARY)
+                    imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else codexBrandAccent())
                     contentDescription = if (engine == "claude-code") "Claude Code 对话" else "Codex 对话"
                 } else {
                     setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
@@ -3810,7 +3814,7 @@ class MainActivity : Activity() {
         header.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
         header.addView(ImageView(this).apply {
             setImageResource(iconResource("history"))
-            imageTintList = ColorStateList.valueOf(if (themeName == "lollipop") LOLLIPOP_PRIMARY else ACCENT)
+            imageTintList = ColorStateList.valueOf(if (themeName == "lollipop") codexBrandAccent() else ACCENT)
             contentDescription = "操作记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
         header.addView(label("操作记录", 12, SUBTLE, true), LinearLayout.LayoutParams(WRAP, dp(25)))
@@ -4257,7 +4261,7 @@ class MainActivity : Activity() {
         }
         if (themeName == "lollipop") heading.addView(ImageView(this).apply {
             setImageResource(iconResource("file"))
-            imageTintList = ColorStateList.valueOf(LOLLIPOP_PRIMARY)
+            imageTintList = ColorStateList.valueOf(iconTint("file"))
             contentDescription = "正在编辑的文件"
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(6) })
         heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -4318,7 +4322,7 @@ class MainActivity : Activity() {
         }
         iconFrame.addView(ImageView(this).apply {
             setImageResource(iconResource("file"))
-            imageTintList = ColorStateList.valueOf(if (themeName == "lollipop") LOLLIPOP_PRIMARY else if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
+            imageTintList = ColorStateList.valueOf(if (themeName == "lollipop") iconTint("file") else if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
         }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
         heading.addView(iconFrame, LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(10) })
         val summary = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -4809,7 +4813,7 @@ class MainActivity : Activity() {
             else -> "发送消息"
         })
         sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
-        sendButton.background = if (themeName == "lollipop") lollipopFabBackground(CODEX_MODE_ACCENT)
+        sendButton.background = if (themeName == "lollipop") lollipopFabBackground(LOLLIPOP_PRIMARY)
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
@@ -5585,7 +5589,7 @@ class MainActivity : Activity() {
             if (themeName == "lollipop") {
                 heading.addView(ImageView(this).apply {
                     setImageResource(iconResource(settingsSectionIcon(title)))
-                    imageTintList = ColorStateList.valueOf(LOLLIPOP_PRIMARY)
+                    imageTintList = ColorStateList.valueOf(iconTint(settingsSectionIcon(title)))
                     contentDescription = "$title 设置"
                 }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(12) })
             }
@@ -6490,7 +6494,7 @@ class MainActivity : Activity() {
                 }
                 row.addView(ImageView(this).apply {
                     setImageResource(if (isDirectory) iconResource("folder") else fileDisplayIconResource(entry.optString("name")))
-                    imageTintList = if (isDirectory) ColorStateList.valueOf(if (themeName == "lollipop") LOLLIPOP_PRIMARY else ACCENT)
+                    imageTintList = if (isDirectory) ColorStateList.valueOf(if (themeName == "lollipop") iconTint("folder") else ACCENT)
                         else null
                     contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
                 }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
@@ -8245,10 +8249,14 @@ class MainActivity : Activity() {
             "add", "arrow_up", "check", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(211, 70, 58)
             "folder", "folder_add", "pin" -> Color.rgb(225, 171, 57)
-            "file", "file_add", "copy", "paste", "open" -> Color.rgb(119, 178, 213)
+            "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
             "image", "palette" -> Color.rgb(185, 123, 184)
-            "chat", "history", "notifications" -> Color.rgb(130, 190, 83)
-            "terminal", "settings", "search", "menu", "more", "back", "close" -> Color.rgb(66, 66, 66)
+            "chat" -> Color.rgb(111, 157, 197)
+            "history" -> Color.rgb(166, 185, 198)
+            "notifications" -> LOLLIPOP_PRIMARY
+            "lock" -> Color.rgb(216, 151, 62)
+            "terminal", "settings", "search", "more", "back", "close", "info" -> LOLLIPOP_TEXT_SECONDARY
+            "menu" -> Color.rgb(66, 66, 66)
             else -> LOLLIPOP_TEXT_SECONDARY
         }
         else -> SUBTLE
@@ -8256,7 +8264,7 @@ class MainActivity : Activity() {
 
     private fun lollipopRipple(
         content: Drawable = ColorDrawable(Color.TRANSPARENT),
-        rippleColor: Int = Color.argb(56, 164, 204, 57),
+        rippleColor: Int = Color.argb(56, 111, 157, 197),
     ): Drawable {
         if (themeName != "lollipop") return content
         val pressed = ColorDrawable(rippleColor)
@@ -8289,7 +8297,7 @@ class MainActivity : Activity() {
         view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else if (themeName == "lollipop") ANDROID1_TITLE_TEXT else codexBrandAccent())
     }
 
-    private fun codexBrandAccent(): Int = if (themeName == "lollipop") LOLLIPOP_PRIMARY else if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
+    private fun codexBrandAccent(): Int = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
 
     private fun settingsSectionIcon(title: String): String = when (title) {
         "主题" -> "palette"
@@ -8435,7 +8443,7 @@ class MainActivity : Activity() {
         setTag(R.id.base_text_size, 13f)
         setTextColor(if (themeName == "lollipop") Color.rgb(23, 29, 14) else DARK)
         isAllCaps = false
-        background = if (themeName == "lollipop") gingerbreadButtonBackground(accent = true)
+        background = if (themeName == "lollipop") gingerbreadButtonBackground()
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
     }
 
@@ -8461,17 +8469,24 @@ class MainActivity : Activity() {
 
     private fun gingerbreadButtonBackground(accent: Boolean = false): GradientDrawable = GradientDrawable().apply {
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(if (accent) intArrayOf(Color.rgb(201, 232, 121), Color.rgb(164, 204, 57), Color.rgb(126, 159, 36))
+        setColors(if (accent) intArrayOf(Color.rgb(151, 204, 89), Color.rgb(112, 179, 43), Color.rgb(72, 132, 30))
             else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
-        setStroke(dp(1), if (accent) Color.rgb(214, 238, 159) else Color.rgb(112, 119, 119))
+        setStroke(dp(1), if (accent) Color.rgb(181, 221, 130) else Color.rgb(112, 119, 119))
+        cornerRadius = dp(3).toFloat()
+    }
+
+    private fun android1MetalButtonBackground(): GradientDrawable = GradientDrawable().apply {
+        orientation = GradientDrawable.Orientation.TOP_BOTTOM
+        setColors(intArrayOf(Color.rgb(245, 245, 245), Color.rgb(205, 205, 205), Color.rgb(157, 157, 157)))
+        setStroke(dp(1), Color.rgb(248, 248, 248))
         cornerRadius = dp(3).toFloat()
     }
 
     private fun lollipopFabBackground(color: Int): Drawable = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(201, 232, 121), color, Color.rgb(126, 159, 36)))
-        setStroke(dp(1), Color.rgb(214, 238, 159))
+        setColors(intArrayOf(Color.rgb(151, 204, 89), color, Color.rgb(72, 132, 30)))
+        setStroke(dp(1), Color.rgb(181, 221, 130))
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
