@@ -293,7 +293,7 @@ private class ComposerGlassDrawable(
     )
 }
 
-private class ComposerGlowDrawable(private val color: Int) : Drawable() {
+private class ComposerGlowDrawable(private val color: Int, private val cornerRadius: Float) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var drawableAlpha = 0
 
@@ -307,14 +307,17 @@ private class ComposerGlowDrawable(private val color: Int) : Drawable() {
     override fun draw(canvas: Canvas) {
         val rect = RectF(bounds)
         if (rect.isEmpty) return
+        val checkpoint = canvas.save()
+        canvas.clipPath(Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) })
         paint.alpha = drawableAlpha
         paint.shader = RadialGradient(
-            rect.centerX(), rect.centerY(), rect.width() * .72f,
-            intArrayOf(withAlpha(color, .36f), withAlpha(color, .17f), Color.TRANSPARENT),
-            floatArrayOf(0f, .46f, 1f), Shader.TileMode.CLAMP,
+            rect.centerX(), rect.top, rect.width() * .76f,
+            intArrayOf(withAlpha(color, .17f), withAlpha(color, .08f), Color.TRANSPARENT),
+            floatArrayOf(0f, .38f, .78f), Shader.TileMode.CLAMP,
         )
-        canvas.drawRoundRect(rect, rect.height() * .42f, rect.height() * .42f, paint)
+        canvas.drawRect(rect, paint)
         paint.shader = null
+        canvas.restoreToCount(checkpoint)
     }
 
     override fun setAlpha(alpha: Int) {
@@ -1419,7 +1422,7 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor())
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(18).toFloat())
             background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -1570,7 +1573,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
-        "light" -> Color.rgb(128, 128, 128)
+        "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> Color.WHITE
@@ -1590,18 +1593,18 @@ class MainActivity : Activity() {
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ValueAnimator.areAnimatorsEnabled()) {
-            composerGlowDrawable.setIntensity(.36f)
+            composerGlowDrawable.setIntensity(.42f)
             return
         }
-        composerGlowDrawable.setIntensity(.28f)
+        composerGlowDrawable.setIntensity(.18f)
         composerGlowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 3_200L
+            duration = 2_800L
             repeatMode = ValueAnimator.REVERSE
             repeatCount = ValueAnimator.INFINITE
             interpolator = android.view.animation.AccelerateDecelerateInterpolator()
             addUpdateListener { animator ->
                 val phase = animator.animatedValue as Float
-                composerGlowDrawable.setIntensity(.32f + phase * .42f)
+                composerGlowDrawable.setIntensity(.18f + phase * .54f)
             }
             start()
         }
