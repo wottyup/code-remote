@@ -881,9 +881,10 @@ class CodexAppServer:
         effort: str | None = None,
         approval_policy: ApprovalPolicy | None = None,
         cwd: Path | None = None,
+        allow_empty: bool = False,
     ) -> dict[str, Any]:
         images = image_paths or []
-        if not prompt.strip() and not images:
+        if not allow_empty and not prompt.strip() and not images:
             raise CodexRuntimeError("请填写消息或附加图片")
         input_items: list[dict[str, Any]] = []
         if prompt.strip():

@@ -884,6 +884,7 @@ type RemoteConnection = keyof typeof connectionLabel
 
 interface ComposerSendInput {
   prompt: string
+  continuePaused?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -1381,7 +1382,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
-    && !draft.trim() && attachedImages.length === 0 && attachedDocuments.length === 0
   const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
@@ -2032,8 +2032,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
-              aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '请先处理排队消息再继续') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '请先处理排队消息再继续') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+              aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
@@ -3644,7 +3644,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const activeContinuation = continuation?.paneIndex === selectedPaneIndex
     && continuation.threadId === activeRemote.activeThread?.id ? continuation : null
   const canContinue = Boolean(activeContinuation?.phase === 'ready' && !activeRemote.isRunning && !activeRemote.isInterrupting
-    && activeRemote.connection === 'connected' && !activeRemote.writerConflict && activeRemote.queuedMessages.length === 0)
+    && activeRemote.connection === 'connected' && !activeRemote.writerConflict)
 
   const updateContinuation = useCallback((next: typeof continuation) => {
     continuationRef.current = next
@@ -3654,7 +3654,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const pauseCurrentReply = useCallback(() => {
     if (!activeRemote.isRunning || activeRemote.isInterrupting) return
     const threadId = activeRemote.activeThread?.id
-    if (isClaudeCodeThread || window.CodexRemoteAndroid || !threadId) {
+    if (window.CodexRemoteAndroid || !threadId) {
       void activeRemote.interrupt()
       return
     }
@@ -3664,7 +3664,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       if (continuationRef.current !== next) return
       updateContinuation(accepted ? { ...next, phase: 'ready' } : null)
     })
-  }, [activeRemote, isClaudeCodeThread, selectedPaneIndex, updateContinuation])
+  }, [activeRemote, selectedPaneIndex, updateContinuation])
 
   useEffect(() => {
     if (activeContinuation?.turnId && activeRemote.isRunning && activeRemote.runningTurnId
@@ -4383,7 +4383,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       const pending = continuationRef.current
       if (pending?.paneIndex === selectedPaneIndex && pending.threadId === activeRemote.activeThread?.id) {
         event.preventDefault()
-        updateContinuation(null)
+        if (pending.phase === 'stopping') return
+        updateContinuation({ ...pending, phase: 'stopping' })
+        void activeRemote.stopInterruptedThread(pending.threadId).then((stopped) => {
+          if (continuationRef.current?.threadId !== pending.threadId) return
+          updateContinuation(stopped ? null : { ...pending, phase: 'ready' })
+        })
         return
       }
       if (!activeRemote.isRunning) return
@@ -4392,7 +4397,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.activeThread?.id, activeRemote.isRunning, pauseCurrentReply, selectedPaneIndex, threadDeleteTargets, threadRenameTarget, updateContinuation])
+  }, [activeRemote.activeThread?.id, activeRemote.isRunning, activeRemote.stopInterruptedThread, pauseCurrentReply, selectedPaneIndex, threadDeleteTargets, threadRenameTarget, updateContinuation])
 
   useEffect(() => {
     if (isClaudeCodeThread || availableModels.length === 0) return
@@ -4814,10 +4819,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!canContinue || !activeContinuation || continuationRef.current !== activeContinuation) return
     const pending = { ...activeContinuation, phase: 'continuing' as const }
     updateContinuation(pending)
-    void sendComposerMessage({ prompt: '请继续刚才中断的任务。', images: [], documents: [] }).then((sent) => {
+    void sendComposerMessage({ prompt: isClaudeCodeThread ? '请继续刚才中断的任务。' : '', images: [], documents: [], continuePaused: true }).then((sent) => {
       if (!sent && continuationRef.current === pending) updateContinuation({ ...pending, phase: 'ready' })
     })
-  }, [activeContinuation, canContinue, sendComposerMessage, updateContinuation])
+  }, [activeContinuation, canContinue, isClaudeCodeThread, sendComposerMessage, updateContinuation])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {

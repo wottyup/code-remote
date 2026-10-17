@@ -112,6 +112,7 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 
 interface SendMessageInput {
   prompt: string
+  continuePaused?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -3996,6 +3997,30 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
       return false
     }
+    if (input.continuePaused) {
+      const threadId = activeThread?.id
+      if (!threadId || isRunning || isInterrupting) return false
+      setIsRunning(true)
+      setActivity({ label: '正在继续回复' })
+      setError(null)
+      try {
+        const result = await codexRemoteClient.continuePausedThread(
+          token, threadId, activeEngine === 'claude-code' ? queuedPayloadFromInput(input) : undefined,
+        )
+        applyServerQueueResponse(threadId, result.queue)
+        if (!result.continued) throw new Error('Codex 没有接受续接请求')
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        if (activeThreadId.current === threadId && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+        if (isAmbiguousNetworkFailure(reason)) void loadThread(threadId, ++historyRevision.current, true)
+        setError(reason instanceof Error ? reason.message : '继续回复失败')
+        return false
+      }
+    }
     const payload = queuedPayloadFromInput(input)
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
@@ -4193,7 +4218,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
@@ -4207,6 +4232,17 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!turnId) return true
     return dispatchInterrupt(threadId, turnId)
   }, [activeThread, dispatchInterrupt, isInterrupting, isRunning])
+
+  const stopInterruptedThread = useCallback(async (threadId: string) => {
+    try {
+      await codexRemoteClient.stopInterruptedThread(token, threadId)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '停止回复失败')
+      return false
+    }
+  }, [onUnauthorized, token])
 
   const handoffToLocalCodex = useCallback(async () => {
     if (handoffInProgress || handedOffRef.current) return false
@@ -4337,6 +4373,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     selectThread,
     createThread,
     sendMessage,
+    stopInterruptedThread,
     uploadPdfAttachment,
     sendQueuedMessageNow: sharedQueueAuthoritative ? sharedSendQueuedMessageNow : sendQueuedMessageNow,
     beginEditQueuedMessage: sharedQueueAuthoritative ? sharedBeginQueuedEdit : beginEditQueuedMessage,

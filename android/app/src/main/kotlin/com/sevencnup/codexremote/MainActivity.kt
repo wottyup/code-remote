@@ -1513,7 +1513,6 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when {
                     queueEditItem != null -> finishQueueEdit(true)
-                    composerInput.text.isNotBlank() || selectedFiles.isNotEmpty() -> sendCurrentMessage()
                     running -> interruptTurn()
                     activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true -> continueInterruptedTurn()
                     else -> sendCurrentMessage()
@@ -2925,7 +2924,10 @@ class MainActivity : Activity() {
                 handler.post {
                     if (connection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = withoutDeliveredQueueItems(next)
+                    if (response.optBoolean("paused", false)) pausedThreadKeys += threadTitleKey(threadId)
+                    else pausedThreadKeys.remove(threadTitleKey(threadId))
                     renderQueue()
+                    updateSendButton()
                 }
             } catch (error: Exception) {
                 if (showErrors) handler.post { if (connection == connectionGeneration) showStatus(error.message ?: "读取排队消息失败") }
@@ -4570,7 +4572,7 @@ class MainActivity : Activity() {
                         renderQueue()
                         refreshActiveThread(false)
                     }
-                    pausedThreadKeys.remove(threadTitleKey(threadId))
+                    if (response.optBoolean("sent", false)) pausedThreadKeys.remove(threadTitleKey(threadId))
                     setSendBusy(false)
                     refreshThreads(false)
                 }
@@ -4602,16 +4604,16 @@ class MainActivity : Activity() {
         sendButton.setImageResource(when {
             sendBusy -> R.drawable.ic_composer_wait
             editingQueue -> R.drawable.ic_composer_confirm
-            hasDraft -> R.drawable.ic_composer_send
             running -> R.drawable.ic_composer_pause
             canContinue -> R.drawable.ic_composer_continue
+            hasDraft -> R.drawable.ic_composer_send
             else -> R.drawable.ic_composer_send
         })
         sendButton.contentDescription = tr(when {
             editingQueue -> "确认修改排队消息"
-            hasDraft -> "发送消息"
             running -> "暂停当前回复"
-            canContinue -> "继续回复：发送续写请求"
+            canContinue -> "继续刚才中断的回复"
+            hasDraft -> "发送消息"
             else -> "发送消息"
         })
         sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
@@ -4626,11 +4628,17 @@ class MainActivity : Activity() {
         setSendBusy(true)
         io.execute {
             try {
-                api.post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/interrupt", JSONObject())
+                val response = api.post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/interrupt", JSONObject())
                 handler.post {
+                    if (!response.optBoolean("interrupted", false)) {
+                        setSendBusy(false)
+                        showStatus("当前回复已经结束，无法暂停")
+                        refreshActiveThread(false)
+                        return@post
+                    }
                     pausedThreadKeys += key
                     if (activeThreadId == threadId && threadTitleKey(threadId) == key) {
-                        showStatus("已停止当前回复；点继续会发送续写请求")
+                        showStatus("已暂停回复；点继续可从中断处续接")
                         running = false
                         setSendBusy(false)
                         renderHeader()
@@ -4645,21 +4653,23 @@ class MainActivity : Activity() {
         val threadId = activeThreadId ?: return
         val key = threadTitleKey(threadId)
         if (key !in pausedThreadKeys) return
-        val text = if (appLanguage == "en")
-            "Continue the interrupted reply from where it stopped. Do not repeat earlier content. Keep the conversation's language."
-        else "请继续刚才被中断的回复，从停止处接着回答，避免重复已经说过的内容，并保持原对话语言。"
-        val payload = queuedPayload(text, UUID.randomUUID().toString(), emptyList())
+        val payload = if (threadId.startsWith("claude:")) {
+            val text = if (appLanguage == "en")
+                "Continue the interrupted reply from where it stopped. Do not repeat earlier content. Keep the conversation's language."
+            else "请继续刚才被中断的回复，从停止处接着回答，避免重复已经说过的内容，并保持原对话语言。"
+            queuedPayload(text, UUID.randomUUID().toString(), emptyList())
+        } else JSONObject()
         val api = RemoteApi(endpoint, token)
         setSendBusy(true)
         io.execute {
             try {
-                val response = api.post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
+                val response = api.post("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/continue", payload)
                 handler.post {
-                    pausedThreadKeys.remove(key)
+                    if (response.optBoolean("continued", false)) pausedThreadKeys.remove(key)
                     setSendBusy(false)
                     if (activeThreadId == threadId && threadTitleKey(threadId) == key) {
                         queuedMessages = response.optJSONArray("queue") ?: JSONArray()
-                        running = response.optBoolean("sent", false)
+                        running = response.optBoolean("continued", false)
                         renderQueue()
                         renderHeader()
                         refreshActiveThread(false)

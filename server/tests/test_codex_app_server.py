@@ -997,6 +997,19 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         await app_server.start_turn("thread-id", "hello")
         self.assertIsNone(await app_server._active_turn_id("thread-id"))
 
+    async def test_empty_turn_is_allowed_only_for_explicit_continuation(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._start_workspace_change_watch = AsyncMock()
+        app_server.request = AsyncMock(return_value={"turn": {"id": "continued-turn", "status": "inProgress"}})
+
+        with self.assertRaises(CodexRuntimeError):
+            await app_server.start_turn("thread-id", "")
+        app_server.request.assert_not_awaited()
+
+        await app_server.start_turn("thread-id", "", allow_empty=True)
+        self.assertEqual(app_server.request.await_args.args[0], "turn/start")
+        self.assertEqual(app_server.request.await_args.args[1]["input"], [])
+
     async def test_waiting_for_start_does_not_return_a_turn_that_already_finished(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._pending_turn_starts["thread-id"] = asyncio.get_running_loop().create_future()
