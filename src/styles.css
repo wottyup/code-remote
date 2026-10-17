@@ -2145,8 +2145,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro a { color: #00e; text-decoration: underline; }
 }
 
-/* Earliest WWW document styling: the app viewport acts like a plain HTML page. */
-@media (min-width: 701px) {
+/* Earliest WWW document styling shared by desktop and mobile web. */
   .app-root--theme-retro { background: #fff; color: #000; font-family: "Times New Roman", Times, serif; }
   .remote-shell--theme-retro,
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed {
@@ -2207,6 +2206,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .chat-message { display: block; width: auto; max-width: none; margin: 1em 0; }
   .remote-shell--theme-retro .chat-message__avatar { display: none; }
   .remote-shell--theme-retro .chat-message__body { display: block; min-width: 0; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+  .remote-shell--theme-retro .chat-message--assistant .chat-message__body,
+  .remote-shell--theme-retro.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body,
+  .remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body { padding: 0; border: 0; background: transparent; box-shadow: none; }
   .remote-shell--theme-retro .chat-message__meta { display: block; min-height: 0; margin: 1em 0 .25em; color: #000; font: bold 1em/normal "Times New Roman", Times, serif; }
   .remote-shell--theme-retro .chat-message__meta :is(strong, span, time) { color: #000 !important; font: inherit; }
   .remote-shell--theme-retro .chat-message__timing,
@@ -2258,7 +2260,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .message-composer textarea::placeholder { color: #666; }
   .remote-shell--theme-retro .message-composer__footer { display: flex; min-height: 0; flex-wrap: wrap; justify-content: flex-start; gap: 6px 12px; margin-top: 4px; }
   .remote-shell--theme-retro .composer-preferences { display: flex; min-width: 0; flex-wrap: wrap; gap: 0 10px; }
-  .remote-shell--theme-retro .composer-menu__trigger { display: inline; width: auto; max-width: none; height: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #00e; font: inherit; text-decoration: underline; }
+  .remote-shell--theme-retro .composer-menu__trigger { display: inline-block; width: auto; max-width: none; height: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #00e; font: inherit; text-decoration: underline; }
   .remote-shell--theme-retro .composer-menu__trigger > svg,
   .remote-shell--theme-retro .composer-hint svg,
   .remote-shell--theme-retro .attach-button svg,
@@ -2270,6 +2272,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .attach-button::after { content: '附加文件'; }
   .remote-shell--theme-retro .send-button,
   .remote-shell--theme-retro .stop-button { display: inline-block; width: auto; height: auto; min-width: 0; min-height: 0; padding: 2px 8px; border: 2px outset #aaa; border-radius: 0; background: #eee; color: #000; font: 1em/normal "Times New Roman", Times, serif; }
+  .remote-shell--theme-retro .message-composer__footer .send-button--arrow { width: auto; min-width: 0; height: auto; padding: 2px 8px; border: 2px outset #aaa; background: #eee; color: #000; font: 1em/normal "Times New Roman", Times, serif; white-space: nowrap; }
   .remote-shell--theme-retro .send-button--arrow::after { content: '发送'; }
   .remote-shell--theme-retro .send-button--queue::after { content: '排队'; }
   .remote-shell--theme-retro .send-button--interrupt::after { content: '暂停'; }
@@ -2353,6 +2356,60 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .theme-option__preview--retro::after { position: absolute; top: 4px; left: 7px; width: 42px; height: 4px; border-top: 1px solid #00e; content: ''; }
   .remote-shell--theme-retro .theme-settings-panel__close { border: 0; background: transparent; color: #00e; }
   .remote-shell--theme-retro .theme-settings-panel__close svg { display: none; }
+
+/* Mobile keeps the same document look, with its existing off-canvas navigation. */
+@media (max-width: 700px) {
+  .remote-shell--theme-retro { display: block; }
+  .remote-shell--theme-retro .remote-sidebar {
+    inset: 0 auto 0 0;
+    display: flex;
+    width: min(78vw, 320px);
+    height: 100dvh;
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+    transform: translate3d(-105%, 0, 0);
+    overflow: hidden;
+    border-right: 1px solid #aaa;
+    visibility: visible;
+  }
+  .remote-shell--theme-retro .remote-sidebar.remote-sidebar--open { transform: translate3d(0, 0, 0); }
+  .remote-shell--theme-retro .remote-sidebar.remote-sidebar--dragging { transform: translate3d(var(--sidebar-drag-offset, -105%), 0, 0); }
+  .remote-shell--theme-retro .sidebar-backdrop { display: block; background: #000; }
+  .remote-shell--theme-retro .remote-sidebar__heading { flex: 0 0 auto; }
+  .remote-shell--theme-retro .remote-sidebar__close { margin-bottom: .5em; }
+
+  .remote-shell--theme-retro .workspace-explorer {
+    inset: 0 0 0 auto;
+    display: grid;
+    width: min(85vw, 360px);
+    height: 100dvh;
+    padding: max(8px, env(safe-area-inset-top)) 8px max(8px, env(safe-area-inset-bottom));
+    transform: translate3d(105%, 0, 0);
+    visibility: hidden;
+    border-left: 1px solid #aaa;
+  }
+  .remote-shell--theme-retro .workspace-explorer.workspace-explorer--mobile-open {
+    inset: 0 0 0 auto;
+    width: min(85vw, 360px);
+    transform: translate3d(0, 0, 0);
+    visibility: visible;
+  }
+  .remote-shell--theme-retro .workspace-explorer.workspace-explorer--dragging { transform: translate3d(var(--workspace-drag-offset, 105%), 0, 0); }
+  .remote-shell--theme-retro .workspace-backdrop { background: #000; }
+  .remote-shell--theme-retro .workspace-explorer__close { display: inline; }
+
+  .remote-shell--theme-retro .remote-chat__header,
+  .remote-shell--theme-retro .message-stream { padding-inline: 8px; }
+  .remote-shell--theme-retro .composer-dock { width: auto; margin-inline: 8px; }
+  .remote-shell--theme-retro .message-composer__footer {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 6px;
+  }
+  .remote-shell--theme-retro .composer-preferences { min-width: 0; flex-wrap: wrap; gap: 2px 8px; }
+  .remote-shell--theme-retro .composer-menu { min-width: 0; max-width: 100%; }
+  .remote-shell--theme-retro .composer-menu__trigger { max-width: 100%; white-space: nowrap; }
+  .remote-shell--theme-retro .composer-actions { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
 }
 
 /* Keep both navigation areas beside the document on desktop. */
