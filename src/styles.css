@@ -2058,3 +2058,88 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .theme-settings-panel__header { border-bottom: 1px solid #777; background: #eee; }
   .remote-shell--theme-retro .theme-settings-panel__header :is(h1, p, .theme-settings-panel__eyebrow) { color: #222; }
 }
+
+/* Late-90s homepage treatment: table-like navigation, plain links, and a rainbow rule. */
+@media (min-width: 701px) {
+  .app-root--theme-retro { background: #bdbdbd; font-family: "Times New Roman", Times, serif; }
+  .remote-shell--theme-retro {
+    width: min(100%, 1240px);
+    max-width: 1240px;
+    margin-inline: auto;
+    grid-template-columns: 218px minmax(0, 1fr);
+    border: 1px solid #666;
+    background: #fff;
+    color: #000;
+    font-family: "Times New Roman", Times, serif;
+  }
+  .remote-shell--theme-retro .remote-sidebar { position: relative; inset: auto; z-index: 2; display: flex; width: auto; min-height: 0; padding: 12px 9px; transform: none; border: 0; border-right: 1px solid #888; background: #fff; box-shadow: none; }
+  .remote-shell--theme-retro .remote-sidebar__heading { min-height: 70px; margin: 0 0 8px; padding: 4px 2px 8px; border: 0; border-bottom: 1px solid #999; background: #fff; }
+  .remote-shell--theme-retro .remote-sidebar__collapse, .remote-shell--theme-retro .remote-sidebar__close, .remote-shell--theme-retro .menu-button { display: none; }
+  .remote-shell--theme-retro .remote-brand { align-items: flex-start; gap: 7px; color: #000; letter-spacing: 0; }
+  .remote-shell--theme-retro .remote-brand__logo { width: 42px; height: 42px; flex-basis: 42px; }
+  .remote-shell--theme-retro .remote-brand__copy { gap: 1px; }
+  .remote-shell--theme-retro .remote-brand__copy strong { color: #000; font-family: "Times New Roman", Times, serif; font-size: 21px; font-weight: 700; }
+  .remote-shell--theme-retro .remote-brand__copy small { color: #333; font-family: Arial, Helvetica, sans-serif; font-size: 11px; }
+  .remote-shell--theme-retro .new-thread-control { width: auto; flex: 0 0 auto; margin: 3px 0 7px; }
+  .remote-shell--theme-retro .new-thread-button { display: inline; width: auto; height: auto; min-height: 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #00e; font: 16px "Times New Roman", Times, serif; text-align: left; text-decoration: underline; }
+  .remote-shell--theme-retro .new-thread-button__icon { display: none; }
+  .remote-shell--theme-retro .thread-list-heading { min-height: 27px; margin: 5px 0 3px; padding: 3px 0; border-bottom: 1px solid #999; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; }
+  .remote-shell--theme-retro .thread-list-heading__select { min-width: 0; min-height: 0; padding: 0; border: 0; background: transparent; color: #00e; text-decoration: underline; }
+  .remote-shell--theme-retro .thread-list__section { margin: 3px 0 0; padding: 5px 2px 2px; border: 0; background: transparent; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 12px; font-weight: 700; }
+  .remote-shell--theme-retro .thread-list { display: block; overflow-y: auto; }
+  .remote-shell--theme-retro .thread-row { min-height: 26px; gap: 5px; padding: 2px 3px; border: 0 !important; border-radius: 0; background: transparent; color: #00e; text-decoration: underline; }
+  .remote-shell--theme-retro .thread-row:hover { background: #f0f0f0; color: #00e; }
+  .remote-shell--theme-retro .thread-row--active, .remote-shell--theme-retro .thread-row--selected { background: #f1f1f1; box-shadow: none; color: #551a8b; }
+  .remote-shell--theme-retro .thread-row__copy strong { font-size: 15px; font-weight: 400; line-height: 1.2; }
+  .remote-shell--theme-retro :is(.thread-row__meta, .thread-row__copy small, .thread-row__engine, .thread-row__pin) { color: #444 !important; font-size: 11px; }
+  .remote-shell--theme-retro .remote-sidebar__actions { display: block; margin-top: 10px; }
+  .remote-shell--theme-retro .remote-sidebar__actions .sidebar-settings { display: inline-flex; width: auto; min-height: 24px; margin: 1px 0; padding: 0 3px; border: 0; border-radius: 0; background: transparent; color: #00e; font-family: "Times New Roman", Times, serif; text-decoration: underline; }
+  .remote-shell--theme-retro .remote-sidebar__actions .sidebar-settings svg { width: 12px; height: 12px; color: #00e; }
+  .remote-shell--theme-retro .remote-sidebar__footer { min-height: 28px; padding: 5px 2px 0; border-top: 1px solid #999; color: #333; font-family: Arial, Helvetica, sans-serif; font-size: 11px; }
+  .remote-shell--theme-retro .remote-sidebar__footer button { padding: 0 2px; color: #00e; text-decoration: underline; }
+  .remote-shell--theme-retro .sidebar-backdrop { display: none; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed { grid-template-columns: 218px minmax(0, 1fr); }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar { padding-inline: 9px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-brand__copy { display: grid; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .sidebar-search { display: flex; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .thread-list__section { display: block; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .thread-list-heading > span { display: inline; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .new-thread-button > span:last-child { display: inline; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .thread-row { gap: 5px; padding-inline: 3px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .thread-row__copy small { display: inline; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings { justify-content: flex-start; padding-inline: 3px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings span,
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer > span { display: inline; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer { gap: 8px; padding-inline: 2px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer button { margin-left: auto; padding-inline: 2px; }
+  .remote-shell--theme-retro .remote-workspace { width: 100%; margin: 0; border: 0; background: #fff; }
+  .remote-shell--theme-retro :is(.remote-chat, .conversation-pane, .remote-pane-grid, .remote-pane-slot) { background: #fff; }
+  .remote-shell--theme-retro :is(.remote-chat, .conversation-pane) { grid-template-rows: 92px minmax(0, 1fr) auto auto auto; }
+  .remote-shell--theme-retro .conversation-pane--active::before { display: none; }
+  .remote-shell--theme-retro .remote-chat__header { position: relative; min-height: 92px; padding: 10px 18px 22px; border: 0; background: #fff; box-shadow: none; }
+  .remote-shell--theme-retro .remote-chat__header::after { position: absolute; right: 10px; bottom: 0; left: 10px; height: 5px; background: linear-gradient(90deg, #f00, #ff8c00, #ff0, #00a000, #00f, #8b00ff, #f00); content: ''; }
+  .remote-shell--theme-retro .remote-chat__title strong { color: #000; font-family: "Times New Roman", Times, serif; font-size: 30px; font-weight: 700; letter-spacing: 0; }
+  .remote-shell--theme-retro .remote-chat__title span, .remote-shell--theme-retro .remote-chat__title .remote-chat__eyebrow { color: #333; font-family: "Times New Roman", Times, serif; font-size: 14px; letter-spacing: 0; text-transform: none; }
+  .remote-shell--theme-retro .connection-label { padding: 1px 4px; border: 0; background: transparent; color: #000; font-family: "Times New Roman", Times, serif; }
+  .remote-shell--theme-retro :is(.menu-button, .mobile-workspace-button) { display: inline-flex; width: auto; min-width: 0; height: 26px; padding: 0 3px; border: 0; border-radius: 0; background: transparent; color: #00e; font: 16px "Times New Roman", Times, serif; text-decoration: underline; }
+  .remote-shell--theme-retro .menu-button { display: none; }
+  .remote-shell--theme-retro .mobile-workspace-button svg { display: none; }
+  .remote-shell--theme-retro .mobile-workspace-button::after { content: '文件区'; }
+  .remote-shell--theme-retro .message-stream { padding: 0 18px 18px; background: #fff; }
+  .remote-shell--theme-retro .message-stream__content { gap: 16px; padding-top: 20px; }
+  .remote-shell--theme-retro .chat-message__content { color: #000; font-family: "Times New Roman", Times, serif; font-size: 17px; line-height: 1.35; }
+  .remote-shell--theme-retro .chat-message--assistant .chat-message__body { padding-bottom: 8px; border-bottom: 1px solid #aaa; }
+  .remote-shell--theme-retro.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body,
+  .remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body { border: 1px solid #888; border-radius: 0; background: #f5f5f5; box-shadow: none; }
+  .remote-shell--theme-retro .message-composer { border: 2px inset #aaa; border-radius: 0; background: #fff; box-shadow: none; }
+  .remote-shell--theme-retro .message-composer textarea { color: #000; font-family: "Times New Roman", Times, serif; }
+  .remote-shell--theme-retro .workspace-resize-handle, .remote-shell--theme-retro .workspace-explorer { display: none; }
+  .remote-shell--theme-retro .workspace-explorer.workspace-explorer--mobile-open { position: fixed; z-index: 20; inset: 0 max(0px, calc((100vw - 1240px) / 2)) 0 auto; display: grid; width: min(var(--workspace-explorer-width, 340px), calc(100vw - 20px)); height: 100dvh; grid-column: auto; grid-row: auto; border: 1px solid #777; background: #fff; box-shadow: none; }
+  .remote-shell--theme-retro .workspace-explorer__header { border-bottom: 1px solid #888; background: #eee; color: #000; }
+  .remote-shell--theme-retro .workspace-explorer__header strong, .remote-shell--theme-retro .workspace-explorer__eyebrow { color: #000; }
+  .remote-shell--theme-retro .workspace-backdrop { position: fixed; z-index: 19; inset: 0; display: block; border: 0; background: #000; opacity: .25; }
+  .remote-shell--theme-retro .theme-settings-panel { grid-column: 2; width: 100%; margin: 0; border: 0; background: #fff; }
+  .remote-shell--theme-retro .theme-settings-panel__header { border-bottom: 1px solid #888; background: #eee; }
+  .remote-shell--theme-retro .theme-settings-panel__header :is(h1, p, .theme-settings-panel__eyebrow) { color: #000; }
+  .remote-shell--theme-retro a { color: #00e; text-decoration: underline; }
+}
