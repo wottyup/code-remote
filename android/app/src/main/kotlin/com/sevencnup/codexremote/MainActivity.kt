@@ -553,6 +553,7 @@ class MainActivity : Activity() {
     private lateinit var page: LinearLayout
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
+    private lateinit var composerFileChanges: LinearLayout
     private lateinit var composerGlowView: View
     private var composerGlowAnimator: ValueAnimator? = null
     private var composerGlowRunning = false
@@ -561,6 +562,17 @@ class MainActivity : Activity() {
     private lateinit var statusView: TextView
     private lateinit var messageScroll: ScrollView
     private lateinit var messageList: LinearLayout
+    private var activeActivityText: TextView? = null
+    private var activeActivityTimer: TextView? = null
+    private var activeActivityStartedAt = 0L
+    private val activityTick = object : Runnable {
+        override fun run() {
+            if (!running || activeActivityTimer == null) return
+            val elapsed = ((System.currentTimeMillis() - activeActivityStartedAt).coerceAtLeast(0L) / 1000L)
+            activeActivityTimer?.text = "%02d:%02d".format(Locale.ROOT, elapsed / 60L, elapsed % 60L)
+            handler.postDelayed(this, 1000L)
+        }
+    }
     private lateinit var welcomeTitleView: TextView
     private lateinit var scrollToBottomButton: ImageButton
     private lateinit var queuePanel: LinearLayout
@@ -1386,6 +1398,11 @@ class MainActivity : Activity() {
             clipChildren = false
             clipToPadding = false
         }
+        composerFileChanges = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
+        composerDock.addView(composerFileChanges, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
@@ -1511,6 +1528,7 @@ class MainActivity : Activity() {
         updateComposerPreferences()
         updateSendButton()
         updateComposerRunningGlow(running)
+        updateComposerFileChanges()
     }
 
     private fun composerGlassBackground(): Drawable {
@@ -2767,8 +2785,10 @@ class MainActivity : Activity() {
                 val usedDelta = revision != null && merged != null
                 val resolvedTurns = resolved.optJSONArray("turns") ?: JSONArray()
                 val lastTurnId = resolvedTurns.optJSONObject(resolvedTurns.length() - 1)?.optString("id")
-                val incrementalTurnId = changedTurnIds.singleOrNull()?.takeIf { usedDelta && it == lastTurnId }
-                val historyChanged = !usedDelta || changedTurnIds.isNotEmpty()
+                val workspaceChanged = response.optJSONObject("historySync")?.optJSONArray("workspaceTurnIds")?.length()?.let { it > 0 } == true
+                val incrementalTurnId = (changedTurnIds.singleOrNull() ?: lastTurnId?.takeIf { workspaceChanged && changedTurnIds.isEmpty() })
+                    ?.takeIf { usedDelta && it == lastTurnId }
+                val historyChanged = !usedDelta || changedTurnIds.isNotEmpty() || workspaceChanged
                 val sync = resolved.optJSONObject("historySync") ?: response.optJSONObject("historySync")
                 val newRevision = sync?.optString("revision")?.takeIf { !it.isNullOrBlank() && it != "null" }
                 if (resolved.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
@@ -2786,6 +2806,7 @@ class MainActivity : Activity() {
                     running = isThreadRunning(resolved)
                     renderHeader()
                     if (historyChanged) renderMessages(!showLoading, incrementalTurnId)
+                    updateComposerFileChanges()
                 }
             } catch (error: Exception) {
                 handler.post {
@@ -3136,9 +3157,12 @@ class MainActivity : Activity() {
             })
         }
 
-        val lastAssistantByTurn = messages.filter { it.first == "assistant" }.groupBy { it.second.optString("_turnId") }
-            .mapValues { (_, values) -> values.lastOrNull()?.second }
         val renderedFileChangeTurns = mutableSetOf<String>()
+        fun appendTurnSummary(turnId: String) {
+            if (!renderedFileChangeTurns.add(turnId)) return
+            val entries = fileChangesForTurn(turnId, turnsById[turnId], thread)
+            addFileChangeSummary(turnId, entries)
+        }
         var messageIndex = 0
         while (messageIndex < messages.size) {
             val (role, item) = messages[messageIndex]
@@ -3152,9 +3176,10 @@ class MainActivity : Activity() {
                     messageIndex++
                 }
                 addOperationLog(turnId, groupedOperations)
-                if (lastAssistantByTurn[turnId] == null && renderedFileChangeTurns.add(turnId)) {
-                    addFileChangeSummary(turnId, fileChangesForTurn(turnId, turnsById[turnId], thread))
+                groupedOperations.filter { normalizedType(it.optString("type")) == "filechange" }.forEach { operation ->
+                    addInlineFileChange(turnId, operation)
                 }
+                if (messageIndex == messages.size || messages[messageIndex].second.optString("_turnId") != turnId) appendTurnSummary(turnId)
                 continue
             }
             val viewportWidth = messageScroll.width.takeIf { it > 0 }
@@ -3256,11 +3281,8 @@ class MainActivity : Activity() {
             }
             messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
 
-            if (role == "assistant" && lastAssistantByTurn[turnId] === item) {
-                renderedFileChangeTurns.add(turnId)
-                addFileChangeSummary(turnId, fileChangesForTurn(turnId, turnsById[turnId], thread))
-            }
             messageIndex++
+            if (messageIndex == messages.size || messages[messageIndex].second.optString("_turnId") != turnId) appendTurnSummary(turnId)
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
@@ -3277,18 +3299,36 @@ class MainActivity : Activity() {
                 indeterminateTintList = ColorStateList.valueOf(activityAccent)
                 contentDescription = activityLabel
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-            activity.addView(label(activityLabel, 12, activityAccent), LinearLayout.LayoutParams(0, WRAP, 1f))
-            activity.addView(label(currentMessageTime(), 10, MUTED).apply {
+            val lastTurn = turns.optJSONObject(turns.length() - 1)
+            activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
+                ?: System.currentTimeMillis()
+            val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
+            val currentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
+                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") && normalizedOperationStatus(item) == "running" }
+            activeActivityText = label("正在运行中 · ${currentOperation?.let { operationActivityLabel(it) } ?: activityLabel}", 12, activityAccent).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
+            activeActivityTimer = label("00:00", 10, MUTED).apply {
                 gravity = Gravity.END
-                contentDescription = "思考开始时间 ${currentMessageTime()}"
-            }, LinearLayout.LayoutParams(WRAP, WRAP))
+                contentDescription = "本轮已运行时间"
+            }
+            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
+            handler.removeCallbacks(activityTick)
+            handler.post(activityTick)
+        } else {
+            handler.removeCallbacks(activityTick)
+            activeActivityText = null
+            activeActivityTimer = null
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
             updateScrollToBottomButton()
         }
         updateComposerRunningGlow(running)
+        updateComposerFileChanges()
     }
 
     private fun updateScrollToBottomButton() {
@@ -3479,7 +3519,15 @@ class MainActivity : Activity() {
                     assistantMarkdown.setMarkdown(content, text)
                     container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
-                "operation" -> block.optJSONObject("item")?.let(pendingOperations::add)
+                "operation" -> block.optJSONObject("item")?.let { operation ->
+                    pendingOperations.add(operation)
+                    if (normalizedType(operation.optString("type")) == "filechange") {
+                        flushOperations()
+                        parseFileChanges(operation.opt("changes")).forEach { entry ->
+                            container.addView(inlineFileChangeView(entry), LinearLayout.LayoutParams(MATCH, WRAP))
+                        }
+                    }
+                }
             }
         }
         flushOperations()
@@ -3491,6 +3539,45 @@ class MainActivity : Activity() {
         messageList.addView(operationLogView(turnId, operations, maxWidth).apply {
             tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
         }, widthWrap())
+    }
+
+    private fun operationActivityLabel(operation: JSONObject): String {
+        val path = operationPaths(operation).firstOrNull()?.substringAfterLast('/')
+        return when (operationLabel(operation)) {
+            "查看文件" -> "正在查看 ${path ?: "文件"}"
+            "修改文件" -> "正在编辑 ${path ?: "文件"}"
+            "搜索文件" -> "正在搜索文件"
+            "执行命令" -> "正在运行命令"
+            else -> operationLabel(operation)
+        }
+    }
+
+    private fun addInlineFileChange(turnId: String, operation: JSONObject) {
+        parseFileChanges(operation.opt("changes")).forEach { entry ->
+            messageList.addView(inlineFileChangeView(entry).apply { tag = "$TAG_MESSAGE_TURN_PREFIX$turnId" },
+                LinearLayout.LayoutParams(MATCH, WRAP))
+        }
+    }
+
+    private fun inlineFileChangeView(entry: FileChangeEntry): LinearLayout {
+        val line = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(10), dp(5), dp(9), dp(5))
+            setOnClickListener { showDiffPreview(entry) }
+            contentDescription = "查看更改 ${entry.path}"
+        }
+        line.addView(ImageView(this).apply {
+            setImageResource(fileIconResource(entry.path))
+            imageTintList = null
+        }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
+        line.addView(label("已更改 ${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, LinearLayout.LayoutParams(0, WRAP, 1f))
+        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        return line
     }
 
     private fun operationLogView(turnId: String, operations: List<JSONObject>, maximumWidth: Int): LinearLayout {
@@ -3929,114 +4016,106 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun addFileChangeSummary(turnId: String, entries: List<FileChangeEntry>) {
+    private fun updateComposerFileChanges() {
+        if (!::composerFileChanges.isInitialized) return
+        composerFileChanges.removeAllViews()
+        val turns = activeThread?.optJSONArray("turns") ?: JSONArray()
+        val turn = turns.optJSONObject(turns.length() - 1)
+        val turnId = turn?.optString("id").orEmpty()
+        val entries = if (running && turnId.isNotBlank()) fileChangesForTurn(turnId, turn, activeThread) else emptyList()
+        composerFileChanges.visibility = if (entries.isEmpty()) View.GONE else View.VISIBLE
         if (entries.isEmpty()) return
-        val summaryId = "files:$turnId"
-        val card = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = rounded(PANEL, dp(11), BORDER, dp(1))
-            tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
-        }
-        val totalAdditions = entries.sumOf { it.additions }
-        val totalDeletions = entries.sumOf { it.deletions }
+        val additions = entries.sumOf { it.additions }
+        val deletions = entries.sumOf { it.deletions }
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            isClickable = true
-            isFocusable = true
-            contentDescription = "展开或收起最近编辑文件"
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+            background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
         }
-        val headingIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_edit)
-            imageTintList = ColorStateList.valueOf(MUTED)
+        heading.addView(label("正在编辑 ${entries.size} 个文件", 11, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        composerFileChanges.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
+        val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        entries.forEach { entry -> details.addView(inlineFileChangeView(entry), LinearLayout.LayoutParams(MATCH, WRAP)) }
+        composerFileChanges.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
+        heading.setOnClickListener { details.visibility = if (details.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+    }
+
+    private fun addFileChangeSummary(turnId: String, entries: List<FileChangeEntry>) {
+        if (entries.isEmpty()) return
+        val summaryId = "files:$turnId"
+        val additions = entries.sumOf { it.additions }
+        val deletions = entries.sumOf { it.deletions }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(10), dp(8), dp(10), dp(9))
+            background = rounded(PANEL, dp(11), BORDER, dp(1))
+            tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
         }
-        heading.addView(headingIcon, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
-        heading.addView(label("最近编辑文件 · ${entries.size}", 12, SUBTLE, true).apply {
-            maxLines = 1
-            ellipsize = android.text.TextUtils.TruncateAt.END
-        }, LinearLayout.LayoutParams(0, dp(25), 1f))
-        val headingStats = LinearLayout(this).apply {
+        val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            if (totalAdditions > 0) addView(label("+$totalAdditions", 11, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
-            if (totalDeletions > 0) addView(label("-$totalDeletions", 11, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
-                setPadding(dp(7), 0, 0, 0)
-            }, LinearLayout.LayoutParams(WRAP, MATCH))
         }
-        heading.addView(headingStats, LinearLayout.LayoutParams(WRAP, dp(25)).apply { leftMargin = dp(7) })
-        val chevron = ImageView(this).apply { imageTintList = ColorStateList.valueOf(MUTED) }
-        heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(8) })
-        card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(25)))
-
-        lateinit var refreshFileRows: () -> Unit
-        refreshFileRows = {
+        heading.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_edit)
+            imageTintList = ColorStateList.valueOf(ACCENT)
+        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(7) })
+        heading.addView(label("${if (running && turnId == activeThread?.optJSONArray("turns")?.optJSONObject((activeThread?.optJSONArray("turns")?.length() ?: 1) - 1)?.optString("id")) "正在编辑" else "本次已编辑"} ${entries.size} 个文件", 12, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(6), 0, 0, 0) })
+        val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val review = label("审核", 11, ACCENT, true).apply { setPadding(dp(9), dp(5), 0, dp(5)) }
+        heading.addView(review, LinearLayout.LayoutParams(WRAP, WRAP))
+        card.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
+        card.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
+        var reviewing = false
+        lateinit var refreshRows: () -> Unit
+        refreshRows = {
+            details.removeAllViews()
             val expanded = summaryId in expandedFileChangeIds
-            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
-            if (card.childCount > 1) card.removeViews(1, card.childCount - 1)
-            if (expanded) {
-                val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                entries.forEach { item ->
-                    val line = RelativeLayout(this).apply {
-                        gravity = Gravity.CENTER_VERTICAL
-                        setPadding(dp(21), dp(3), 0, dp(3))
-                        setOnClickListener { showDiffPreview(item) }
-                    }
-                    val stats = LinearLayout(this).apply {
-                        id = View.generateViewId()
-                        orientation = LinearLayout.HORIZONTAL
-                        gravity = Gravity.CENTER_VERTICAL
-                        if (item.additions > 0) addView(label("+${item.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true), LinearLayout.LayoutParams(WRAP, MATCH))
-                        if (item.deletions > 0) addView(label("-${item.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply {
-                            setPadding(dp(6), 0, 0, 0)
-                        }, LinearLayout.LayoutParams(WRAP, MATCH))
-                    }
-                    line.addView(stats, RelativeLayout.LayoutParams(WRAP, dp(22)).apply {
-                        addRule(RelativeLayout.ALIGN_PARENT_END)
-                        addRule(RelativeLayout.CENTER_VERTICAL)
-                    })
-                    line.addView(label(item.path, 11, ACCENT, translateUi = false).apply {
-                        maxLines = 1
-                        ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
-                    }, RelativeLayout.LayoutParams(MATCH, dp(22)).apply {
-                        addRule(RelativeLayout.ALIGN_PARENT_START)
-                        addRule(RelativeLayout.START_OF, stats.id)
-                        marginEnd = if (item.additions > 0 || item.deletions > 0) dp(8) else 0
-                    })
-                    rows.addView(line, LinearLayout.LayoutParams(MATCH, WRAP))
+            val visible = if (expanded || reviewing) entries else entries.take(1)
+            visible.forEach { entry ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(23), dp(5), 0, dp(5))
                 }
-                val listHeight = min(dp(252), (entries.size * dp(28)).coerceAtLeast(dp(28)))
-                var previousY = 0f
-                val scroll = ScrollView(this).apply {
-                    isVerticalScrollBarEnabled = false
-                    overScrollMode = View.OVER_SCROLL_NEVER
-                    isNestedScrollingEnabled = true
-                    addView(rows, FrameLayout.LayoutParams(MATCH, WRAP))
-                    setOnTouchListener { view, event ->
-                        when (event.actionMasked) {
-                            MotionEvent.ACTION_DOWN -> {
-                                previousY = event.y
-                                view.parent?.requestDisallowInterceptTouchEvent(true)
-                            }
-                            MotionEvent.ACTION_MOVE -> {
-                                val movingDown = event.y > previousY
-                                previousY = event.y
-                                val canConsume = canScrollVertically(if (movingDown) -1 else 1)
-                                view.parent?.requestDisallowInterceptTouchEvent(canConsume)
-                            }
-                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> view.parent?.requestDisallowInterceptTouchEvent(false)
-                        }
-                        false
-                    }
-                }
-                card.addView(scroll, LinearLayout.LayoutParams(MATCH, listHeight).apply { topMargin = dp(3) })
+                row.addView(label(entry.path, 11, ACCENT, translateUi = false).apply {
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                    setOnClickListener { showDiffPreview(entry) }
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                if (entry.additions > 0) row.addView(label("+${entry.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+                if (entry.deletions > 0) row.addView(label("-${entry.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(5), 0, 0, 0) })
+                row.addView(label("插入对话", 10, ACCENT).apply {
+                    setPadding(dp(8), dp(5), 0, dp(5))
+                    setOnClickListener { insertWorkspacePathIntoComposer(entry.path) }
+                })
+                details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
+                if (reviewing) details.addView(label(entry.diff.ifBlank { "暂无差异片段，点击文件名查看文件" }, 10, MUTED, translateUi = false).apply {
+                    maxLines = 7
+                    setPadding(dp(23), dp(3), 0, dp(6))
+                    setOnClickListener { showDiffPreview(entry) }
+                }, LinearLayout.LayoutParams(MATCH, WRAP))
             }
+            if (entries.size > 1) details.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, ACCENT, true).apply {
+                setPadding(dp(23), dp(5), 0, dp(4))
+                setOnClickListener {
+                    if (summaryId in expandedFileChangeIds) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
+                    reviewing = false
+                    review.text = "审核"
+                    refreshRows()
+                }
+            }, LinearLayout.LayoutParams(MATCH, WRAP))
         }
-        heading.setOnClickListener {
-            if (summaryId in expandedFileChangeIds) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
-            refreshFileRows()
+        review.setOnClickListener {
+            reviewing = !reviewing
+            review.text = if (reviewing) "收起审核" else "审核"
+            refreshRows()
         }
-        refreshFileRows()
+        refreshRows()
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
     }
 
@@ -7406,6 +7485,16 @@ class MainActivity : Activity() {
     }
 
     private fun currentMessageTime(): String = formatMessageTime(Instant.now().toString())
+
+    private fun parseMessageInstant(value: Any?): Instant? = try {
+        when (value) {
+            is Number -> value.toLong().let { Instant.ofEpochMilli(if (it in -9_999_999_999L..9_999_999_999L) it * 1000L else it) }
+            is String -> value.trim().toLongOrNull()?.let { Instant.ofEpochMilli(if (it in -9_999_999_999L..9_999_999_999L) it * 1000L else it) }
+                ?: runCatching { Instant.parse(value) }.getOrNull()
+                ?: runCatching { OffsetDateTime.parse(value).toInstant() }.getOrNull()
+            else -> null
+        }
+    } catch (_: Exception) { null }
 
     private fun firstJsonValue(value: JSONObject, vararg keys: String): Any? {
         for (key in keys) {

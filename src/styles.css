@@ -681,6 +681,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-queue__remove { width: 22px; padding: 0; color: #8f98af; }
 .composer-queue__remove:hover:not(:disabled) { background: rgba(255, 255, 255, .1); color: #f0f2f8; }
 .composer-queue__send:disabled, .composer-queue__edit:disabled, .composer-queue__remove:disabled { cursor: wait; opacity: .55; }
+.composer-edit-bar { display: flex; min-height: 27px; align-items: center; justify-content: space-between; gap: 8px; margin: -3px 0 3px; color: #aeb8cc; font-size: calc(11px + var(--mobile-font-offset)); }
 .composer-edit-cancel { display: grid; width: 29px; min-width: 29px; height: 29px; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #b8bfce; cursor: pointer; }
 .composer-edit-cancel:hover:not(:disabled) { background: rgba(255, 255, 255, .08); color: #f0f2f8; }
 .composer-edit-cancel:disabled { cursor: wait; opacity: .55; }

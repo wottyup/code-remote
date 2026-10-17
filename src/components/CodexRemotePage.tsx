@@ -1891,6 +1891,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         className={`message-composer${isRunning ? ' message-composer--running' : ''}`}
         onSubmit={(event) => void send(event)}
       >
+      {editingQueuedMessageId ? (
+        <div className="composer-edit-bar">
+          <span>正在修改排队消息</span>
+          <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button>
+        </div>
+      ) : null}
       {attachedImages.length > 0 ? (
         <div className="composer-images" aria-label="待发送图片">
           {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><img src={`data:${image.mediaType};base64,${image.data}`} alt={image.name} /><button type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
@@ -2008,10 +2014,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
-          {writerConflict
-            ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button>
-            : isRunning && editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onInterrupt} disabled={isInterrupting}>{isInterrupting ? <LoaderCircle className="spin" size={13} /> : <Square size={13} fill="currentColor" />}{isInterrupting ? '停止中' : '停止'}</button> : null}
-          {editingQueuedMessageId ? <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button> : null}
+          {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
               className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}`}
