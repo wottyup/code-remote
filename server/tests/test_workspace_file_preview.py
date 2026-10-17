@@ -211,6 +211,7 @@ class WorkspaceFileSaveApiTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)
+        self.addAsyncCleanup(self.app.state.claude_code.close)
         self.save_endpoint = next(
             route.endpoint
             for route in self.app.routes

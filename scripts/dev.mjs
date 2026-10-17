@@ -41,7 +41,9 @@ const windowsCodexCandidates = isWindows
 const virtualEnvironmentPython = isWindows
   ? join(projectRoot, '.venv', 'Scripts', 'python.exe')
   : join(projectRoot, '.venv', 'bin', 'python')
-const python = configuredPython || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
+const python = configuredPython
+  || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
+  || (isWindows ? 'python' : null)
 
 let engine = null
 let vite = null
@@ -166,7 +168,7 @@ function startVite() {
 
 async function main() {
   if (!python) {
-    throw new Error(`找不到 Python 虚拟环境，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON 指向 Python。`)
+    throw new Error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON 指向 Python。`)
   }
   if (!existsSync(viteEntrypoint)) {
     throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)

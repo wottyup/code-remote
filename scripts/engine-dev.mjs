@@ -8,10 +8,12 @@ const serverRoot = join(projectRoot, 'server')
 const isWindows = process.platform === 'win32'
 const configuredPython = process.env.CODEX_REMOTE_PYTHON
 const virtualEnvironmentPython = isWindows ? join(projectRoot, '.venv', 'Scripts', 'python.exe') : join(projectRoot, '.venv', 'bin', 'python')
-const python = configuredPython || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
+const python = configuredPython
+  || (existsSync(virtualEnvironmentPython) ? virtualEnvironmentPython : null)
+  || (isWindows ? 'python' : null)
 
 if (!python) {
-  console.error(`找不到 Python 虚拟环境，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON。`)
+  console.error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON。`)
   process.exit(1)
 }
 

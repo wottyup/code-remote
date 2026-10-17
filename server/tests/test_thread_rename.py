@@ -25,6 +25,7 @@ class ThreadRenameApiTests(unittest.IsolatedAsyncioTestCase):
         ):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)
+        self.addAsyncCleanup(self.app.state.claude_code.close)
         self.server = self.app.state.codex
         self.rename = next(
             route.endpoint

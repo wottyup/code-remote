@@ -47,6 +47,16 @@ class SharedStateStoreTests(unittest.TestCase):
         with self.assertRaises(QueueConflictError):
             self.store.enqueue("thread", message("queued-first", "different content"))
 
+    def test_sqlite_permissions_follow_the_host_platform(self) -> None:
+        self.store.close()
+        with patch("codex_remote.shared_state.os.chmod") as chmod:
+            self.store = SharedStateStore(self.path)
+        self.addCleanup(self.store.close)
+        if os.name == "nt":
+            chmod.assert_not_called()
+        else:
+            chmod.assert_called_once_with(self.path, 0o600)
+
     def test_crash_after_claim_keeps_message_unverified(self) -> None:
         self.store.enqueue("thread", message("queued-first", "first"))
         self.store.claim("thread", "queued-first")
@@ -386,6 +396,7 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         }):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)
+        self.addAsyncCleanup(self.app.state.claude_code.close)
         self.app.state.codex.read_thread = AsyncMock(return_value={"status": {"type": "idle"}})
 
     def endpoint(self, path: str):
