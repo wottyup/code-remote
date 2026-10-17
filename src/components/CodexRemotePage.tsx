@@ -212,7 +212,7 @@ const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
 const workspaceChatMinWidth = 240
 const retroSidePanelMinWidth = 144
-const retroSidePanelDefaultMaxWidth = 227.2
+const retroSidePanelDefaultWidth = 174.4
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
@@ -345,8 +345,7 @@ function clampRetroSidePanelWidth(value: number) {
 }
 
 function defaultRetroSidePanelWidth() {
-  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
-  return clampRetroSidePanelWidth(Math.max(retroSidePanelMinWidth, Math.min(retroSidePanelDefaultMaxWidth, viewportWidth * 0.176)))
+  return clampRetroSidePanelWidth(retroSidePanelDefaultWidth)
 }
 
 function readRetroSidePanelWidth(): number | null {
@@ -4246,7 +4245,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     ...themeRootStyle(themePreferences),
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
     '--retro-side-panel-width': retroSidePanelWidth === null
-      ? 'clamp(144px, 17.6vw, 227.2px)'
+      ? 'clamp(144px, 174.4px, min(40vw, calc(50vw - 124px)))'
       : `clamp(144px, ${retroSidePanelWidth}px, min(40vw, calc(50vw - 124px)))`,
   } as CSSProperties
 
