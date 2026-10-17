@@ -309,7 +309,7 @@ private class ComposerGlowDrawable(private val color: Int) : Drawable() {
         paint.alpha = drawableAlpha
         paint.shader = RadialGradient(
             rect.centerX(), rect.centerY(), rect.width() * .72f,
-            intArrayOf(withAlpha(color, .23f), withAlpha(color, .11f), Color.TRANSPARENT),
+            intArrayOf(withAlpha(color, .36f), withAlpha(color, .17f), Color.TRANSPARENT),
             floatArrayOf(0f, .46f, 1f), Shader.TileMode.CLAMP,
         )
         canvas.drawRoundRect(rect, rect.height() * .42f, rect.height() * .42f, paint)
@@ -562,6 +562,7 @@ class MainActivity : Activity() {
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
     private lateinit var composerFileChanges: LinearLayout
+    private var expandedComposerFileChangesTurnId: String? = null
     private lateinit var composerGlowDrawable: ComposerGlowDrawable
     private var composerGlowAnimator: ValueAnimator? = null
     private var composerGlowRunning = false
@@ -573,6 +574,9 @@ class MainActivity : Activity() {
     private var activeActivityText: TextView? = null
     private var activeActivityTimer: TextView? = null
     private var activeActivityStartedAt = 0L
+    private var liveActivityItem: JSONObject? = null
+    private var liveActivityItemCompleted = false
+    private var liveActivityTurnId: String? = null
     private val collapsedInlineFileChangeIds = mutableSetOf<String>()
     private val activityTick = object : Runnable {
         override fun run() {
@@ -1286,14 +1290,13 @@ class MainActivity : Activity() {
         queueRenderDirty = false
         queuePanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), dp(3), dp(14), dp(1))
+            setPadding(dp(2), dp(2), dp(2), 0)
             visibility = View.GONE
         }
-        queueContent = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
-        page.addView(queuePanel, widthWrap())
-        page.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply {
-            leftMargin = dp(14); rightMargin = dp(14); bottomMargin = dp(2)
-        })
+        queueContent = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+        }
     }
 
     private fun buildCompletionNotice() {
@@ -1418,6 +1421,8 @@ class MainActivity : Activity() {
             composerGlowDrawable = ComposerGlowDrawable(composerGlowColor())
             background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
+        composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
+        composer.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
         queueEditBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2520,6 +2525,7 @@ class MainActivity : Activity() {
             readThreadHistoryCache(id, MAX_EAGER_HISTORY_CACHE_BYTES)
         } else null
         persistCurrentDraft()
+        if (activeThreadId != id) clearLiveActivity()
         activeThreadId = id
         activeThread = existingHistory ?: memoryHistory ?: diskHistory?.first ?: thread
         if (diskHistory != null) {
@@ -3305,7 +3311,19 @@ class MainActivity : Activity() {
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
             val currentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
                 .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") && normalizedOperationStatus(item) == "running" }
-            activeActivityText = label(currentOperation?.let { operationActivityLabel(it) } ?: "正在运行中 · $activityLabel", 12, activityAccent).apply {
+            val turnId = lastTurn?.optString("id").orEmpty()
+            val liveItem = liveActivityItem?.takeIf { liveActivityTurnId != null }
+            val historyIsCurrentTurn = liveActivityTurnId == null || liveActivityTurnId == turnId
+            val recentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
+                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") }
+            val activityText = when {
+                liveItem != null && !liveActivityItemCompleted -> operationActivityLabel(liveItem)
+                liveItem != null -> "$activityLabel · ${completedActivityLabel(liveItem)}"
+                historyIsCurrentTurn && currentOperation != null -> operationActivityLabel(currentOperation)
+                historyIsCurrentTurn && recentOperation != null -> "$activityLabel · ${completedActivityLabel(recentOperation)}"
+                else -> activityLabel
+            }
+            activeActivityText = label(activityText, 12, activityAccent).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
@@ -3543,14 +3561,41 @@ class MainActivity : Activity() {
     }
 
     private fun operationActivityLabel(operation: JSONObject): String {
-        val path = operationPaths(operation).firstOrNull()?.substringAfterLast('/')
+        val path = operationDisplayPath(operation)
         return when (operationLabel(operation)) {
             "查看文件" -> "正在查看 ${path ?: "文件"}"
             "修改文件" -> "正在编辑 ${path ?: "文件"}"
             "搜索文件" -> "正在搜索文件"
-            "执行命令" -> "正在运行 ${operation.optString("command").replace(CONTROL_CHARACTER_PATTERN, " ").trim().ifBlank { "命令" }}"
+            "执行命令" -> "正在执行命令"
             else -> operationLabel(operation)
         }
+    }
+
+    private fun completedActivityLabel(operation: JSONObject): String {
+        val path = operationDisplayPath(operation)
+        return when (operationLabel(operation)) {
+            "查看文件" -> if (path != null) "已查看 $path" else "已查看文件"
+            "修改文件" -> if (path != null) "已编辑 $path" else "已修改文件"
+            "搜索文件" -> "已搜索文件"
+            "执行命令" -> "已执行命令"
+            else -> "已${operationLabel(operation)}"
+        }
+    }
+
+    private fun operationDisplayPath(operation: JSONObject): String? {
+        val path = operationPaths(operation).firstOrNull() ?: run {
+            val command = operation.optString("command")
+            if (!VIEW_COMMAND_PATTERN.containsMatchIn(command)) null else
+                Regex("(?:^|\\s)(?:cat|sed|head|tail)\\s+(?:-n\\s+['\"]?[^'\"\\s]+['\"]?\\s+)?['\"]?([^'\"\\s;|]+)")
+                    .find(command)?.groupValues?.getOrNull(1)?.takeUnless { it.startsWith("-") }
+        }
+        return path?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+    }
+
+    private fun clearLiveActivity() {
+        liveActivityItem = null
+        liveActivityItemCompleted = false
+        liveActivityTurnId = null
     }
 
     private fun addInlineFileChange(turnId: String, operation: JSONObject) {
@@ -4072,17 +4117,28 @@ class MainActivity : Activity() {
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(5), dp(10), dp(5))
-            background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
+            setPadding(dp(3), dp(5), dp(3), dp(5))
         }
-        heading.addView(label("正在编辑 ${entries.size} 个文件", 11, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
         if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
         if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        val chevron = ImageView(this).apply {
+            imageTintList = ColorStateList.valueOf(MUTED)
+            setImageResource(if (expandedComposerFileChangesTurnId == turnId) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+        }
+        heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(7) })
         composerFileChanges.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
-        val details = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        val details = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
+        }
         entries.forEach { entry -> details.addView(inlineFileChangeView(entry), LinearLayout.LayoutParams(MATCH, WRAP)) }
         composerFileChanges.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
-        heading.setOnClickListener { details.visibility = if (details.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+        heading.setOnClickListener {
+            expandedComposerFileChangesTurnId = if (expandedComposerFileChangesTurnId == turnId) null else turnId
+            details.visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
+            chevron.setImageResource(if (details.visibility == View.VISIBLE) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+        }
     }
 
     private fun addFileChangeSummary(turnId: String, entries: List<FileChangeEntry>) {
@@ -4214,8 +4270,7 @@ class MainActivity : Activity() {
             val item = visibleQueue[index]
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(7), dp(5), dp(7), dp(5))
-                background = rounded(PANEL_INSET, dp(9))
+                setPadding(dp(4), dp(5), dp(4), dp(5))
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
             card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, TEXT, translateUi = false).apply {
@@ -7343,6 +7398,9 @@ class MainActivity : Activity() {
                 if (eventThread != null) handler.post { pausedThreadKeys.remove(threadTitleKey(eventThread)) }
                 if (eventThread == activeThreadId) {
                     running = true
+                    clearLiveActivity()
+                    liveActivityTurnId = params.optString("turnId").ifBlank { params.optJSONObject("turn")?.optString("id").orEmpty() }
+                        .takeIf(String::isNotBlank)
                     if (foreground) handler.post { renderHeader(); renderMessages(false) }
                     else backgroundThreadDirty = true
                 }
@@ -7351,6 +7409,7 @@ class MainActivity : Activity() {
                 val eventThread = eventThreadId(params)
                 if (eventThread == activeThreadId) {
                     running = false
+                    clearLiveActivity()
                     if (foreground) handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
                     else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
@@ -7370,7 +7429,25 @@ class MainActivity : Activity() {
             "item/started", "item/completed", "item/fileChange/patchUpdated", "turn/workspaceChanges" -> {
                 val eventThread = eventThreadId(params)
                 if (eventThread == activeThreadId) {
-                    if (foreground) handler.post { scheduleActiveThreadRefresh() }
+                    if (foreground) handler.post {
+                        if (eventThread != activeThreadId) return@post
+                        if (method == "item/started" || method == "item/completed") {
+                            val item = params.optJSONObject("item")
+                            val type = normalizedType(item?.optString("type").orEmpty())
+                            if (item != null && type !in setOf("usermessage", "agentmessage", "reasoning", "plan")) {
+                                val turnId = params.optString("turnId").ifBlank {
+                                    activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                                }
+                                if (turnId.isNotBlank()) {
+                                    liveActivityItem = item
+                                    liveActivityItemCompleted = method == "item/completed"
+                                    liveActivityTurnId = turnId
+                                    activeActivityText?.text = if (liveActivityItemCompleted) "$activityLabel · ${completedActivityLabel(item)}" else operationActivityLabel(item)
+                                }
+                            }
+                        }
+                        scheduleActiveThreadRefresh()
+                    }
                     else backgroundThreadDirty = true
                 }
             }
