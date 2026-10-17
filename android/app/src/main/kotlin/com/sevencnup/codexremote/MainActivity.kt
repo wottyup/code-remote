@@ -662,6 +662,7 @@ class MainActivity : Activity() {
     private lateinit var page: LinearLayout
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
+    private lateinit var composerSurface: LinearLayout
     private lateinit var composerFileChanges: LinearLayout
     private var expandedComposerFileChangesTurnId: String? = null
     private lateinit var composerGlowDrawable: ComposerGlowDrawable
@@ -786,6 +787,15 @@ class MainActivity : Activity() {
 
     private fun applySystemBarTheme() {
         val lollipop = themeName == "lollipop"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
             window.statusBarColor = if (lollipop) LOLLIPOP_PRIMARY_DARK else Color.TRANSPARENT
@@ -1195,10 +1205,10 @@ class MainActivity : Activity() {
                 if (view.paddingLeft != 0 || view.paddingTop != 0 ||
                     view.paddingRight != 0 || view.paddingBottom != 0
                 ) view.setPadding(0, 0, 0, 0)
-                if (content.paddingLeft != systemBars.left || content.paddingTop != 0 ||
-                    content.paddingRight != systemBars.right || content.paddingBottom != bottom
+                if (content.paddingLeft != 0 || content.paddingTop != 0 ||
+                    content.paddingRight != 0 || content.paddingBottom != bottom
                 ) {
-                    content.setPadding(systemBars.left, 0, systemBars.right, bottom)
+                    content.setPadding(0, 0, 0, bottom)
                 }
                 if (systemInsetsChanged) {
                     updateInsetAwareOverlays()
@@ -1270,7 +1280,7 @@ class MainActivity : Activity() {
 
     private fun updateInsetAwareOverlays() {
         if (::headerView.isInitialized) {
-            headerView.setPadding(dp(10), systemInsetTop + dp(2), dp(8), dp(2))
+            headerView.setPadding(dp(10) + systemInsetLeft, systemInsetTop + dp(2), dp(8) + systemInsetRight, dp(2))
             headerView.layoutParams?.let { params ->
                 val targetHeight = systemInsetTop + dp(44)
                 if (params.height != targetHeight) {
@@ -1279,6 +1289,31 @@ class MainActivity : Activity() {
                 }
             }
         }
+        if (::statusView.isInitialized) statusView.setPadding(dp(16) + systemInsetLeft, 0, dp(16) + systemInsetRight, dp(4))
+        if (::messageScroll.isInitialized) messageScroll.setPadding(dp(12) + systemInsetLeft, dp(8), dp(12) + systemInsetRight, dp(8))
+        if (::welcomeTitleView.isInitialized) welcomeTitleView.setPadding(dp(12) + systemInsetLeft, dp(24), dp(12) + systemInsetRight, dp(24))
+        if (::scrollToBottomButton.isInitialized) {
+            (scrollToBottomButton.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.rightMargin = dp(16) + systemInsetRight
+                scrollToBottomButton.layoutParams = params
+            }
+        }
+        if (::composerSurface.isInitialized) composerSurface.setPadding(
+            dp(11) + systemInsetLeft,
+            dp(8),
+            dp(11) + systemInsetRight,
+            dp(6),
+        )
+        if (::composerFileChanges.isInitialized) composerFileChanges.setPadding(systemInsetLeft, 0, systemInsetRight, 0)
+        fun applyNoticeInsets(view: View) {
+            (view.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+                params.leftMargin = dp(12) + systemInsetLeft
+                params.rightMargin = dp(12) + systemInsetRight
+                view.layoutParams = params
+            }
+        }
+        if (::completionNotice.isInitialized) applyNoticeInsets(completionNotice)
+        if (::modeSwitchNotice.isInitialized) applyNoticeInsets(modeSwitchNotice)
         applyEdgeDrawerInsets(sidebarHost)
         applyEdgeDrawerInsets(workspaceHost)
         (settingsOverlay?.findViewWithTag<View>(TAG_INSET_CONTENT))?.setPadding(
@@ -1304,7 +1339,7 @@ class MainActivity : Activity() {
         root.addView(page, FrameLayout.LayoutParams(MATCH, MATCH))
         buildHeader()
         statusView = label("正在连接…", 11, MUTED).apply {
-            setPadding(dp(16), 0, dp(16), dp(4))
+            setPadding(dp(16) + systemInsetLeft, 0, dp(16) + systemInsetRight, dp(4))
             visibility = View.GONE
         }
         page.addView(statusView, widthWrap())
@@ -1313,7 +1348,7 @@ class MainActivity : Activity() {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             clipToPadding = false
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(12) + systemInsetLeft, dp(8), dp(12) + systemInsetRight, dp(8))
         }
         messageList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
@@ -1327,7 +1362,7 @@ class MainActivity : Activity() {
             textAlignment = View.TEXT_ALIGNMENT_CENTER
             breakStrategy = Layout.BREAK_STRATEGY_BALANCED
             maxLines = 2
-            setPadding(dp(12), dp(24), dp(12), dp(24))
+            setPadding(dp(12) + systemInsetLeft, dp(24), dp(12) + systemInsetRight, dp(24))
             visibility = View.GONE
         }
         chatArea.addView(welcomeTitleView, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
@@ -1341,7 +1376,7 @@ class MainActivity : Activity() {
             visibility = View.GONE
         }
         chatArea.addView(scrollToBottomButton, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.END or Gravity.BOTTOM).apply {
-            rightMargin = dp(16)
+            rightMargin = dp(16) + systemInsetRight
             bottomMargin = dp(12)
         })
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
@@ -1549,7 +1584,7 @@ class MainActivity : Activity() {
         composerDock.addView(composerFileChanges, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(11), dp(8), dp(11), dp(6))
+            setPadding(dp(11) + systemInsetLeft, dp(8), dp(11) + systemInsetRight, dp(6))
             composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (themeName == "lollipop") 10 else 18).toFloat(), composerGlowOpacity())
             if (themeName == "lollipop") {
                 background = rounded(PANEL, dp(2), BORDER, dp(1))
@@ -1558,6 +1593,7 @@ class MainActivity : Activity() {
                 background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
             }
         }
+        composerSurface = composer
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
         composer.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
         queueEditBar = LinearLayout(this).apply {
