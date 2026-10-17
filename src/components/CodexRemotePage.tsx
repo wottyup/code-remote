@@ -203,6 +203,7 @@ function formatTurnDuration(durationMs: number) {
 }
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const paneLayoutStorageKey = 'codex-remote.pane-layout'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
@@ -210,6 +211,8 @@ const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
 const workspaceChatMinWidth = 240
+const retroSidePanelMinWidth = 144
+const retroSidePanelDefaultMaxWidth = 227.2
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
@@ -330,6 +333,30 @@ function workspaceExplorerWidthLimit() {
 
 function clampWorkspaceExplorerWidth(value: number) {
   return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(), value)))
+}
+
+function retroSidePanelWidthLimit() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return Math.max(retroSidePanelMinWidth, Math.min(viewportWidth * 0.4, (viewportWidth - 248) / 2))
+}
+
+function clampRetroSidePanelWidth(value: number) {
+  return Math.round(Math.max(retroSidePanelMinWidth, Math.min(retroSidePanelWidthLimit(), value)))
+}
+
+function defaultRetroSidePanelWidth() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return clampRetroSidePanelWidth(Math.max(retroSidePanelMinWidth, Math.min(retroSidePanelDefaultMaxWidth, viewportWidth * 0.176)))
+}
+
+function readRetroSidePanelWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = Number(window.localStorage.getItem(retroSidePanelWidthStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? clampRetroSidePanelWidth(stored) : null
+  } catch {
+    return null
+  }
 }
 
 function readWorkspaceExplorerWidth() {
@@ -3700,6 +3727,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
+  const [retroSidePanelWidth, setRetroSidePanelWidth] = useState(readRetroSidePanelWidth)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
@@ -3785,7 +3813,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const sidebarPanel = useRef<HTMLElement>(null)
   const workspacePanel = useRef<HTMLElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
-  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number; currentWidth: number; retro: boolean } | null>(null)
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
@@ -4217,6 +4245,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const themeStyle = {
     ...themeRootStyle(themePreferences),
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
+    '--retro-side-panel-width': retroSidePanelWidth === null
+      ? 'clamp(144px, 17.6vw, 227.2px)'
+      : `clamp(144px, ${retroSidePanelWidth}px, min(40vw, calc(50vw - 124px)))`,
   } as CSSProperties
 
   useEffect(() => {
@@ -4845,6 +4876,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return width
   }
 
+  function setRetroSidePanelWidthValue(value: number | null, persist = false) {
+    const width = value === null ? null : clampRetroSidePanelWidth(value)
+    setRetroSidePanelWidth(width)
+    if (!persist) return width
+    try {
+      if (width === null) window.localStorage.removeItem(retroSidePanelWidthStorageKey)
+      else window.localStorage.setItem(retroSidePanelWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
   const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
     if (open) {
       setWorkspacePreviewRequest(null)
@@ -4859,10 +4903,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     event.preventDefault()
+    const retro = themePreferences.theme === 'retro'
+    const startWidth = retro
+      ? sidebarPanel.current?.getBoundingClientRect().width || retroSidePanelWidth || defaultRetroSidePanelWidth()
+      : workspaceExplorerWidthRef.current
     workspaceResizePointer.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
-      startWidth: workspaceExplorerWidthRef.current,
+      startWidth,
+      currentWidth: startWidth,
+      retro,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setWorkspaceResizing(true)
@@ -4872,14 +4922,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
     const requestedWidth = current.startWidth + current.startX - event.clientX
-    setWorkspaceExplorerWidthValue(requestedWidth)
+    current.currentWidth = requestedWidth
+    if (current.retro) {
+      const width = clampRetroSidePanelWidth(requestedWidth)
+      remoteShell.current?.style.setProperty('--retro-side-panel-width', `${width}px`)
+      setRetroSidePanelWidthValue(width)
+    } else {
+      setWorkspaceExplorerWidthValue(requestedWidth)
+    }
   }
 
   function finishWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
     workspaceResizePointer.current = null
-    setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
+    if (current.retro) setRetroSidePanelWidthValue(current.currentWidth, true)
+    else setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
     setWorkspaceResizing(false)
   }
 
@@ -5212,32 +5270,38 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <div
             className="workspace-resize-handle"
             role="separator"
-            aria-label="调整右侧文件区宽度"
+            aria-label={themePreferences.theme === 'retro' ? '调整左右侧边栏宽度' : '调整右侧文件区宽度'}
             aria-orientation="vertical"
-            aria-valuemin={workspaceExplorerMinimumWidth()}
-            aria-valuemax={workspaceExplorerWidthLimit()}
-            aria-valuenow={workspaceExplorerWidth}
+            aria-valuemin={themePreferences.theme === 'retro' ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()}
+            aria-valuemax={themePreferences.theme === 'retro' ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()}
+            aria-valuenow={themePreferences.theme === 'retro' ? clampRetroSidePanelWidth(retroSidePanelWidth ?? defaultRetroSidePanelWidth()) : workspaceExplorerWidth}
             tabIndex={0}
             onPointerDown={startWorkspaceResize}
             onPointerMove={moveWorkspaceResize}
             onPointerUp={finishWorkspaceResize}
             onPointerCancel={finishWorkspaceResize}
             onLostPointerCapture={finishWorkspaceResize}
-            onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
+            onDoubleClick={() => themePreferences.theme === 'retro'
+              ? setRetroSidePanelWidthValue(null, true)
+              : setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
             onKeyDown={(event) => {
-              const limits = workspaceExplorerWidthLimit()
+              const retro = themePreferences.theme === 'retro'
+              const currentWidth = retro ? retroSidePanelWidth ?? defaultRetroSidePanelWidth() : workspaceExplorerWidthRef.current
+              const minimumWidth = retro ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()
+              const limits = retro ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()
               const nextWidth = event.key === 'ArrowLeft'
-                ? workspaceExplorerWidthRef.current + 24
+                ? currentWidth + 24
                 : event.key === 'ArrowRight'
-                  ? workspaceExplorerWidthRef.current - 24
+                  ? currentWidth - 24
                   : event.key === 'Home'
-                    ? workspaceExplorerMinimumWidth()
+                    ? minimumWidth
                     : event.key === 'End'
                       ? limits
                       : null
               if (nextWidth === null) return
               event.preventDefault()
-              setWorkspaceExplorerWidthValue(nextWidth, true)
+              if (retro) setRetroSidePanelWidthValue(nextWidth, true)
+              else setWorkspaceExplorerWidthValue(nextWidth, true)
             }}
           />
           <WorkspaceExplorer

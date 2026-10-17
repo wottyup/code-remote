@@ -2462,7 +2462,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (min-width: 701px) {
   .remote-shell--theme-retro,
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed {
-    grid-template-columns: minmax(180px, min(284px, 22vw)) minmax(0, 1fr) 8px minmax(160px, min(var(--workspace-explorer-width, 340px), calc(100vw - max(180px, min(284px, 22vw)) - 264px)));
+    --retro-side-panel-width: clamp(144px, 17.6vw, 227.2px);
+    grid-template-columns: var(--retro-side-panel-width) minmax(0, 1fr) 8px var(--retro-side-panel-width);
   }
 
   .remote-shell--theme-retro .remote-sidebar,
