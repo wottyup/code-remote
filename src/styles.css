@@ -2594,15 +2594,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   }
 }
 
-/* Reuse the sidebar's solid contrast fill to make user messages easy to scan. */
+/* Match the retro textarea treatment so user messages are easy to scan. */
 .remote-shell--theme-retro.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body,
 .remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body {
   display: block;
   width: fit-content;
   max-width: 100%;
   padding: 6px 10px;
-  border: 0;
+  border: 1px inset #aaa;
   border-radius: 0;
-  background: #d4d0c8;
+  background: #fff;
   box-shadow: none;
 }
