@@ -117,6 +117,52 @@ import kotlin.math.min
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
+private class LollipopSystemBarsDrawable(
+    private val contentColor: Int,
+    private val statusBarColor: Int,
+    private val navigationBarColor: Int,
+    private val statusBarHeight: () -> Int,
+    private val navigationBarHeight: () -> Int,
+) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var drawableAlpha = 255
+    private var drawableColorFilter: ColorFilter? = null
+
+    override fun draw(canvas: Canvas) {
+        val area = bounds
+        paint.colorFilter = drawableColorFilter
+        paint.color = contentColor
+        paint.alpha = Color.alpha(contentColor) * drawableAlpha / 255
+        canvas.drawRect(area, paint)
+
+        val top = statusBarHeight().coerceIn(0, area.height())
+        if (top > 0) {
+            paint.color = statusBarColor
+            paint.alpha = Color.alpha(statusBarColor) * drawableAlpha / 255
+            canvas.drawRect(area.left.toFloat(), area.top.toFloat(), area.right.toFloat(), area.top + top.toFloat(), paint)
+        }
+        val bottom = navigationBarHeight().coerceIn(0, (area.height() - top).coerceAtLeast(0))
+        if (bottom > 0) {
+            paint.color = navigationBarColor
+            paint.alpha = Color.alpha(navigationBarColor) * drawableAlpha / 255
+            canvas.drawRect(area.left.toFloat(), area.bottom - bottom.toFloat(), area.right.toFloat(), area.bottom.toFloat(), paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        drawableColorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.OPAQUE
+}
+
 private class ThemeWallpaperDrawable(
     private val bitmap: Bitmap,
     private val baseColor: Int,
@@ -345,22 +391,23 @@ private class ComposerGlowDrawable(
 
 class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
-    private val themeName: String get() = prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark"
+    private val themeName: String get() = (prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark")
+        .let { if (it == "oreo" || it == "gingerbread") "lollipop" else it }
     private val lightTheme get() = when (themeName) {
-        "light", "warm", "oreo" -> true
+        "light", "warm", "lollipop" -> true
         "custom" -> Color.luminance(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)) > .46f
         else -> false
     }
     private val DARK: Int get() = when (themeName) {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
-        "oreo" -> Color.rgb(250, 250, 250)
+        "lollipop" -> Color.rgb(250, 250, 250)
         "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
         "warm" -> Color.rgb(255, 250, 243)
-        "oreo" -> Color.WHITE
+        "lollipop" -> Color.WHITE
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
         else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
     }
@@ -370,57 +417,57 @@ class MainActivity : Activity() {
     }
     private val PANEL_INSET: Int get() = when (themeName) {
         "warm" -> Color.rgb(241, 231, 216)
-        "oreo" -> Color.rgb(245, 245, 245)
+        "lollipop" -> Color.rgb(245, 245, 245)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
         else -> if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
     }
     private val BORDER: Int get() = when (themeName) {
         "warm" -> Color.rgb(225, 211, 194)
-        "oreo" -> Color.rgb(224, 224, 224)
+        "lollipop" -> Color.rgb(224, 224, 224)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .3f)
         else -> if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
     }
     private val USER_BUBBLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(240, 226, 208)
-        "oreo" -> Color.rgb(227, 242, 253)
+        "lollipop" -> Color.rgb(227, 242, 253)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
         else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
     }
     private val TEXT: Int get() = when (themeName) {
         "warm" -> Color.rgb(66, 53, 40)
-        "oreo" -> Color.rgb(33, 33, 33)
+        "lollipop" -> Color.rgb(33, 33, 33)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
     }
     private val SUBTLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(109, 91, 71)
-        "oreo" -> Color.rgb(97, 97, 97)
+        "lollipop" -> Color.rgb(97, 97, 97)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .84f)
         else -> if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
     }
     private val MUTED: Int get() = when (themeName) {
         "warm" -> Color.rgb(139, 121, 100)
-        "oreo" -> Color.rgb(117, 117, 117)
+        "lollipop" -> Color.rgb(117, 117, 117)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .64f)
         else -> if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
     }
     private val ACCENT: Int get() = when {
         currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
-        themeName == "oreo" -> Color.rgb(25, 118, 210)
+        themeName == "lollipop" -> Color.rgb(33, 150, 243)
         themeName == "warm" -> Color.rgb(146, 114, 83)
         themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
-    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "oreo") Color.rgb(33, 150, 243) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(33, 150, 243) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (themeName == "lollipop") Color.WHITE else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
     private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
-    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "oreo") Color.rgb(187, 222, 251) else Color.rgb(159, 166, 203)
+    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "lollipop") Color.rgb(187, 222, 251) else Color.rgb(159, 166, 203)
     private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
-    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "oreo") Color.rgb(13, 71, 161) else Color.rgb(24, 27, 37)
+    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "lollipop") Color.rgb(13, 71, 161) else Color.rgb(24, 27, 37)
     private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
     private val ASSISTANT_NAME_ACCENT: Int get() = when {
         themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
@@ -685,23 +732,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
-            window.statusBarColor = Color.TRANSPARENT
-            window.navigationBarColor = Color.TRANSPARENT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                window.isStatusBarContrastEnforced = false
-                window.isNavigationBarContrastEnforced = false
-            }
-        } else {
-            window.statusBarColor = DARK
-            window.navigationBarColor = DARK
-        }
-        window.decorView.setBackgroundColor(DARK)
-        window.decorView.systemUiVisibility = if (lightTheme) {
-            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        } else 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+        applySystemBarTheme()
 
         endpoint = prefs.getString(KEY_ENDPOINT, "").orEmpty()
         token = prefs.getString(KEY_TOKEN, "").orEmpty()
@@ -714,6 +745,27 @@ class MainActivity : Activity() {
         intent?.takeIf { it.hasExtra(EXTRA_THREAD_ID) }?.let { launchIntent ->
             handler.post { navigateNotification(launchIntent) }
         }
+    }
+
+    private fun applySystemBarTheme() {
+        val lollipop = themeName == "lollipop"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.statusBarColor = if (lollipop) Color.rgb(2, 119, 189) else Color.TRANSPARENT
+            window.navigationBarColor = if (lollipop) Color.BLACK else Color.TRANSPARENT
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                window.isStatusBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
+            }
+        } else {
+            window.statusBarColor = if (lollipop) Color.rgb(2, 119, 189) else DARK
+            window.navigationBarColor = if (lollipop) Color.BLACK else DARK
+        }
+        window.decorView.setBackgroundColor(DARK)
+        window.decorView.systemUiVisibility = if (lollipop) 0 else if (lightTheme) {
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        } else 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
     }
 
     override fun onResume() {
@@ -1206,7 +1258,11 @@ class MainActivity : Activity() {
         installThemeBackground(root)
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
+            background = when {
+                themeName == "custom" -> ColorDrawable(Color.TRANSPARENT)
+                themeName == "lollipop" -> lollipopSystemBarsBackground(DARK)
+                else -> ColorDrawable(DARK)
+            }
         }
         root.addView(page, FrameLayout.LayoutParams(MATCH, MATCH))
         buildHeader()
@@ -1283,21 +1339,27 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(2), dp(8), dp(2))
-            background = ColorDrawable(Color.TRANSPARENT)
+            background = if (themeName == "lollipop") lollipopActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
-        val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }
+        val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }.apply {
+            if (themeName == "lollipop") imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }
         headerView.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
-        titleView = label("Codex Remote", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        titleView = label("Codex Remote", 14, if (themeName == "lollipop") Color.WHITE else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
-        val path = label("本机项目", 10, MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
+        val path = label("本机项目", 10, if (themeName == "lollipop") Color.rgb(214, 235, 255) else MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         titleColumn.addView(path, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
         modeButton = iconButton(if (targetMode == "claude-code") "claude" else "codex", modeSwitchDescription()) { switchMode() }
         headerView.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
-        headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }.apply {
+            if (themeName == "lollipop") imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }.apply {
+            if (themeName == "lollipop") imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
         page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(44)))
     }
 
@@ -1434,7 +1496,7 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (themeName == "oreo") 8 else 18).toFloat(), composerGlowOpacity())
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (themeName == "lollipop") 10 else 18).toFloat(), composerGlowOpacity())
             background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -1518,7 +1580,7 @@ class MainActivity : Activity() {
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+            background = rounded(if (themeName == "lollipop") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             isClickable = true
             isFocusable = true
             setOnClickListener {
@@ -1551,7 +1613,7 @@ class MainActivity : Activity() {
 
     private fun composerGlassBackground(): Drawable {
         val fills = when (themeName) {
-            "oreo" -> intArrayOf(
+            "lollipop" -> intArrayOf(
                 Color.WHITE,
                 Color.rgb(250, 250, 250),
             )
@@ -1576,23 +1638,23 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
-            "oreo" -> Color.rgb(227, 242, 253)
+            "lollipop" -> Color.rgb(227, 242, 253)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
-            "oreo" -> Color.rgb(189, 189, 189)
+            "lollipop" -> Color.rgb(187, 222, 251)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
             else -> Color.rgb(43, 46, 52)
         }
-        return ComposerGlassDrawable(fills, highlight, border, dp(if (themeName == "oreo") 8 else 18).toFloat())
+        return ComposerGlassDrawable(fills, highlight, border, dp(if (themeName == "lollipop") 10 else 18).toFloat())
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
-        "oreo" -> Color.rgb(33, 150, 243)
+        "lollipop" -> Color.rgb(33, 150, 243)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
@@ -1600,7 +1662,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
-        "oreo" -> .24f
+        "lollipop" -> .22f
         "light" -> .30f
         "warm", "custom" -> .29f
         else -> .38f
@@ -1868,6 +1930,7 @@ class MainActivity : Activity() {
         val title = activeThread?.let { threadTitle(it) }
             ?: if (activeThreadId == null) "新对话" else "Codex Remote"
         titleView.text = title
+        titleView.setTextColor(if (themeName == "lollipop") Color.WHITE else TEXT)
         if (::modeButton.isInitialized) {
             setBrandIcon(modeButton, modeSwitchTarget())
             modeButton.contentDescription = modeSwitchDescription()
@@ -1875,6 +1938,7 @@ class MainActivity : Activity() {
         updateSidebarBrand()
         updateSidebarModeAccent()
         val path = page.findViewWithTag<TextView>("workspace_path")
+        path?.setTextColor(if (themeName == "lollipop") Color.rgb(214, 235, 255) else MUTED)
         path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             ?: runtime.optString("workspace", "本机项目")
         statusView.visibility = if (runtime.optBoolean("connected", false)) View.GONE else View.VISIBLE
@@ -1914,7 +1978,7 @@ class MainActivity : Activity() {
         val claudeMode = currentMode == "claude-code"
         val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
-        sidebarNewThreadButton.background = rounded(fill, dp(if (themeName == "oreo") 4 else 10))
+        sidebarNewThreadButton.background = rounded(fill, dp(if (themeName == "lollipop") 4 else 10))
         sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
         sidebarNewThreadIcon.background = rounded(
             if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
@@ -3232,7 +3296,7 @@ class MainActivity : Activity() {
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
                     val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL
-                    background = rounded(bubbleColor, dp(if (themeName == "oreo") 6 else 12))
+                    background = rounded(bubbleColor, dp(if (themeName == "lollipop") 5 else 12))
                 }
             }
             if (role == "assistant") {
@@ -3429,7 +3493,7 @@ class MainActivity : Activity() {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(7), dp(11), dp(7))
-            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(if (themeName == "oreo") 6 else 12))
+            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(if (themeName == "lollipop") 5 else 12))
         }
         val text = messageText(item, "user")
         if (text.isNotBlank()) {
@@ -4617,7 +4681,7 @@ class MainActivity : Activity() {
             else -> "发送消息"
         })
         sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
-        sendButton.background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+        sendButton.background = rounded(if (themeName == "lollipop") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
     private fun interruptTurn() {
@@ -5331,7 +5395,7 @@ class MainActivity : Activity() {
         if (sidebarVisible) setSidebarVisible(false)
 
         val overlay = FrameLayout(this).apply {
-            background = wallpaperBackground(DARK)
+            background = if (themeName == "lollipop") lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
             elevation = dp(16).toFloat()
         }
         val layout = LinearLayout(this).apply {
@@ -5343,11 +5407,14 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
+            background = if (themeName == "lollipop") lollipopActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
-        header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }.apply {
+            if (themeName == "lollipop") imageTintList = ColorStateList.valueOf(Color.WHITE)
+        }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
-        titleCopy.addView(label("设置", 17, TEXT, true), widthWrap())
-        titleCopy.addView(label("偏好保存在本机", 10, MUTED), widthWrap())
+        titleCopy.addView(label("设置", 17, if (themeName == "lollipop") Color.WHITE else TEXT, true), widthWrap())
+        titleCopy.addView(label("偏好保存在本机", 10, if (themeName == "lollipop") Color.rgb(214, 235, 255) else MUTED), widthWrap())
         header.addView(titleCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
         layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(56)))
 
@@ -5366,12 +5433,12 @@ class MainActivity : Activity() {
         settingsOverlay = overlay
         updateInsetAwareOverlays()
 
-        val settingsAccent = if (themeName == "oreo") CODEX_MODE_ACCENT else ASSISTANT_NAME_ACCENT
+        val settingsAccent = if (themeName == "lollipop") CODEX_MODE_ACCENT else ASSISTANT_NAME_ACCENT
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(4), dp(12), dp(4))
-                background = if (themeName == "oreo") rounded(PANEL, dp(4), BORDER, dp(1))
+                background = if (themeName == "lollipop") rounded(PANEL, dp(4), BORDER, dp(1)).also { elevation = dp(2).toFloat() }
                 else rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
             }
             val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -5411,7 +5478,7 @@ class MainActivity : Activity() {
             Triple("light", "白色", "清爽明亮"),
             Triple("dark", "黑色", "低光阅读"),
             Triple("warm", "暖色", "柔和纸感"),
-            Triple("oreo", "Android 8", "Oreo 经典浅色界面"),
+            Triple("lollipop", "Android 5", "Lollipop Material 经典样式"),
             Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
             val selected = themeName == theme
@@ -5870,10 +5937,7 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
-        window.decorView.setBackgroundColor(DARK)
-        window.decorView.systemUiVisibility = if (lightTheme) {
-            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        } else 0
+        applySystemBarTheme()
         renderHome()
         composerInput.setText(draft)
         if (reopenSettings) showSettings(settingsScrollY)
@@ -7932,7 +7996,7 @@ class MainActivity : Activity() {
         textSize = adjustedTextSize(14)
         setTag(R.id.base_text_size, 14f)
         setPadding(dp(12), dp(7), dp(12), dp(7))
-        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (themeName == "oreo") 4 else 9), BORDER, dp(1))
+        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (themeName == "lollipop") 4 else 9), BORDER, dp(1))
     }
 
     private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
@@ -7949,7 +8013,7 @@ class MainActivity : Activity() {
     }
 
     private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
-        setImageResource(iconResource(icon))
+            setImageResource(iconResource(icon))
         imageTintList = ColorStateList.valueOf(when (icon) {
             "codex" -> codexBrandAccent()
             "claude" -> ACCENT_WARM
@@ -8053,15 +8117,20 @@ class MainActivity : Activity() {
         text = tr(value)
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
-        setTextColor(if (themeName == "oreo") Color.WHITE else DARK)
+        setTextColor(if (themeName == "lollipop") Color.WHITE else DARK)
         isAllCaps = false
-        background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(if (themeName == "oreo") 4 else 9))
+        background = rounded(if (themeName == "lollipop") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(if (themeName == "lollipop") 4 else 9))
     }
 
     private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = radius.toFloat()
+        cornerRadius = if (themeName == "lollipop" && radius < dp(15)) minOf(radius, dp(4)).toFloat() else radius.toFloat()
         if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+    }
+
+    private fun lollipopActionBarBackground(): GradientDrawable = GradientDrawable().apply {
+        setColor(Color.rgb(2, 136, 209))
+        cornerRadius = 0f
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -8162,8 +8231,16 @@ class MainActivity : Activity() {
     }
 
     private fun installThemeBackground(target: FrameLayout) {
-        target.background = wallpaperBackground(DARK)
+        target.background = if (themeName == "lollipop") lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
     }
+
+    private fun lollipopSystemBarsBackground(contentColor: Int): Drawable = LollipopSystemBarsDrawable(
+        contentColor = contentColor,
+        statusBarColor = Color.rgb(2, 119, 189),
+        navigationBarColor = Color.BLACK,
+        statusBarHeight = { systemInsetTop },
+        navigationBarHeight = { systemInsetBottom },
+    )
 
     private fun decodeThemeBackground(uri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
