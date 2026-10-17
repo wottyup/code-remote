@@ -2238,6 +2238,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .file-change-card__path-desktop,
   .remote-shell--theme-retro .file-change-card__insert,
   .remote-shell--theme-retro .operation-log > summary > svg { display: none; }
+  .remote-shell--theme-retro .file-change-card__path-mobile { display: block; }
   .remote-shell--theme-retro .operation-log > summary { display: block; min-height: 0; padding: 0; font: inherit; }
   .remote-shell--theme-retro .operation-log > summary::after { display: none; }
   .remote-shell--theme-retro .operation-log > ul { display: block; max-height: 30vh; padding-left: 2em; list-style: disc; }
