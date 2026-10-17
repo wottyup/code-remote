@@ -1,0 +1,15 @@
+Android 1.0-inspired theme icons
+
+The ic_android1_*.png resources include images from Android Open Source Project
+release android-2.0_r1, and images adapted from those resources.
+
+Sources:
+https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-2.0_r1/core/res/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Settings/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Browser/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Launcher2/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Mms/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+
+Copyright (C) 2005-2009 The Android Open Source Project
+Licensed under the Apache License, Version 2.0. The full license text is included
+in this application at assets/fonts/NOTICE.
