@@ -425,7 +425,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-option__preview--light { border-color: #dedede; background: #fff; }
 .theme-option__preview--dark { border-color: #303641; background: linear-gradient(140deg, #15181d 0 58%, #303744 58%); }
 .theme-option__preview--warm { border-color: #e4d7c8; background: linear-gradient(140deg, #fffaf2 0 58%, #ead9c5 58%); }
-.theme-option__preview--retro { border-color: #8ba2b8; background: linear-gradient(90deg, #edf2f7 0 28%, #fff 28% 72%, #dce8f3 72%); }
+.theme-option__preview--retro { border-color: #54728b; background: linear-gradient(180deg, #2f6794 0 28%, #fff 28% 76%, #d9d9d9 76%); }
 .theme-option__preview--custom { background: linear-gradient(135deg, #aab8c7, #4b5563 48%, #d6b99d 49%); }
 .theme-option > span:last-child { display: grid; gap: 3px; min-width: 0; }
 .theme-option strong { overflow: hidden; color: #e5e8ee; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -1966,3 +1966,66 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .chat-image-dialog__header button { border-radius: 2px; background: #eef2f5; color: #344b5d; }
 .remote-shell--theme-retro .chat-image-dialog__header button:hover { background: #e1e9ef; }
 .remote-shell--theme-retro .chat-image-dialog__body { background: #edf1f4; }
+
+/* Push the retro theme beyond a palette swap: evoke a compact early-web portal. */
+.app-root--theme-retro { background: #c8c8c8; font-family: Tahoma, Verdana, Arial, sans-serif; }
+.remote-shell--theme-retro {
+  --line: #969696;
+  --muted: #666;
+  --panel: #ededed;
+  --panel-raised: #dedede;
+  --accent: #174f7d;
+  background: #c8c8c8;
+  font-family: Tahoma, Verdana, Arial, sans-serif;
+}
+.remote-shell--theme-retro :is(.remote-sidebar, .remote-chat, .remote-workspace, .remote-pane-grid, .remote-pane-slot, .theme-settings-panel) { background: #f2f2f2; }
+.remote-shell--theme-retro .remote-sidebar { border-right: 2px solid #888; background: #e8e8e8; }
+.remote-shell--theme-retro .remote-sidebar__heading { min-height: 50px; margin: -12px -12px 8px; padding: 0 10px; border-bottom: 2px solid #fff; background: linear-gradient(180deg, #477da7 0%, #1d4e78 100%); }
+.remote-shell--theme-retro .remote-brand { color: #fff; letter-spacing: 0; }
+.remote-shell--theme-retro .remote-brand__copy strong { color: #fff; font-weight: 700; }
+.remote-shell--theme-retro .remote-brand__copy small { color: #d5e2ed; }
+.remote-shell--theme-retro .remote-brand__mark { border-color: #c3d2df; border-radius: 0; background: #f0f3f6; color: #204a6d; box-shadow: none; }
+.remote-shell--theme-retro .remote-sidebar__footer { border-color: #aaa; }
+.remote-shell--theme-retro .thread-list-heading { padding-bottom: 5px; border-bottom: 1px solid #b8b8b8; color: #555; }
+.remote-shell--theme-retro .thread-list__section { margin: 8px 0 3px; padding: 3px 5px; border-bottom: 1px solid #c4c4c4; background: #dedede; color: #555; font-weight: 700; }
+.remote-shell--theme-retro .thread-row { min-height: 34px; padding: 4px 6px; border-bottom: 1px solid #d2d2d2; border-radius: 0; }
+.remote-shell--theme-retro .thread-row--active { box-shadow: inset 3px 0 #2a6595; }
+.remote-shell--theme-retro .new-thread-button { min-height: 36px; height: 36px; border: 1px outset #91a8bb; border-radius: 0; background: linear-gradient(180deg, #f7fbff, #cbdceb); color: #183d5d; font-weight: 700; }
+.remote-shell--theme-retro .new-thread-button__icon { border-radius: 0; background: #d5e3ef; }
+.remote-shell--theme-retro .remote-chat { background: #f7f7f7; }
+.remote-shell--theme-retro .remote-chat__header { border-bottom: 2px solid #aaa; background: linear-gradient(180deg, #477da7 0%, #1d4e78 100%); box-shadow: none; }
+.remote-shell--theme-retro .remote-chat__title strong { color: #fff; font-weight: 700; letter-spacing: 0; }
+.remote-shell--theme-retro .remote-chat__title span, .remote-shell--theme-retro .remote-chat__title .remote-chat__eyebrow { color: #d5e2ed; letter-spacing: 0; text-transform: none; }
+.remote-shell--theme-retro .connection-label { border-color: #bdcbd6; border-radius: 0; background: #eef4f8; color: #294e6a; }
+.remote-shell--theme-retro .message-stream { padding: 0 20px 20px; background: #fff; }
+.remote-shell--theme-retro .message-stream__content { gap: 12px; padding-top: 18px; }
+.remote-shell--theme-retro .chat-message--assistant .chat-message__body { padding-bottom: 8px; border-bottom: 1px dotted #c7c7c7; }
+.remote-shell--theme-retro.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body,
+.remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body { border-radius: 0; box-shadow: none; }
+.remote-shell--theme-retro .message-composer { border: 2px inset #b8b8b8; border-radius: 0; }
+.remote-shell--theme-retro .message-composer:focus-within { border-color: #7593aa; }
+.remote-shell--theme-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button, .thread-list-heading__select, .sidebar-selection-bar__actions button, .workspace-explorer__root-open, .workspace-explorer__root-actions button, .workspace-explorer__add, .workspace-file-preview__copy, .chat-message__actions button, .attach-button, .stop-button, .send-button:not(.send-button--arrow), .send-button--arrow, .composer-menu__trigger, .composer-queue__send, .composer-queue__edit) {
+  border-style: outset;
+  border-radius: 0;
+  background-image: linear-gradient(180deg, #fff 0%, #e2e2e2 100%);
+  box-shadow: none;
+}
+.remote-shell--theme-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button, .thread-list-heading__select, .sidebar-selection-bar__actions button, .workspace-explorer__root-open, .workspace-explorer__root-actions button, .workspace-explorer__add, .workspace-file-preview__copy, .chat-message__actions button, .attach-button, .stop-button, .send-button:not(.send-button--arrow), .send-button--arrow, .composer-menu__trigger, .composer-queue__send, .composer-queue__edit):active { border-style: inset; }
+.remote-shell--theme-retro .send-button--arrow { background-color: #e2e2e2; color: #294963; }
+.remote-shell--theme-retro .workspace-explorer { border-left: 2px solid #888; background: #f0f0f0; box-shadow: none; }
+.remote-shell--theme-retro .workspace-explorer__header { border-bottom: 2px solid #aaa; background: linear-gradient(180deg, #477da7 0%, #1d4e78 100%); color: #fff; }
+.remote-shell--theme-retro .workspace-explorer__header strong { color: #fff; }
+.remote-shell--theme-retro .workspace-explorer__eyebrow { color: #d5e2ed; letter-spacing: 0; text-transform: none; }
+.remote-shell--theme-retro .workspace-explorer__root { background: #e3e3e3; }
+.remote-shell--theme-retro .workspace-explorer__tree { background: #fff; }
+.remote-shell--theme-retro .theme-settings-panel { background: #e7e7e7; }
+.remote-shell--theme-retro .theme-settings-panel__header { border-bottom: 2px solid #aaa; background: linear-gradient(180deg, #477da7 0%, #1d4e78 100%); }
+.remote-shell--theme-retro .theme-settings-panel__header :is(h1, p, .theme-settings-panel__eyebrow) { color: #fff; }
+.remote-shell--theme-retro .theme-settings-card { border: 1px solid #888; border-radius: 0; background: #fff; box-shadow: none; }
+.remote-shell--theme-retro .theme-option__preview--retro { border-color: #54728b; background: linear-gradient(180deg, #2f6794 0 28%, #fff 28% 76%, #d9d9d9 76%); }
+.remote-shell--theme-retro :is(.theme-option, .theme-settings-panel__close, .theme-notification-toggle, .theme-image-upload, .theme-image-clear) { border-radius: 0; box-shadow: none; }
+.remote-shell--theme-retro :is(.chat-overlay-panel, .thread-rename-dialog, .thread-delete-dialog, .thread-context-menu, .terminal-context-menu, .chat-image-dialog) { border-radius: 0; box-shadow: 2px 2px 0 #999; }
+.remote-shell--theme-retro :is(.chat-overlay-panel__header, .chat-overlay-panel__footer) { border-radius: 0; background: #dedede; }
+.remote-shell--theme-retro .message-composer__footer .send-button--arrow { border: 1px outset #999; border-radius: 0; background: #e2e2e2; color: #294963; }
+.remote-shell--theme-retro .message-composer__footer .send-button--arrow:hover:not(:disabled) { background: #f5f5f5; color: #294963; }
+.remote-shell--theme-retro a { color: #003c8f; text-decoration: underline; }
