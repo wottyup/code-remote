@@ -259,7 +259,7 @@ private class ComposerGlassDrawable(
         val strokeWidth = (cornerRadius / 18f).coerceAtLeast(1f)
         val inset = strokeWidth / 2f
         borderPaint.color = borderColor
-        borderPaint.alpha = drawableAlpha
+        borderPaint.alpha = (Color.alpha(borderColor) * drawableAlpha / 255f).roundToInt()
         borderPaint.strokeWidth = strokeWidth
         borderPaint.colorFilter = colorFilter
         val borderRect = RectF(rect).apply { inset(inset, inset) }
@@ -293,7 +293,11 @@ private class ComposerGlassDrawable(
     )
 }
 
-private class ComposerGlowDrawable(private val color: Int, private val cornerRadius: Float) : Drawable() {
+private class ComposerGlowDrawable(
+    private val color: Int,
+    private val cornerRadius: Float,
+    private val centerOpacity: Float,
+) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var drawableAlpha = 0
 
@@ -311,9 +315,9 @@ private class ComposerGlowDrawable(private val color: Int, private val cornerRad
         canvas.clipPath(Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) })
         paint.alpha = drawableAlpha
         paint.shader = RadialGradient(
-            rect.centerX(), rect.top, rect.width() * .76f,
-            intArrayOf(withAlpha(color, .17f), withAlpha(color, .08f), Color.TRANSPARENT),
-            floatArrayOf(0f, .38f, .78f), Shader.TileMode.CLAMP,
+            rect.centerX(), rect.top, max(rect.width() * .92f, rect.height() * 1.15f),
+            intArrayOf(withAlpha(color, centerOpacity), withAlpha(color, centerOpacity * .44f), Color.TRANSPARENT),
+            floatArrayOf(0f, .43f, 1f), Shader.TileMode.CLAMP,
         )
         canvas.drawRect(rect, paint)
         paint.shader = null
@@ -1421,7 +1425,7 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(18).toFloat())
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(18).toFloat(), composerGlowOpacity())
             background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -1564,9 +1568,9 @@ class MainActivity : Activity() {
         }
         val border = when (themeName) {
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
-            "warm" -> Color.rgb(213, 198, 179)
-            "light" -> Color.rgb(208, 208, 208)
-            else -> Color.argb(48, 222, 229, 246)
+            "warm" -> Color.rgb(216, 202, 182)
+            "light" -> Color.rgb(214, 216, 220)
+            else -> Color.rgb(43, 46, 52)
         }
         return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
     }
@@ -1576,6 +1580,12 @@ class MainActivity : Activity() {
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> Color.WHITE
+    }
+
+    private fun composerGlowOpacity(): Float = when (themeName) {
+        "light" -> .30f
+        "warm", "custom" -> .29f
+        else -> .38f
     }
 
     private fun updateComposerRunningGlow(isRunning: Boolean) {
@@ -1592,10 +1602,10 @@ class MainActivity : Activity() {
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !ValueAnimator.areAnimatorsEnabled()) {
-            composerGlowDrawable.setIntensity(.42f)
+            composerGlowDrawable.setIntensity(.68f)
             return
         }
-        composerGlowDrawable.setIntensity(.18f)
+        composerGlowDrawable.setIntensity(.24f)
         composerGlowAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 2_800L
             repeatMode = ValueAnimator.REVERSE
@@ -1603,7 +1613,7 @@ class MainActivity : Activity() {
             interpolator = android.view.animation.AccelerateDecelerateInterpolator()
             addUpdateListener { animator ->
                 val phase = animator.animatedValue as Float
-                composerGlowDrawable.setIntensity(.18f + phase * .54f)
+                composerGlowDrawable.setIntensity(.24f + phase * .68f)
             }
             start()
         }
