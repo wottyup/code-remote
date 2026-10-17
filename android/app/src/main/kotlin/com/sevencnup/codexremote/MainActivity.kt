@@ -5788,7 +5788,7 @@ class MainActivity : Activity() {
             Triple("light", "白色", "清爽明亮"),
             Triple("dark", "黑色", "低光阅读"),
             Triple("warm", "暖色", "柔和纸感"),
-            Triple("lollipop", "Android 1.0", "银灰金属与早期 Droid 经典样式"),
+            Triple("lollipop", "旧经典", "银灰金属与早期 Droid 经典样式"),
             Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
             val selected = themeName == theme
