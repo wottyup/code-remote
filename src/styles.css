@@ -2370,6 +2370,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .remote-sidebar.remote-sidebar--dragging { transform: translate3d(var(--sidebar-drag-offset, -105%), 0, 0); }
   .remote-shell--theme-retro .sidebar-backdrop { display: block; background: #000; }
   .remote-shell--theme-retro .remote-sidebar__heading { display: none; }
+  .remote-shell--theme-retro .sidebar-search { margin: 8px 0 4px; }
+  .remote-shell--theme-retro .new-thread-control { flex: 0 0 auto; margin: 4px 0 0; }
+  .remote-shell--theme-retro .thread-list-heading { margin: 10px 0 4px; }
+  .remote-shell--theme-retro .thread-list__section { margin: 8px 0 4px; }
 
   .remote-shell--theme-retro .workspace-explorer {
     inset: 0 0 0 auto;
