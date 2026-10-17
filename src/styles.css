@@ -2403,7 +2403,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .remote-chat__controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 0 0 0 auto; }
   .remote-shell--theme-retro :is(.menu-button, .mobile-workspace-button) { display: none; }
   .remote-shell--theme-retro .welcome-state h1 {
-    font-size: clamp(14px, calc(4.2vw + var(--mobile-font-offset)), 18px);
+    font-size: clamp(16px, calc(4.8vw + var(--mobile-font-offset)), 20px);
     white-space: nowrap;
   }
 
