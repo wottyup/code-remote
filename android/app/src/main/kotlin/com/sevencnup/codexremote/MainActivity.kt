@@ -3999,6 +3999,16 @@ class MainActivity : Activity() {
             toolbar.addView(button, LinearLayout.LayoutParams(dp(36), dp(38)))
         }
         toolbar.addView(addressView, LinearLayout.LayoutParams(0, dp(36), 1f))
+
+        val resizeHeader = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(38), dp(4), Gravity.CENTER))
+        }
+        panel.addView(resizeHeader, LinearLayout.LayoutParams(MATCH, dp(18)))
         panel.addView(toolbar, LinearLayout.LayoutParams(MATCH, dp(42)))
         panel.addView(progress, LinearLayout.LayoutParams(MATCH, dp(2)))
         panel.addView(webView, LinearLayout.LayoutParams(MATCH, 0, 1f))
@@ -4091,7 +4101,11 @@ class MainActivity : Activity() {
         }
         webPreviewRelayout = { applySavedFrame() }
 
-        fun resizeHandler(resizeWidth: Boolean, resizeHeight: Boolean): View.OnTouchListener {
+        fun resizeHandler(
+            resizeWidth: Boolean,
+            resizeHeight: Boolean,
+            anchorBottom: Boolean = false,
+        ): View.OnTouchListener {
             var startX = 0f
             var startY = 0f
             var startWidth = 0
@@ -4116,7 +4130,8 @@ class MainActivity : Activity() {
                                 .coerceIn(dp(240).coerceAtMost(available.availableWidth), available.availableWidth)
                         } else startWidth
                         val height = if (resizeHeight) {
-                            (startHeight + (event.rawY - startY).roundToInt())
+                            val deltaY = (event.rawY - startY).roundToInt()
+                            (startHeight + (if (anchorBottom) -deltaY else deltaY))
                                 .coerceIn(dp(220).coerceAtMost(available.availableHeight), available.availableHeight)
                         } else startHeight
                         val editor = prefs.edit()
@@ -4125,7 +4140,9 @@ class MainActivity : Activity() {
                         editor.apply()
                         applySavedFrame(
                             anchorX = if (resizeWidth) startPopupX else popupX,
-                            anchorY = if (resizeHeight) startPopupY else popupY,
+                            anchorY = if (resizeHeight && anchorBottom) {
+                                startPopupY + startHeight - height
+                            } else if (resizeHeight) startPopupY else popupY,
                         )
                         true
                     }
@@ -4139,6 +4156,7 @@ class MainActivity : Activity() {
         }
         widthResizeHandle.setOnTouchListener(resizeHandler(resizeWidth = true, resizeHeight = false))
         resizeFooter.setOnTouchListener(resizeHandler(resizeWidth = false, resizeHeight = true))
+        resizeHeader.setOnTouchListener(resizeHandler(resizeWidth = false, resizeHeight = true, anchorBottom = true))
 
         var cleanedUp = false
         val rootLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applySavedFrame() }
