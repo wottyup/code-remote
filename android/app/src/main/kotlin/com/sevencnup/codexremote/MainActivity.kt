@@ -3763,13 +3763,33 @@ class MainActivity : Activity() {
     }
 
     private fun runningActivityText(operation: JSONObject?): String {
-        val detail = operation?.let {
-            when (operationLabel(it)) {
-                "执行命令" -> it.optString("command").takeIf(String::isNotBlank)
-                else -> operationDisplayPath(it)
-            }
+        if (operation == null) return "正在思考"
+        val type = normalizedType(operation.optString("type"))
+        val operationName = operationLabel(operation)
+        val statusLabel = when (operationName) {
+            "查看文件" -> "正在读取"
+            "搜索文件" -> "正在搜索文件"
+            "执行命令" -> "正在运行"
+            "修改文件" -> "正在修改文件"
+            "搜索资料" -> "正在搜索资料"
+            "查看图片" -> "正在查看图片"
+            "生成图片" -> "正在生成图片"
+            "读取技能" -> "正在读取技能"
+            "运行子任务" -> if (type == "collabagenttoolcall") "正在协调子任务" else "正在运行子任务"
+            "调用工具" -> if (type == "mcptoolcall") "正在调用 MCP 工具" else "正在调用工具"
+            else -> "正在处理"
         }
-        return detail?.let { "正在思考 $it" } ?: "正在思考"
+        val detail = when {
+            type == "filechange" -> operation.optJSONArray("changes")?.length()
+                ?.takeIf { it > 0 }?.let { "$it 个文件" }
+            type == "commandexecution" && operationName == "查看文件" -> operationDisplayPath(operation)
+            type == "mcptoolcall" -> listOf(operation.optString("server"), operation.optString("tool"))
+                .filter(String::isNotBlank).joinToString(" · ").takeIf(String::isNotBlank)
+            type == "dynamictoolcall" -> listOf(operation.optString("tool"), operation.optString("name"))
+                .firstOrNull(String::isNotBlank)
+            else -> operationDisplayPath(operation) ?: operationDetail(operation).takeIf(String::isNotBlank)
+        }
+        return detail?.let { "$statusLabel $it" } ?: statusLabel
     }
 
     private var assistantMarkdownAppearance = ""
