@@ -2593,3 +2593,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
     top: max(120px, calc(env(safe-area-inset-top) + 108px), calc(var(--native-status-bar-inset) + 108px));
   }
 }
+
+/* Reuse the sidebar's solid contrast fill to make user messages easy to scan. */
+.remote-shell--theme-retro.remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body,
+.remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 0;
+  background: #d4d0c8;
+  box-shadow: none;
+}
