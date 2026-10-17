@@ -4626,8 +4626,8 @@ class MainActivity : Activity() {
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
-                setImageResource(if (themeName == "lollipop") iconResource("arrow_up") else R.drawable.ic_queue_send)
-                imageTintList = retroIconTint(iconTint("arrow_up"))
+                setImageResource(if (themeName == "lollipop") iconResource("send") else R.drawable.ic_queue_send)
+                imageTintList = retroIconTint(iconTint("send"))
                 setPadding(dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
@@ -4849,7 +4849,7 @@ class MainActivity : Activity() {
             editingQueue -> "check"
             running -> "pause"
             canContinue -> "play"
-            else -> "arrow_up"
+            else -> "send"
         }) else when {
             sendBusy -> R.drawable.ic_composer_wait
             editingQueue -> R.drawable.ic_composer_confirm
@@ -8395,7 +8395,8 @@ class MainActivity : Activity() {
             "search" -> R.drawable.ic_android1_search
             "settings" -> R.drawable.ic_android1_settings
             "refresh" -> R.drawable.ic_android1_refresh
-            "arrow_up", "send" -> R.drawable.ic_android1_arrow_up
+            "arrow_up" -> R.drawable.ic_android1_arrow_up
+            "send" -> R.drawable.ic_android1_send
             "file" -> R.drawable.ic_android1_file
             "image" -> R.drawable.ic_android1_image
             "file_add" -> R.drawable.ic_android1_file_add
@@ -8417,7 +8418,7 @@ class MainActivity : Activity() {
             "notifications" -> R.drawable.ic_android1_notifications
             "language" -> R.drawable.ic_android1_language
             "info" -> R.drawable.ic_android1_info
-            "palette" -> R.drawable.ic_android1_image
+            "palette" -> R.drawable.ic_android1_palette
             "display" -> R.drawable.ic_android1_display
             "lock" -> R.drawable.ic_android1_lock
             "checked" -> R.drawable.ic_android1_checked
@@ -8441,6 +8442,7 @@ class MainActivity : Activity() {
         "settings" -> R.drawable.ic_settings
         "refresh" -> R.drawable.ic_refresh
         "arrow_up" -> R.drawable.ic_arrow_up
+        "send" -> R.drawable.ic_arrow_up
         "file" -> R.drawable.ic_file
         "file_add" -> R.drawable.ic_file_add
         "folder_add" -> R.drawable.ic_folder_add

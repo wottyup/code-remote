@@ -1,7 +1,12 @@
 Android 1.0-inspired theme icons
 
 The ic_android1_*.png resources include images from Android Open Source Project
-release android-2.0_r1, and images adapted from those resources.
+release android-2.0_r1, images adapted from those resources, and 19 icons cropped
+from the transparent icon sheet supplied by the user for this project. The
+user-supplied icons are search, refresh, chat, settings, link, terminal, folder,
+file_add, send, pause, edit, check, delete, palette, display, language,
+notifications, lock and info. The Apache notice below applies to the AOSP
+resources only; it does not claim ownership or license for the user image.
 
 Sources:
 https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-2.0_r1/core/res/res/drawable-hdpi/
