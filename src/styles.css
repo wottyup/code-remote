@@ -598,6 +598,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .file-change-card__diff-line--hunk { background: var(--file-change-hunk-background); color: var(--file-change-hunk-text); }
 .file-change-card__file > small { display: block; margin: -1px 12px 10px; color: var(--file-change-muted); font-size: calc(10.5px + var(--mobile-font-offset)); }
 .file-change-card__more { display: flex; width: 100%; min-height: 32px; align-items: center; gap: 5px; padding: 0 12px; border: 0; border-top: 1px solid var(--file-change-divider); border-radius: 0 0 10px 10px; background: var(--file-change-more); color: var(--file-change-copy); cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); text-align: left; }
+.file-change-card--expanded .file-change-card__more { position: sticky; z-index: 6; bottom: 0; box-shadow: 0 -1px 0 var(--file-change-divider); }
 .file-change-card__more:hover { background: var(--file-change-control-hover); color: var(--file-change-control-hover-text); }
 .file-change-card__more svg { transition: transform .18s ease; }
 .file-change-card__more[aria-expanded='true'] svg { transform: rotate(180deg); }
