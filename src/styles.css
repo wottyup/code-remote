@@ -2638,3 +2638,27 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .workspace-file-preview__line-number,
 .remote-shell--theme-retro .workspace-file-preview__line-content,
 .remote-shell--theme-retro .workspace-file-preview__line-content * { color: #20252b !important; }
+
+.remote-shell--theme-retro .message-composer__footer { align-items: center; }
+.remote-shell--theme-retro .message-composer__footer .composer-preferences { align-items: center; }
+.remote-shell--theme-retro .message-composer__footer :is(.composer-menu__trigger, .attach-button, .send-button, .stop-button) {
+  box-sizing: border-box;
+  display: inline-flex;
+  height: 30px;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  vertical-align: middle;
+}
+.remote-shell--theme-retro .message-stream__content--loading {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: center;
+  padding: 0;
+}
+.remote-shell--theme-retro .message-stream__content--loading .loading-state {
+  width: 100%;
+  min-height: 0;
+  text-align: center;
+}
