@@ -1036,8 +1036,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .scroll-to-bottom:hover { border-color: #bdbdbd; background: #efefef; color: #292929; }
 .remote-shell--theme-light .chat-message--user .chat-message__body { background: #ececec; box-shadow: none; }
 .remote-shell--theme-light .chat-message--user .chat-message__content { color: #303030; }
-.remote-shell--theme-light .message-composer { border: 1px solid #d0d0d0; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .1), inset 0 1px 0 #fff; }
-.remote-shell--theme-light .message-composer:focus-within { border-color: #d0d0d0; box-shadow: 0 10px 28px rgba(0, 0, 0, .12), inset 0 1px 0 #fff; }
+.remote-shell--theme-light .message-composer { border: 1px solid #d0d0d0; background: #fff; box-shadow: none; }
+.remote-shell--theme-light .message-composer:focus-within { border-color: #d0d0d0; box-shadow: none; }
 .remote-shell--theme-light .message-composer textarea { color: #303030; }
 .remote-shell--theme-light .composer-file-change-summary { color: #686868; }
 .remote-shell--theme-light .composer-file-change-summary > svg { color: #777; }
