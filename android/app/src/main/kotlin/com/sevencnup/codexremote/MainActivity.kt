@@ -84,6 +84,7 @@ import android.text.util.Linkify
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.core.MarkwonTheme
+import io.noties.markwon.linkify.LinkifyPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -3852,6 +3853,7 @@ class MainActivity : Activity() {
                         .tableOddRowBackgroundColor(PANEL)
                         .tableEvenRowBackgroundColor(PANEL_INSET)
                 })
+                .usePlugin(LinkifyPlugin.create(Linkify.WEB_URLS))
                 .build().also { assistantMarkdownCache = it; assistantMarkdownAppearance = appearance }
         }
 
