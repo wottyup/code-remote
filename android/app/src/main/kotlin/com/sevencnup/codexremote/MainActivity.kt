@@ -1698,9 +1698,12 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
-        val footerActionSize = if (themeName == "lollipop") dp(38) else dp(34)
-        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(footerActionSize, dp(footerHeight)).apply {
+        val footerActionSize = if (themeName == "lollipop") dp(36) else dp(34)
+        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }.apply {
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
             rightMargin = dp(4)
+            gravity = Gravity.CENTER_VERTICAL
         })
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
@@ -1719,7 +1722,7 @@ class MainActivity : Activity() {
             }
             contentDescription = "发送消息"
         }
-        val sendSize = if (themeName == "lollipop") dp(36) else dp(30)
+        val sendSize = if (themeName == "lollipop") dp(32) else dp(28)
         footer.addView(sendButton, LinearLayout.LayoutParams(sendSize, sendSize).apply {
             leftMargin = dp(if (themeName == "lollipop") 2 else 6)
             gravity = Gravity.CENTER_VERTICAL
@@ -3558,7 +3561,7 @@ class MainActivity : Activity() {
             activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
                 indeterminateTintList = ColorStateList.valueOf(activityColor)
-                contentDescription = "正在运行"
+                contentDescription = "正在思考"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             val lastTurn = turns.optJSONObject(turns.length() - 1)
             activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
@@ -3572,7 +3575,7 @@ class MainActivity : Activity() {
             val activityText = when {
                 liveItem != null && !liveActivityItemCompleted -> runningActivityText(liveItem)
                 historyIsCurrentTurn && currentOperation != null -> runningActivityText(currentOperation)
-                else -> "正在运行"
+                else -> "正在思考"
             }
             activeActivityText = label(activityText, 12, activityColor).apply {
                 maxLines = 1
@@ -3581,7 +3584,7 @@ class MainActivity : Activity() {
             activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
             activeActivityTimer = label("已用 0分0秒", 10, activityColor).apply {
                 setPadding(dp(8), 0, 0, 0)
-                contentDescription = "本轮已运行时间"
+                contentDescription = "本轮思考时间"
             }
             activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -3766,7 +3769,7 @@ class MainActivity : Activity() {
                 else -> operationDisplayPath(it)
             }
         }
-        return detail?.let { "正在运行 $it" } ?: "正在运行"
+        return detail?.let { "正在思考 $it" } ?: "正在思考"
     }
 
     private var assistantMarkdownAppearance = ""
@@ -7919,7 +7922,7 @@ class MainActivity : Activity() {
                                     liveActivityItemCompleted = method == "item/completed"
                                     liveActivityTurnId = turnId
                                     activeActivityText?.let { activityText ->
-                                        activityText.text = if (liveActivityItemCompleted) "正在运行" else operationActivityLabel(item)
+                                        activityText.text = if (liveActivityItemCompleted) "正在思考" else operationActivityLabel(item)
                                         startActivityShimmer(activityText)
                                     }
                                 }
