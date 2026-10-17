@@ -2601,8 +2601,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   width: fit-content;
   max-width: 100%;
   padding: 6px 10px;
-  border: 1px inset #aaa;
+  border: 1px solid #808080;
   border-radius: 0;
   background: #fff;
-  box-shadow: none;
+  box-shadow: inset 1px 1px 0 #d4d4d4;
 }
