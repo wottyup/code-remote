@@ -747,6 +747,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-hint svg { flex: 0 0 auto; color: #8c929c; }
 .composer-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; }
 .send-button, .stop-button, .attach-button { display: inline-flex; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; min-width: 30px; height: 29px; padding: 0 8px; border: 0; border-radius: 7px; background: transparent; color: #17191d; cursor: pointer; }
+.send-button { white-space: nowrap; }
 @container message-composer (max-width: 760px) {
   .composer-hint { display: none; }
 }
