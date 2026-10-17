@@ -2465,5 +2465,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .workspace-explorer__entry--selected { border: 0; background: #eee; color: #551a8b; }
   .remote-shell--theme-retro .workspace-explorer__footer { min-height: 0; padding: 6px 0 0; border: 0; background: #fff; color: #000; font: .8125em/normal "Times New Roman", Times, serif; }
 
+  .remote-shell--theme-retro .remote-chat__header,
+  .remote-shell--theme-retro .message-stream { padding-inline: 32px; }
+  .remote-shell--theme-retro .remote-workspace > .composer-dock { width: min(calc(100% - 64px), 900px); }
+
   .remote-shell--theme-retro .theme-settings-panel { grid-column: 2 / -1; grid-row: 1; width: 100%; height: 100%; min-height: 0; overflow-y: auto; }
 }
