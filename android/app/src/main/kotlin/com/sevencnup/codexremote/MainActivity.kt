@@ -1423,7 +1423,7 @@ class MainActivity : Activity() {
                 background = android1SegmentButtonBackground()
             }
         }
-        val actionSize = if (themeName == "lollipop") dp(48) else dp(40)
+        val actionSize = if (themeName == "lollipop") dp(42) else dp(40)
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", if (themeName == "lollipop") 20 else 14, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
@@ -1447,7 +1447,7 @@ class MainActivity : Activity() {
                 background = android1SegmentButtonBackground()
             }
         }, LinearLayout.LayoutParams(actionSize, actionSize))
-        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 44)))
+        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 42 else 44)))
     }
 
     private fun buildQueuePanel() {
@@ -1833,8 +1833,7 @@ class MainActivity : Activity() {
         brandCopy.addView(label("Codex Remote", if (themeName == "lollipop") 18 else 15, TEXT, true), widthWrap())
         brandCopy.addView(label("对话工作台", if (themeName == "lollipop") 12 else 10, MUTED), widthWrap())
         brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        brand.addView(sidebarIconButton("close", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 44 else 38), dp(if (themeName == "lollipop") 44 else 38)))
-        drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 44)))
+        drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
 
         val searchBox = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1871,7 +1870,7 @@ class MainActivity : Activity() {
         drawerSearch.addTextChangedListener(SimpleTextWatcher { value ->
             searchBox.findViewWithTag<View>("sidebar_search_clear")?.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
         })
-        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 42)).apply { topMargin = dp(12) })
+        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 44 else 42)).apply { topMargin = dp(9) })
 
         sidebarNewThreadButton = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1889,7 +1888,7 @@ class MainActivity : Activity() {
         sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
         sidebarNewThreadLabel = label("新建对话", 13, TEXT, true)
         sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
-        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 43)).apply { topMargin = dp(9) })
+        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 44 else 43)).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
@@ -1933,10 +1932,10 @@ class MainActivity : Activity() {
         val footerDivider = View(this).apply { setBackgroundColor(BORDER) }
         drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(42)))
+        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(40), 1f))
+        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(40), 1f))
+        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(40), 1f))
+        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
 
         sidebarHost = createEdgeDrawer(drawer, Gravity.START) { setSidebarVisible(false) }
         updateInsetAwareOverlays()
@@ -2315,7 +2314,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(if (themeName == "lollipop") 0 else dp(9), if (themeName == "lollipop") dp(2) else dp(8), dp(5), if (themeName == "lollipop") dp(2) else dp(8))
-                minimumHeight = dp(if (themeName == "lollipop") 48 else 0)
+                minimumHeight = dp(if (themeName == "lollipop") 44 else 0)
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
                 background = if (themeName == "lollipop") {
                     if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
@@ -6441,13 +6440,13 @@ class MainActivity : Activity() {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
-        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(if (themeName == "lollipop") 42 else 48), 1f))
         val refreshButton = sidebarIconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
         if (themeName == "lollipop") {
             refreshButton.imageTintList = null
             refreshButton.background = android1SegmentButtonBackground()
         }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 44 else 32), dp(if (themeName == "lollipop") 44 else 32)))
+        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 40 else 32), dp(if (themeName == "lollipop") 40 else 32)))
         val createButton = sidebarIconButton("add", "新建文件或文件夹") { }
         createButton.setOnClickListener {
             showCreateEntry(createButton, workspaceCurrentPath, browsingCwd()) {
@@ -6458,14 +6457,8 @@ class MainActivity : Activity() {
             createButton.imageTintList = null
             createButton.background = android1SegmentButtonBackground()
         }
-        header.addView(createButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 44 else 32), dp(if (themeName == "lollipop") 44 else 32)))
-        header.addView(sidebarIconButton("close", "关闭文件树") { setWorkspaceVisible(false) }.apply {
-            if (themeName == "lollipop") {
-                imageTintList = null
-                background = android1SegmentButtonBackground()
-            }
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 44 else 32), dp(if (themeName == "lollipop") 44 else 32)))
-        panel.addView(header, LinearLayout.LayoutParams(MATCH, if (themeName == "lollipop") dp(48) else WRAP))
+        header.addView(createButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 40 else 32), dp(if (themeName == "lollipop") 40 else 32)))
+        panel.addView(header, LinearLayout.LayoutParams(MATCH, if (themeName == "lollipop") dp(42) else WRAP))
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         rootInput = editField("输入服务端目录路径", manualRoot ?: currentCwd() ?: runtime.optString("workspace"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
