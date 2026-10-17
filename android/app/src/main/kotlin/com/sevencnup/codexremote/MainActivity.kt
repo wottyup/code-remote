@@ -397,7 +397,7 @@ class MainActivity : Activity() {
     private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(48, 60, 68)
     private val LOLLIPOP_TEXT_SECONDARY = Color.rgb(184, 190, 188)
     private val ANDROID1_TITLE_TEXT = Color.rgb(28, 28, 28)
-    private val gingerbreadTypeface: Typeface by lazy {
+    private val android1Typeface: Typeface by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
             val regular = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSans.ttf")
                 .setWeight(android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL)
@@ -416,11 +416,12 @@ class MainActivity : Activity() {
                     android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT,
                 ))
                 .build()
-        }.getOrElse { Typeface.createFromAsset(assets, "fonts/DroidSansFallback.ttf") }
-        else Typeface.createFromAsset(assets, "fonts/DroidSansFallback.ttf")
+        }.getOrElse { Typeface.createFromAsset(assets, "fonts/DroidSans.ttf") }
+        else Typeface.createFromAsset(assets, "fonts/DroidSans.ttf")
     }
-    private val gingerbreadBoldTypeface: Typeface by lazy {
-        Typeface.create(gingerbreadTypeface, Typeface.BOLD)
+    private val android1BoldTypeface: Typeface by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Typeface.create(android1Typeface, Typeface.BOLD)
+        else Typeface.createFromAsset(assets, "fonts/DroidSans-Bold.ttf")
     }
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
     private val themeName: String get() = (prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark")
@@ -8215,8 +8216,8 @@ class MainActivity : Activity() {
 
     private fun themedTypeface(bold: Boolean = false): Typeface = when {
         themeName != "lollipop" -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
-        bold -> gingerbreadBoldTypeface
-        else -> gingerbreadTypeface
+        bold -> android1BoldTypeface
+        else -> android1Typeface
     }
 
     private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
@@ -8438,7 +8439,7 @@ class MainActivity : Activity() {
 
     private fun actionButton(value: String): Button = Button(this).apply {
         text = tr(value)
-        if (themeName == "lollipop") typeface = gingerbreadBoldTypeface
+        if (themeName == "lollipop") typeface = android1BoldTypeface
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
         setTextColor(if (themeName == "lollipop") Color.rgb(23, 29, 14) else DARK)
