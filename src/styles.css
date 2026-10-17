@@ -2209,7 +2209,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .chat-message__timing,
   .remote-shell--theme-retro .chat-message__sent-at { display: none; }
   .remote-shell--theme-retro .chat-message--user .chat-message__meta { display: none; }
-  .remote-shell--theme-retro .chat-message--user .chat-message__body::before { display: block; margin: 1em 0 .25em; color: #000; content: '你：'; font-weight: bold; }
   .remote-shell--theme-retro .chat-message--user .chat-message__footer { display: none; }
   .remote-shell--theme-retro .chat-message__content { width: auto; max-width: none; overflow: visible; margin: 0; color: #000 !important; font: 1em/normal "Times New Roman", Times, serif; overflow-wrap: break-word; }
   .remote-shell--theme-retro .chat-message__text { margin: 1em 0; white-space: pre-wrap; }
