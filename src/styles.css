@@ -751,6 +751,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .send-button:disabled, .attach-button:disabled, .attach-button--disabled { background: transparent; color: #727883; cursor: not-allowed; }
 .send-button--queue:not(:disabled) { background: transparent; color: #9eafff; }
+.send-button--continue { font-size: calc(11px + var(--mobile-font-offset)); }
 .attach-button { border: 0; background: transparent; color: #c9cbd1; }
 .attach-button--native { position: relative; overflow: hidden; }
 .attach-button--native > svg { pointer-events: none; }

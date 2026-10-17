@@ -948,6 +948,9 @@ interface MessageComposerProps {
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
   onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
   onInterrupt: () => void
+  onContinue: () => void
+  canContinue: boolean
+  continuationPending: boolean
   onRefresh: () => void
 }
 
@@ -993,6 +996,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onEndQueuedEdit,
   onRemoveQueued,
   onInterrupt,
+  onContinue,
+  canContinue,
+  continuationPending,
   onRefresh,
 }, ref) {
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
@@ -1376,6 +1382,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
     && !draft.trim() && attachedImages.length === 0 && attachedDocuments.length === 0
+  const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
       aria-checked={temporaryPreferences} disabled={!canConfigure}
@@ -2011,7 +2018,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
             <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
           </>}
-          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行'}</span>
+          <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
@@ -2021,16 +2028,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
-              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}`}
-              type={stopWithSendButton ? 'button' : 'submit'}
-              onClick={stopWithSendButton ? onInterrupt : undefined}
-              disabled={stopWithSendButton ? isInterrupting : !canSend}
-              aria-label={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在停止回复' : '停止回复') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}`}
+              type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
+              onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
+              disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
+              aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '请先处理排队消息再继续') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '请先处理排队消息再继续') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
-                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : <Send size={16} />}
+                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>继续</span></> : <Send size={16} />}
             </button>
           ) : null}
         </div>
@@ -3631,6 +3638,40 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   remotesRef.current = remotes
   const activeRemote = remotes[selectedPaneIndex] ?? remote0
   const isClaudeCodeThread = activeRemote.activeEngine === 'claude-code'
+  const [continuation, setContinuation] = useState<{ paneIndex: number; threadId: string; turnId: string | null; phase: 'stopping' | 'ready' | 'continuing' } | null>(null)
+  const continuationRef = useRef(continuation)
+  continuationRef.current = continuation
+  const activeContinuation = continuation?.paneIndex === selectedPaneIndex
+    && continuation.threadId === activeRemote.activeThread?.id ? continuation : null
+  const canContinue = Boolean(activeContinuation?.phase === 'ready' && !activeRemote.isRunning && !activeRemote.isInterrupting
+    && activeRemote.connection === 'connected' && !activeRemote.writerConflict && activeRemote.queuedMessages.length === 0)
+
+  const updateContinuation = useCallback((next: typeof continuation) => {
+    continuationRef.current = next
+    setContinuation(next)
+  }, [])
+
+  const pauseCurrentReply = useCallback(() => {
+    if (!activeRemote.isRunning || activeRemote.isInterrupting) return
+    const threadId = activeRemote.activeThread?.id
+    if (isClaudeCodeThread || window.CodexRemoteAndroid || !threadId) {
+      void activeRemote.interrupt()
+      return
+    }
+    const next = { paneIndex: selectedPaneIndex, threadId, turnId: activeRemote.runningTurnId, phase: 'stopping' as const }
+    updateContinuation(next)
+    void activeRemote.interrupt().then((accepted) => {
+      if (continuationRef.current !== next) return
+      updateContinuation(accepted ? { ...next, phase: 'ready' } : null)
+    })
+  }, [activeRemote, isClaudeCodeThread, selectedPaneIndex, updateContinuation])
+
+  useEffect(() => {
+    if (activeContinuation?.turnId && activeRemote.isRunning && activeRemote.runningTurnId
+      && activeRemote.runningTurnId !== activeContinuation.turnId && !activeRemote.isInterrupting) {
+      updateContinuation(null)
+    }
+  }, [activeContinuation, activeRemote.isInterrupting, activeRemote.isRunning, activeRemote.runningTurnId, updateContinuation])
 
   useEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
@@ -4335,13 +4376,23 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         workspacePreviewCloseRef.current?.()
         return
       }
+      if (composerHandle.current?.closeOpenMenu()) {
+        event.preventDefault()
+        return
+      }
+      const pending = continuationRef.current
+      if (pending?.paneIndex === selectedPaneIndex && pending.threadId === activeRemote.activeThread?.id) {
+        event.preventDefault()
+        updateContinuation(null)
+        return
+      }
       if (!activeRemote.isRunning) return
       event.preventDefault()
-      void activeRemote.interrupt()
+      pauseCurrentReply()
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTargets, threadRenameTarget])
+  }, [activeRemote.activeThread?.id, activeRemote.isRunning, pauseCurrentReply, selectedPaneIndex, threadDeleteTargets, threadRenameTarget, updateContinuation])
 
   useEffect(() => {
     if (isClaudeCodeThread || availableModels.length === 0) return
@@ -4754,8 +4805,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         return next
       })
     }
+    if (sent && continuationRef.current?.paneIndex === selectedPaneIndex
+      && continuationRef.current.threadId === target.activeThread?.id) updateContinuation(null)
     return sent
-  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences])
+  }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences, updateContinuation])
+
+  const continueInterruptedReply = useCallback(() => {
+    if (!canContinue || !activeContinuation || continuationRef.current !== activeContinuation) return
+    const pending = { ...activeContinuation, phase: 'continuing' as const }
+    updateContinuation(pending)
+    void sendComposerMessage({ prompt: '请继续刚才中断的任务。', images: [], documents: [] }).then((sent) => {
+      if (!sent && continuationRef.current === pending) updateContinuation({ ...pending, phase: 'ready' })
+    })
+  }, [activeContinuation, canContinue, sendComposerMessage, updateContinuation])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
@@ -5136,7 +5198,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
               onEndQueuedEdit={activeRemote.endEditQueuedMessage}
               onRemoveQueued={activeRemote.removeQueuedMessage}
-              onInterrupt={activeRemote.interrupt}
+              onInterrupt={pauseCurrentReply}
+              onContinue={continueInterruptedReply}
+              canContinue={canContinue}
+              continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
             />
           </section>
