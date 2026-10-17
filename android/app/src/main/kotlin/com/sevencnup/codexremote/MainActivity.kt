@@ -1493,7 +1493,6 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val preferenceScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val preferenceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         modelButton = preferenceButton("模型") { showModelOptions() }
@@ -1504,6 +1503,9 @@ class MainActivity : Activity() {
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
+        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(34), dp(40)).apply {
+            rightMargin = dp(4)
+        })
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -3305,18 +3307,15 @@ class MainActivity : Activity() {
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
             val activityAccent = if (currentMode == "claude-code" && socketConnected) CLAUDE_MODE_ACCENT else ACCENT
             val activity = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 tag = TAG_MESSAGE_DYNAMIC
             }
-            val activityHeading = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            activityHeading.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
                 indeterminateTintList = ColorStateList.valueOf(activityAccent)
-                contentDescription = activityLabel
+                contentDescription = "正在运行"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             val lastTurn = turns.optJSONObject(turns.length() - 1)
             activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
@@ -3327,26 +3326,21 @@ class MainActivity : Activity() {
             val turnId = lastTurn?.optString("id").orEmpty()
             val liveItem = liveActivityItem?.takeIf { liveActivityTurnId != null }
             val historyIsCurrentTurn = liveActivityTurnId == null || liveActivityTurnId == turnId
-            val recentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
-                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") }
             val activityText = when {
-                liveItem != null && !liveActivityItemCompleted -> operationActivityLabel(liveItem)
-                liveItem != null -> "$activityLabel · ${completedActivityLabel(liveItem)}"
-                historyIsCurrentTurn && currentOperation != null -> operationActivityLabel(currentOperation)
-                historyIsCurrentTurn && recentOperation != null -> "$activityLabel · ${completedActivityLabel(recentOperation)}"
-                else -> activityLabel
+                liveItem != null && !liveActivityItemCompleted -> runningActivityText(liveItem)
+                historyIsCurrentTurn && currentOperation != null -> runningActivityText(currentOperation)
+                else -> "正在运行"
             }
             activeActivityText = label(activityText, 12, activityAccent).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            activityHeading.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
-            activity.addView(activityHeading, LinearLayout.LayoutParams(MATCH, WRAP))
+            activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
             activeActivityTimer = label("已用 0分0秒", 10, MUTED).apply {
-                setPadding(dp(23), dp(4), 0, 0)
+                setPadding(dp(8), 0, 0, 0)
                 contentDescription = "本轮已运行时间"
             }
-            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(MATCH, WRAP))
+            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
             handler.removeCallbacks(activityTick)
             handler.post(activityTick)
@@ -3486,8 +3480,15 @@ class MainActivity : Activity() {
         if (draftStorageKey() == scope) renderMessages(false)
     }
 
-    private val activityLabel: String
-        get() = if (socketConnected) "正在思考…" else "正在等待连接…"
+    private fun runningActivityText(operation: JSONObject?): String {
+        val detail = operation?.let {
+            when (operationLabel(it)) {
+                "执行命令" -> it.optString("command").takeIf(String::isNotBlank)
+                else -> operationDisplayPath(it)
+            }
+        }
+        return detail?.let { "正在运行 $it" } ?: "正在运行"
+    }
 
     private var assistantMarkdownAppearance = ""
     private var assistantMarkdownCache: Markwon? = null
@@ -3568,25 +3569,7 @@ class MainActivity : Activity() {
     }
 
     private fun operationActivityLabel(operation: JSONObject): String {
-        val path = operationDisplayPath(operation)
-        return when (operationLabel(operation)) {
-            "查看文件" -> "正在查看 ${path ?: "文件"}"
-            "修改文件" -> "正在编辑 ${path ?: "文件"}"
-            "搜索文件" -> "正在搜索文件"
-            "执行命令" -> "正在执行命令"
-            else -> operationLabel(operation)
-        }
-    }
-
-    private fun completedActivityLabel(operation: JSONObject): String {
-        val path = operationDisplayPath(operation)
-        return when (operationLabel(operation)) {
-            "查看文件" -> if (path != null) "已查看 $path" else "已查看文件"
-            "修改文件" -> if (path != null) "已编辑 $path" else "已修改文件"
-            "搜索文件" -> "已搜索文件"
-            "执行命令" -> "已执行命令"
-            else -> "已${operationLabel(operation)}"
-        }
+        return runningActivityText(operation)
     }
 
     private fun operationDisplayPath(operation: JSONObject): String? {
@@ -4893,7 +4876,9 @@ class MainActivity : Activity() {
                 handler.post {
                     if (actionConnection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = result.optJSONArray("queue") ?: JSONArray()
+                    if (action == "send-now" && result.optBoolean("sent", false)) pausedThreadKeys.remove(threadTitleKey(threadId))
                     renderQueue()
+                    updateSendButton()
                     if (result.optBoolean("sent", false)) refreshActiveThread(false)
                     if (action == "send-now" && !result.optBoolean("sent", false)) {
                         val first = queuedMessages.optJSONObject(0)
@@ -5106,10 +5091,10 @@ class MainActivity : Activity() {
             if (efforts != null && efforts.length() > 0) (0 until efforts.length()).mapNotNull { index ->
                 val effort = efforts.optJSONObject(index)?.optString("reasoningEffort") ?: return@mapNotNull null
                 effort to effortLabel(effort)
-            } else listOf("minimal" to "最小", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高")
-        } else listOf("default" to "本机默认", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高", "max" to "最大")
+            } else listOf("minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High")
+        } else listOf("default" to "Default", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max")
         val key = if (currentMode == "codex") "effort" else "claudeEffort"
-        showChoicePopup(effortButton, "思考等级", listOf("default" to "默认") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
+        showChoicePopup(effortButton, "Reasoning Effort", listOf("default" to "Default") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
     }
 
     private fun showPermissionOptions() {
@@ -7512,7 +7497,7 @@ class MainActivity : Activity() {
                                     liveActivityItem = item
                                     liveActivityItemCompleted = method == "item/completed"
                                     liveActivityTurnId = turnId
-                                    activeActivityText?.text = if (liveActivityItemCompleted) "$activityLabel · ${completedActivityLabel(item)}" else operationActivityLabel(item)
+                                    activeActivityText?.text = if (liveActivityItemCompleted) "正在运行" else operationActivityLabel(item)
                                 }
                             }
                         }
@@ -7833,13 +7818,13 @@ class MainActivity : Activity() {
     }
 
     private fun effortLabel(selected: String?): String = when (selected) {
-        "minimal" -> "最小"
-        "low" -> "低"
-        "medium" -> "中"
-        "high" -> "高"
-        "xhigh" -> "极高"
-        "max" -> "最大"
-        null, "default" -> "思考"
+        "minimal" -> "Minimal"
+        "low" -> "Low"
+        "medium" -> "Medium"
+        "high" -> "High"
+        "xhigh" -> "Extra High"
+        "max" -> "Max"
+        null, "default" -> "Effort"
         else -> selected
     }
 
@@ -8417,13 +8402,13 @@ private fun MainActivity.claudeModelLabel(selected: String?): String = when (sel
 }
 
 private fun MainActivity.effortLabel(selected: String?): String = when (selected) {
-    "minimal" -> "最小"
-    "low" -> "低"
-    "medium" -> "中"
-    "high" -> "高"
-    "xhigh" -> "极高"
-    "max" -> "最大"
-    null, "default" -> "思考"
+    "minimal" -> "Minimal"
+    "low" -> "Low"
+    "medium" -> "Medium"
+    "high" -> "High"
+    "xhigh" -> "Extra High"
+    "max" -> "Max"
+    null, "default" -> "Effort"
     else -> selected
 }
 

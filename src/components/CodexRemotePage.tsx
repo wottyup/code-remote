@@ -150,7 +150,7 @@ function WelcomeTypingTitle({ text }: { text: string }) {
 }
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
-  if (preferences.theme === 'light' || preferences.theme === 'warm') return true
+  if (preferences.theme === 'light' || preferences.theme === 'warm' || preferences.theme === 'retro') return true
   if (preferences.theme === 'dark') return false
 
   const hex = preferences.customBackgroundColor.slice(1)
@@ -3653,7 +3653,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const pauseCurrentReply = useCallback(() => {
     if (!activeRemote.isRunning || activeRemote.isInterrupting) return
     const threadId = activeRemote.activeThread?.id
-    if (window.CodexRemoteAndroid || !threadId) {
+    if (!threadId) {
       void activeRemote.interrupt()
       return
     }
@@ -5281,6 +5281,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
+    { value: 'retro', label: '旧网页', description: '经典蓝白界面', previewClass: 'theme-option__preview--retro' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
 
