@@ -2392,6 +2392,21 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .workspace-backdrop { background: #000; }
   .remote-shell--theme-retro .workspace-explorer__close { display: inline; }
 
+  .remote-shell--theme-retro .remote-chat__header {
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    justify-content: flex-end;
+    padding-inline: 8px;
+  }
+  .remote-shell--theme-retro .remote-chat__title-wrap { display: none; }
+  .remote-shell--theme-retro .remote-chat__controls { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin: 0 0 0 auto; }
+  .remote-shell--theme-retro :is(.menu-button, .mobile-workspace-button) { display: none; }
+  .remote-shell--theme-retro .welcome-state h1 {
+    font-size: clamp(14px, calc(4.2vw + var(--mobile-font-offset)), 18px);
+    white-space: nowrap;
+  }
+
   .remote-shell--theme-retro .remote-chat__header,
   .remote-shell--theme-retro .message-stream { padding-inline: 8px; }
   .remote-shell--theme-retro .composer-dock { width: auto; margin-inline: 8px; }
