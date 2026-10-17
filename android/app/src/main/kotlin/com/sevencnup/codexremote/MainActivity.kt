@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.Manifest
 import android.app.Activity
 import android.app.Dialog
+import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -37,6 +38,7 @@ import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.provider.OpenableColumns
@@ -85,6 +87,8 @@ import android.util.LruCache
 import android.util.Patterns
 import android.text.util.Linkify
 import android.webkit.SslErrorHandler
+import android.webkit.CookieManager
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -599,6 +603,7 @@ class MainActivity : Activity() {
     private var webPreviewView: WebView? = null
     private var webPreviewRelayout: (() -> Unit)? = null
     private var webPreviewCleanup: (() -> Unit)? = null
+    private var pendingWebDownload: PendingWebDownload? = null
     private var sidebarHost: EdgeDrawerHost? = null
     private var sidebarLongPressActive = false
     private var sidebarTouchActive = false
@@ -3900,6 +3905,118 @@ class MainActivity : Activity() {
         }
     }
 
+    private data class PendingWebDownload(
+        val url: String,
+        val userAgent: String?,
+        val contentDisposition: String?,
+        val mimeType: String?,
+    )
+
+    private fun showWebAddressDialog(currentAddress: String, onLoad: (String) -> Unit) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(10))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        layout.addView(label("输入网页地址", 15, TEXT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            bottomMargin = dp(12)
+        })
+        val addressInput = EditText(this).apply {
+            setTextColor(TEXT)
+            setHintTextColor(MUTED)
+            textSize = adjustedTextSize(14)
+            setTag(R.id.base_text_size, 14f)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setSingleLine(true)
+            setSelectAllOnFocus(true)
+            hint = "https://example.com"
+            setText(currentAddress)
+            background = rounded(PANEL_INSET, dp(8), BORDER, dp(1))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        layout.addView(addressInput, LinearLayout.LayoutParams(MATCH, dp(44)))
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        val submit = {
+            val target = normalizeWebUrl(addressInput.text.toString())
+            if (target == null) {
+                addressInput.error = "请输入有效的网址"
+            } else {
+                onLoad(target)
+                dialog.dismiss()
+            }
+        }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(42)))
+        actions.addView(dialogTextButton("前往", ACCENT) { submit() }, LinearLayout.LayoutParams(WRAP, dp(42)))
+        layout.addView(actions, LinearLayout.LayoutParams(MATCH, dp(46)).apply { topMargin = dp(5) })
+        addressInput.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_GO) {
+                submit()
+                true
+            } else false
+        }
+        dialog.setContentView(layout)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout((resources.displayMetrics.widthPixels - dp(32)).coerceAtLeast(dp(260)), WRAP)
+            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
+        addressInput.requestFocus()
+        addressInput.post {
+            addressInput.selectAll()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(addressInput, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun beginWebDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        val scheme = runCatching { Uri.parse(url).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+        if (scheme !in setOf("http", "https")) {
+            showToast("此网页的下载链接暂不支持")
+            return
+        }
+        val download = PendingWebDownload(url, userAgent, contentDisposition, mimeType)
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingWebDownload = download
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WEB_DOWNLOAD_STORAGE)
+            return
+        }
+        enqueueWebDownload(download)
+    }
+
+    private fun enqueueWebDownload(download: PendingWebDownload) {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val fileName = URLUtil.guessFileName(download.url, download.contentDisposition, download.mimeType)
+        val request = DownloadManager.Request(Uri.parse(download.url)).apply {
+            setTitle(fileName)
+            setDescription("网页文件下载")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            download.mimeType?.takeIf { it.isNotBlank() }?.let { setMimeType(it) }
+            download.userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+            CookieManager.getInstance().getCookie(download.url)?.takeIf { it.isNotBlank() }?.let {
+                addRequestHeader("Cookie", it)
+            }
+            webPreviewView?.url?.takeIf { it.isNotBlank() }?.let { addRequestHeader("Referer", it) }
+        }
+        runCatching { manager.enqueue(request) }
+            .onSuccess { showToast("已开始下载：$fileName") }
+            .onFailure { showToast("下载启动失败：${it.message ?: "请稍后重试"}") }
+    }
+
     private data class WebPreviewFrame(
         val x: Int,
         val y: Int,
@@ -3978,6 +4095,8 @@ class MainActivity : Activity() {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             setPadding(dp(9), 0, dp(9), 0)
+            isClickable = true
+            contentDescription = "输入网页地址"
         }
         val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
@@ -3999,6 +4118,9 @@ class MainActivity : Activity() {
             toolbar.addView(button, LinearLayout.LayoutParams(dp(36), dp(38)))
         }
         toolbar.addView(addressView, LinearLayout.LayoutParams(0, dp(36), 1f))
+        addressView.setOnClickListener {
+            showWebAddressDialog(webView.url ?: url) { target -> webView.loadUrl(target) }
+        }
 
         val resizeHeader = FrameLayout(this).apply {
             isClickable = true
@@ -4079,6 +4201,9 @@ class MainActivity : Activity() {
                 handler.cancel()
                 showToast("网页证书验证失败，已停止加载")
             }
+        }
+        webView.setDownloadListener { downloadUrl, userAgent, contentDisposition, mimeType, _ ->
+            beginWebDownload(downloadUrl, userAgent, contentDisposition, mimeType)
         }
 
         var popupX = initialFrame.x
@@ -8480,6 +8605,16 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_WEB_DOWNLOAD_STORAGE) {
+            val pending = pendingWebDownload
+            pendingWebDownload = null
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && pending != null) {
+                enqueueWebDownload(pending)
+            } else {
+                showToast("未获得存储权限，无法保存到下载目录")
+            }
+            return
+        }
         if (requestCode != REQUEST_NOTIFICATIONS || !notificationPermissionRequestedFromSettings) return
         notificationPermissionRequestedFromSettings = false
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
@@ -9278,6 +9413,7 @@ class MainActivity : Activity() {
         private const val REQUEST_ATTACH = 4101
         private const val REQUEST_NOTIFICATIONS = 4102
         private const val REQUEST_THEME_BACKGROUND = 4103
+        private const val REQUEST_WEB_DOWNLOAD_STORAGE = 4104
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val EXTRA_CONNECTION_ID = "notification_connection_id"
