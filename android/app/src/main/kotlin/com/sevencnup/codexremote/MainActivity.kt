@@ -11,6 +11,7 @@ import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
@@ -41,9 +42,11 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
+import android.text.Spannable
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.method.LinkMovementMethod
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.style.BackgroundColorSpan
@@ -77,6 +80,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.util.LruCache
+import android.text.util.Linkify
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.core.MarkwonTheme
@@ -3500,7 +3504,14 @@ class MainActivity : Activity() {
                     hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                     maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
                 }
-                if (role == "assistant") assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text.ifBlank { tr("（附件消息）") }))
+                if (role == "assistant") {
+                    assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text.ifBlank { tr("（附件消息）") }))
+                    enableChatLinkClicks(content)
+                } else if (role == "user") {
+                    Linkify.addLinks(content, Linkify.WEB_URLS)
+                    content.setLinkTextColor(ACCENT)
+                    enableChatLinkClicks(content)
+                }
                 val contentWidth = if (role == "user") {
                     val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
                     naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
@@ -3800,6 +3811,20 @@ class MainActivity : Activity() {
         "${match.groupValues[1]}：${match.groupValues[2]}"
     }
 
+    private fun enableChatLinkClicks(textView: TextView) {
+        textView.linksClickable = true
+        textView.movementMethod = object : LinkMovementMethod() {
+            override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
+                return try {
+                    super.onTouchEvent(widget, buffer, event)
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this@MainActivity, "没有可用的应用打开此链接", Toast.LENGTH_SHORT).show()
+                    true
+                }
+            }
+        }
+    }
+
     private val assistantMarkdown: Markwon
         get() {
             val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT"
@@ -3858,6 +3883,7 @@ class MainActivity : Activity() {
                         maxWidth = maximumWidth
                     }
                     assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text))
+                    enableChatLinkClicks(content)
                     container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
