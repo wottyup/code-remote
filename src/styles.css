@@ -1708,7 +1708,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--claude-mode .thread-row--active > .thread-row__icon { background: rgba(238, 140, 109, .16); box-shadow: none; }
 .remote-shell--claude-mode .thread-row--active .thread-row__icon > .engine-brand-icon--claude-code,
 .remote-shell--claude-mode .thread-row .engine-brand-icon--claude-code { background-color: #ee8c6d; color: #ee8c6d; }
-.remote-shell--claude-mode .remote-sidebar__actions .sidebar-settings svg { color: #ee8c6d; }
 .remote-shell--theme-light :is(.remote-shell *) .new-thread-button,
 .remote-shell--theme-light :is(.remote-shell *) .new-thread-button__icon { color: #fff; }
 .remote-shell--theme-light.remote-shell--claude-mode .new-thread-button,
