@@ -4095,8 +4095,8 @@ class MainActivity : Activity() {
             val maxX = (root.width - systemInsetRight - dp(6) - frame.width).coerceAtLeast(minX)
             val minY = systemInsetTop + dp(8)
             val maxY = (composerTop - dp(8) - frame.height).coerceAtLeast(minY)
-            popupX = (anchorX ?: frame.x).coerceIn(minX, maxX)
-            popupY = (anchorY ?: frame.y).coerceIn(minY, maxY)
+            popupX = (anchorX ?: popupX).coerceIn(minX, maxX)
+            popupY = (anchorY ?: popupY).coerceIn(minY, maxY)
             popup.update(popupX, popupY, frame.width, frame.height)
         }
         webPreviewRelayout = { applySavedFrame() }
