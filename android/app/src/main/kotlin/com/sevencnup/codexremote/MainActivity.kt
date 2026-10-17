@@ -392,11 +392,13 @@ private class ComposerGlowDrawable(
 class MainActivity : Activity() {
     // The legacy-theme key remains "lollipop" for preference compatibility, but
     // its appearance now follows Android 2.3 Gingerbread rather than Material.
-    private val LOLLIPOP_PRIMARY = Color.rgb(112, 179, 43)
+    private val LOLLIPOP_PRIMARY = Color.rgb(177, 139, 82)
     private val LOLLIPOP_PRIMARY_DARK = Color.rgb(185, 185, 185)
     private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(48, 60, 68)
     private val LOLLIPOP_TEXT_SECONDARY = Color.rgb(184, 190, 188)
     private val ANDROID1_TITLE_TEXT = Color.rgb(28, 28, 28)
+    private val ANDROID1_ADDED_COLOR = Color.rgb(145, 151, 111)
+    private val ANDROID1_DELETED_COLOR = Color.rgb(177, 99, 92)
     private val android1Typeface: Typeface by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
             val regular = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSans.ttf")
@@ -493,7 +495,7 @@ class MainActivity : Activity() {
         else -> Color.rgb(170, 186, 255)
     }
     private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(20, 25, 12) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(28, 31, 33) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
@@ -1444,7 +1446,7 @@ class MainActivity : Activity() {
         completionNotice.removeAllViews()
         val brand = ImageView(this).apply {
             setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-            imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else codexBrandAccent())
+            imageTintList = ColorStateList.valueOf(brandIconTint(engine))
             contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
         }
         completionNotice.addView(brand, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
@@ -1456,7 +1458,7 @@ class MainActivity : Activity() {
         completionNotice.addView(ImageView(this).apply {
             val activeClaude = currentMode == "claude-code"
             setImageResource(if (activeClaude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-            imageTintList = ColorStateList.valueOf(if (activeClaude) ACCENT_WARM else codexBrandAccent())
+            imageTintList = ColorStateList.valueOf(brandIconTint(if (activeClaude) "claude-code" else "codex"))
             contentDescription = "当前${if (activeClaude) "Claude Code" else "Codex"}模式"
         }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(3) })
         completionNotice.addView(iconButton("close", "关闭完成提示") { dismissCompletionNotice() }, LinearLayout.LayoutParams(dp(30), dp(30)))
@@ -1501,7 +1503,7 @@ class MainActivity : Activity() {
             val claude = engine == "claude-code"
             modeSwitchNotice.addView(ImageView(this).apply {
                 setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
+                imageTintList = ColorStateList.valueOf(brandIconTint(if (claude) "claude-code" else "codex"))
                 contentDescription = if (claude) "Claude Code" else "Codex"
             }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { if (index == 0) rightMargin = dp(4) else leftMargin = dp(4) })
             if (index == 0) {
@@ -1705,13 +1707,13 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
-            "lollipop" -> Color.rgb(74, 91, 48)
+            "lollipop" -> Color.rgb(76, 70, 58)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
-            "lollipop" -> Color.rgb(110, 128, 76)
+            "lollipop" -> Color.rgb(105, 94, 75)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
@@ -1721,7 +1723,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
-        "lollipop" -> Color.rgb(164, 204, 57)
+        "lollipop" -> Color.rgb(177, 139, 82)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
@@ -1729,7 +1731,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
-        "lollipop" -> .22f
+        "lollipop" -> .14f
         "light" -> .30f
         "warm", "custom" -> .29f
         else -> .38f
@@ -2298,7 +2300,7 @@ class MainActivity : Activity() {
                     // A conversation row is a chat destination, not another copy of the model logo.
                     // Branded marks remain in the mode switch and cross-mode completion notices.
                     setImageResource(iconResource("chat"))
-                    imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else codexBrandAccent())
+                    imageTintList = ColorStateList.valueOf(brandIconTint(engine))
                     contentDescription = if (engine == "claude-code") "Claude Code 对话" else "Codex 对话"
                 } else {
                     setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
@@ -3777,13 +3779,14 @@ class MainActivity : Activity() {
         }
         line.addView(ImageView(this).apply {
             setImageResource(fileDisplayIconResource(entry.path))
+            if (themeName == "lollipop") imageTintList = ColorStateList.valueOf(android1FileIconTint(fileIconResource(entry.path)))
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
         line.addView(label("${if (compact) "" else "已更改 "}${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         return line
     }
 
@@ -3864,7 +3867,11 @@ class MainActivity : Activity() {
                 "failed" -> ERROR
                 "running" -> if (themeName == "lollipop") LOLLIPOP_PRIMARY else ACCENT
                 "stopped" -> WARNING
-                else -> if (lightTheme) Color.rgb(52, 132, 75) else Color.rgb(119, 174, 132)
+                else -> when {
+                    themeName == "lollipop" -> ANDROID1_ADDED_COLOR
+                    lightTheme -> Color.rgb(52, 132, 75)
+                    else -> Color.rgb(119, 174, 132)
+                }
             }
             val statusIcon: View = if (themeName == "lollipop" && status == "running") {
                 ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
@@ -4266,8 +4273,8 @@ class MainActivity : Activity() {
             contentDescription = "正在编辑的文件"
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(6) })
         heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (additions > 0) heading.addView(label("+$additions", 10, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         val chevron = ImageView(this).apply {
             imageTintList = ColorStateList.valueOf(MUTED)
             setImageResource(iconResource(if (expandedComposerFileChangesTurnId == turnId) "chevron_up" else "chevron_down"))
@@ -4302,8 +4309,8 @@ class MainActivity : Activity() {
         val controlSurface = if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(56, 56, 59)
         val controlBorder = if (lightTheme) Color.rgb(226, 226, 229) else Color.rgb(75, 75, 80)
         val copyColor = if (lightTheme) Color.rgb(88, 88, 94) else Color.rgb(199, 199, 203)
-        val addedColor = if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
-        val deletedColor = if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
+        val addedColor = if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
+        val deletedColor = if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(1), dp(1), dp(1), dp(1))
@@ -5551,7 +5558,7 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 48 else 40), dp(if (themeName == "lollipop") 48 else 40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
         titleCopy.addView(label("设置", if (themeName == "lollipop") 20 else 17, if (themeName == "lollipop") Color.WHITE else TEXT, true), widthWrap())
-        titleCopy.addView(label("偏好保存在本机", if (themeName == "lollipop") 12 else 10, if (themeName == "lollipop") Color.rgb(205, 222, 168) else MUTED), widthWrap())
+        titleCopy.addView(label("偏好保存在本机", if (themeName == "lollipop") 12 else 10, if (themeName == "lollipop") Color.rgb(205, 211, 209) else MUTED), widthWrap())
         header.addView(titleCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
         layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 56)))
 
@@ -6494,9 +6501,13 @@ class MainActivity : Activity() {
                     row.addView(View(this), LinearLayout.LayoutParams(dp(17), dp(1)))
                 }
                 row.addView(ImageView(this).apply {
-                    setImageResource(if (isDirectory) iconResource("folder") else fileDisplayIconResource(entry.optString("name")))
-                    imageTintList = if (isDirectory) ColorStateList.valueOf(if (themeName == "lollipop") iconTint("folder") else ACCENT)
-                        else null
+                    val fileIcon = fileDisplayIconResource(entry.optString("name"))
+                    setImageResource(if (isDirectory) iconResource("folder") else fileIcon)
+                    imageTintList = when {
+                        isDirectory -> ColorStateList.valueOf(if (themeName == "lollipop") iconTint("folder") else ACCENT)
+                        themeName == "lollipop" -> ColorStateList.valueOf(android1FileIconTint(fileIcon))
+                        else -> null
+                    }
                     contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
                 }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
                 row.addView(label(entry.optString("name"), 13, TEXT, translateUi = false).apply {
@@ -6913,7 +6924,7 @@ class MainActivity : Activity() {
             else -> "class|interface|struct|enum|function|fun|def|const|let|var|if|else|for|while|return|import|export|package|true|false|null|nil"
         }
         val keywordColor = if (lightTheme) Color.rgb(104, 73, 184) else Color.rgb(197, 154, 255)
-        val stringColor = if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
+        val stringColor = if (themeName == "lollipop") Color.rgb(139, 157, 125) else if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
         val numberColor = if (lightTheme) Color.rgb(176, 83, 27) else Color.rgb(244, 176, 112)
         val commentColor = if (lightTheme) Color.rgb(103, 112, 124) else Color.rgb(132, 145, 153)
         Regex("\\b(?:$keywordSet)\\b").findAll(value).forEach { match ->
@@ -6963,15 +6974,15 @@ class MainActivity : Activity() {
         }
         header.addView(ImageView(this).apply {
             setImageResource(fileDisplayIconResource(entry.path))
-            imageTintList = null
+            imageTintList = if (themeName == "lollipop") ColorStateList.valueOf(android1FileIconTint(fileIconResource(entry.path))) else null
             contentDescription = fileGlyph(entry.path)
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
         header.addView(label(entry.path.substringAfterLast('/'), if (themeName == "lollipop") 17 else 13, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, dp(34), 1f))
-        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
-        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
+        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
+        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
         header.addView(iconButton("close", "关闭修改预览") { dialog.dismiss() }.apply {
             if (themeName == "lollipop") {
                 imageTintList = ColorStateList.valueOf(ANDROID1_TITLE_TEXT)
@@ -7087,7 +7098,7 @@ class MainActivity : Activity() {
         }
         header.addView(ImageView(this).apply {
             setImageResource(fileDisplayIconResource(path))
-            imageTintList = null
+            imageTintList = if (themeName == "lollipop") ColorStateList.valueOf(android1FileIconTint(fileIconResource(path))) else null
             contentDescription = fileGlyph(path)
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
         header.addView(label(path.substringAfterLast('/'), if (themeName == "lollipop") 17 else 13, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(48), 1f))
@@ -7391,7 +7402,7 @@ class MainActivity : Activity() {
                     when (event.optString("type")) {
                         "ready" -> {
                             terminalReady = true
-                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
+                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
                         }
                         "error" -> {
                             terminalReady = false
@@ -7499,6 +7510,22 @@ class MainActivity : Activity() {
             extension in setOf("txt", "text", "log") -> R.drawable.file_icon_text
             else -> R.drawable.file_icon_default
         }
+    }
+
+    private fun android1FileIconTint(resource: Int): Int = when (resource) {
+        R.drawable.file_icon_js, R.drawable.file_icon_ts, R.drawable.file_icon_kotlin,
+        R.drawable.file_icon_java, R.drawable.file_icon_c, R.drawable.file_icon_cpp,
+        R.drawable.file_icon_go, R.drawable.file_icon_rust -> Color.rgb(111, 157, 197)
+        R.drawable.file_icon_json, R.drawable.file_icon_yaml, R.drawable.file_icon_toml,
+        R.drawable.file_icon_config, R.drawable.file_icon_gradle, R.drawable.file_icon_npm,
+        R.drawable.file_icon_pnpm -> Color.rgb(171, 132, 73)
+        R.drawable.file_icon_shell, R.drawable.file_icon_docker, R.drawable.file_icon_database -> Color.rgb(174, 125, 66)
+        R.drawable.file_icon_image -> Color.rgb(159, 119, 144)
+        R.drawable.file_icon_archive, R.drawable.file_icon_pdf -> Color.rgb(164, 76, 65)
+        R.drawable.file_icon_markdown, R.drawable.file_icon_text, R.drawable.file_icon_agents,
+        R.drawable.file_icon_git, R.drawable.file_icon_csv, R.drawable.file_icon_css,
+        R.drawable.file_icon_html, R.drawable.file_icon_xml -> Color.rgb(154, 171, 181)
+        else -> LOLLIPOP_TEXT_SECONDARY
     }
 
     private fun fileGlyph(name: String): String = when (fileIconResource(name)) {
@@ -8245,17 +8272,17 @@ class MainActivity : Activity() {
 
     private fun iconTint(icon: String): Int = when {
         icon == "codex" -> codexBrandAccent()
-        icon == "claude" -> ACCENT_WARM
+        icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
         themeName == "lollipop" -> when (icon) {
             "add", "arrow_up", "check", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
-            "delete", "stop" -> Color.rgb(211, 70, 58)
-            "folder", "folder_add", "pin" -> Color.rgb(225, 171, 57)
+            "delete", "stop" -> Color.rgb(164, 76, 65)
+            "folder", "folder_add", "pin" -> Color.rgb(171, 132, 73)
             "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
-            "image", "palette" -> Color.rgb(185, 123, 184)
+            "image", "palette" -> Color.rgb(159, 119, 144)
             "chat" -> Color.rgb(111, 157, 197)
-            "history" -> Color.rgb(166, 185, 198)
+            "history" -> Color.rgb(154, 171, 181)
             "notifications" -> LOLLIPOP_PRIMARY
-            "lock" -> Color.rgb(216, 151, 62)
+            "lock" -> Color.rgb(174, 125, 66)
             "terminal", "settings", "search", "more", "back", "close", "info" -> LOLLIPOP_TEXT_SECONDARY
             "menu" -> Color.rgb(66, 66, 66)
             else -> LOLLIPOP_TEXT_SECONDARY
@@ -8292,10 +8319,16 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun brandIconTint(engine: String): Int = when {
+        engine != "claude-code" -> codexBrandAccent()
+        themeName == "lollipop" -> Color.rgb(177, 112, 83)
+        else -> ACCENT_WARM
+    }
+
     private fun setBrandIcon(view: ImageView, engine: String) {
         val claude = engine == "claude-code"
         view.setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-        view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else if (themeName == "lollipop") ANDROID1_TITLE_TEXT else codexBrandAccent())
+        view.imageTintList = ColorStateList.valueOf(brandIconTint(engine))
     }
 
     private fun codexBrandAccent(): Int = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
@@ -8470,9 +8503,9 @@ class MainActivity : Activity() {
 
     private fun gingerbreadButtonBackground(accent: Boolean = false): GradientDrawable = GradientDrawable().apply {
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(if (accent) intArrayOf(Color.rgb(151, 204, 89), Color.rgb(112, 179, 43), Color.rgb(72, 132, 30))
+        setColors(if (accent) intArrayOf(Color.rgb(203, 178, 130), Color.rgb(177, 139, 82), Color.rgb(119, 91, 57))
             else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
-        setStroke(dp(1), if (accent) Color.rgb(181, 221, 130) else Color.rgb(112, 119, 119))
+        setStroke(dp(1), if (accent) Color.rgb(225, 207, 171) else Color.rgb(112, 119, 119))
         cornerRadius = dp(3).toFloat()
     }
 
@@ -8486,8 +8519,8 @@ class MainActivity : Activity() {
     private fun lollipopFabBackground(color: Int): Drawable = GradientDrawable().apply {
         shape = GradientDrawable.OVAL
         orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(151, 204, 89), color, Color.rgb(72, 132, 30)))
-        setStroke(dp(1), Color.rgb(181, 221, 130))
+        setColors(intArrayOf(Color.rgb(203, 178, 130), color, Color.rgb(119, 91, 57)))
+        setStroke(dp(1), Color.rgb(225, 207, 171))
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
