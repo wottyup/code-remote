@@ -256,10 +256,11 @@ private class ComposerGlassDrawable(
         canvas.drawRoundRect(rect, cornerRadius, cornerRadius, reflectionPaint)
         canvas.restoreToCount(checkpoint)
 
-        val inset = .5f
+        val strokeWidth = (cornerRadius / 18f).coerceAtLeast(1f)
+        val inset = strokeWidth / 2f
         borderPaint.color = borderColor
         borderPaint.alpha = drawableAlpha
-        borderPaint.strokeWidth = 1f
+        borderPaint.strokeWidth = strokeWidth
         borderPaint.colorFilter = colorFilter
         val borderRect = RectF(rect).apply { inset(inset, inset) }
         canvas.drawRoundRect(borderRect, cornerRadius - inset, cornerRadius - inset, borderPaint)
@@ -1535,9 +1536,9 @@ class MainActivity : Activity() {
     private fun composerGlassBackground(): Drawable {
         val fills = when (themeName) {
             "light" -> intArrayOf(
-                colorWithAlpha(Color.rgb(255, 255, 255), .92f),
-                colorWithAlpha(Color.rgb(248, 249, 251), .95f),
-                colorWithAlpha(Color.rgb(255, 255, 255), .97f),
+                Color.rgb(250, 251, 253),
+                Color.rgb(245, 247, 250),
+                Color.rgb(248, 249, 252),
             )
             "warm" -> intArrayOf(
                 colorWithAlpha(Color.rgb(255, 251, 245), .94f),
@@ -1561,8 +1562,8 @@ class MainActivity : Activity() {
         }
         val border = when (themeName) {
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
-            "warm" -> colorWithAlpha(Color.rgb(255, 255, 255), .62f)
-            "light" -> Color.argb(155, 255, 255, 255)
+            "warm" -> Color.rgb(213, 198, 179)
+            "light" -> Color.rgb(197, 205, 217)
             else -> Color.argb(48, 222, 229, 246)
         }
         return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
@@ -3163,6 +3164,7 @@ class MainActivity : Activity() {
         val renderedFileChangeTurns = mutableSetOf<String>()
         fun appendTurnSummary(turnId: String) {
             if (!renderedFileChangeTurns.add(turnId)) return
+            if (running && turnId == turns.optJSONObject(turns.length() - 1)?.optString("id")) return
             val entries = fileChangesForTurn(turnId, turnsById[turnId], thread)
             addFileChangeSummary(turnId, entries)
         }
@@ -3646,11 +3648,11 @@ class MainActivity : Activity() {
         return block
     }
 
-    private fun inlineFileChangeView(entry: FileChangeEntry): LinearLayout {
+    private fun inlineFileChangeView(entry: FileChangeEntry, compact: Boolean = false): LinearLayout {
         val line = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(5), dp(9), dp(5))
+            setPadding(dp(if (compact) 3 else 10), dp(if (compact) 4 else 5), dp(if (compact) 3 else 9), dp(if (compact) 4 else 5))
             setOnClickListener { showDiffPreview(entry) }
             contentDescription = "查看更改 ${entry.path}"
         }
@@ -3658,7 +3660,7 @@ class MainActivity : Activity() {
             setImageResource(fileIconResource(entry.path))
             imageTintList = null
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-        line.addView(label("已更改 ${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
+        line.addView(label("${if (compact) "" else "已更改 "}${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -4130,14 +4132,19 @@ class MainActivity : Activity() {
         composerFileChanges.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
         val details = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
         }
-        entries.forEach { entry -> details.addView(inlineFileChangeView(entry), LinearLayout.LayoutParams(MATCH, WRAP)) }
-        composerFileChanges.addView(details, LinearLayout.LayoutParams(MATCH, WRAP))
+        entries.forEach { entry -> details.addView(inlineFileChangeView(entry, compact = true), LinearLayout.LayoutParams(MATCH, WRAP)) }
+        val detailsScroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = entries.size > 3
+            overScrollMode = View.OVER_SCROLL_NEVER
+            visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
+            addView(details, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
+        composerFileChanges.addView(detailsScroll, LinearLayout.LayoutParams(MATCH, if (entries.size > 3) dp(110) else WRAP))
         heading.setOnClickListener {
             expandedComposerFileChangesTurnId = if (expandedComposerFileChangesTurnId == turnId) null else turnId
-            details.visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
-            chevron.setImageResource(if (details.visibility == View.VISIBLE) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            detailsScroll.visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
+            chevron.setImageResource(if (detailsScroll.visibility == View.VISIBLE) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
         }
     }
 
