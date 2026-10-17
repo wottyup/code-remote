@@ -42,6 +42,7 @@ import android.os.Looper
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
+import android.text.Selection
 import android.text.Spannable
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
@@ -52,6 +53,7 @@ import android.text.TextDirectionHeuristics
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
+import android.text.style.URLSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -80,7 +82,14 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.util.LruCache
+import android.util.Patterns
 import android.text.util.Linkify
+import android.webkit.SslErrorHandler
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.core.MarkwonTheme
@@ -586,6 +595,10 @@ class MainActivity : Activity() {
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
+    private var webPreviewPopup: PopupWindow? = null
+    private var webPreviewView: WebView? = null
+    private var webPreviewRelayout: (() -> Unit)? = null
+    private var webPreviewCleanup: (() -> Unit)? = null
     private var sidebarHost: EdgeDrawerHost? = null
     private var sidebarLongPressActive = false
     private var sidebarTouchActive = false
@@ -830,6 +843,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        webPreviewView?.onResume()
         foreground = true
         activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
@@ -864,6 +878,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        webPreviewView?.onPause()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
         persistCurrentDraft()
@@ -890,6 +905,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        closeWebPreview()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
         composerGlowAnimator?.cancel()
@@ -910,6 +926,8 @@ class MainActivity : Activity() {
             settingsDialog?.isShowing == true -> settingsDialog?.dismiss()
             preferencePopup?.isShowing == true -> preferencePopup?.dismiss()
             settingsOverlay != null -> closeSettings(animated = true)
+            webPreviewPopup?.isShowing == true && webPreviewView?.canGoBack() == true -> webPreviewView?.goBack()
+            webPreviewPopup?.isShowing == true -> closeWebPreview()
             terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
                 val input = terminalDraftInput
@@ -1021,6 +1039,7 @@ class MainActivity : Activity() {
     private fun activeThreadStorageKey(mode: String): String = connectionScopedKey("$KEY_ACTIVE_THREAD_PREFIX$mode")
 
     private fun showConnectionPage(message: String? = null) {
+        closeWebPreview()
         root = FrameLayout(this)
         installThemeBackground(root)
         val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
@@ -1341,9 +1360,11 @@ class MainActivity : Activity() {
             systemInsetBottom,
         )
         positionTerminalOverlay()
+        webPreviewRelayout?.invoke()
     }
 
     private fun renderHome() {
+        closeWebPreview()
         root = ChatRootLayout(this).apply { isFocusableInTouchMode = true }
         installThemeBackground(root)
         page = LinearLayout(this).apply {
@@ -3815,15 +3836,360 @@ class MainActivity : Activity() {
     private fun enableChatLinkClicks(textView: TextView) {
         textView.linksClickable = true
         textView.movementMethod = object : LinkMovementMethod() {
+            private var pressedUrl: URLSpan? = null
+            private var touchStartX = 0f
+            private var touchStartY = 0f
+
             override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
-                return try {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartX = event.x
+                        touchStartY = event.y
+                        pressedUrl = urlSpanAt(widget, buffer, event)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val candidate = urlSpanAt(widget, buffer, event)
+                        val stayedOnLink = pressedUrl != null && candidate?.url == pressedUrl?.url
+                        val touchSlop = ViewConfiguration.get(widget.context).scaledTouchSlop
+                        val stayedInPlace = kotlin.math.abs(event.x - touchStartX) <= touchSlop &&
+                            kotlin.math.abs(event.y - touchStartY) <= touchSlop
+                        if (stayedOnLink && stayedInPlace) {
+                            val webUrl = normalizeWebUrl(candidate?.url.orEmpty())
+                            if (webUrl != null) {
+                                pressedUrl = null
+                                Selection.removeSelection(buffer)
+                                openWebPreview(webUrl)
+                                return true
+                            }
+                        }
+                    }
+                }
+                val handled = try {
                     super.onTouchEvent(widget, buffer, event)
                 } catch (_: ActivityNotFoundException) {
                     Toast.makeText(this@MainActivity, "没有可用的应用打开此链接", Toast.LENGTH_SHORT).show()
                     true
                 }
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) pressedUrl = null
+                return handled
             }
         }
+    }
+
+    private fun urlSpanAt(textView: TextView, text: Spannable, event: MotionEvent): URLSpan? {
+        if (text.isEmpty()) return null
+        val layout = textView.layout ?: return null
+        val x = event.x - textView.totalPaddingLeft + textView.scrollX
+        val y = event.y - textView.totalPaddingTop + textView.scrollY
+        if (x < 0 || y < 0 || y > layout.height) return null
+        val line = layout.getLineForVertical(y.toInt())
+        val offset = layout.getOffsetForHorizontal(line, x).coerceIn(0, text.length - 1)
+        return text.getSpans(offset, offset + 1, URLSpan::class.java)
+            .firstOrNull { offset >= text.getSpanStart(it) && offset < text.getSpanEnd(it) }
+    }
+
+    private fun normalizeWebUrl(value: String): String? {
+        val address = value.trim()
+        if (address.isBlank()) return null
+        if (address.startsWith("//")) return "https:$address"
+        val scheme = runCatching { Uri.parse(address).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+        return when (scheme) {
+            "http", "https" -> address
+            null -> if (Patterns.WEB_URL.matcher(address).matches()) "https://$address" else null
+            else -> null
+        }
+    }
+
+    private data class WebPreviewFrame(
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+        val availableWidth: Int,
+        val availableHeight: Int,
+    )
+
+    private fun webPreviewFrame(): WebPreviewFrame {
+        val left = systemInsetLeft + dp(6)
+        val right = (root.width - systemInsetRight - dp(6)).coerceAtLeast(left + dp(160))
+        val availableWidth = (right - left).coerceAtLeast(dp(160))
+        val rootLocation = IntArray(2)
+        val composerLocation = IntArray(2)
+        root.getLocationOnScreen(rootLocation)
+        composerDock.getLocationOnScreen(composerLocation)
+        val composerTop = composerLocation[1] - rootLocation[1]
+        val top = systemInsetTop + dp(8)
+        val bottom = (composerTop - dp(8)).coerceAtLeast(top + dp(160))
+        val availableHeight = (bottom - top).coerceAtLeast(dp(160))
+        val widthRatio = prefs.getFloat(KEY_WEB_PREVIEW_WIDTH_RATIO, .94f).coerceIn(.45f, 1f)
+        val heightRatio = prefs.getFloat(KEY_WEB_PREVIEW_HEIGHT_RATIO, .76f).coerceIn(.4f, 1f)
+        val width = (availableWidth * widthRatio).roundToInt().coerceIn(dp(240).coerceAtMost(availableWidth), availableWidth)
+        val height = (availableHeight * heightRatio).roundToInt().coerceIn(dp(220).coerceAtMost(availableHeight), availableHeight)
+        val x = left + (availableWidth - width) / 2
+        val y = top + (availableHeight - height) / 2
+        return WebPreviewFrame(x, y, width, height, availableWidth, availableHeight)
+    }
+
+    private fun openWebPreview(rawUrl: String) {
+        val url = normalizeWebUrl(rawUrl) ?: return openExternalChatLink(rawUrl)
+        if (webPreviewPopup?.isShowing == true) {
+            webPreviewView?.loadUrl(url)
+            return
+        }
+        if (!::root.isInitialized || !::composerDock.isInitialized || root.width <= 0) {
+            openExternalChatLink(url)
+            return
+        }
+
+        val focused = window.currentFocus
+        if (focused is EditText) {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(focused.windowToken, 0)
+        }
+        parkActivityInputFocus()
+
+        val webView = WebView(this).apply {
+            setBackgroundColor(Color.WHITE)
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
+        }
+        webPreviewView = webView
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+            clipToOutline = true
+        }
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(2), dp(5), dp(2))
+            background = if (themeName == "lollipop") lollipopActionBarBackground() else ColorDrawable(PANEL)
+        }
+        val addressView = label(url, 10, MUTED, translateUi = false).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setPadding(dp(9), 0, dp(9), 0)
+        }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            progressTintList = ColorStateList.valueOf(ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+            visibility = View.GONE
+        }
+        val backButton = iconButton("back", "网页后退") { if (webView.canGoBack()) webView.goBack() }
+        val forwardButton = iconButton("chevron_right", "网页前进") { if (webView.canGoForward()) webView.goForward() }
+        val refreshButton = iconButton("refresh", "刷新网页") { webView.reload() }
+        val externalButton = iconButton("open", "用浏览器打开") {
+            openExternalChatLink(webView.url ?: url)
+        }
+        val closeButton = iconButton("close", "关闭网页预览") { closeWebPreview() }
+        listOf(backButton, forwardButton, refreshButton, externalButton, closeButton).forEach { button ->
+            button.minimumWidth = dp(34)
+            button.minimumHeight = dp(36)
+            toolbar.addView(button, LinearLayout.LayoutParams(dp(36), dp(38)))
+        }
+        toolbar.addView(addressView, LinearLayout.LayoutParams(0, dp(36), 1f))
+        panel.addView(toolbar, LinearLayout.LayoutParams(MATCH, dp(42)))
+        panel.addView(progress, LinearLayout.LayoutParams(MATCH, dp(2)))
+        panel.addView(webView, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        val resizeFooter = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(38), dp(4), Gravity.CENTER))
+        }
+        panel.addView(resizeFooter, LinearLayout.LayoutParams(MATCH, dp(26)))
+        val popupContent = FrameLayout(this).apply {
+            addView(panel, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        val widthResizeHandle = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(4), dp(38), Gravity.CENTER))
+        }
+        popupContent.addView(widthResizeHandle, FrameLayout.LayoutParams(dp(24), dp(76), Gravity.END or Gravity.CENTER_VERTICAL))
+
+        val initialFrame = webPreviewFrame()
+        val popup = PopupWindow(popupContent, initialFrame.width, initialFrame.height, false).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isTouchable = true
+            isFocusable = false
+            isOutsideTouchable = false
+            isClippingEnabled = true
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+        }
+        webPreviewPopup = popup
+
+        val updateHistoryButtons = {
+            backButton.isEnabled = webView.canGoBack()
+            backButton.alpha = if (backButton.isEnabled) 1f else .45f
+            forwardButton.isEnabled = webView.canGoForward()
+            forwardButton.alpha = if (forwardButton.isEnabled) 1f else .45f
+        }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                progress.progress = newProgress
+                progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+            }
+        }
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                routeWebPreviewNavigation(request.url)
+
+            override fun onPageStarted(view: WebView, address: String?, favicon: Bitmap?) {
+                address?.let { addressView.text = it }
+                progress.progress = 0
+                progress.visibility = View.VISIBLE
+                updateHistoryButtons()
+            }
+
+            override fun onPageFinished(view: WebView, address: String?) {
+                addressView.text = view.url ?: address.orEmpty()
+                updateHistoryButtons()
+            }
+
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
+                handler.cancel()
+                showToast("网页证书验证失败，已停止加载")
+            }
+        }
+
+        var popupX = initialFrame.x
+        var popupY = initialFrame.y
+        fun applySavedFrame(anchorX: Int? = null, anchorY: Int? = null) {
+            if (!popup.isShowing) return
+            val frame = webPreviewFrame()
+            val rootLocation = IntArray(2)
+            val composerLocation = IntArray(2)
+            root.getLocationOnScreen(rootLocation)
+            composerDock.getLocationOnScreen(composerLocation)
+            val composerTop = composerLocation[1] - rootLocation[1]
+            val minX = systemInsetLeft + dp(6)
+            val maxX = (root.width - systemInsetRight - dp(6) - frame.width).coerceAtLeast(minX)
+            val minY = systemInsetTop + dp(8)
+            val maxY = (composerTop - dp(8) - frame.height).coerceAtLeast(minY)
+            popupX = (anchorX ?: frame.x).coerceIn(minX, maxX)
+            popupY = (anchorY ?: frame.y).coerceIn(minY, maxY)
+            popup.update(popupX, popupY, frame.width, frame.height)
+        }
+        webPreviewRelayout = { applySavedFrame() }
+
+        fun resizeHandler(resizeWidth: Boolean, resizeHeight: Boolean): View.OnTouchListener {
+            var startX = 0f
+            var startY = 0f
+            var startWidth = 0
+            var startHeight = 0
+            var startPopupX = 0
+            var startPopupY = 0
+            return View.OnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.rawX
+                        startY = event.rawY
+                        startWidth = popup.width
+                        startHeight = popup.height
+                        startPopupX = popupX
+                        startPopupY = popupY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val available = webPreviewFrame()
+                        val width = if (resizeWidth) {
+                            (startWidth + (event.rawX - startX).roundToInt())
+                                .coerceIn(dp(240).coerceAtMost(available.availableWidth), available.availableWidth)
+                        } else startWidth
+                        val height = if (resizeHeight) {
+                            (startHeight + (event.rawY - startY).roundToInt())
+                                .coerceIn(dp(220).coerceAtMost(available.availableHeight), available.availableHeight)
+                        } else startHeight
+                        val editor = prefs.edit()
+                        if (resizeWidth) editor.putFloat(KEY_WEB_PREVIEW_WIDTH_RATIO, width.toFloat() / available.availableWidth)
+                        if (resizeHeight) editor.putFloat(KEY_WEB_PREVIEW_HEIGHT_RATIO, height.toFloat() / available.availableHeight)
+                        editor.apply()
+                        applySavedFrame(
+                            anchorX = if (resizeWidth) startPopupX else popupX,
+                            anchorY = if (resizeHeight) startPopupY else popupY,
+                        )
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        view.performClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        widthResizeHandle.setOnTouchListener(resizeHandler(resizeWidth = true, resizeHeight = false))
+        resizeFooter.setOnTouchListener(resizeHandler(resizeWidth = false, resizeHeight = true))
+
+        var cleanedUp = false
+        val rootLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applySavedFrame() }
+        root.addOnLayoutChangeListener(rootLayoutListener)
+        val cleanup = {
+            if (!cleanedUp) {
+                cleanedUp = true
+                root.removeOnLayoutChangeListener(rootLayoutListener)
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.removeAllViews()
+                webView.destroy()
+                if (webPreviewView === webView) webPreviewView = null
+                if (webPreviewPopup === popup) webPreviewPopup = null
+                webPreviewRelayout = null
+                webPreviewCleanup = null
+            }
+        }
+        webPreviewCleanup = cleanup
+        popup.setOnDismissListener { cleanup() }
+
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, initialFrame.x, initialFrame.y)
+        backButton.isEnabled = false
+        backButton.alpha = .45f
+        forwardButton.isEnabled = false
+        forwardButton.alpha = .45f
+        webView.loadUrl(url)
+    }
+
+    private fun routeWebPreviewNavigation(uri: Uri): Boolean {
+        return when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "http", "https" -> false
+            "javascript", "file", "content", "data", "blob", "about" -> true
+            else -> {
+                openExternalChatLink(uri.toString())
+                true
+            }
+        }
+    }
+
+    private fun openExternalChatLink(value: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(value)))
+        } catch (_: ActivityNotFoundException) {
+            showToast("没有可用的应用打开此链接")
+        }
+    }
+
+    private fun closeWebPreview() {
+        val popup = webPreviewPopup
+        if (popup?.isShowing == true) popup.dismiss() else webPreviewCleanup?.invoke()
     }
 
     private val assistantMarkdown: Markwon
@@ -8903,6 +9269,8 @@ class MainActivity : Activity() {
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
         private const val KEY_APP_LANGUAGE = "native_app_language"
         private const val KEY_WORKSPACE_EXPLORER_ROOT = "native_workspace_explorer_root"
+        private const val KEY_WEB_PREVIEW_WIDTH_RATIO = "native_web_preview_width_ratio"
+        private const val KEY_WEB_PREVIEW_HEIGHT_RATIO = "native_web_preview_height_ratio"
         private const val TAG_INSET_CONTENT = "inset_content"
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
