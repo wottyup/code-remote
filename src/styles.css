@@ -2556,3 +2556,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .remote-chat__title strong { color: #000080; }
 .remote-shell--theme-retro .message-composer { border: 2px inset #c0c0c0; }
 .remote-shell--theme-retro :is(button, input, textarea, select):focus-visible { outline: 1px dotted #000080; outline-offset: 1px; }
+.remote-shell--theme-retro .thread-context-menu:not(.workspace-file-context-menu) button { color: #000; opacity: 1; }
+.remote-shell--theme-retro .thread-context-menu:not(.workspace-file-context-menu) button:hover:not(:disabled) { color: #000; }
+.remote-shell--theme-retro .thread-context-menu:not(.workspace-file-context-menu) button.thread-context-menu__danger { color: #000; }
+.remote-shell--theme-retro .remote-chat__header::after { display: none; }
+.remote-shell--theme-retro .workspace-explorer__header-actions .icon-button { color: #fff; }
+
+@media (min-width: 701px) {
+  .remote-shell--theme-retro .remote-chat__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .remote-shell--theme-retro .remote-chat__title-wrap { flex: 1 1 auto; min-width: 0; }
+  .remote-shell--theme-retro .remote-chat__controls { display: flex; flex: 0 0 auto; align-items: center; justify-content: flex-end; gap: 10px; margin: 0 0 0 auto; white-space: nowrap; }
+}
