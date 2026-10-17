@@ -49,6 +49,7 @@ import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, t
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
+import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -3650,6 +3651,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
+  const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
+  const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
@@ -3669,10 +3673,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
   const [threadRenameError, setThreadRenameError] = useState<string | null>(null)
   const [threadRenameSaving, setThreadRenameSaving] = useState(false)
-  const [threadDeleteTarget, setThreadDeleteTarget] = useState<CodexThread | null>(null)
+  const [threadDeleteTargets, setThreadDeleteTargets] = useState<CodexThread[] | null>(null)
   const [threadDeleteError, setThreadDeleteError] = useState<string | null>(null)
   const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
+  const [threadDeleteProgress, setThreadDeleteProgress] = useState(0)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+
+  useEffect(() => {
+    setSidebarSelectionMode(false)
+    setSelectedSidebarThreadIds(new Set())
+  }, [isClaudeCodeThread])
 
   useEffect(() => {
     let current = true
@@ -3697,6 +3707,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setWorkspaceOpen(false)
   }, [])
   const openSidebarPanel = useCallback(() => {
+    const focused = document.activeElement
+    if (isMobileLayout() && focused instanceof HTMLTextAreaElement && focused.closest('.message-composer')) focused.blur()
     setWorkspaceOpen(false)
     setSidebarOpen(true)
   }, [])
@@ -3831,47 +3843,77 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function startThreadDelete(thread: CodexThread) {
     setThreadContextMenu(null)
-    setThreadDeleteTarget(thread)
+    setThreadDeleteTargets([thread])
     setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
   }
 
   function closeThreadDelete() {
     if (threadDeleteSaving) return
-    setThreadDeleteTarget(null)
+    setThreadDeleteTargets(null)
     setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
+
+  function applyDeletedThread(thread: CodexThread, pinnedIds: string[]) {
+    const deletedPaneIndex = paneIndexForThread(thread.id)
+    if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex) {
+      setOpenPaneIndexes((current) => current.length > 1 ? current.filter((index) => index !== deletedPaneIndex) : current)
+    }
+    for (const remote of remotes) remote.removeDeletedThread(thread.id)
+    setPinnedThreadIds(new Set(pinnedIds))
+    setCompletionToast((current) => current?.threadId === thread.id ? null : current)
+    setThreadComposerPreferences((current) => {
+      if (!(thread.id in current)) return current
+      const next = { ...current }
+      delete next[thread.id]
+      return next
+    })
+    const draftScope = composerDraftScopeForThread(thread.id)
+    saveComposerDraft(draftScope, '')
+    forgetComposerImageDraftTarget(draftScope)
+    void saveComposerImageDraft(draftScope, []).catch(() => undefined)
+    setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
   }
 
   async function submitThreadDelete(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!threadDeleteTarget || threadDeleteSaving) return
-    const thread = threadDeleteTarget
-    const deletedPaneIndex = paneIndexForThread(thread.id)
+    if (!threadDeleteTargets?.length || threadDeleteSaving) return
+    const targets = threadDeleteTargets
+    const isBatch = sidebarSelectionMode
     setThreadDeleteSaving(true)
     setThreadDeleteError(null)
-    try {
-      const result = await codexRemoteClient.deleteThread(token, thread.id)
-      if (deletedPaneIndex !== undefined && deletedPaneIndex !== selectedPaneIndex && openPaneIndexes.length > 1) closePane(deletedPaneIndex)
-      for (const remote of remotes) remote.removeDeletedThread(thread.id)
-      setPinnedThreadIds(new Set(result.thread_ids))
-      setCompletionToast((current) => current?.threadId === thread.id ? null : current)
-      setThreadComposerPreferences((current) => {
-        if (!(thread.id in current)) return current
-        const next = { ...current }
-        delete next[thread.id]
-        return next
-      })
-      const draftScope = composerDraftScopeForThread(thread.id)
-      saveComposerDraft(draftScope, '')
-      forgetComposerImageDraftTarget(draftScope)
-      void saveComposerImageDraft(draftScope, []).catch(() => undefined)
-      setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
-      setThreadDeleteTarget(null)
-      showPaneNotice(`已删除“${titleOf(thread)}”`)
-    } catch (reason) {
-      setThreadDeleteError(reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。')
-    } finally {
-      setThreadDeleteSaving(false)
+    setThreadDeleteProgress(0)
+    const failed: CodexThread[] = []
+    let firstError = ''
+    for (const thread of targets) {
+      let pinnedIds: string[]
+      try {
+        const result = await codexRemoteClient.deleteThread(token, thread.id)
+        pinnedIds = result.thread_ids
+      } catch (reason) {
+        failed.push(thread)
+        if (!firstError) firstError = reason instanceof Error ? reason.message : '删除聊天失败，请稍后重试。'
+        setThreadDeleteProgress((count) => count + 1)
+        continue
+      }
+      // The server has already deleted this thread; local cleanup must not turn it into a retry target.
+      try { applyDeletedThread(thread, pinnedIds) } catch (reason) { console.error('Failed to clean up deleted thread locally', reason) }
+      setThreadDeleteProgress((count) => count + 1)
     }
+    const deletedCount = targets.length - failed.length
+    if (isBatch) {
+      setSelectedSidebarThreadIds(new Set(failed.map((thread) => thread.id)))
+      if (failed.length === 0) setSidebarSelectionMode(false)
+    }
+    if (failed.length > 0) {
+      setThreadDeleteTargets(failed)
+      setThreadDeleteError(isBatch ? `已删除 ${deletedCount} 个，${failed.length} 个失败：${firstError}` : firstError)
+    } else {
+      setThreadDeleteTargets(null)
+      showPaneNotice(isBatch ? `已删除 ${deletedCount} 个聊天` : `已删除“${titleOf(targets[0])}”`)
+    }
+    setThreadDeleteSaving(false)
   }
 
   function applyPendingPanelDragStyles() {
@@ -3925,7 +3967,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!touch) return
     const globalOverlayOpen = settingsOpen
       || Boolean(threadRenameTarget)
-      || Boolean(threadDeleteTarget)
+      || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
       || workspacePreviewModeRef.current === 'mobile'
     if (globalOverlayOpen) {
@@ -3956,11 +3998,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       : startedOnInteractiveSurface && !startedOnBackdrop
         ? null
         : beginMobilePanelGesture(touch.clientX, touch.clientY, window.innerWidth, sidebarOpen, workspaceOpen)
+    const sidebarPanelWidth = sidebarPanel.current?.getBoundingClientRect().width || Math.min(window.innerWidth * 0.78, 320)
     sidebarTouchStart.current = start
     sidebarDrag.current = start?.panel === 'sidebar'
       ? {
-        panelWidth: Math.min(window.innerWidth * 0.67, 256),
-        offset: sidebarOpen ? 0 : -Math.min(window.innerWidth * 0.67, 256) * 1.05,
+        panelWidth: sidebarPanelWidth,
+        offset: sidebarOpen ? 0 : -sidebarPanelWidth * 1.05,
         active: false,
       }
       : null
@@ -4057,7 +4100,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (action === 'close-global') {
       if (settingsOpen) closeSettingsPanel()
       else if (threadRenameTarget) closeThreadRename()
-      else if (threadDeleteTarget) closeThreadDelete()
+      else if (threadDeleteTargets) closeThreadDelete()
       else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
       else if (threadContextMenu) setThreadContextMenu(null)
     } else if (action === 'open-sidebar') openSidebarPanel()
@@ -4231,7 +4274,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [threadRenameTarget, threadRenameSaving])
 
   useEffect(() => {
-    if (!threadDeleteTarget) return
+    if (!threadDeleteTargets) return
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       event.preventDefault()
@@ -4239,7 +4282,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', closeOnEscape)
     return () => document.removeEventListener('keydown', closeOnEscape)
-  }, [threadDeleteTarget, threadDeleteSaving])
+  }, [threadDeleteTargets, threadDeleteSaving])
 
   useLayoutEffect(() => {
     const handleBack = () => {
@@ -4251,7 +4294,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         closeThreadRename()
         return true
       }
-      if (threadDeleteTarget) {
+      if (threadDeleteTargets) {
         closeThreadDelete()
         return true
       }
@@ -4278,12 +4321,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTarget, threadRenameTarget, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
-      if (threadRenameTarget || threadDeleteTarget) return
+      if (threadRenameTarget || threadDeleteTargets) return
       if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
         workspacePreviewCloseRef.current?.()
@@ -4295,7 +4338,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', interruptOnEscape)
     return () => document.removeEventListener('keydown', interruptOnEscape)
-  }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTarget, threadRenameTarget])
+  }, [activeRemote.isRunning, activeRemote.interrupt, threadDeleteTargets, threadRenameTarget])
 
   useEffect(() => {
     if (isClaudeCodeThread || availableModels.length === 0) return
@@ -4827,7 +4870,55 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
       .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
     : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
+  const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+  const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
+
+  function toggleSidebarSelectionMode() {
+    if (sidebarSelectionBusy) return
+    setSidebarSelectionMode((current) => !current)
+    setSelectedSidebarThreadIds(new Set())
+    setThreadContextMenu(null)
+    clearThreadLongPress()
+  }
+
+  function toggleSidebarThreadSelection(threadId: string) {
+    if (sidebarSelectionBusy) return
+    setSelectedSidebarThreadIds((current) => {
+      const next = new Set(current)
+      if (next.has(threadId)) next.delete(threadId)
+      else next.add(threadId)
+      return next
+    })
+  }
+
+  async function pinSelectedSidebarThreads() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    const selected = selectedSidebarThreads
+    setSidebarSelectionBusy(true)
+    const failedIds = new Set<string>()
+    let latestPinnedIds: string[] | null = null
+    for (const thread of selected) {
+      try {
+        const result = await codexRemoteClient.setThreadPin(token, thread.id, true)
+        latestPinnedIds = result.thread_ids
+      } catch {
+        failedIds.add(thread.id)
+      }
+    }
+    if (latestPinnedIds) setPinnedThreadIds(new Set(latestPinnedIds))
+    setSelectedSidebarThreadIds(failedIds)
+    setSidebarSelectionMode(failedIds.size > 0)
+    setSidebarSelectionBusy(false)
+    showPaneNotice(failedIds.size > 0 ? `${failedIds.size} 个聊天置顶失败，仍保持选中` : `已置顶 ${selected.length} 个聊天`)
+  }
+
+  function startBulkThreadDelete() {
+    if (sidebarSelectionBusy || selectedSidebarThreads.length === 0) return
+    setThreadDeleteTargets(selectedSidebarThreads)
+    setThreadDeleteError(null)
+    setThreadDeleteProgress(0)
+  }
 
   return (
     <div
@@ -4852,7 +4943,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
-          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) setSidebarSearch(''); setSidebarCollapsed((collapsed) => !collapsed) }}>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
@@ -4865,29 +4956,44 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
         </div>
-        <div className="thread-list-heading"><span>{normalizedSidebarSearch ? '搜索结果' : sidebarCollapsed ? '对话记录' : isClaudeCodeThread ? '最近 Claude 对话' : '最近 Codex 对话'}</span><button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={14} /></button></div>
+        <div className="thread-list-heading">
+          <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
+          <div className="thread-list-heading__actions">
+            <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
+            <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
+          </div>
+        </div>
+        {sidebarSelectionMode ? <div className="sidebar-selection-bar">
+          <div className="sidebar-selection-bar__summary"><span>已选 {selectedSidebarThreads.length} 个聊天</span><button type="button" onClick={() => setSelectedSidebarThreadIds((current) => new Set([...current, ...visibleSidebarThreads.map((thread) => thread.id)]))} disabled={sidebarSelectionBusy || visibleSidebarThreads.length === 0}>全选</button><button type="button" onClick={() => setSelectedSidebarThreadIds(new Set())} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>清空</button></div>
+          <div className="sidebar-selection-bar__actions"><button type="button" onClick={() => void pinSelectedSidebarThreads()} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{sidebarSelectionBusy ? <LoaderCircle className="spin" size={14} /> : <Pin size={14} />}置顶</button><button className="sidebar-selection-bar__delete" type="button" onClick={startBulkThreadDelete} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}><Trash2 size={14} />删除</button></div>
+        </div> : null}
         <nav className="thread-list">
-          {visibleSidebarThreads.map((thread) => {
-            const paneIndex = paneIndexForThread(thread.id)
-            const isActive = paneIndex === selectedPaneIndex
-            const isPinned = pinnedThreadIds.has(thread.id)
-            return (
-              <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
-                const pending = threadLongPress.current
-                if (pending?.threadId === thread.id && pending.triggered) {
-                  event.preventDefault()
+          {groupedSidebarThreads.map((section) => <Fragment key={section.label}>
+            <div className="thread-list__section">{section.label}</div>
+            {section.threads.map((thread) => {
+              const paneIndex = paneIndexForThread(thread.id)
+              const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
+              const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
+              const isPinned = pinnedThreadIds.has(thread.id)
+              return (
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
+                  const pending = threadLongPress.current
+                  if (pending?.threadId === thread.id && pending.triggered) {
+                    event.preventDefault()
+                    clearThreadLongPress()
+                    return
+                  }
                   clearThreadLongPress()
-                  return
-                }
-                clearThreadLongPress()
-                void selectThread(thread)
-              }} onContextMenu={(event) => { event.preventDefault(); openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => handleThreadTouchStart(event, thread)} onTouchMove={handleThreadTouchMove} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff} aria-current={isActive ? 'page' : undefined}>
-                <span className="thread-row__icon"><EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} /></span>
-                <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
-                {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
-              </button>
-            )
-          })}
+                  if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
+                  else void selectThread(thread)
+                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
+                  <span className="thread-row__icon">{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />}</span>
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
+                  {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
+                </button>
+              )
+            })}
+          </Fragment>)}
           {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
           {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
@@ -4929,18 +5035,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
 
-      {threadDeleteTarget ? (
+      {threadDeleteTargets?.length ? (
         <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadDelete() }}>
           <form className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-delete-title" aria-describedby="thread-delete-description" onSubmit={(event) => { void submitThreadDelete(event) }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="thread-rename-dialog__heading">
-              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">删除聊天</h2></div>
-              <p id="thread-delete-description">这会永久删除聊天记录，删除后无法恢复。</p>
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">{sidebarSelectionMode ? '批量删除聊天' : '删除聊天'}</h2></div>
+              <p id="thread-delete-description">{sidebarSelectionMode ? `删除选中的 ${threadDeleteTargets.length} 个聊天？此操作无法撤销。` : '这会永久删除聊天记录，删除后无法恢复。'}</p>
             </div>
-            <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTarget)}>{titleOf(threadDeleteTarget)}</div>
+            {sidebarSelectionMode ? <ul className="thread-delete-dialog__list">{threadDeleteTargets.slice(0, 5).map((thread) => <li key={thread.id} title={titleOf(thread)}>{titleOf(thread)}</li>)}{threadDeleteTargets.length > 5 ? <li>另有 {threadDeleteTargets.length - 5} 个聊天</li> : null}</ul> : <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTargets[0])}>{titleOf(threadDeleteTargets[0])}</div>}
             {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{threadDeleteError}</p> : null}
             <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
               <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>取消</button>
-              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />删除中</> : <><Trash2 size={14} />确认删除</>}</button>
+              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />{sidebarSelectionMode ? `删除中 ${threadDeleteProgress}/${threadDeleteTargets.length}` : '删除中'}</> : <><Trash2 size={14} />{threadDeleteError ? '重试删除' : '确认删除'}</>}</button>
             </div>
           </form>
         </div>
