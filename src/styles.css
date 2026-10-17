@@ -2225,8 +2225,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro :is(.chat-message__images img, .composer-image) { border: 0; border-radius: 0; box-shadow: none; }
   .remote-shell--theme-retro .chat-message__table th,
   .remote-shell--theme-retro .chat-message__table td { padding: 1px 4px; border: 0; background: transparent; color: #000; }
-  .remote-shell--theme-retro .welcome-state { display: block; min-height: 0; margin: 0; padding: 0; text-align: left; }
-  .remote-shell--theme-retro .welcome-state h1 { margin: .67em 0; color: #000; font: bold 2em/normal "Times New Roman", Times, serif; letter-spacing: normal; text-align: left; }
+  .remote-shell--theme-retro .message-stream__content--welcome { display: flex; min-height: 100%; flex-direction: column; justify-content: center; gap: 0; }
+  .remote-shell--theme-retro .welcome-state { display: block; min-height: 0; margin: 0; padding: 0; text-align: center; }
+  .remote-shell--theme-retro .welcome-state h1 { margin: .67em 0; color: #000; font: bold 2em/normal "Times New Roman", Times, serif; letter-spacing: normal; text-align: center; }
   .remote-shell--theme-retro .welcome-state__cursor { display: none; }
   .remote-shell--theme-retro :is(.handoff-notice, .approval-card, .operation-log, .file-change-card, .message-document, .thread-completion-toast, .pane-limit-notice) { width: auto; max-width: none; margin: 1em 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #000; box-shadow: none; }
   .remote-shell--theme-retro :is(.handoff-notice, .approval-card, .operation-log, .file-change-card, .message-document, .thread-completion-toast, .pane-limit-notice) :is(strong, small, span, p, code) { color: #000; font-family: "Times New Roman", Times, serif; }

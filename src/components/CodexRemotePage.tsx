@@ -3501,7 +3501,7 @@ function RemoteChatPane({
       </header>
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
-        <div className="message-stream__content" ref={messageContent}>
+        <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}`} ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
