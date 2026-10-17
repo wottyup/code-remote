@@ -347,18 +347,20 @@ class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
     private val themeName: String get() = prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark"
     private val lightTheme get() = when (themeName) {
-        "light", "warm" -> true
+        "light", "warm", "oreo" -> true
         "custom" -> Color.luminance(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)) > .46f
         else -> false
     }
     private val DARK: Int get() = when (themeName) {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
+        "oreo" -> Color.rgb(250, 250, 250)
         "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
         "warm" -> Color.rgb(255, 250, 243)
+        "oreo" -> Color.WHITE
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
         else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
     }
@@ -368,50 +370,57 @@ class MainActivity : Activity() {
     }
     private val PANEL_INSET: Int get() = when (themeName) {
         "warm" -> Color.rgb(241, 231, 216)
+        "oreo" -> Color.rgb(245, 245, 245)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
         else -> if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
     }
     private val BORDER: Int get() = when (themeName) {
         "warm" -> Color.rgb(225, 211, 194)
+        "oreo" -> Color.rgb(224, 224, 224)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .3f)
         else -> if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
     }
     private val USER_BUBBLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(240, 226, 208)
+        "oreo" -> Color.rgb(227, 242, 253)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
         else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
     }
     private val TEXT: Int get() = when (themeName) {
         "warm" -> Color.rgb(66, 53, 40)
+        "oreo" -> Color.rgb(33, 33, 33)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
     }
     private val SUBTLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(109, 91, 71)
+        "oreo" -> Color.rgb(97, 97, 97)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .84f)
         else -> if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
     }
     private val MUTED: Int get() = when (themeName) {
         "warm" -> Color.rgb(139, 121, 100)
+        "oreo" -> Color.rgb(117, 117, 117)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .64f)
         else -> if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
     }
     private val ACCENT: Int get() = when {
         currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
+        themeName == "oreo" -> Color.rgb(25, 118, 210)
         themeName == "warm" -> Color.rgb(146, 114, 83)
         themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
-    private val CODEX_MODE_ACCENT: Int get() = if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "oreo") Color.rgb(33, 150, 243) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
     private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
     private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
-    private val CODEX_USER_MESSAGE_FILL = Color.rgb(159, 166, 203)
+    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "oreo") Color.rgb(187, 222, 251) else Color.rgb(159, 166, 203)
     private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
-    private val CODEX_USER_MESSAGE_TEXT = Color.rgb(24, 27, 37)
+    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "oreo") Color.rgb(13, 71, 161) else Color.rgb(24, 27, 37)
     private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
     private val ASSISTANT_NAME_ACCENT: Int get() = when {
         themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
@@ -1425,7 +1434,7 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(8), dp(11), dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(18).toFloat(), composerGlowOpacity())
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (themeName == "oreo") 8 else 18).toFloat(), composerGlowOpacity())
             background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
         }
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -1509,7 +1518,7 @@ class MainActivity : Activity() {
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+            background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             isClickable = true
             isFocusable = true
             setOnClickListener {
@@ -1542,6 +1551,10 @@ class MainActivity : Activity() {
 
     private fun composerGlassBackground(): Drawable {
         val fills = when (themeName) {
+            "oreo" -> intArrayOf(
+                Color.WHITE,
+                Color.rgb(250, 250, 250),
+            )
             "light" -> intArrayOf(
                 Color.rgb(250, 251, 253),
                 Color.rgb(245, 247, 250),
@@ -1563,20 +1576,23 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
+            "oreo" -> Color.rgb(227, 242, 253)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
+            "oreo" -> Color.rgb(189, 189, 189)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
             else -> Color.rgb(43, 46, 52)
         }
-        return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
+        return ComposerGlassDrawable(fills, highlight, border, dp(if (themeName == "oreo") 8 else 18).toFloat())
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
+        "oreo" -> Color.rgb(33, 150, 243)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
@@ -1584,6 +1600,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
+        "oreo" -> .24f
         "light" -> .30f
         "warm", "custom" -> .29f
         else -> .38f
@@ -1897,7 +1914,7 @@ class MainActivity : Activity() {
         val claudeMode = currentMode == "claude-code"
         val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
-        sidebarNewThreadButton.background = rounded(fill, dp(10))
+        sidebarNewThreadButton.background = rounded(fill, dp(if (themeName == "oreo") 4 else 10))
         sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
         sidebarNewThreadIcon.background = rounded(
             if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
@@ -3215,7 +3232,7 @@ class MainActivity : Activity() {
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
                     val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL
-                    background = rounded(bubbleColor, dp(12))
+                    background = rounded(bubbleColor, dp(if (themeName == "oreo") 6 else 12))
                 }
             }
             if (role == "assistant") {
@@ -3412,7 +3429,7 @@ class MainActivity : Activity() {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(7), dp(11), dp(7))
-            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(12))
+            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(if (themeName == "oreo") 6 else 12))
         }
         val text = messageText(item, "user")
         if (text.isNotBlank()) {
@@ -4600,7 +4617,7 @@ class MainActivity : Activity() {
             else -> "发送消息"
         })
         sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
-        sendButton.background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+        sendButton.background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
     private fun interruptTurn() {
@@ -5349,12 +5366,13 @@ class MainActivity : Activity() {
         settingsOverlay = overlay
         updateInsetAwareOverlays()
 
-        val settingsAccent = ASSISTANT_NAME_ACCENT
+        val settingsAccent = if (themeName == "oreo") CODEX_MODE_ACCENT else ASSISTANT_NAME_ACCENT
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(4), dp(12), dp(4))
-                background = rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
+                background = if (themeName == "oreo") rounded(PANEL, dp(4), BORDER, dp(1))
+                else rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
             }
             val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val expanded = title in expandedSettingsSections
@@ -5393,6 +5411,7 @@ class MainActivity : Activity() {
             Triple("light", "白色", "清爽明亮"),
             Triple("dark", "黑色", "低光阅读"),
             Triple("warm", "暖色", "柔和纸感"),
+            Triple("oreo", "Android 8", "Oreo 经典浅色界面"),
             Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
             val selected = themeName == theme
@@ -7913,7 +7932,7 @@ class MainActivity : Activity() {
         textSize = adjustedTextSize(14)
         setTag(R.id.base_text_size, 14f)
         setPadding(dp(12), dp(7), dp(12), dp(7))
-        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(9), BORDER, dp(1))
+        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (themeName == "oreo") 4 else 9), BORDER, dp(1))
     }
 
     private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
@@ -8034,9 +8053,9 @@ class MainActivity : Activity() {
         text = tr(value)
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
-        setTextColor(DARK)
+        setTextColor(if (themeName == "oreo") Color.WHITE else DARK)
         isAllCaps = false
-        background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
+        background = rounded(if (themeName == "oreo") CODEX_MODE_ACCENT else if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(if (themeName == "oreo") 4 else 9))
     }
 
     private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): GradientDrawable = GradientDrawable().apply {
