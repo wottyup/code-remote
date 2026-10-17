@@ -2606,6 +2606,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   font-family: "Times New Roman", Times, serif;
   font-size: inherit;
 }
+.remote-shell--theme-retro .workspace-file-preview__editor { font-size: calc(1em - 1px); }
 
 .remote-shell--theme-retro .workspace-file-preview__line--added {
   background: #d6edd8;
