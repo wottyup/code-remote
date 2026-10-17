@@ -581,7 +581,6 @@ class MainActivity : Activity() {
     private var liveActivityItem: JSONObject? = null
     private var liveActivityItemCompleted = false
     private var liveActivityTurnId: String? = null
-    private val collapsedInlineFileChangeIds = mutableSetOf<String>()
     private val activityTick = object : Runnable {
         override fun run() {
             if (!running || activeActivityTimer == null) return
@@ -3184,9 +3183,6 @@ class MainActivity : Activity() {
                     messageIndex++
                 }
                 addOperationLog(turnId, groupedOperations)
-                groupedOperations.filter { normalizedType(it.optString("type")) == "filechange" }.forEach { operation ->
-                    addInlineFileChange(turnId, operation)
-                }
                 if (messageIndex == messages.size || messages[messageIndex].second.optString("_turnId") != turnId) appendTurnSummary(turnId)
                 continue
             }
@@ -3545,12 +3541,6 @@ class MainActivity : Activity() {
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
                     pendingOperations.add(operation)
-                    if (normalizedType(operation.optString("type")) == "filechange") {
-                        flushOperations()
-                        fileChangeRecordView(turnId, operation)?.let { record ->
-                            container.addView(record, LinearLayout.LayoutParams(MATCH, WRAP))
-                        }
-                    }
                 }
             }
         }
@@ -3601,54 +3591,6 @@ class MainActivity : Activity() {
         liveActivityItem = null
         liveActivityItemCompleted = false
         liveActivityTurnId = null
-    }
-
-    private fun addInlineFileChange(turnId: String, operation: JSONObject) {
-        fileChangeRecordView(turnId, operation)?.let { record ->
-            record.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
-            messageList.addView(record, LinearLayout.LayoutParams(MATCH, WRAP))
-        }
-    }
-
-    private fun fileChangeRecordView(turnId: String, operation: JSONObject): LinearLayout? {
-        val entries = parseFileChanges(operation.opt("changes"))
-        if (entries.isEmpty()) return null
-        val recordId = "inline:$turnId:${operation.optString("_activityIndex").ifBlank { operation.optString("id") }}"
-        val block = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), dp(3), dp(6), dp(3))
-        }
-        val heading = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(3), dp(3), dp(3), dp(3))
-        }
-        heading.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_edit)
-            imageTintList = ColorStateList.valueOf(MUTED)
-        }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-        heading.addView(label("${entries.size} 个文件已更改", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        val additions = entries.sumOf { it.additions }
-        val deletions = entries.sumOf { it.deletions }
-        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(6), 0, 0, 0) })
-        val chevron = ImageView(this).apply { imageTintList = ColorStateList.valueOf(MUTED) }
-        heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(9) })
-        block.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
-        val detail = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, 0, 0) }
-        entries.forEach { detail.addView(inlineFileChangeView(it), LinearLayout.LayoutParams(MATCH, WRAP)) }
-        block.addView(detail, LinearLayout.LayoutParams(MATCH, WRAP))
-        fun refresh() {
-            val expanded = recordId !in collapsedInlineFileChangeIds
-            detail.visibility = if (expanded) View.VISIBLE else View.GONE
-            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
-        }
-        heading.setOnClickListener {
-            if (recordId in collapsedInlineFileChangeIds) collapsedInlineFileChangeIds.remove(recordId) else collapsedInlineFileChangeIds.add(recordId)
-            refresh()
-        }
-        refresh()
-        return block
     }
 
     private fun inlineFileChangeView(entry: FileChangeEntry, compact: Boolean = false): LinearLayout {
@@ -3732,6 +3674,8 @@ class MainActivity : Activity() {
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, 0, dp(3)) }
         val visibleOperations = if (showAll) operations else operations.take(8)
         visibleOperations.forEach { operation ->
+            val isFileChange = normalizedType(operation.optString("type")) == "filechange"
+            val changedFiles = if (isFileChange) parseFileChanges(operation.opt("changes")) else emptyList()
             val status = normalizedOperationStatus(operation)
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -3755,13 +3699,13 @@ class MainActivity : Activity() {
             val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             copy.addView(label(operationLabel(operation), 12, TEXT, true), widthWrap())
             val paths = operationPaths(operation)
-            val detail = operationDetail(operation, paths)
+            val detail = if (changedFiles.isNotEmpty()) "" else operationDetail(operation, paths)
             if (detail.isNotBlank()) copy.addView(label(detail, 10, MUTED, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
             }, widthWrap())
-            if (paths.isNotEmpty()) {
+            if (paths.isNotEmpty() && changedFiles.isEmpty()) {
                 val path = paths.first()
                 val imagePath = isWorkspaceImagePath(path)
                 copy.addView(label("${if (imagePath) "查看图片" else "打开文件"} · ${path.substringAfterLast('/')}", 10, ACCENT).apply {
@@ -3773,6 +3717,11 @@ class MainActivity : Activity() {
             }
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             list.addView(row, LinearLayout.LayoutParams(maximumWidth - dp(7), WRAP))
+            changedFiles.forEach { entry ->
+                list.addView(inlineFileChangeView(entry, compact = true), LinearLayout.LayoutParams(maximumWidth - dp(28), WRAP).apply {
+                    leftMargin = dp(21)
+                })
+            }
         }
         if (!showAll && operations.size > visibleOperations.size) {
             list.addView(label("查看其余 ${operations.size - visibleOperations.size} 项", 11, ACCENT, true).apply {
