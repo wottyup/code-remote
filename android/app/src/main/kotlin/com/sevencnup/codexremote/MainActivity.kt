@@ -565,11 +565,12 @@ class MainActivity : Activity() {
     private var activeActivityText: TextView? = null
     private var activeActivityTimer: TextView? = null
     private var activeActivityStartedAt = 0L
+    private val collapsedInlineFileChangeIds = mutableSetOf<String>()
     private val activityTick = object : Runnable {
         override fun run() {
             if (!running || activeActivityTimer == null) return
             val elapsed = ((System.currentTimeMillis() - activeActivityStartedAt).coerceAtLeast(0L) / 1000L)
-            activeActivityTimer?.text = "%02d:%02d".format(Locale.ROOT, elapsed / 60L, elapsed % 60L)
+            activeActivityTimer?.text = "已用 ${elapsed / 60L}分${elapsed % 60L}秒"
             handler.postDelayed(this, 1000L)
         }
     }
@@ -3289,12 +3290,15 @@ class MainActivity : Activity() {
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
             val activityAccent = if (currentMode == "claude-code" && socketConnected) CLAUDE_MODE_ACCENT else ACCENT
             val activity = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
+                orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(8), dp(12), dp(8))
                 tag = TAG_MESSAGE_DYNAMIC
             }
-            activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            val activityHeading = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            activityHeading.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
                 indeterminateTintList = ColorStateList.valueOf(activityAccent)
                 contentDescription = activityLabel
@@ -3305,16 +3309,17 @@ class MainActivity : Activity() {
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
             val currentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
                 .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") && normalizedOperationStatus(item) == "running" }
-            activeActivityText = label("正在运行中 · ${currentOperation?.let { operationActivityLabel(it) } ?: activityLabel}", 12, activityAccent).apply {
+            activeActivityText = label(currentOperation?.let { operationActivityLabel(it) } ?: "正在运行中 · $activityLabel", 12, activityAccent).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
-            activeActivityTimer = label("00:00", 10, MUTED).apply {
-                gravity = Gravity.END
+            activityHeading.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
+            activity.addView(activityHeading, LinearLayout.LayoutParams(MATCH, WRAP))
+            activeActivityTimer = label("已用 0分0秒", 10, MUTED).apply {
+                setPadding(dp(23), dp(4), 0, 0)
                 contentDescription = "本轮已运行时间"
             }
-            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
+            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(MATCH, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
             handler.removeCallbacks(activityTick)
             handler.post(activityTick)
@@ -3523,8 +3528,8 @@ class MainActivity : Activity() {
                     pendingOperations.add(operation)
                     if (normalizedType(operation.optString("type")) == "filechange") {
                         flushOperations()
-                        parseFileChanges(operation.opt("changes")).forEach { entry ->
-                            container.addView(inlineFileChangeView(entry), LinearLayout.LayoutParams(MATCH, WRAP))
+                        fileChangeRecordView(turnId, operation)?.let { record ->
+                            container.addView(record, LinearLayout.LayoutParams(MATCH, WRAP))
                         }
                     }
                 }
@@ -3547,16 +3552,57 @@ class MainActivity : Activity() {
             "查看文件" -> "正在查看 ${path ?: "文件"}"
             "修改文件" -> "正在编辑 ${path ?: "文件"}"
             "搜索文件" -> "正在搜索文件"
-            "执行命令" -> "正在运行命令"
+            "执行命令" -> "正在运行 ${operation.optString("command").replace(CONTROL_CHARACTER_PATTERN, " ").trim().ifBlank { "命令" }}"
             else -> operationLabel(operation)
         }
     }
 
     private fun addInlineFileChange(turnId: String, operation: JSONObject) {
-        parseFileChanges(operation.opt("changes")).forEach { entry ->
-            messageList.addView(inlineFileChangeView(entry).apply { tag = "$TAG_MESSAGE_TURN_PREFIX$turnId" },
-                LinearLayout.LayoutParams(MATCH, WRAP))
+        fileChangeRecordView(turnId, operation)?.let { record ->
+            record.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
+            messageList.addView(record, LinearLayout.LayoutParams(MATCH, WRAP))
         }
+    }
+
+    private fun fileChangeRecordView(turnId: String, operation: JSONObject): LinearLayout? {
+        val entries = parseFileChanges(operation.opt("changes"))
+        if (entries.isEmpty()) return null
+        val recordId = "inline:$turnId:${operation.optString("_activityIndex").ifBlank { operation.optString("id") }}"
+        val block = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(3), dp(6), dp(3))
+        }
+        val heading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+        }
+        heading.addView(ImageView(this).apply {
+            setImageResource(R.drawable.ic_edit)
+            imageTintList = ColorStateList.valueOf(MUTED)
+        }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
+        heading.addView(label("${entries.size} 个文件已更改", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+        val additions = entries.sumOf { it.additions }
+        val deletions = entries.sumOf { it.deletions }
+        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(6), 0, 0, 0) })
+        val chevron = ImageView(this).apply { imageTintList = ColorStateList.valueOf(MUTED) }
+        heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(9) })
+        block.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
+        val detail = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(16), 0, 0, 0) }
+        entries.forEach { detail.addView(inlineFileChangeView(it), LinearLayout.LayoutParams(MATCH, WRAP)) }
+        block.addView(detail, LinearLayout.LayoutParams(MATCH, WRAP))
+        fun refresh() {
+            val expanded = recordId !in collapsedInlineFileChangeIds
+            detail.visibility = if (expanded) View.VISIBLE else View.GONE
+            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+        }
+        heading.setOnClickListener {
+            if (recordId in collapsedInlineFileChangeIds) collapsedInlineFileChangeIds.remove(recordId) else collapsedInlineFileChangeIds.add(recordId)
+            refresh()
+        }
+        refresh()
+        return block
     }
 
     private fun inlineFileChangeView(entry: FileChangeEntry): LinearLayout {
