@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from contextlib import closing
 from pathlib import Path
@@ -14,6 +16,8 @@ from fastapi import HTTPException
 
 from codex_remote.app import (
     TurnImage,
+    MESSAGE_IMAGE_RETENTION_SECONDS,
+    cleanup_expired_message_images,
     enrich_thread_images,
     enrich_user_message_item,
     prepare_message_image_directory,
@@ -301,6 +305,67 @@ class CodexHistoryStoreTests(unittest.TestCase):
 
             self.assertEqual("image/png", preview["mediaType"])
             self.assertEqual("iVBORw0KGgpwcmV2aWV3", preview["data"])
+
+    def test_expired_persistent_images_are_not_embedded_or_previewed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image_directory = prepare_message_image_directory(root)
+            image_path = image_directory / "expired.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\nexpired-image")
+            expired_at = time.time() - MESSAGE_IMAGE_RETENTION_SECONDS - 1
+            os.utime(image_path, (expired_at, expired_at))
+            thread = {"turns": [{"items": [{"type": "userMessage", "content": [
+                {"type": "localImage", "path": str(image_path), "mediaType": "image/png"},
+            ]}]}]}
+
+            enrich_thread_images(thread, image_directory)
+
+            content = thread["turns"][0]["items"][0]["content"][0]
+            self.assertNotIn("data", content)
+            with self.assertRaises(HTTPException) as error:
+                workspace_image_preview(root, str(image_path), image_directory)
+            self.assertEqual(404, error.exception.status_code)
+
+    def test_cleanup_deletes_only_expired_managed_image_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image_directory = prepare_message_image_directory(Path(directory))
+            now = 1_800_000_000.0
+            expired = image_directory / "expired.png"
+            expired.write_bytes(b"old")
+            os.utime(expired, (now - MESSAGE_IMAGE_RETENTION_SECONDS - 1,) * 2)
+            recent = image_directory / "recent.jpg"
+            recent.write_bytes(b"new")
+            os.utime(recent, (now - MESSAGE_IMAGE_RETENTION_SECONDS + 1,) * 2)
+            unrelated = image_directory / "notes.txt"
+            unrelated.write_text("keep", encoding="utf-8")
+
+            removed = cleanup_expired_message_images(image_directory, now=now)
+
+            self.assertEqual(1, removed)
+            self.assertFalse(expired.exists())
+            self.assertTrue(recent.exists())
+            self.assertTrue(unrelated.exists())
+
+    def test_upload_cleans_expired_images_before_checking_storage_quota(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            image_directory = prepare_message_image_directory(Path(directory))
+            expired = image_directory / "expired.png"
+            expired.write_bytes(b"old-image")
+            expired_at = time.time() - MESSAGE_IMAGE_RETENTION_SECONDS - 1
+            os.utime(expired, (expired_at, expired_at))
+            image = TurnImage(
+                media_type="image/png",
+                data=base64.b64encode(b"new-image").decode("ascii"),
+            )
+
+            saved = save_turn_images(
+                [image], image_directory,
+                max_storage_bytes=len(b"new-image"),
+                storage_lock=threading.Lock(),
+            )
+
+            self.assertFalse(expired.exists())
+            self.assertEqual([b"new-image"], [path.read_bytes() for path in saved])
 
     def test_persistent_image_quota_rejects_new_image_without_deleting_old_ones(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

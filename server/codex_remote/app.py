@@ -137,6 +137,8 @@ MAX_IMAGES_PER_TURN = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
 MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+MESSAGE_IMAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60
+MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -863,6 +865,8 @@ def workspace_image_preview(base: Path, relative_path: str, managed_image_root: 
     media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
     if media_type is None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
+    if managed_image_root is not None and is_expired_managed_message_image(candidate, managed_image_root):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片已过期")
     try:
         if not candidate.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
@@ -957,6 +961,53 @@ def prepare_message_image_directory(state_directory: Path) -> Path:
     return image_directory.resolve()
 
 
+def cleanup_expired_message_images(image_directory: Path, *, now: float | None = None) -> int:
+    """Delete managed chat images whose creation time is more than 90 days old."""
+    cutoff = (time.time() if now is None else now) - MESSAGE_IMAGE_RETENTION_SECONDS
+    deleted = 0
+    try:
+        with os.scandir(image_directory) as entries:
+            for entry in entries:
+                if Path(entry.name).suffix.lower() not in IMAGE_MEDIA_TYPES:
+                    continue
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_mtime >= cutoff:
+                        continue
+                    (image_directory / entry.name).unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logger.warning("Could not remove expired chat image %s", entry.name, exc_info=True)
+    except OSError as error:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="无法清理过期聊天图片。",
+        ) from error
+    return deleted
+
+
+def is_expired_managed_message_image(
+    image_path: Path,
+    image_directory: Path,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Avoid serving expired images even before the periodic cleanup runs."""
+    try:
+        image_root = image_directory.resolve()
+        resolved_path = image_path.resolve()
+        if not resolved_path.is_relative_to(image_root):
+            return False
+        if resolved_path.suffix.lower() not in IMAGE_MEDIA_TYPES:
+            return False
+        cutoff = (time.time() if now is None else now) - MESSAGE_IMAGE_RETENTION_SECONDS
+        return resolved_path.stat().st_mtime < cutoff
+    except (OSError, RuntimeError, ValueError):
+        return True
+
+
 def stored_image_directory_size(image_directory: Path) -> int:
     total = 0
     try:
@@ -1013,6 +1064,8 @@ def save_turn_images(
                 paths.append(path)
 
         if storage_lock is None:
+            if decoded_images:
+                cleanup_expired_message_images(image_directory)
             if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
                 raise HTTPException(
                     status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
@@ -1021,6 +1074,8 @@ def save_turn_images(
             write_images()
         else:
             with storage_lock:
+                if decoded_images:
+                    cleanup_expired_message_images(image_directory)
                 if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
                     raise HTTPException(
                         status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
@@ -1153,6 +1208,8 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
                         and image_path.suffix.lower() in IMAGE_MEDIA_TYPES
                     )
                     if not in_remote_image_directory and not is_codex_clipboard_image:
+                        continue
+                    if in_remote_image_directory and is_expired_managed_message_image(image_path, image_root):
                         continue
                     if not image_path.is_file():
                         continue
@@ -1397,6 +1454,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 logger.exception("Could not clean idle tmux terminal sessions")
             await asyncio.sleep(TMUX_CLEANUP_INTERVAL_SECONDS)
 
+    async def reap_expired_message_images() -> None:
+        while True:
+            await asyncio.sleep(MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS)
+            try:
+                deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
+                if deleted:
+                    logger.info("Removed %d expired chat image(s)", deleted)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Could not clean expired chat images")
+
     async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
         images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
@@ -1453,12 +1522,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
+        try:
+            deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
+            if deleted:
+                logger.info("Removed %d expired chat image(s) at startup", deleted)
+        except Exception:
+            logger.exception("Could not clean expired chat images at startup")
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        image_reaper = asyncio.create_task(reap_expired_message_images())
         terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
         shared_queue.start()
         try:
             yield
         finally:
+            image_reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await image_reaper
             terminal_reaper.cancel()
             with suppress(asyncio.CancelledError):
                 await terminal_reaper
@@ -1473,7 +1552,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.40.4-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.41.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
