@@ -1709,7 +1709,8 @@ class MainActivity : Activity() {
         if (pixelTheme) menu.setPadding(dp(5), dp(5), dp(5), dp(5))
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
-        titleView = label("Codex Remote", if (retroTheme) 20 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val titleBaseSize = if (retroTheme) 18 else 15
+        titleView = label("Codex Remote", titleBaseSize, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
