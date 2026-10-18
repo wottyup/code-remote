@@ -5027,6 +5027,36 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
     : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
   const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+
+  useEffect(() => {
+    const switchSidebarThread = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing || event.keyCode === 229) return
+      if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return
+
+      const threads = groupedSidebarThreads.flatMap((section) => section.threads)
+      if (threads.length === 0) return
+
+      const direction = event.key === 'ArrowDown' ? 1 : -1
+      const currentIndex = threads.findIndex((thread) => thread.id === activeRemote.activeThread?.id)
+      const nextIndex = currentIndex < 0
+        ? direction > 0 ? 0 : threads.length - 1
+        : (currentIndex + direction + threads.length) % threads.length
+      const nextThread = threads[nextIndex]
+
+      event.preventDefault()
+      if (nextThread.id !== activeRemote.activeThread?.id) void selectThread(nextThread)
+    }
+
+    document.addEventListener('keydown', switchSidebarThread)
+    return () => document.removeEventListener('keydown', switchSidebarThread)
+  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
 
@@ -5114,6 +5144,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
         <div className="thread-list-heading">
           <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
+          <small className="thread-list-heading__shortcut" title="使用 Alt + 上 / 下方向键切换聊天">Alt ↑↓</small>
           <div className="thread-list-heading__actions">
             <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
             <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
