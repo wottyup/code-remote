@@ -141,8 +141,8 @@ import kotlin.math.roundToInt
 
 private class PixelFrameNineSliceDrawable(
     private val bitmap: Bitmap,
-    sourceCornerWidth: Int,
-    sourceCornerHeight: Int,
+    private val sourceCornerWidth: Int,
+    private val sourceCornerHeight: Int,
     private val targetCornerSize: Int,
 ) : Drawable() {
     private val paint = Paint().apply {
@@ -199,8 +199,31 @@ private class PixelFrameNineSliceDrawable(
         invalidateSelf()
     }
 
+    override fun getConstantState(): Drawable.ConstantState = PixelFrameNineSliceConstantState(
+        bitmap,
+        sourceCornerWidth,
+        sourceCornerHeight,
+        targetCornerSize,
+    )
+
     @Deprecated("Deprecated in Android graphics API")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+private class PixelFrameNineSliceConstantState(
+    private val bitmap: Bitmap,
+    private val sourceCornerWidth: Int,
+    private val sourceCornerHeight: Int,
+    private val targetCornerSize: Int,
+) : Drawable.ConstantState() {
+    override fun newDrawable(): Drawable = PixelFrameNineSliceDrawable(
+        bitmap,
+        sourceCornerWidth,
+        sourceCornerHeight,
+        targetCornerSize,
+    )
+
+    override fun getChangingConfigurations(): Int = 0
 }
 
 private class LollipopSystemBarsDrawable(
@@ -501,8 +524,22 @@ class MainActivity : Activity() {
         R.drawable.pixel_theme,
     )
     private val pixelTypeface: Typeface by lazy(LazyThreadSafetyMode.NONE) {
-        runCatching { Typeface.createFromAsset(assets, "fonts/FusionPixel12pxProportionalZhHans.ttf") }
-            .getOrElse { Typeface.create("monospace", Typeface.NORMAL) }
+        runCatching {
+            val assetPath = "fonts/FusionPixel12pxProportionalZhHans.ttf"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val pixelFont = android.graphics.fonts.Font.Builder(assets, assetPath)
+                    .setWeight(android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL)
+                    .build()
+                val pixelFamily = android.graphics.fonts.FontFamily.Builder(pixelFont).build()
+                Typeface.CustomFallbackBuilder(pixelFamily)
+                    .setSystemFallback("sans-serif")
+                    .setStyle(android.graphics.fonts.FontStyle(
+                        android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL,
+                        android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT,
+                    ))
+                    .build()
+            } else Typeface.createFromAsset(assets, assetPath)
+        }.getOrElse { Typeface.create("sans-serif", Typeface.NORMAL) }
     }
     private val pixelTheme get() = themeName == "pixel"
     private val retroTheme get() = themeName == "lollipop" || pixelTheme
@@ -9575,7 +9612,6 @@ class MainActivity : Activity() {
         setText(value)
         inputType = inputTypeValue
         typeface = themedTypeface()
-        if (pixelTheme) paintFlags = paintFlags and Paint.ANTI_ALIAS_FLAG.inv()
         setTextColor(TEXT)
         setHintTextColor(MUTED)
         textSize = adjustedTextSize(14)
@@ -9594,12 +9630,11 @@ class MainActivity : Activity() {
         setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
         if (retroTheme) typeface = themedTypeface(bold) else if (bold) setTypeface(typeface, Typeface.BOLD)
-        if (pixelTheme) paintFlags = paintFlags and Paint.ANTI_ALIAS_FLAG.inv()
         gravity = Gravity.CENTER_VERTICAL
     }
 
     private fun themedTypeface(bold: Boolean = false): Typeface = when {
-        pixelTheme -> Typeface.create(pixelTypeface, if (bold) Typeface.BOLD else Typeface.NORMAL)
+        pixelTheme -> Typeface.create("monospace", if (bold) Typeface.BOLD else Typeface.NORMAL)
         !retroTheme -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
         bold -> android1BoldTypeface
         else -> android1Typeface
