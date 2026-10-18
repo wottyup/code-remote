@@ -849,6 +849,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .pair-input-wrap { display: flex; align-items: center; gap: 9px; height: 43px; padding: 0 11px; border: 1px solid #3b3e46; border-radius: 8px; background: #111317; color: #9097a2; }
 .pair-input-wrap:focus-within { border-color: #6c7891; }
 .pair-input-wrap input { width: 100%; border: 0; outline: 0; background: transparent; color: #f0f1f4; font: 15px ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(15px + var(--mobile-font-offset)); letter-spacing: .1em; }
+.pair-input-wrap input:disabled { cursor: not-allowed; opacity: .55; }
 .pair-input-wrap input::placeholder { color: #606671; letter-spacing: .04em; }
 .pair-error { margin: 2px 0 0; color: #e29a9e; font-size: calc(12px + var(--mobile-font-offset)); }
 .pair-submit { display: flex; align-items: center; justify-content: center; gap: 8px; height: 39px; margin-top: 6px; border: 1px solid #d7d9de; border-radius: 8px; background: #e4e5e8; color: #191a1e; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 620; }

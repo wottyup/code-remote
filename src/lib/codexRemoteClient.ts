@@ -177,7 +177,7 @@ export interface RemoteEvent {
 }
 
 export class RemoteApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(message: string, readonly status: number, readonly retryAfterSeconds?: number) {
     super(message)
     this.name = 'RemoteApiError'
   }
@@ -243,7 +243,13 @@ async function request<T>(
         const message = typeof detail === 'string'
           ? detail
           : validationDetail || (detail && typeof detail === 'object' && typeof detail.message === 'string' ? detail.message : `请求失败 (${response.status})`)
-        throw new RemoteApiError(message, response.status)
+        const retryAfterHeader = response.headers.get('Retry-After')
+        const retryAfterSeconds = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader)
+        throw new RemoteApiError(
+          message,
+          response.status,
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? Math.ceil(retryAfterSeconds) : undefined,
+        )
       }
       // Reading the body can fail after fetch has already received headers.
       // Await it here so those failures use the same safe retry path.

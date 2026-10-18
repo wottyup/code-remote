@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -60,6 +61,9 @@ from .shared_state import QueueConflictError, SharedQueueService, SharedStateSto
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
+
+PAIRING_MAX_FAILED_ATTEMPTS = 3
+PAIRING_LOCKOUT_SECONDS = 60
 
 
 def resolve_default_workspace(
@@ -1374,9 +1378,9 @@ class PairingAuth:
             return None
         if not hmac.compare_digest(normalize_pairing_code(code), self.code):
             self.failed_attempts += 1
-            if self.failed_attempts >= 8:
+            if self.failed_attempts >= PAIRING_MAX_FAILED_ATTEMPTS:
                 self.failed_attempts = 0
-                self.blocked_until = time.monotonic() + 60
+                self.blocked_until = time.monotonic() + PAIRING_LOCKOUT_SECONDS
             return None
         self.failed_attempts = 0
         token = secrets.token_urlsafe(32)
@@ -1388,6 +1392,9 @@ class PairingAuth:
             self.token_hashes.discard(token_hash)
             raise
         return token
+
+    def retry_after_seconds(self) -> int:
+        return max(0, math.ceil(self.blocked_until - time.monotonic()))
 
     def accepts(self, token: str | None) -> bool:
         if not token:
@@ -1552,7 +1559,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.42.1-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.42.2-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1613,7 +1620,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except PairingStateError as error:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
         if token is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码无效或尝试次数过多")
+            retry_after = auth.retry_after_seconds()
+            if retry_after > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="配对尝试次数已达上限，配对已暂停",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码错误")
         return {"token": token}
 
     @app.get("/api/v1/settings/bailian-voice")
