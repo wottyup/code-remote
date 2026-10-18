@@ -12,7 +12,7 @@ android {
         minSdk 26
         targetSdk 35
         versionCode 279
-        versionName '0.38.1-dev.1'
+        versionName '0.38.2-dev.1'
     }
 
     buildFeatures {
