@@ -50,6 +50,7 @@ import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
+import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { BailianVoiceInputController, type VoiceInputState } from '../lib/bailianVoiceInput'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
@@ -3847,6 +3848,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarChatShortcuts, setSidebarChatShortcuts] = useState(readSidebarChatShortcuts)
+  useEffect(() => saveSidebarChatShortcuts(sidebarChatShortcuts), [sidebarChatShortcuts])
   const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
   const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
   const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
@@ -5124,11 +5127,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
     : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
   const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+  const sidebarShortcutHint = `${formatSidebarChatShortcut(sidebarChatShortcuts.previous)} / ${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`
 
   useEffect(() => {
     const switchSidebarThread = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
-      if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.isComposing || event.keyCode === 229) return
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      const direction = matchesSidebarChatShortcut(event, sidebarChatShortcuts.previous)
+        ? -1
+        : matchesSidebarChatShortcut(event, sidebarChatShortcuts.next) ? 1 : 0
+      if (direction === 0) return
       if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen
         || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
 
@@ -5139,7 +5146,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       const threads = groupedSidebarThreads.flatMap((section) => section.threads)
       if (threads.length === 0) return
 
-      const direction = event.key === 'ArrowDown' ? 1 : -1
       const currentIndex = threads.findIndex((thread) => thread.id === activeRemote.activeThread?.id)
       const nextIndex = currentIndex < 0
         ? direction > 0 ? 0 : threads.length - 1
@@ -5152,7 +5158,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
     document.addEventListener('keydown', switchSidebarThread)
     return () => document.removeEventListener('keydown', switchSidebarThread)
-  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
 
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
@@ -5241,7 +5247,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
         <div className="thread-list-heading">
           <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
-          <small className="thread-list-heading__shortcut" title="使用 Alt + 上 / 下方向键切换聊天">Alt ↑↓</small>
+          <small className="thread-list-heading__shortcut" title={`上一条：${formatSidebarChatShortcut(sidebarChatShortcuts.previous)}；下一条：${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`}>{sidebarShortcutHint}</small>
           <div className="thread-list-heading__actions">
             <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
             <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
@@ -5337,7 +5343,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} />
+        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -5500,11 +5506,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
+function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange }: {
+  preferences: ThemePreferences
+  onChange: (next: ThemePreferences) => void
+  onClose: () => void
+  chatShortcuts: SidebarChatShortcuts
+  onChatShortcutsChange: (next: SidebarChatShortcuts) => void
+}) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
   const [notificationError, setNotificationError] = useState<string | null>(null)
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
+  const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
+  const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
   const backgroundCropDrag = useRef<{
     pointerId: number
     clientX: number
@@ -5522,6 +5536,64 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
+
+  useEffect(() => {
+    if (!recordingShortcut) return
+    const handleShortcutRecording = (event: globalThis.KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (event.key === 'Escape') {
+        event.stopImmediatePropagation()
+        setRecordingShortcut(null)
+        setShortcutMessage('已取消录制。')
+        return
+      }
+      if (isSidebarChatShortcutModifierKey(event.key)) return
+      if (isReservedSidebarChatShortcut(event)) {
+        setShortcutMessage('这个组合键由浏览器保留，请换一个。')
+        return
+      }
+
+      const recordedShortcut = sidebarChatShortcutFromEvent(event)
+      if (!recordedShortcut) {
+        setShortcutMessage('请同时按住 Ctrl、Alt、Shift 或 ⌘，再按一个按键。')
+        return
+      }
+      const otherAction = recordingShortcut === 'previous' ? 'next' : 'previous'
+      if (sameSidebarChatShortcut(recordedShortcut, chatShortcuts[otherAction])) {
+        setShortcutMessage('这个快捷键已分配给另一个方向，请换一个。')
+        return
+      }
+
+      onChatShortcutsChange({ ...chatShortcuts, [recordingShortcut]: recordedShortcut })
+      setRecordingShortcut(null)
+      setShortcutMessage(`${recordingShortcut === 'previous' ? '上一条' : '下一条'}快捷键已更新为 ${formatSidebarChatShortcut(recordedShortcut)}。`)
+    }
+
+    window.addEventListener('keydown', handleShortcutRecording, true)
+    return () => window.removeEventListener('keydown', handleShortcutRecording, true)
+  }, [chatShortcuts, onChatShortcutsChange, recordingShortcut])
+
+  function toggleShortcutRecording(action: SidebarChatShortcutAction) {
+    if (recordingShortcut === action) {
+      setRecordingShortcut(null)
+      setShortcutMessage('已取消录制。')
+      return
+    }
+    setRecordingShortcut(action)
+    setShortcutMessage(`正在录制${action === 'previous' ? '上一条' : '下一条'}快捷键；按下组合键，Esc 取消。`)
+  }
+
+  function resetChatShortcuts() {
+    setRecordingShortcut(null)
+    onChatShortcutsChange({
+      previous: { ...defaultSidebarChatShortcuts.previous },
+      next: { ...defaultSidebarChatShortcuts.next },
+    })
+    setShortcutMessage('已恢复默认快捷键。')
+  }
 
   async function updateBackgroundImage(file: File | undefined) {
     setImageError(null)
@@ -5614,7 +5686,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
   }
 
   return (
-    <main className="theme-settings-panel" aria-label="主题设置">
+    <main className="theme-settings-panel" aria-label="设置">
       <header className="theme-settings-panel__header">
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
@@ -5770,6 +5842,33 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
               <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label="全局字体大小" /><output>{fontSizeAdjustment === 0 ? '标准' : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
             </label>
           </div>
+        </section>
+
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading">
+            <div><h2>聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
+            <button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button>
+          </div>
+          <div className="theme-display-controls sidebar-chat-shortcut-controls">
+            {(['previous', 'next'] as const).map((action) => {
+              const label = action === 'previous' ? '上一条聊天' : '下一条聊天'
+              const isRecording = recordingShortcut === action
+              return (
+                <div className="theme-control-row sidebar-chat-shortcut-row" key={action}>
+                  <span><strong>{label}</strong><small>{action === 'previous' ? '切换到列表中的上一条聊天。' : '切换到列表中的下一条聊天。'}</small></span>
+                  <kbd className="sidebar-chat-shortcut-key">{formatSidebarChatShortcut(chatShortcuts[action])}</kbd>
+                  <button
+                    className={`theme-notification-toggle${isRecording ? ' theme-notification-toggle--enabled' : ''}`}
+                    type="button"
+                    aria-pressed={isRecording}
+                    onClick={() => toggleShortcutRecording(action)}
+                  >{isRecording ? '按下组合键…' : '录制'}</button>
+                </div>
+              )
+            })}
+          </div>
+          <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
+          {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
         </section>
 
         <section className="theme-settings-card">
