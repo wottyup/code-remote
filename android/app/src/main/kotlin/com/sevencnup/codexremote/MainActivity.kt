@@ -21,6 +21,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Paint
+import android.graphics.PaintFlagsDrawFilter
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.LinearGradient
@@ -699,6 +700,77 @@ class MainActivity : Activity() {
         .build()
     private val messageImageCache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+    private val pixelTextBitmapCache = object : LruCache<String, Bitmap>(8 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+    private val pixelTextDrawFilter = PaintFlagsDrawFilter(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG, 0)
+    private var nextPixelTextViewId = 0L
+
+    @Suppress("DEPRECATION")
+    private inner class PixelRasterTextView(context: Context, private val cacheId: Long) : TextView(context) {
+        private var rasterRevision = 0L
+        private var activeCacheKey: String? = null
+        private val nearestNeighborPaint = Paint().apply {
+            isAntiAlias = false
+            isFilterBitmap = false
+            isDither = false
+        }
+        private val destination = Rect()
+
+        private fun invalidateRaster() {
+            activeCacheKey?.let(pixelTextBitmapCache::remove)
+            activeCacheKey = null
+            rasterRevision++
+        }
+
+        override fun invalidate() {
+            invalidateRaster()
+            super.invalidate()
+        }
+
+        override fun invalidate(dirty: Rect?) {
+            invalidateRaster()
+            super.invalidate(dirty)
+        }
+
+        override fun invalidate(left: Int, top: Int, right: Int, bottom: Int) {
+            invalidateRaster()
+            super.invalidate(left, top, right, bottom)
+        }
+
+        override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+            invalidateRaster()
+            super.onSizeChanged(width, height, oldWidth, oldHeight)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            if (width <= 0 || height <= 0) {
+                super.onDraw(canvas)
+                return
+            }
+
+            val rasterWidth = ceil(width * PIXEL_TEXT_RASTER_SCALE).toInt().coerceAtLeast(1)
+            val rasterHeight = ceil(height * PIXEL_TEXT_RASTER_SCALE).toInt().coerceAtLeast(1)
+            val key = "$cacheId:$rasterRevision:${rasterWidth}x$rasterHeight:${text?.hashCode()}:${textSize}:${paint.color}:${typeface?.hashCode()}:${paint.shader?.hashCode()}:${gravity}:${maxLines}:${paddingLeft},${paddingTop},${paddingRight},${paddingBottom}"
+            val bitmap = pixelTextBitmapCache.get(key) ?: runCatching {
+                Bitmap.createBitmap(rasterWidth, rasterHeight, Bitmap.Config.ARGB_8888).also { raster ->
+                    val lowResolutionCanvas = Canvas(raster)
+                    lowResolutionCanvas.setDrawFilter(pixelTextDrawFilter)
+                    lowResolutionCanvas.scale(PIXEL_TEXT_RASTER_SCALE, PIXEL_TEXT_RASTER_SCALE)
+                    super.onDraw(lowResolutionCanvas)
+                    activeCacheKey = key
+                    pixelTextBitmapCache.put(key, raster)
+                }
+            }.getOrNull()
+
+            if (bitmap == null) {
+                super.onDraw(canvas)
+                return
+            }
+            destination.set(0, 0, width, height)
+            canvas.drawBitmap(bitmap, null, destination, nearestNeighborPaint)
+        }
     }
 
     private var endpoint = ""
@@ -4216,7 +4288,7 @@ class MainActivity : Activity() {
         header.addView(copyActionButton("复制代码", "代码", code), LinearLayout.LayoutParams(WRAP, dp(30)))
         card.addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
 
-        val codeText = label(code, 12, TEXT, translateUi = false).apply {
+        val codeText = label(code, 12, TEXT, translateUi = false, pixelize = false).apply {
             typeface = Typeface.MONOSPACE
             setTextIsSelectable(true)
             setHorizontallyScrolling(true)
@@ -5698,7 +5770,7 @@ class MainActivity : Activity() {
                 insert.addView(label("插入对话", 10, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
                 row.addView(insert, LinearLayout.LayoutParams(WRAP, dp(28)).apply { leftMargin = dp(8) })
                 details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
-                if (reviewing) details.addView(label("", 10, MUTED, translateUi = false).apply {
+                if (reviewing) details.addView(label("", 10, MUTED, translateUi = false, pixelize = false).apply {
                     text = highlightedReviewDiff(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" })
                     typeface = Typeface.MONOSPACE
                     maxLines = 10
@@ -8368,7 +8440,7 @@ class MainActivity : Activity() {
                 code.append("           │ 其余 ${lines.size - visibleLines.size} 行未显示")
                 code.setSpan(ForegroundColorSpan(WARNING), start, code.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-            val codeView = label("", 11, TEXT).apply {
+            val codeView = label("", 11, TEXT, pixelize = false).apply {
                 text = code
                 typeface = Typeface.MONOSPACE
                 includeFontPadding = false
@@ -8604,7 +8676,7 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
-        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226)).apply {
+        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226), pixelize = false).apply {
             typeface = Typeface.MONOSPACE
             setTextIsSelectable(true)
             setPadding(dp(9), dp(9), dp(9), dp(9))
@@ -9624,7 +9696,14 @@ class MainActivity : Activity() {
 
     private fun tr(value: String): String = if (appLanguage == "en") UiEnglish.translate(value) else value
 
-    private fun label(value: String, size: Int, color: Int, bold: Boolean = false, translateUi: Boolean = true): TextView = TextView(this).apply {
+    private fun label(
+        value: String,
+        size: Int,
+        color: Int,
+        bold: Boolean = false,
+        translateUi: Boolean = true,
+        pixelize: Boolean = true,
+    ): TextView = (if (pixelTheme && pixelize) PixelRasterTextView(this, nextPixelTextViewId++) else TextView(this)).apply {
         text = if (translateUi) tr(value) else value
         textSize = adjustedTextSize(size)
         setTag(R.id.base_text_size, size.toFloat())
@@ -10253,6 +10332,7 @@ class MainActivity : Activity() {
         private const val MAX_HISTORY_CACHE_JSON_BYTES = 12 * 1024 * 1024
         private const val MAX_HISTORY_CACHE_STRING_CHARS = 3 * 1024 * 1024
         private const val MAX_HISTORY_CACHE_DEPTH = 64
+        private const val PIXEL_TEXT_RASTER_SCALE = 0.5f
         private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_DIFF_PREVIEW_LINES = 2500
