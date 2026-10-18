@@ -1,38 +1,68 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import os
 import tempfile
+from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 import codex_remote.bailian_voice_input as voice_input
 
 
-class FakeProviderSocket:
-    def __init__(self) -> None:
-        self.events: asyncio.Queue[str] = asyncio.Queue()
-        self.sent: list[dict] = []
-        self.closed = False
+def provider_event(event: str, **values) -> str:
+    return json.dumps({"header": {"event": event}, **values}, ensure_ascii=False)
 
-    async def send(self, raw: str) -> None:
-        event = json.loads(raw)
-        self.sent.append(event)
-        if event.get("type") == "session.update":
-            await self.events.put(json.dumps({"type": "session.updated"}))
-        elif event.get("type") == "input_audio_buffer.commit":
-            await self.events.put(json.dumps({
-                "type": "conversation.item.input_audio_transcription.delta",
-                "delta": "你好",
-            }))
-            await self.events.put(json.dumps({
-                "type": "conversation.item.input_audio_transcription.completed",
-                "transcript": "你好，百炼。",
-            }))
+
+class FakeProviderSocket:
+    def __init__(self, *, fail_on_run: bool = False) -> None:
+        self.events: asyncio.Queue[str] = asyncio.Queue()
+        self.sent: list[str | bytes] = []
+        self.closed = False
+        self.fail_on_run = fail_on_run
+
+    @property
+    def sent_events(self) -> list[dict]:
+        return [json.loads(item) for item in self.sent if isinstance(item, str)]
+
+    async def send(self, raw: str | bytes) -> None:
+        self.sent.append(raw)
+        if isinstance(raw, bytes):
+            await self.events.put(provider_event(
+                "result-generated",
+                payload={"output": {"sentence": {
+                    "sentence_id": 1, "text": "你好", "sentence_end": False,
+                }}},
+            ))
+            await self.events.put(provider_event(
+                "result-generated",
+                payload={"output": {"sentence": {
+                    "sentence_id": 1, "text": "你好，", "sentence_end": True,
+                }}},
+            ))
+            await self.events.put(provider_event(
+                "result-generated",
+                payload={"output": {"sentence": {
+                    "sentence_id": 2, "text": "百炼。", "sentence_end": True,
+                }}},
+            ))
+            return
+
+        request = json.loads(raw)
+        action = request.get("header", {}).get("action")
+        if action == "run-task":
+            if self.fail_on_run:
+                await self.events.put(provider_event(
+                    "task-failed",
+                    error_code="MODEL_NOT_FOUND",
+                    error_message="private provider detail",
+                ))
+            else:
+                await self.events.put(provider_event("task-started", payload={}))
+        elif action == "finish-task":
+            await self.events.put(provider_event("task-finished", payload={}))
 
     async def recv(self) -> str:
         return await self.events.get()
@@ -80,20 +110,20 @@ class FakeAuth:
 
 
 class BailianVoiceInputTests(unittest.TestCase):
-    def test_realtime_url_uses_workspace_region_and_escaped_model(self) -> None:
+    def test_realtime_url_uses_workspace_region_and_fun_asr_endpoint(self) -> None:
         self.assertEqual(
-            "wss://workspace_01.cn-beijing.maas.aliyuncs.com/api-ws/v1/realtime?model=qwen3.8-omni-flash-realtime",
-            voice_input.build_realtime_url("workspace_01", "cn-beijing", "qwen3.8-omni-flash-realtime"),
+            "wss://workspace_01.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference",
+            voice_input.build_realtime_url("workspace_01", "cn-beijing", voice_input.DEFAULT_REALTIME_MODEL),
         )
         self.assertIn(
             "ap-southeast-1.maas.aliyuncs.com",
-            voice_input.build_realtime_url("workspace", "ap-southeast-1", "model"),
+            voice_input.build_realtime_url("workspace", "ap-southeast-1", "fun-asr-realtime"),
         )
         with self.assertRaises(voice_input.BailianVoiceInputError):
-            voice_input.build_realtime_url("workspace", "us-west-1", "model")
+            voice_input.build_realtime_url("workspace", "us-west-1", "fun-asr-realtime")
 
     def test_missing_credentials_return_a_setup_hint(self) -> None:
-        config = voice_input.BailianVoiceInputConfig("", "", "cn-beijing", "model", "qwen3-asr-flash-realtime")
+        config = voice_input.BailianVoiceInputConfig("", "", "cn-beijing", "model")
         with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "项目设置"):
             config.validate()
 
@@ -106,11 +136,13 @@ class BailianVoiceInputTests(unittest.TestCase):
                 "workspace_id": "project-workspace",
                 "region": "cn-beijing",
                 "realtime_model": voice_input.DEFAULT_REALTIME_MODEL,
-                "transcription_model": voice_input.DEFAULT_TRANSCRIPTION_MODEL,
+                "transcription_model": "ignored-legacy-field",
             })
 
             self.assertTrue(settings["configured"])
             self.assertEqual("project", settings["api_key_source"])
+            self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, settings["realtime_model"])
+            self.assertNotIn("transcription_model", settings)
             self.assertNotIn("api_key", settings)
             self.assertNotIn("project-secret", json.dumps(settings))
             self.assertEqual("project-secret", voice_input.BailianVoiceInputSettingsStore(path, environ={}).get_config().api_key)
@@ -122,10 +154,27 @@ class BailianVoiceInputTests(unittest.TestCase):
                 "workspace_id": "project-workspace",
                 "region": "cn-beijing",
                 "realtime_model": voice_input.DEFAULT_REALTIME_MODEL,
-                "transcription_model": voice_input.DEFAULT_TRANSCRIPTION_MODEL,
             })
             self.assertTrue(settings["configured"])
             self.assertEqual("project-secret", store.get_config().api_key)
+
+    def test_old_qwen_settings_and_environment_defaults_migrate_to_fun_asr(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "settings.json"
+            path.write_text(json.dumps({
+                "api_key": "saved-key",
+                "workspace_id": "saved-workspace",
+                "realtime_model": "qwen3.8-omni-flash-realtime",
+                "transcription_model": "qwen3-asr-flash-realtime",
+            }), encoding="utf-8")
+            store = voice_input.BailianVoiceInputSettingsStore(path, environ={
+                "BAILIAN_REALTIME_MODEL": "qwen3.8-omni-flash-realtime",
+                "BAILIAN_TRANSCRIPTION_MODEL": "qwen3-asr-flash-realtime",
+            })
+
+            self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, store.public_view()["realtime_model"])
+            self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, store.get_config().model)
+            self.assertNotIn("transcription_model", store.public_view())
 
     def test_settings_store_falls_back_to_environment_and_reset_restores_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -140,7 +189,7 @@ class BailianVoiceInputTests(unittest.TestCase):
             self.assertTrue(store.reset()["configured"])
             self.assertEqual("environment-secret", store.get_config().api_key)
 
-    def test_connection_test_config_uses_draft_key_without_persisting_it(self) -> None:
+    def test_connection_test_config_uses_draft_key_and_migrates_old_model(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "bailian-voice-settings.json"
             store = voice_input.BailianVoiceInputSettingsStore(path, environ={
@@ -157,14 +206,15 @@ class BailianVoiceInputTests(unittest.TestCase):
 
             self.assertEqual("draft-key", config.api_key)
             self.assertEqual("draft-workspace", config.workspace_id)
+            self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, config.model)
             self.assertFalse(path.exists())
 
             config = store.config_for_test({
                 "api_key": "",
                 "workspace_id": "draft-workspace",
                 "region": "cn-beijing",
-                "realtime_model": "qwen3.8-omni-flash-realtime",
-                "transcription_model": "qwen3-asr-flash-realtime",
+                "realtime_model": voice_input.DEFAULT_REALTIME_MODEL,
+                "transcription_model": "legacy-field-is-ignored",
             })
             self.assertEqual("saved-environment-key", config.api_key)
 
@@ -177,50 +227,7 @@ class BailianVoiceInputTests(unittest.TestCase):
         self.assertIn("权限", voice_input.connection_error_message(forbidden))
         self.assertIn("Workspace", voice_input.connection_error_message(not_found))
 
-    def test_connection_test_opens_configured_session_without_audio_and_closes(self) -> None:
-        provider = FakeProviderSocket()
-        connection: dict = {}
-
-        async def connect(url: str, additional_headers=None, **kwargs):
-            connection.update(url=url, additional_headers=additional_headers)
-            return provider
-
-        config = voice_input.BailianVoiceInputConfig(
-            "server-secret", "workspace", "cn-beijing", "realtime-model", "transcription-model",
-        )
-        asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
-
-        self.assertEqual("Bearer server-secret", connection["additional_headers"]["Authorization"])
-        self.assertEqual(["session.update"], [event["type"] for event in provider.sent])
-        self.assertTrue(provider.closed)
-
-    def test_connection_test_maps_provider_setup_errors_and_closes(self) -> None:
-        provider = FakeProviderSocket()
-
-        async def send_error(raw: str) -> None:
-            event = json.loads(raw)
-            provider.sent.append(event)
-            if event.get("type") == "session.update":
-                await provider.events.put(json.dumps({
-                    "type": "error",
-                    "error": {"code": "workspace_not_found", "message": "private provider detail"},
-                }))
-
-        provider.send = send_error
-
-        async def connect(_url: str, **_kwargs):
-            return provider
-
-        config = voice_input.BailianVoiceInputConfig(
-            "server-secret", "workspace", "cn-beijing", "realtime-model", "transcription-model",
-        )
-        with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "Workspace ID") as error:
-            asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
-
-        self.assertNotIn("private provider detail", str(error.exception))
-        self.assertTrue(provider.closed)
-
-    def test_manual_session_only_configures_transcription_and_commits_audio(self) -> None:
+    def test_connection_test_runs_and_finishes_task_without_audio(self) -> None:
         provider = FakeProviderSocket()
         connection: dict = {}
 
@@ -228,9 +235,43 @@ class BailianVoiceInputTests(unittest.TestCase):
             connection.update(url=url, additional_headers=additional_headers, kwargs=kwargs)
             return provider
 
-        config = voice_input.BailianVoiceInputConfig(
-            "server-secret", "workspace", "cn-beijing", "qwen3.8-omni-flash-realtime", "qwen3-asr-flash-realtime",
+        config = voice_input.BailianVoiceInputConfig("server-secret", "workspace", "cn-beijing", voice_input.DEFAULT_REALTIME_MODEL)
+        asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
+
+        self.assertEqual("Bearer server-secret", connection["additional_headers"]["Authorization"])
+        self.assertEqual("workspace", connection["additional_headers"]["X-DashScope-WorkSpace"])
+        self.assertEqual("codex-remote", connection["kwargs"]["user_agent_header"])
+        self.assertEqual(
+            ["run-task", "finish-task"],
+            [event["header"]["action"] for event in provider.sent_events],
         )
+        self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, provider.sent_events[0]["payload"]["model"])
+        self.assertEqual(16_000, provider.sent_events[0]["payload"]["parameters"]["sample_rate"])
+        self.assertFalse(any(isinstance(message, bytes) for message in provider.sent))
+        self.assertTrue(provider.closed)
+
+    def test_connection_test_maps_fun_asr_task_failure_and_closes(self) -> None:
+        provider = FakeProviderSocket(fail_on_run=True)
+
+        async def connect(_url: str, **_kwargs):
+            return provider
+
+        config = voice_input.BailianVoiceInputConfig("server-secret", "workspace", "cn-beijing", "fun-asr-realtime")
+        with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "对应资源") as error:
+            asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
+
+        self.assertNotIn("private provider detail", str(error.exception))
+        self.assertTrue(provider.closed)
+
+    def test_session_sends_binary_pcm_and_fun_asr_task_events(self) -> None:
+        provider = FakeProviderSocket()
+        connection: dict = {}
+
+        async def connect(url: str, additional_headers=None, **kwargs):
+            connection.update(url=url, additional_headers=additional_headers, kwargs=kwargs)
+            return provider
+
+        config = voice_input.BailianVoiceInputConfig("server-secret", "workspace", "cn-beijing", voice_input.DEFAULT_REALTIME_MODEL)
 
         async def exercise() -> None:
             session = voice_input.BailianVoiceInputSession(config, websocket_connect=connect)
@@ -243,12 +284,13 @@ class BailianVoiceInputTests(unittest.TestCase):
         asyncio.run(exercise())
 
         self.assertEqual("Bearer server-secret", connection["additional_headers"]["Authorization"])
-        self.assertEqual(voice_input.SAMPLE_RATE, provider.sent[0]["session"]["audio"]["input"]["format"]["sample_rate"])
-        self.assertIsNone(provider.sent[0]["session"]["turn_detection"])
-        self.assertEqual("qwen3-asr-flash-realtime", provider.sent[0]["session"]["input_audio_transcription"]["model"])
-        self.assertEqual(base64.b64encode(b"pcm16").decode("ascii"), provider.sent[1]["audio"])
-        self.assertEqual("input_audio_buffer.commit", provider.sent[2]["type"])
-        self.assertNotIn("response.create", [event["type"] for event in provider.sent])
+        self.assertEqual("/api-ws/v1/inference", connection["url"].split(".com", maxsplit=1)[1])
+        self.assertEqual(["run-task", "finish-task"], [event["header"]["action"] for event in provider.sent_events])
+        self.assertEqual(b"pcm16", next(message for message in provider.sent if isinstance(message, bytes)))
+        self.assertEqual(
+            provider.sent_events[0]["header"]["task_id"],
+            provider.sent_events[1]["header"]["task_id"],
+        )
         self.assertTrue(provider.closed)
 
     def test_unpaired_browser_is_rejected_before_opening_bailian(self) -> None:
@@ -263,7 +305,7 @@ class BailianVoiceInputTests(unittest.TestCase):
         self.assertTrue(browser.accepted)
         self.assertEqual(1008, browser.close_args["code"])
 
-    def test_proxy_relays_transcription_but_never_requests_a_response(self) -> None:
+    def test_proxy_relays_fun_asr_partial_and_completed_text_after_finish(self) -> None:
         browser = FakeBrowserSocket([
             {"type": "websocket.receive", "bytes": b"\x00\x01"},
             {"type": "websocket.receive", "text": json.dumps({"type": "voice.transcription.commit"})},
@@ -288,13 +330,12 @@ class BailianVoiceInputTests(unittest.TestCase):
             asyncio.run(voice_input.run_voice_input_websocket(browser, FakeAuth()))
 
         self.assertIn({"type": "voice.transcription.ready"}, browser.sent)
-        self.assertIn({"type": "voice.transcription.partial", "text": "你好"}, browser.sent)
+        partials = [event["text"] for event in browser.sent if event["type"] == "voice.transcription.partial"]
+        self.assertEqual(["你好", "你好，", "你好，百炼。"], partials)
         self.assertIn({"type": "voice.transcription.completed", "text": "你好，百炼。"}, browser.sent)
         self.assertNotIn("server-secret", json.dumps(browser.sent, ensure_ascii=False))
-        provider_types = [event["type"] for event in provider.sent]
-        self.assertIn("input_audio_buffer.append", provider_types)
-        self.assertIn("input_audio_buffer.commit", provider_types)
-        self.assertNotIn("response.create", provider_types)
+        self.assertEqual(["run-task", "finish-task"], [event["header"]["action"] for event in provider.sent_events])
+        self.assertIn(b"\x00\x01", provider.sent)
         self.assertTrue(provider.closed)
 
 

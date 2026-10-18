@@ -113,7 +113,6 @@ export interface BailianVoiceInputSettings {
   workspace_id: string
   region: 'cn-beijing' | 'ap-southeast-1'
   realtime_model: string
-  transcription_model: string
 }
 
 export interface BailianVoiceInputSettingsUpdate {
@@ -121,7 +120,6 @@ export interface BailianVoiceInputSettingsUpdate {
   workspace_id: string
   region: 'cn-beijing' | 'ap-southeast-1'
   realtime_model: string
-  transcription_model: string
 }
 
 export interface CodexWorkspaceEntry {

@@ -51,6 +51,19 @@ class BailianVoiceSettingsApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("temporary-key", tested_config.api_key)
         self.assertFalse((self.app.state.auth.state_path.parent / "bailian-voice-settings.json").exists())
 
+    async def test_default_model_is_fun_asr_and_old_transcription_field_is_ignored(self) -> None:
+        request = BailianVoiceInputSettingsRequest(
+            api_key="temporary-key",
+            workspace_id="temporary-workspace",
+            transcription_model="old-client-value",
+        )
+
+        with patch("codex_remote.app.test_bailian_voice_connection", new=AsyncMock()) as test_connection:
+            await self.test_endpoint(request)
+
+        tested_config = test_connection.await_args.args[0]
+        self.assertEqual("fun-asr-realtime-2026-02-28", tested_config.model)
+
     async def test_missing_key_returns_setup_error_without_attempting_connection(self) -> None:
         request = BailianVoiceInputSettingsRequest(
             workspace_id="temporary-workspace",

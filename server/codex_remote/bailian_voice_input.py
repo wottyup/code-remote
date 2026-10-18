@@ -10,14 +10,16 @@ import os
 import socket
 import ssl
 import tempfile
+import uuid
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 
-DEFAULT_REALTIME_MODEL = "qwen3.8-omni-flash-realtime"
+DEFAULT_REALTIME_MODEL = "fun-asr-realtime-2026-02-28"
+# Retained for compatibility with older API clients; Fun-ASR uses one model field.
 DEFAULT_TRANSCRIPTION_MODEL = "qwen3-asr-flash-realtime"
+LEGACY_REALTIME_MODELS = {"qwen3.8-omni-flash-realtime", "qwen3-asr-flash-realtime"}
 SAMPLE_RATE = 16_000
 MAX_AUDIO_SECONDS = 180
 MAX_AUDIO_BYTES = SAMPLE_RATE * 2 * MAX_AUDIO_SECONDS
@@ -63,10 +65,17 @@ def connection_error_message(error: Exception) -> str:
     return f"百炼连接失败（{type(error).__name__}），请检查网络、地域和配置。"
 
 
+def normalize_realtime_model(model: Any) -> str:
+    model = str(model or "").strip()
+    if not model.startswith("fun-asr-") or model in LEGACY_REALTIME_MODELS:
+        return DEFAULT_REALTIME_MODEL
+    return model
+
+
 def build_realtime_url(workspace_id: str, region: str, model: str) -> str:
     workspace_id = str(workspace_id or "").strip()
     region = str(region or "").strip().lower()
-    model = str(model or "").strip()
+    model = normalize_realtime_model(model)
     if not workspace_id or not all(char.isascii() and (char.isalnum() or char in "-_") for char in workspace_id):
         raise BailianVoiceInputError("百炼 Workspace ID 无效")
     host_suffix = {
@@ -77,18 +86,20 @@ def build_realtime_url(workspace_id: str, region: str, model: str) -> str:
         raise BailianVoiceInputError("百炼地域仅支持北京或新加坡")
     if not model or not all(char.isascii() and (char.isalnum() or char in "._-") for char in model):
         raise BailianVoiceInputError("百炼实时模型名无效")
-    return f"wss://{workspace_id}.{host_suffix}/api-ws/v1/realtime?model={quote(model, safe='._-')}"
+    return f"wss://{workspace_id}.{host_suffix}/api-ws/v1/inference"
 
 
 def provider_error_message(event: dict[str, Any] | None = None) -> str:
     """Return actionable but credential-safe errors to the paired browser."""
-    detail = event.get("error") if isinstance(event, dict) else None
+    event = event if isinstance(event, dict) else {}
+    code = str(event.get("error_code") or "").lower()
+    message = str(event.get("error_message") or "").lower()
+    detail = event.get("error")
     if isinstance(detail, dict):
-        code = str(detail.get("code") or "").lower()
-        message = str(detail.get("message") or "").lower()
-    else:
-        code = ""
-        message = str(detail or "").lower()
+        code = f"{code} {detail.get('code') or ''}".lower()
+        message = f"{message} {detail.get('message') or ''}".lower()
+    elif detail:
+        message = f"{message} {detail}".lower()
     combined = f"{code} {message}"
     if any(value in combined for value in ("invalid_api_key", "unauthorized", "401", "authentication")):
         return "百炼鉴权失败，请检查服务端 API Key。"
@@ -100,12 +111,11 @@ def provider_error_message(event: dict[str, Any] | None = None) -> str:
 
 
 class BailianVoiceInputConfig:
-    def __init__(self, api_key: str, workspace_id: str, region: str, model: str, transcription_model: str):
+    def __init__(self, api_key: str, workspace_id: str, region: str, model: str):
         self.api_key = api_key.strip()
         self.workspace_id = workspace_id.strip()
         self.region = region.strip().lower()
-        self.model = model.strip()
-        self.transcription_model = transcription_model.strip()
+        self.model = normalize_realtime_model(model)
 
     @classmethod
     def from_environment(cls) -> BailianVoiceInputConfig:
@@ -114,7 +124,6 @@ class BailianVoiceInputConfig:
             workspace_id=os.environ.get("BAILIAN_WORKSPACE_ID", ""),
             region=os.environ.get("BAILIAN_REGION", "cn-beijing"),
             model=os.environ.get("BAILIAN_REALTIME_MODEL", DEFAULT_REALTIME_MODEL),
-            transcription_model=os.environ.get("BAILIAN_TRANSCRIPTION_MODEL", DEFAULT_TRANSCRIPTION_MODEL),
         )
 
     def validate(self) -> None:
@@ -123,8 +132,6 @@ class BailianVoiceInputConfig:
                 "尚未配置百炼语音输入，请在项目设置中填写 API Key 和 Workspace ID。"
             )
         build_realtime_url(self.workspace_id, self.region, self.model)
-        if not self.transcription_model:
-            raise BailianVoiceInputError("百炼转写模型配置无效")
 
 
 class BailianVoiceInputSettingsStore:
@@ -144,7 +151,7 @@ class BailianVoiceInputSettingsStore:
         return {
             key: item.strip()
             for key, item in value.items()
-            if key in {"api_key", "workspace_id", "region", "realtime_model", "transcription_model"}
+            if key in {"api_key", "workspace_id", "region", "realtime_model"}
             and isinstance(item, str)
             and item.strip()
         }
@@ -156,8 +163,9 @@ class BailianVoiceInputSettingsStore:
             "api_key": stored.get("api_key") or str(env.get("DASHSCOPE_API_KEY", "")).strip(),
             "workspace_id": stored.get("workspace_id") or str(env.get("BAILIAN_WORKSPACE_ID", "")).strip(),
             "region": stored.get("region") or str(env.get("BAILIAN_REGION", "cn-beijing")).strip(),
-            "realtime_model": stored.get("realtime_model") or str(env.get("BAILIAN_REALTIME_MODEL", DEFAULT_REALTIME_MODEL)).strip(),
-            "transcription_model": stored.get("transcription_model") or str(env.get("BAILIAN_TRANSCRIPTION_MODEL", DEFAULT_TRANSCRIPTION_MODEL)).strip(),
+            "realtime_model": normalize_realtime_model(
+                stored.get("realtime_model") or env.get("BAILIAN_REALTIME_MODEL", DEFAULT_REALTIME_MODEL)
+            ),
         }
         api_key_source = "project" if stored.get("api_key") else "environment" if values["api_key"] else None
         return values, api_key_source
@@ -169,7 +177,6 @@ class BailianVoiceInputSettingsStore:
             values["workspace_id"],
             values["region"],
             values["realtime_model"],
-            values["transcription_model"],
         )
 
     def config_for_test(self, overrides: dict[str, Any]) -> BailianVoiceInputConfig:
@@ -179,12 +186,9 @@ class BailianVoiceInputSettingsStore:
             api_key=requested_key if isinstance(requested_key, str) and requested_key.strip() else current["api_key"],
             workspace_id=str(overrides.get("workspace_id", "")).strip(),
             region=str(overrides.get("region", "cn-beijing")).strip(),
-            model=str(overrides.get("realtime_model", DEFAULT_REALTIME_MODEL)).strip(),
-            transcription_model=str(overrides.get("transcription_model", DEFAULT_TRANSCRIPTION_MODEL)).strip(),
+            model=normalize_realtime_model(overrides.get("realtime_model", DEFAULT_REALTIME_MODEL)),
         )
         config.validate()
-        if not all(char.isascii() and (char.isalnum() or char in "._-") for char in config.transcription_model):
-            raise BailianVoiceInputError("百炼转写模型名无效")
         return config
 
     def public_view(self) -> dict[str, Any]:
@@ -197,7 +201,6 @@ class BailianVoiceInputSettingsStore:
             "workspace_id": values["workspace_id"],
             "region": values["region"],
             "realtime_model": values["realtime_model"],
-            "transcription_model": values["transcription_model"],
         }
 
     def update(self, values: dict[str, Any]) -> dict[str, Any]:
@@ -210,19 +213,13 @@ class BailianVoiceInputSettingsStore:
 
         workspace_id = str(values.get("workspace_id", "")).strip()
         region = str(values.get("region", "cn-beijing")).strip().lower()
-        realtime_model = str(values.get("realtime_model", DEFAULT_REALTIME_MODEL)).strip()
-        transcription_model = str(values.get("transcription_model", DEFAULT_TRANSCRIPTION_MODEL)).strip()
+        realtime_model = normalize_realtime_model(values.get("realtime_model", DEFAULT_REALTIME_MODEL))
         build_realtime_url(workspace_id, region, realtime_model)
-        if not transcription_model or not all(
-            char.isascii() and (char.isalnum() or char in "._-") for char in transcription_model
-        ):
-            raise BailianVoiceInputError("百炼转写模型名无效")
 
         stored.update({
             "workspace_id": workspace_id,
             "region": region,
             "realtime_model": realtime_model,
-            "transcription_model": transcription_model,
         })
         self._write(stored)
         return self.public_view()
@@ -254,6 +251,13 @@ class BailianVoiceInputSettingsStore:
             raise BailianVoiceInputError("无法安全保存百炼配置，请检查服务目录权限。") from error
 
 
+def provider_event_type(event: dict[str, Any]) -> str:
+    header = event.get("header")
+    if isinstance(header, dict) and header.get("event"):
+        return str(header["event"])
+    return str(event.get("type") or event.get("event") or "")
+
+
 class BailianVoiceInputSession:
     """One Bailian realtime connection used only to transcribe microphone audio."""
 
@@ -262,6 +266,7 @@ class BailianVoiceInputSession:
         self._websocket_connect = websocket_connect
         self._websocket = None
         self._closed = False
+        self.task_id = str(uuid.uuid4())
 
     async def connect(self) -> None:
         self.config.validate()
@@ -282,7 +287,11 @@ class BailianVoiceInputSession:
             self._websocket = await connector(
                 build_realtime_url(self.config.workspace_id, self.config.region, self.config.model),
                 **{
-                    header_name: {"Authorization": f"Bearer {self.config.api_key}"},
+                    header_name: {
+                        "Authorization": f"Bearer {self.config.api_key}",
+                        "X-DashScope-WorkSpace": self.config.workspace_id,
+                    },
+                    "user_agent_header": "codex-remote",
                     "open_timeout": 12,
                     "close_timeout": 2,
                     "ping_interval": 20,
@@ -297,40 +306,42 @@ class BailianVoiceInputSession:
 
     async def configure(self) -> None:
         await self.send_json({
-            "type": "session.update",
-            "session": {
-                "modalities": ["text", "audio"],
-                # Manual mode: audio is transcribed, but no assistant response is
-                # created unless a response.create event is explicitly sent.
-                "turn_detection": None,
-                "audio": {
-                    "input": {
-                        "format": {
-                            "type": "pcm",
-                            "sample_rate": SAMPLE_RATE,
-                            "sample_format": "s16le",
-                            "channels": 1,
-                            "packing": "interleaved",
-                            "channel_layout": "mono",
-                        },
-                    },
-                },
-                "input_audio_transcription": {"model": self.config.transcription_model},
+            "header": {
+                "action": "run-task",
+                "task_id": self.task_id,
+                "streaming": "duplex",
+            },
+            "payload": {
+                "task_group": "audio",
+                "task": "asr",
+                "function": "recognition",
+                "model": self.config.model,
+                "parameters": {"format": "pcm", "sample_rate": SAMPLE_RATE},
+                "input": {},
             },
         })
 
     async def send_audio(self, pcm16: bytes) -> None:
-        if pcm16:
-            await self.send_json({
-                "type": "input_audio_buffer.append",
-                "audio": base64.b64encode(pcm16).decode("ascii"),
-            })
+        if not pcm16:
+            return
+        if self._websocket is None or self._closed:
+            raise BailianVoiceInputError("百炼语音识别连接尚未就绪")
+        try:
+            await self._websocket.send(pcm16)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            raise BailianVoiceInputError("与百炼通信失败，请检查网络后重试。") from exc
 
     async def commit(self) -> None:
-        await self.send_json({"type": "input_audio_buffer.commit"})
-
-    async def clear(self) -> None:
-        await self.send_json({"type": "input_audio_buffer.clear"})
+        await self.send_json({
+            "header": {
+                "action": "finish-task",
+                "task_id": self.task_id,
+                "streaming": "duplex",
+            },
+            "payload": {"input": {}},
+        })
 
     async def receive_event(self) -> dict[str, Any]:
         if self._websocket is None or self._closed:
@@ -371,30 +382,44 @@ class BailianVoiceInputSession:
                 await websocket.close()
 
 
+async def receive_expected_event(
+    session: BailianVoiceInputSession,
+    expected: str,
+    timeout_message: str = "等待百炼语音识别会话就绪超时，请检查模型权限和配置。",
+) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + UPSTREAM_READY_TIMEOUT_SECONDS
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            raise BailianVoiceInputError(timeout_message)
+        try:
+            event = await asyncio.wait_for(session.receive_event(), timeout=remaining)
+        except asyncio.TimeoutError as exc:
+            raise BailianVoiceInputError(timeout_message) from exc
+        event_type = provider_event_type(event)
+        if event_type == "task-failed" or event_type == "error":
+            raise BailianVoiceInputError(provider_error_message(event))
+        if event_type == expected:
+            return event
+
+
 async def test_bailian_voice_connection(
     config: BailianVoiceInputConfig,
     *,
     websocket_connect=None,
 ) -> None:
-    """Validate credentials, connectivity, and session config without sending audio."""
+    """Validate credentials and a Fun-ASR task without sending audio."""
     session = BailianVoiceInputSession(config, websocket_connect=websocket_connect)
     try:
         await session.connect()
         await session.configure()
-        deadline = asyncio.get_running_loop().time() + UPSTREAM_READY_TIMEOUT_SECONDS
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise BailianVoiceInputError("已连接百炼，但等待语音会话就绪超时，请检查模型权限和配置。")
-            try:
-                event = await asyncio.wait_for(session.receive_event(), timeout=remaining)
-            except asyncio.TimeoutError as exc:
-                raise BailianVoiceInputError("已连接百炼，但等待语音会话就绪超时，请检查模型权限和配置。") from exc
-            event_type = str(event.get("type") or "")
-            if event_type == "error":
-                raise BailianVoiceInputError(provider_error_message(event))
-            if event_type == "session.updated":
-                return
+        await receive_expected_event(session, "task-started")
+        await session.commit()
+        await receive_expected_event(
+            session,
+            "task-finished",
+            "等待百炼结束识别任务超时，请检查网络后重试。",
+        )
     finally:
         await session.close()
 
@@ -432,22 +457,12 @@ async def run_voice_input_websocket(
     try:
         await session.connect()
         await session.configure()
-        deadline = asyncio.get_running_loop().time() + UPSTREAM_READY_TIMEOUT_SECONDS
-        while True:
-            remaining = deadline - asyncio.get_running_loop().time()
-            if remaining <= 0:
-                raise BailianVoiceInputError("等待百炼语音识别会话就绪超时")
-            event = await asyncio.wait_for(session.receive_event(), timeout=remaining)
-            event_type = str(event.get("type") or "")
-            if event_type == "error":
-                raise BailianVoiceInputError(provider_error_message(event))
-            if event_type == "session.updated":
-                break
+        await receive_expected_event(session, "task-started")
         await websocket.send_json({"type": "voice.transcription.ready"})
 
         audio_bytes_received = 0
         committed = False
-        partial_text = ""
+        sentence_texts: dict[int, str] = {}
         client_task = asyncio.create_task(websocket.receive())
         provider_task = asyncio.create_task(session.receive_event())
         while True:
@@ -469,24 +484,36 @@ async def run_voice_input_websocket(
                 except BailianVoiceInputError as exc:
                     await websocket.send_json({"type": "voice.transcription.error", "message": str(exc)})
                     return
-                event_type = str(event.get("type") or "")
-                if event_type == "error" or event_type == "conversation.item.input_audio_transcription.failed":
+                event_type = provider_event_type(event)
+                if event_type in {"error", "task-failed"}:
                     await websocket.send_json({
                         "type": "voice.transcription.error",
                         "message": provider_error_message(event),
                     })
                     return
-                if event_type == "conversation.item.input_audio_transcription.delta":
-                    if "delta" in event:
-                        partial_text += str(event.get("delta") or "")
-                    else:
-                        partial_text = str(event.get("text") or "") + str(event.get("stash") or "")
-                    await websocket.send_json({
-                        "type": "voice.transcription.partial",
-                        "text": partial_text,
-                    })
-                elif event_type == "conversation.item.input_audio_transcription.completed":
-                    transcript = str(event.get("transcript") or "").strip()
+                if event_type == "result-generated":
+                    payload = event.get("payload")
+                    output = payload.get("output") if isinstance(payload, dict) else None
+                    sentence = output.get("sentence") if isinstance(output, dict) else None
+                    if isinstance(sentence, dict) and not sentence.get("heartbeat"):
+                        text = str(sentence.get("text") or "")
+                        if text:
+                            try:
+                                sentence_id = int(sentence.get("sentence_id"))
+                            except (TypeError, ValueError):
+                                sentence_id = max(sentence_texts, default=0) + 1
+                            sentence_texts[sentence_id] = text
+                            partial_text = "".join(
+                                sentence_texts[key] for key in sorted(sentence_texts)
+                            )
+                            await websocket.send_json({
+                                "type": "voice.transcription.partial",
+                                "text": partial_text,
+                            })
+                elif event_type == "task-finished":
+                    transcript = "".join(
+                        sentence_texts[key] for key in sorted(sentence_texts)
+                    ).strip()
                     await websocket.send_json({
                         "type": "voice.transcription.completed",
                         "text": transcript,
@@ -535,7 +562,6 @@ async def run_voice_input_websocket(
                                 committed = True
                                 await session.commit()
                         elif control.get("type") == "voice.transcription.cancel":
-                            await session.clear()
                             await websocket.send_json({"type": "voice.transcription.cancelled"})
                             return
                         elif control.get("type") == "voice.transcription.ping":

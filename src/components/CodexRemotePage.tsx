@@ -5639,7 +5639,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       workspace_id: bailianVoiceSettings.workspace_id.trim(),
       region: bailianVoiceSettings.region,
       realtime_model: bailianVoiceSettings.realtime_model,
-      transcription_model: bailianVoiceSettings.transcription_model,
     }
   }
 
@@ -6074,14 +6073,10 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
                 </select>
               </label>
               <details className="bailian-voice-advanced">
-                <summary>高级模型设置</summary>
+                <summary>识别模型</summary>
                 <label className="theme-control-row bailian-voice-row" htmlFor="bailian-realtime-model">
-                  <span><strong>实时模型</strong><small>需已在百炼开通实时语音权限。</small></span>
-                  <input id="bailian-realtime-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.realtime_model} onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, realtime_model: event.target.value })} />
-                </label>
-                <label className="theme-control-row bailian-voice-row" htmlFor="bailian-transcription-model">
-                  <span><strong>转写模型</strong><small>用于将录音识别为文字。</small></span>
-                  <input id="bailian-transcription-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.transcription_model} onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, transcription_model: event.target.value })} />
+                  <span><strong>实时语音识别</strong><small>使用当前百炼账号已开通的 Fun-ASR 模型。</small></span>
+                  <input id="bailian-realtime-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.realtime_model} readOnly />
                 </label>
               </details>
               <div className="bailian-voice-actions">
