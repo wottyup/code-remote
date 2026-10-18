@@ -97,6 +97,13 @@ function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: num
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
 }
 
+type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification'
+
+function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
+  if (theme !== 'pixel') return null
+  return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
+}
+
 function WelcomeTypingTitle({ text }: { text: string }) {
   const [visibleText, setVisibleText] = useState('')
   const [cursorVisible, setCursorVisible] = useState(true)
@@ -5541,6 +5548,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
+    { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
 
@@ -5705,7 +5713,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
       <div className="theme-settings-panel__content">
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
           <div className="theme-options" role="radiogroup" aria-label="界面主题">
             {themeOptions.map((option) => (
               <button
@@ -5842,7 +5850,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         </section>
 
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
           <div className="theme-display-controls">
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
@@ -5853,7 +5861,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading">
-            <div><h2>聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
+            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
             <button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button>
           </div>
           <div className="theme-display-controls sidebar-chat-shortcut-controls">
@@ -5879,7 +5887,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         </section>
 
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
           <div className="theme-display-controls">
             <div className="theme-control-row">
               <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
