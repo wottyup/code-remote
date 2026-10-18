@@ -92,6 +92,7 @@ const connectionLabel = {
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
 type ChatEngine = 'codex' | 'claude-code'
+type ComposerHeightMemory = Partial<Record<ChatEngine, { height: number; manuallyResized: boolean }>>
 
 function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
@@ -219,6 +220,7 @@ const retroSidePanelDefaultWidth = 174.4
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
+const defaultClaudeComposerHeight = 52
 const compactLandscapeComposerHeight = 50
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
@@ -939,7 +941,7 @@ interface MessageComposerProps {
   token: string
   draftScope: string
   onDraftChange: (draft: string) => void
-  composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
+  composerHeightMemory: RefObject<ComposerHeightMemory | null>
   connection: RemoteConnection
   isRunning: boolean
   isReplying: boolean
@@ -1032,6 +1034,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   continuationPending,
   onRefresh,
 }, ref) {
+  const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
+  const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
@@ -1050,9 +1054,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
-    if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
-    if (typeof window === 'undefined') return defaultComposerHeight
-    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
+    if (savedComposerHeight?.manuallyResized) return savedComposerHeight.height
+    if (typeof window === 'undefined') return composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
@@ -1070,10 +1074,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   attachedDocumentsRef.current = attachedDocuments
   const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
+  const composerEngineRef = useRef(composerEngine)
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
-  const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
+  const composerHeightWasResized = useRef(savedComposerHeight?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
   const keyboardFallbackTimer = useRef<number | undefined>(undefined)
   const requestComposerKeyboard = useCallback(() => {
@@ -1102,8 +1107,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   } | null>(null)
 
   useLayoutEffect(() => {
-    composerHeightMemory.current = { height: composerHeight, manuallyResized: composerHeightWasResized.current }
-  }, [composerHeight, composerHeightMemory])
+    if (composerEngineRef.current !== composerEngine) return
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: composerHeightWasResized.current },
+    }
+  }, [composerEngine, composerHeight, composerHeightMemory])
+
+  useLayoutEffect(() => {
+    if (composerEngineRef.current === composerEngine) return
+    composerEngineRef.current = composerEngine
+    const savedHeight = composerHeightMemory.current?.[composerEngine]
+    composerHeightWasResized.current = savedHeight?.manuallyResized ?? false
+    setComposerHeight(savedHeight?.height ?? (compactLandscape
+      ? compactLandscapeComposerHeight
+      : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight))
+  }, [composerEngine, composerHeightMemory, compactLandscape])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(pointer: coarse)')
@@ -1111,7 +1130,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const landscape = isCompactLandscape()
       setCompactLandscape(landscape)
       if (composerHeightWasResized.current) return
-      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight)
     }
     syncComposerHeight()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
@@ -1122,7 +1141,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
       else mediaQuery.removeListener(syncComposerHeight)
     }
-  }, [])
+  }, [composerEngine])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
@@ -1929,7 +1948,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault()
     composerHeightWasResized.current = true
-    composerHeightMemory.current = { height: composerHeight, manuallyResized: true }
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: true },
+    }
     resizeState.current = { startY: event.clientY, startHeight: composerHeight }
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
@@ -3818,7 +3840,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
   const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const workspaceTerminalRequestSequence = useRef(0)
-  const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
+  const composerHeightMemory = useRef<ComposerHeightMemory | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
