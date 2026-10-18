@@ -13,6 +13,7 @@ import secrets
 import shutil
 import stat
 import tempfile
+import threading
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -135,6 +136,7 @@ IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EX
 MAX_IMAGES_PER_TURN = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
+MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -942,10 +944,48 @@ def workspace_file_save(base: Path, relative_path: str, content: str, expected_r
     return workspace_file_preview(base, relative_path)
 
 
-def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
+def prepare_message_image_directory(state_directory: Path) -> Path:
+    image_directory = state_directory / "message-images"
+    try:
+        if image_directory.is_symlink():
+            raise OSError("聊天图片目录不能是符号链接")
+        image_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(image_directory, 0o700)
+    except OSError as error:
+        raise RuntimeError(f"无法准备聊天图片目录：{image_directory}：{error}") from error
+    return image_directory.resolve()
+
+
+def stored_image_directory_size(image_directory: Path) -> int:
+    total = 0
+    try:
+        with os.scandir(image_directory) as entries:
+            for entry in entries:
+                if Path(entry.name).suffix.lower() not in IMAGE_MEDIA_TYPES:
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                total += entry.stat(follow_symlinks=False).st_size
+    except OSError as error:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="无法检查聊天图片存储空间。",
+        ) from error
+    return total
+
+
+def save_turn_images(
+    images: list[TurnImage],
+    image_directory: Path,
+    *,
+    max_storage_bytes: int | None = None,
+    storage_lock: threading.Lock | None = None,
+) -> list[Path]:
     paths: list[Path] = []
     total_size = 0
     try:
+        decoded_images: list[tuple[TurnImage, bytes]] = []
         for image in images:
             try:
                 encoded = image.data.encode("ascii")
@@ -957,9 +997,36 @@ def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Pat
             total_size += len(content)
             if total_size > MAX_TOTAL_IMAGE_BYTES:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="单条消息的图片总大小不能超过 24 MB")
-            path = image_directory / f"{secrets.token_hex(16)}{IMAGE_EXTENSIONS[image.media_type]}"
-            path.write_bytes(content)
-            paths.append(path)
+            decoded_images.append((image, content))
+
+        def write_images() -> None:
+            for image, content in decoded_images:
+                path = image_directory / f"{secrets.token_hex(16)}{IMAGE_EXTENSIONS[image.media_type]}"
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(content)
+                except Exception:
+                    with suppress(FileNotFoundError):
+                        path.unlink()
+                    raise
+                paths.append(path)
+
+        if storage_lock is None:
+            if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                    detail="聊天图片存储空间已满，请先清理服务器数据后再上传。",
+                )
+            write_images()
+        else:
+            with storage_lock:
+                if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                        detail="聊天图片存储空间已满，请先清理服务器数据后再上传。",
+                    )
+                write_images()
         return paths
     except Exception:
         for path in paths:
@@ -1053,7 +1120,7 @@ def prepare_claude_turn_files(
 
 
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
-    """Embed images created by this process so a refreshed thread can render them."""
+    """Embed managed chat images so a refreshed thread can render them."""
     image_root = image_directory.resolve()
     system_temp_root = Path(tempfile.gettempdir()).resolve()
     turns = thread.get("turns")
@@ -1309,8 +1376,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         app_server._emit,
     )
     idempotent_requests = IdempotentRequestRegistry()
-    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-", dir=auth.state_path.parent))
-    pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
+    image_directory = prepare_message_image_directory(auth.state_path.parent)
+    image_storage_lock = threading.Lock()
+    runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
+    pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
 
     async def reap_tmux_terminal_sessions() -> None:
@@ -1333,7 +1402,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
         if is_claude_thread_id(thread_id):
             turn_directory, prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                payload["requestText"], images, pdf_ids, pdf_attachments, image_directory,
+                payload["requestText"], images, pdf_ids, pdf_attachments, runtime_directory,
             )
             try:
                 turn_id = await claude_code.start_turn(
@@ -1402,15 +1471,16 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await history_watcher
             await app_server.close()
             shared_state.close()
-            shutil.rmtree(image_directory, ignore_errors=True)
+            shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.40.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.40.4-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
     app.state.bailian_voice_settings = bailian_voice_settings
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
+    app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
     browser_history_sync = BrowserHistorySync()
@@ -1906,7 +1976,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         if is_claude_thread_id(thread_id):
             async def start_claude_turn() -> dict[str, Any]:
                 turn_directory, turn_prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                    prompt, body.images, body.pdf_attachments, pdf_attachments, image_directory,
+                    prompt, body.images, body.pdf_attachments, pdf_attachments, runtime_directory,
                 )
                 try:
                     turn_id = await claude_code.start_turn(
@@ -1940,7 +2010,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
         async def start() -> dict[str, Any]:
-            image_paths = save_turn_images(body.images, image_directory)
+            image_paths = save_turn_images(
+                body.images, image_directory,
+                max_storage_bytes=MAX_STORED_IMAGE_BYTES,
+                storage_lock=image_storage_lock,
+            )
             try:
                 turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
                 cwd = await thread_workspace_for_turn(thread_id)
@@ -2016,7 +2090,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
 
         async def steer() -> dict[str, Any]:
-            image_paths = save_turn_images(body.images, image_directory)
+            image_paths = save_turn_images(
+                body.images, image_directory,
+                max_storage_bytes=MAX_STORED_IMAGE_BYTES,
+                storage_lock=image_storage_lock,
+            )
             try:
                 turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
                 result = await app_server.steer_turn(thread_id, turn_prompt, image_paths)

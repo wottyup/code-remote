@@ -1,14 +1,25 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_remote.app import enrich_thread_images, enrich_user_message_item, workspace_image_preview
+from fastapi import HTTPException
+
+from codex_remote.app import (
+    TurnImage,
+    enrich_thread_images,
+    enrich_user_message_item,
+    prepare_message_image_directory,
+    save_turn_images,
+    workspace_image_preview,
+)
 from codex_remote.codex_history import CodexHistoryStore
 
 
@@ -290,6 +301,28 @@ class CodexHistoryStoreTests(unittest.TestCase):
 
             self.assertEqual("image/png", preview["mediaType"])
             self.assertEqual("iVBORw0KGgpwcmV2aWV3", preview["data"])
+
+    def test_persistent_image_quota_rejects_new_image_without_deleting_old_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_directory = Path(directory)
+            image_directory = prepare_message_image_directory(state_directory)
+            existing = image_directory / "old.png"
+            existing.write_bytes(b"old-image")
+            image = TurnImage(
+                media_type="image/png",
+                data=base64.b64encode(b"new-image").decode("ascii"),
+            )
+
+            with self.assertRaises(HTTPException) as error:
+                save_turn_images(
+                    [image], image_directory,
+                    max_storage_bytes=existing.stat().st_size + 1,
+                    storage_lock=threading.Lock(),
+                )
+
+            self.assertEqual(507, error.exception.status_code)
+            self.assertEqual(b"old-image", existing.read_bytes())
+            self.assertEqual([existing], list(image_directory.iterdir()))
 
 
 if __name__ == "__main__":
