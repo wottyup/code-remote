@@ -33,14 +33,6 @@ from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
 from .browser_payload import browser_event, browser_thread, browser_thread_summary
-from .bailian_voice_input import (
-    DEFAULT_REALTIME_MODEL,
-    DEFAULT_TRANSCRIPTION_MODEL,
-    BailianVoiceInputError,
-    BailianVoiceInputSettingsStore,
-    run_voice_input_websocket,
-    test_bailian_voice_connection,
-)
 from .claude_code import (
     ClaudeCodeError,
     ClaudeCodeServer,
@@ -110,14 +102,6 @@ async def watch_codex_history(app_server: CodexAppServer) -> None:
 
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
-
-
-class BailianVoiceInputSettingsRequest(BaseModel):
-    api_key: str | None = Field(default=None, max_length=512)
-    workspace_id: str = Field(min_length=1, max_length=256)
-    region: Literal["cn-beijing", "ap-southeast-1"] = "cn-beijing"
-    realtime_model: str = Field(default=DEFAULT_REALTIME_MODEL, min_length=1, max_length=200)
-    transcription_model: str = Field(default=DEFAULT_TRANSCRIPTION_MODEL, min_length=1, max_length=200)
 
 
 class PairingStateError(RuntimeError):
@@ -1430,7 +1414,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as error:
         raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
-    bailian_voice_settings = BailianVoiceInputSettingsStore(auth.state_path.parent / "bailian-voice-settings.json")
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
@@ -1559,11 +1542,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.42.3-dev.2", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.43.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
-    app.state.bailian_voice_settings = bailian_voice_settings
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
     app.state.message_image_directory = image_directory
@@ -1629,33 +1611,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 )
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码错误")
         return {"token": token}
-
-    @app.get("/api/v1/settings/bailian-voice")
-    async def get_bailian_voice_settings() -> dict[str, Any]:
-        return bailian_voice_settings.public_view()
-
-    @app.post("/api/v1/settings/bailian-voice")
-    async def save_bailian_voice_settings(request: BailianVoiceInputSettingsRequest) -> dict[str, Any]:
-        try:
-            return bailian_voice_settings.update(request.model_dump())
-        except BailianVoiceInputError as error:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-
-    @app.post("/api/v1/settings/bailian-voice/test")
-    async def test_bailian_voice_settings(request: BailianVoiceInputSettingsRequest) -> dict[str, Any]:
-        try:
-            config = bailian_voice_settings.config_for_test(request.model_dump())
-        except BailianVoiceInputError as error:
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
-        try:
-            await test_bailian_voice_connection(config)
-        except BailianVoiceInputError as error:
-            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
-        return {"success": True, "message": "连接成功，百炼语音会话已就绪；本次测试未发送音频。"}
-
-    @app.delete("/api/v1/settings/bailian-voice")
-    async def reset_bailian_voice_settings() -> dict[str, Any]:
-        return bailian_voice_settings.reset()
 
     @app.post("/api/v1/unpair")
     async def unpair(request: Request) -> dict[str, bool]:
@@ -2215,10 +2170,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
-
-    @app.websocket("/api/v1/codex/voice-transcription")
-    async def voice_transcription_websocket(websocket: WebSocket) -> None:
-        await run_voice_input_websocket(websocket, auth, bailian_voice_settings.get_config)
 
     @app.websocket("/api/v1/codex/ws")
     async def codex_websocket(websocket: WebSocket) -> None:

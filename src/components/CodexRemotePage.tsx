@@ -24,7 +24,6 @@ import {
   ImagePlus,
   Link2,
   LoaderCircle,
-  Mic,
   Menu,
   MessagesSquare,
   Pause,
@@ -45,14 +44,13 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type BailianVoiceInputSettings, type BailianVoiceInputSettingsUpdate, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
-import { BailianVoiceInputController, type VoiceInputState } from '../lib/bailianVoiceInput'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
@@ -1046,9 +1044,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
-  const [voiceInputState, setVoiceInputState] = useState<VoiceInputState>('idle')
-  const [voiceTranscriptPreview, setVoiceTranscriptPreview] = useState('')
-  const [voiceInputError, setVoiceInputError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
     isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
@@ -1065,7 +1060,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
-  const voiceInputController = useRef<BailianVoiceInputController | null>(null)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
   draftScopeRef.current = draftScope
@@ -1285,79 +1279,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const messageId = editingQueuedMessageIdRef.current
     if (messageId) onEndQueuedEdit(messageId)
   }, [onEndQueuedEdit])
-
-  useEffect(() => () => {
-    voiceInputController.current?.dispose()
-    voiceInputController.current = null
-  }, [])
-
-  function insertVoiceTranscript(text: string) {
-    const transcript = text.trim()
-    if (!transcript) {
-      setVoiceInputError('没有识别到语音内容，请再试一次。')
-      return
-    }
-    const textarea = composer.current
-    const current = draftRef.current
-    const start = textarea?.selectionStart ?? current.length
-    const end = textarea?.selectionEnd ?? start
-    const next = `${current.slice(0, start)}${transcript}${current.slice(end)}`
-    updateDraft(next)
-    window.requestAnimationFrame(() => {
-      const activeTextarea = composer.current
-      if (!activeTextarea) return
-      activeTextarea.focus({ preventScroll: true })
-      const cursor = start + transcript.length
-      activeTextarea.setSelectionRange(cursor, cursor)
-    })
-  }
-
-  async function startVoiceInput() {
-    setVoiceInputError(null)
-    setVoiceTranscriptPreview('')
-    const controller = new BailianVoiceInputController()
-    voiceInputController.current = controller
-    try {
-      await controller.start(token, {
-        onState: setVoiceInputState,
-        onPartial: setVoiceTranscriptPreview,
-        onTranscript: (text) => {
-          if (voiceInputController.current === controller) voiceInputController.current = null
-          insertVoiceTranscript(text)
-        },
-        onError: (message) => {
-          if (voiceInputController.current === controller) voiceInputController.current = null
-          setVoiceInputError(message)
-        },
-      })
-    } catch (reason) {
-      if (voiceInputController.current === controller) {
-        voiceInputController.current = null
-        setVoiceInputState('idle')
-        setVoiceInputError(reason instanceof Error ? reason.message : '无法启动语音输入。')
-      }
-    }
-  }
-
-  function toggleVoiceInput() {
-    const controller = voiceInputController.current
-    if (voiceInputState === 'connecting') {
-      controller?.cancel()
-      voiceInputController.current = null
-      return
-    }
-    if (voiceInputState === 'recording') {
-      controller?.stop()
-      return
-    }
-    if (voiceInputState === 'transcribing') {
-      controller?.cancel()
-      voiceInputController.current = null
-      setVoiceTranscriptPreview('')
-      return
-    }
-    if (voiceInputState === 'idle') void startVoiceInput()
-  }
 
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
@@ -2146,13 +2067,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           enterKeyHint="send"
         />
       </div>
-      {voiceInputError ? <p className="voice-input-status voice-input-status--error" role="alert">{voiceInputError}</p> : null}
-      {voiceInputState !== 'idle' ? (
-        <p className={`voice-input-status${voiceInputState === 'recording' ? ' voice-input-status--recording' : ''}`} role="status">
-          {voiceInputState === 'connecting' ? '正在连接阿里云语音…' : voiceInputState === 'transcribing' ? '正在转写…' : '正在录音'}
-          {voiceTranscriptPreview ? <span>{voiceTranscriptPreview}</span> : null}
-        </p>
-      ) : null}
       <div className="message-composer__footer">
         <div className="composer-preferences">
           {showCodexPreferences ? <>
@@ -2167,15 +2081,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
-          <button
-            className={`voice-input-button${voiceInputState === 'recording' ? ' voice-input-button--recording' : ''}${voiceInputState === 'connecting' ? ' voice-input-button--busy' : ''}`}
-            type="button"
-            onClick={toggleVoiceInput}
-            aria-label={voiceInputState === 'recording' ? '停止录音' : voiceInputState === 'transcribing' ? '取消语音转写' : voiceInputState === 'connecting' ? '取消连接' : '语音输入'}
-            title={voiceInputState === 'recording' ? '停止录音并转写' : voiceInputState === 'transcribing' ? '取消语音转写' : voiceInputState === 'connecting' ? '取消连接' : '语音输入'}
-          >
-            {voiceInputState === 'recording' ? <Square size={15} /> : voiceInputState === 'idle' ? <Mic size={17} /> : voiceInputState === 'connecting' ? <X size={15} /> : <LoaderCircle className="spin" size={15} />}
-          </button>
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
@@ -5594,13 +5499,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
   const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
-  const [bailianVoiceSettings, setBailianVoiceSettings] = useState<BailianVoiceInputSettings | null>(null)
-  const [bailianApiKeyDraft, setBailianApiKeyDraft] = useState('')
-  const [bailianSettingsLoading, setBailianSettingsLoading] = useState(true)
-  const [bailianSettingsSaving, setBailianSettingsSaving] = useState(false)
-  const [bailianSettingsTesting, setBailianSettingsTesting] = useState(false)
-  const [bailianSettingsMessage, setBailianSettingsMessage] = useState<string | null>(null)
-  const [bailianSettingsError, setBailianSettingsError] = useState<string | null>(null)
   const backgroundCropDrag = useRef<{
     pointerId: number
     clientX: number
@@ -5618,81 +5516,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
-
-  useEffect(() => {
-    let active = true
-    setBailianSettingsLoading(true)
-    void codexRemoteClient.bailianVoiceInputSettings(token).then((settings) => {
-      if (active) setBailianVoiceSettings(settings)
-    }).catch((error: unknown) => {
-      if (active) setBailianSettingsError(error instanceof Error ? error.message : '读取百炼配置失败。')
-    }).finally(() => {
-      if (active) setBailianSettingsLoading(false)
-    })
-    return () => { active = false }
-  }, [token])
-
-  function bailianSettingsDraft(): BailianVoiceInputSettingsUpdate | null {
-    if (!bailianVoiceSettings) return null
-    return {
-      ...(bailianApiKeyDraft.trim() ? { api_key: bailianApiKeyDraft.trim() } : {}),
-      workspace_id: bailianVoiceSettings.workspace_id.trim(),
-      region: bailianVoiceSettings.region,
-      realtime_model: bailianVoiceSettings.realtime_model,
-    }
-  }
-
-  async function saveBailianSettings(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    const draft = bailianSettingsDraft()
-    if (!draft) return
-    setBailianSettingsSaving(true)
-    setBailianSettingsError(null)
-    setBailianSettingsMessage(null)
-    try {
-      const settings = await codexRemoteClient.saveBailianVoiceInputSettings(token, draft)
-      setBailianVoiceSettings(settings)
-      setBailianApiKeyDraft('')
-      setBailianSettingsMessage(settings.configured ? '已保存，语音输入现在可以使用。' : '已保存 Workspace ID；还需要配置 API Key 才能使用语音输入。')
-    } catch (error) {
-      setBailianSettingsError(error instanceof Error ? error.message : '保存百炼配置失败。')
-    } finally {
-      setBailianSettingsSaving(false)
-    }
-  }
-
-  async function testBailianSettings() {
-    const draft = bailianSettingsDraft()
-    if (!draft) return
-    setBailianSettingsTesting(true)
-    setBailianSettingsError(null)
-    setBailianSettingsMessage(null)
-    try {
-      const result = await codexRemoteClient.testBailianVoiceInputSettings(token, draft)
-      setBailianSettingsMessage(`${result.message} 测试不会保存配置或发送音频；如刚修改过设置，请再点“保存配置”。`)
-    } catch (error) {
-      setBailianSettingsError(error instanceof Error ? error.message : '百炼连接测试失败。')
-    } finally {
-      setBailianSettingsTesting(false)
-    }
-  }
-
-  async function resetBailianSettings() {
-    if (!window.confirm('清除项目内保存的百炼配置，并改用服务器环境变量？')) return
-    setBailianSettingsSaving(true)
-    setBailianSettingsError(null)
-    setBailianSettingsMessage(null)
-    try {
-      const settings = await codexRemoteClient.resetBailianVoiceInputSettings(token)
-      setBailianVoiceSettings(settings)
-      setBailianApiKeyDraft('')
-      setBailianSettingsMessage(settings.configured ? '已恢复使用服务器环境变量。' : '项目内配置已清除，目前尚未配置百炼凭证。')
-    } catch (error) {
-      setBailianSettingsError(error instanceof Error ? error.message : '清除百炼配置失败。')
-    } finally {
-      setBailianSettingsSaving(false)
-    }
-  }
 
   useEffect(() => {
     if (!recordingShortcut) return
@@ -6026,76 +5849,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           </div>
           <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
-        </section>
-
-        <section className="theme-settings-card">
-          <div className="theme-settings-card__heading">
-            <div><h2>阿里云百炼语音</h2><p>在这里配置语音转文字服务，无需编辑服务器环境文件或重启。</p></div>
-            {bailianVoiceSettings ? <span className="theme-settings-card__badge">{bailianVoiceSettings.configured ? '已配置' : '待配置'}</span> : null}
-          </div>
-          {bailianSettingsLoading ? <p className="theme-settings-hint bailian-voice-loading">正在读取配置…</p> : bailianVoiceSettings ? (
-            <form className="bailian-voice-form" onSubmit={(event) => { void saveBailianSettings(event) }}>
-              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-api-key">
-                <span><strong>API Key</strong><small>{bailianVoiceSettings.api_key_configured ? '已配置；留空不会修改现有 Key。' : '填写百炼 DashScope API Key。'}</small></span>
-                <input
-                  id="bailian-api-key"
-                  className="bailian-voice-input"
-                  type="password"
-                  value={bailianApiKeyDraft}
-                  autoComplete="new-password"
-                  placeholder={bailianVoiceSettings.api_key_configured ? '已配置，留空则保持不变' : '粘贴 API Key'}
-                  onChange={(event) => setBailianApiKeyDraft(event.target.value)}
-                />
-              </label>
-              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-workspace-id">
-                <span><strong>Workspace ID</strong><small>百炼实时语音模型所属的业务空间 ID。</small></span>
-                <input
-                  id="bailian-workspace-id"
-                  className="bailian-voice-input"
-                  type="text"
-                  value={bailianVoiceSettings.workspace_id}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder="填写 Workspace ID"
-                  onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, workspace_id: event.target.value })}
-                />
-              </label>
-              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-region">
-                <span><strong>服务地域</strong><small>需要与百炼业务空间所在地域一致。</small></span>
-                <select
-                  id="bailian-region"
-                  className="bailian-voice-input bailian-voice-select"
-                  value={bailianVoiceSettings.region}
-                  onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, region: event.target.value as BailianVoiceInputSettings['region'] })}
-                >
-                  <option value="cn-beijing">中国（北京）</option>
-                  <option value="ap-southeast-1">新加坡</option>
-                </select>
-              </label>
-              <details className="bailian-voice-advanced">
-                <summary>识别模型</summary>
-                <label className="theme-control-row bailian-voice-row" htmlFor="bailian-realtime-model">
-                  <span><strong>实时语音识别</strong><small>使用当前百炼账号已开通的 Fun-ASR 模型。</small></span>
-                  <input id="bailian-realtime-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.realtime_model} readOnly />
-                </label>
-              </details>
-              <div className="bailian-voice-actions">
-                <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving || bailianSettingsTesting || !bailianVoiceSettings.workspace_id.trim() || (!bailianVoiceSettings.api_key_configured && !bailianApiKeyDraft.trim())} onClick={() => { void testBailianSettings() }}>
-                  {bailianSettingsTesting ? <><LoaderCircle className="spin" size={14} />测试中…</> : '测试连接'}
-                </button>
-                <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" disabled={bailianSettingsSaving || bailianSettingsTesting || !bailianVoiceSettings.workspace_id.trim()}>
-                  {bailianSettingsSaving ? <><LoaderCircle className="spin" size={14} />保存中…</> : '保存配置'}
-                </button>
-                {bailianVoiceSettings.project_settings_saved ? <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving || bailianSettingsTesting} onClick={() => { void resetBailianSettings() }}>恢复服务器环境变量</button> : null}
-                <span className="bailian-voice-source">
-                  {bailianVoiceSettings.api_key_source === 'project' ? 'Key 保存在项目服务端' : bailianVoiceSettings.api_key_source === 'environment' ? '当前使用服务器环境变量中的 Key' : '尚未配置 API Key'}
-                </span>
-              </div>
-              <p className="theme-settings-hint bailian-voice-hint">API Key 只保存在运行 Codex Remote 的服务器，不会回传到浏览器。通过局域网填写时建议使用 HTTPS；已保存的 Key 不会显示，可随时在此替换。</p>
-              {bailianSettingsMessage ? <p className="bailian-voice-message" role="status" aria-live="polite">{bailianSettingsMessage}</p> : null}
-              {bailianSettingsError ? <p className="theme-notification-error bailian-voice-error" role="alert">{bailianSettingsError}</p> : null}
-            </form>
-          ) : <p className="theme-settings-hint">{bailianSettingsError ?? '读取百炼配置失败。关闭设置后重新打开可重试。'}</p>}
         </section>
 
         <section className="theme-settings-card">
