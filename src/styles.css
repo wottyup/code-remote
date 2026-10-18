@@ -2803,6 +2803,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 .remote-chat__header--with-history-refresh { position: relative; }
 .workspace-file-context-menu--retro {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   width: min(292px, calc(100vw - 16px));
   min-width: min(260px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
@@ -2816,6 +2819,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+.workspace-file-context-menu--retro > * { flex: 0 0 auto; }
 .workspace-file-context-menu--retro .workspace-file-context-menu__name {
   max-width: none;
   padding: 2px 4px 8px;
