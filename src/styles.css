@@ -1719,6 +1719,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm.remote-shell--claude-mode .new-thread-button__icon { background: rgba(255, 250, 243, .18); color: #fffaf3; }
 .remote-shell--theme-light.remote-shell--claude-mode .new-thread-button:hover:not(:disabled),
 .remote-shell--theme-warm.remote-shell--claude-mode .new-thread-button:hover:not(:disabled) { border-color: #c57a60; background: #b76c53; }
+.remote-shell--theme-light .new-thread-button > span:last-child { color: #fff; }
 .remote-shell--claude-mode .remote-sidebar .icon-button:hover,
 .remote-shell--claude-mode .remote-sidebar__footer button:hover { color: #ee8c6d; }
 .running-indicator__activity--claude-thinking .operation-activity__text { background-image: none; color: #ee8c6d; animation: none; -webkit-text-fill-color: #ee8c6d; }
