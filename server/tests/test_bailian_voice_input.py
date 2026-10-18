@@ -12,8 +12,8 @@ from unittest.mock import patch
 import codex_remote.bailian_voice_input as voice_input
 
 
-def provider_event(event: str, **values) -> str:
-    return json.dumps({"header": {"event": event}, **values}, ensure_ascii=False)
+def provider_event(event: str, *, header_values: dict | None = None, **values) -> str:
+    return json.dumps({"header": {"event": event, **(header_values or {})}, **values}, ensure_ascii=False)
 
 
 class FakeProviderSocket:
@@ -56,13 +56,18 @@ class FakeProviderSocket:
             if self.fail_on_run:
                 await self.events.put(provider_event(
                     "task-failed",
-                    error_code="MODEL_NOT_FOUND",
-                    error_message="private provider detail",
+                    header_values={"error_code": "MODEL_NOT_FOUND", "error_message": "private provider detail"},
                 ))
             else:
                 await self.events.put(provider_event("task-started", payload={}))
         elif action == "finish-task":
-            await self.events.put(provider_event("task-finished", payload={}))
+            if any(isinstance(message, bytes) for message in self.sent):
+                await self.events.put(provider_event("task-finished", payload={}))
+            else:
+                await self.events.put(provider_event(
+                    "task-failed",
+                    header_values={"error_code": "EmptyAudio", "error_message": "private empty audio detail"},
+                ))
 
     async def recv(self) -> str:
         return await self.events.get()
@@ -222,12 +227,17 @@ class BailianVoiceInputTests(unittest.TestCase):
         unauthorized = SimpleNamespace(response=SimpleNamespace(status_code=401))
         forbidden = SimpleNamespace(response=SimpleNamespace(status_code=403))
         not_found = SimpleNamespace(response=SimpleNamespace(status_code=404))
+        invalid_endpoint = SimpleNamespace(response=SimpleNamespace(
+            status_code=400,
+            body=b'{"code":"BadRequest.IllegalEndpoint","message":"Workspace endpoint is invalid."}',
+        ))
 
         self.assertIn("API Key", voice_input.connection_error_message(unauthorized))
         self.assertIn("权限", voice_input.connection_error_message(forbidden))
         self.assertIn("Workspace", voice_input.connection_error_message(not_found))
+        self.assertIn("Workspace ID", voice_input.connection_error_message(invalid_endpoint))
 
-    def test_connection_test_runs_and_finishes_task_without_audio(self) -> None:
+    def test_connection_test_starts_task_without_audio_or_finish(self) -> None:
         provider = FakeProviderSocket()
         connection: dict = {}
 
@@ -242,7 +252,7 @@ class BailianVoiceInputTests(unittest.TestCase):
         self.assertEqual("workspace", connection["additional_headers"]["X-DashScope-WorkSpace"])
         self.assertEqual("codex-remote", connection["kwargs"]["user_agent_header"])
         self.assertEqual(
-            ["run-task", "finish-task"],
+            ["run-task"],
             [event["header"]["action"] for event in provider.sent_events],
         )
         self.assertEqual(voice_input.DEFAULT_REALTIME_MODEL, provider.sent_events[0]["payload"]["model"])
@@ -262,6 +272,14 @@ class BailianVoiceInputTests(unittest.TestCase):
 
         self.assertNotIn("private provider detail", str(error.exception))
         self.assertTrue(provider.closed)
+
+    def test_empty_audio_header_error_is_actionable_and_does_not_leak_details(self) -> None:
+        message = voice_input.provider_error_message({
+            "header": {"event": "task-failed", "error_code": "EmptyAudio", "error_message": "private empty audio detail"},
+        })
+
+        self.assertIn("未录到声音", message)
+        self.assertNotIn("private empty audio detail", message)
 
     def test_session_sends_binary_pcm_and_fun_asr_task_events(self) -> None:
         provider = FakeProviderSocket()

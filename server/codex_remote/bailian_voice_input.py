@@ -47,6 +47,14 @@ def connection_error_message(error: Exception) -> str:
         if status_code == 429:
             return "百炼限制了连接（HTTP 429），请检查额度或并发限制后重试。"
         if status_code == 400:
+            body = getattr(response, "body", None)
+            if isinstance(body, bytes):
+                body = body.decode("utf-8", errors="replace")
+            if isinstance(body, str) and (
+                "badrequest.illegalendpoint" in body.lower()
+                or "workspace endpoint is invalid" in body.lower()
+            ):
+                return "百炼业务空间地址无效，请核对 Workspace ID 和服务地域。"
             return "百炼拒绝了实时会话配置（HTTP 400），请检查模型名称和语音模型权限。"
         if status_code >= 500:
             return f"百炼服务暂时异常（HTTP {status_code}），请稍后重试。"
@@ -94,6 +102,10 @@ def provider_error_message(event: dict[str, Any] | None = None) -> str:
     event = event if isinstance(event, dict) else {}
     code = str(event.get("error_code") or "").lower()
     message = str(event.get("error_message") or "").lower()
+    header = event.get("header")
+    if isinstance(header, dict):
+        code = f"{code} {header.get('error_code') or ''}".lower()
+        message = f"{message} {header.get('error_message') or ''}".lower()
     detail = event.get("error")
     if isinstance(detail, dict):
         code = f"{code} {detail.get('code') or ''}".lower()
@@ -101,8 +113,12 @@ def provider_error_message(event: dict[str, Any] | None = None) -> str:
     elif detail:
         message = f"{message} {detail}".lower()
     combined = f"{code} {message}"
+    if "emptyaudio" in combined or "empty_audio" in combined:
+        return "未录到声音，请稍等片刻再结束录音。"
     if any(value in combined for value in ("invalid_api_key", "unauthorized", "401", "authentication")):
         return "百炼鉴权失败，请检查服务端 API Key。"
+    if "illegalendpoint" in combined or "workspace endpoint is invalid" in combined:
+        return "百炼业务空间地址无效，请核对 Workspace ID 和服务地域。"
     if any(value in combined for value in ("permission", "forbidden", "403", "access_denied")):
         return "百炼拒绝访问，请检查实时语音模型权限和业务空间授权。"
     if any(value in combined for value in ("workspace_not_found", "model_not_found", "404")):
@@ -414,12 +430,6 @@ async def test_bailian_voice_connection(
         await session.connect()
         await session.configure()
         await receive_expected_event(session, "task-started")
-        await session.commit()
-        await receive_expected_event(
-            session,
-            "task-finished",
-            "等待百炼结束识别任务超时，请检查网络后重试。",
-        )
     finally:
         await session.close()
 
