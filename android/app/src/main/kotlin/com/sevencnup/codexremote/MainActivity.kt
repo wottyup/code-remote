@@ -1706,6 +1706,7 @@ class MainActivity : Activity() {
             }
         }
         val actionSize = if (retroTheme) dp(42) else dp(40)
+        if (pixelTheme) menu.setPadding(dp(5), dp(5), dp(5), dp(5))
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", if (retroTheme) 20 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
@@ -1722,14 +1723,16 @@ class MainActivity : Activity() {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
+            if (pixelTheme) setPadding(dp(5), dp(5), dp(5), dp(5))
         }, LinearLayout.LayoutParams(actionSize, actionSize))
         headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }.apply {
             if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
+            if (pixelTheme) setPadding(dp(5), dp(5), dp(5), dp(5))
         }, LinearLayout.LayoutParams(actionSize, actionSize))
-        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 42 else 44)))
+        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (pixelTheme) 48 else if (retroTheme) 42 else 44)))
     }
 
     private fun buildQueuePanel() {
@@ -2232,7 +2235,7 @@ class MainActivity : Activity() {
         val footerDivider = View(this).apply { setBackgroundColor(BORDER) }
         drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val footerHeight = if (pixelTheme) 44 else 40
+        val footerHeight = if (pixelTheme) 68 else 40
         footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
         footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
         footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
@@ -2325,10 +2328,12 @@ class MainActivity : Activity() {
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
-        val actionColor = SUBTLE
+        val actionColor = if (pixelTheme) PIXEL_TEXT else SUBTLE
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         setPadding(dp(1), dp(2), dp(1), dp(2))
+        clipChildren = false
+        clipToPadding = false
         background = if (retroTheme) android1SegmentButtonBackground() else rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
         isFocusable = true
@@ -2338,15 +2343,20 @@ class MainActivity : Activity() {
             setPixelAwareImageResource(sidebarIconResource(icon))
             imageTintList = retroIconTint(actionColor)
         }
-        val labelView = label(title, if (pixelTheme) 12 else 11, actionColor, true).apply {
+        val labelView = label(title, if (pixelTheme) 12 else 11, actionColor, true, pixelize = false).apply {
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
+            if (pixelTheme) {
+                // Respect the active UI font scale so larger text cannot clip.
+                includeFontPadding = true
+                minHeight = dp(24)
+            }
         }
         sidebarActionAccentViews += iconView to labelView
-        val iconSize = if (pixelTheme) 20 else 17
+        val iconSize = if (pixelTheme) 22 else 17
         addView(iconView, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
-        addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(if (pixelTheme) 3 else 2) })
+        addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
     }
 
     private fun renderHeader() {
@@ -2421,7 +2431,7 @@ class MainActivity : Activity() {
             dp(if (retroTheme) 2 else 7),
         )
         sidebarNewThreadLabel.setTextColor(newThreadForeground)
-        val actionColor = SUBTLE
+        val actionColor = if (pixelTheme) PIXEL_TEXT else SUBTLE
         sidebarActionAccentViews.forEach { (icon, label) ->
             icon.imageTintList = retroIconTint(actionColor)
             label.setTextColor(actionColor)
@@ -2660,8 +2670,9 @@ class MainActivity : Activity() {
                     contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
                 }
             }
-            val threadIconSize = if (pixelTheme) 24 else 22
-            row.addView(icon, LinearLayout.LayoutParams(dp(threadIconSize), dp(threadIconSize)).apply { rightMargin = dp(if (pixelTheme) 10 else 9) })
+            val threadIconSize = 22
+            if (pixelTheme) icon.setPadding(dp(2), dp(2), dp(2), dp(2))
+            row.addView(icon, LinearLayout.LayoutParams(dp(threadIconSize), dp(threadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 9) })
             val title = threadTitle(thread)
             val titleView = label(title, if (pixelTheme) 14 else 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
                 maxLines = 1
