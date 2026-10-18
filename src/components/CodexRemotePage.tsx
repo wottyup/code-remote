@@ -2277,6 +2277,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
   const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
+  const contextMenuElement = useRef<HTMLDivElement>(null)
   const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
   const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
   const [mutationSaving, setMutationSaving] = useState(false)
@@ -2651,6 +2652,25 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
       return { ...latest, ...position }
     })
   }, [selectionContextMenu])
+
+  useLayoutEffect(() => {
+    const current = contextMenu
+    const menu = contextMenuElement.current
+    if (!current || !menu) return
+
+    const keepMenuInViewport = () => {
+      const bounds = menu.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return
+      const x = Math.max(8, Math.min(current.x, window.innerWidth - bounds.width - 8))
+      const y = Math.max(8, Math.min(current.y, window.innerHeight - bounds.height - 8))
+      if (Math.abs(current.x - x) < 1 && Math.abs(current.y - y) < 1) return
+      setContextMenu((latest) => latest === current ? { ...latest, x, y } : latest)
+    }
+
+    keepMenuInViewport()
+    window.addEventListener('resize', keepMenuInViewport)
+    return () => window.removeEventListener('resize', keepMenuInViewport)
+  }, [contextMenu])
 
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
@@ -3190,7 +3210,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
             <span className="workspace-file-context-menu__group-label">快捷操作</span>

@@ -2804,7 +2804,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-chat__header--with-history-refresh { position: relative; }
 .workspace-file-context-menu--retro {
   width: min(292px, calc(100vw - 16px));
-  min-width: 0;
+  min-width: min(260px, calc(100vw - 16px));
   max-width: calc(100vw - 16px);
   gap: 7px;
   padding: 8px;
@@ -2856,13 +2856,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   font: 13px/1.25 Arial, Helvetica, sans-serif;
   text-align: left;
   white-space: normal;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 .workspace-file-context-menu--retro button svg { flex: 0 0 auto; }
 .workspace-file-context-menu--retro button:hover:not(:disabled) { border-color: #6689a6; background: #e7eef4; color: #1e3b54; }
 .workspace-file-context-menu--retro button:disabled { cursor: default; opacity: .52; }
 .workspace-file-context-menu--retro button.workspace-file-context-menu__delete { margin-top: 0; border-top: 1px solid #cdaaaa; padding-top: 7px; color: #8b3838; }
 .workspace-file-context-menu--retro button.workspace-file-context-menu__delete:hover:not(:disabled) { border-color: #cdaaaa; background: #f7e9e9; color: #772929; }
+
+@media (max-width: 480px) {
+  .workspace-file-context-menu--retro .workspace-file-context-menu__group--create,
+  .workspace-file-context-menu--retro .workspace-file-context-menu__group--manage { grid-template-columns: minmax(0, 1fr); }
+}
 .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__title-wrap,
 .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { flex: 1 1 0; }
 .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { margin: 0; justify-content: flex-end; }
