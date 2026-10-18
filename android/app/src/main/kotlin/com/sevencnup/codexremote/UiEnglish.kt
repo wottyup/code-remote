@@ -5,7 +5,9 @@ internal object UiEnglish {
     private val strings = mapOf(
         "设置" to "Settings", "偏好保存在本机" to "Preferences are saved on this device",
         "主题" to "Theme", "选择工作区色彩；自定义主题支持背景图片与颜色。" to "Choose workspace colors. Custom themes support images and colors.",
-        "白色" to "Light", "黑色" to "Dark", "暖色" to "Warm", "自定义主题" to "Custom theme",
+        "白色" to "Light", "黑色" to "Dark", "暖色" to "Warm", "旧经典" to "Old Classic",
+        "像素风" to "Pixel Art", "深蓝像素面板与独立像素图标" to "Deep navy pixel panels and custom pixel icons",
+        "自定义主题" to "Custom theme",
         "清爽明亮" to "Bright and clean", "低光阅读" to "Comfortable in low light", "柔和纸感" to "Soft paper tones",
         "颜色、图片与透明度" to "Colors, image and opacity", "背景颜色" to "Background color", "字体颜色" to "Text color",
         "背景图片" to "Background image", "选择图片" to "Choose image", "更换或清除当前图片" to "Replace or remove image",

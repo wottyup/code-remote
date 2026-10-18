@@ -32,6 +32,7 @@ import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
@@ -412,13 +413,34 @@ private class ComposerGlowDrawable(
 class MainActivity : Activity() {
     // The legacy-theme key remains "lollipop" for preference compatibility, but
     // its appearance now follows Android 2.3 Gingerbread rather than Material.
-    private val LOLLIPOP_PRIMARY = Color.rgb(160, 171, 174)
-    private val LOLLIPOP_PRIMARY_DARK = Color.rgb(185, 185, 185)
-    private val LOLLIPOP_PRIMARY_LIGHT = Color.rgb(48, 60, 68)
-    private val LOLLIPOP_TEXT_SECONDARY = Color.rgb(184, 190, 188)
-    private val ANDROID1_TITLE_TEXT = Color.rgb(28, 28, 28)
-    private val ANDROID1_ADDED_COLOR = Color.rgb(145, 151, 111)
-    private val ANDROID1_DELETED_COLOR = Color.rgb(177, 99, 92)
+    private val PIXEL_BACKGROUND = Color.rgb(7, 15, 28)
+    private val PIXEL_PANEL = Color.rgb(15, 27, 43)
+    private val PIXEL_PANEL_INSET = Color.rgb(34, 50, 70)
+    private val PIXEL_BORDER = Color.rgb(102, 121, 146)
+    private val PIXEL_BORDER_LIGHT = Color.rgb(224, 222, 207)
+    private val PIXEL_BORDER_SHADOW = Color.rgb(53, 68, 88)
+    private val PIXEL_TEXT = Color.rgb(244, 240, 225)
+    private val PIXEL_BLUE = Color.rgb(29, 136, 238)
+    private val PIXEL_GREEN = Color.rgb(74, 203, 111)
+    private val PIXEL_RED = Color.rgb(236, 91, 91)
+    private val pixelIconResourceIds = setOf(
+        R.drawable.pixel_about, R.drawable.pixel_chat, R.drawable.pixel_check,
+        R.drawable.pixel_connection, R.drawable.pixel_delete, R.drawable.pixel_display,
+        R.drawable.pixel_edit, R.drawable.pixel_file_add, R.drawable.pixel_folder,
+        R.drawable.pixel_language, R.drawable.pixel_match, R.drawable.pixel_notifications,
+        R.drawable.pixel_pause, R.drawable.pixel_refresh, R.drawable.pixel_search,
+        R.drawable.pixel_send, R.drawable.pixel_settings, R.drawable.pixel_terminal,
+        R.drawable.pixel_theme,
+    )
+    private val pixelTheme get() = themeName == "pixel"
+    private val retroTheme get() = themeName == "lollipop" || pixelTheme
+    private val LOLLIPOP_PRIMARY: Int get() = if (pixelTheme) PIXEL_BLUE else Color.rgb(160, 171, 174)
+    private val LOLLIPOP_PRIMARY_DARK: Int get() = if (pixelTheme) PIXEL_BACKGROUND else Color.rgb(185, 185, 185)
+    private val LOLLIPOP_PRIMARY_LIGHT: Int get() = if (pixelTheme) PIXEL_PANEL_INSET else Color.rgb(48, 60, 68)
+    private val LOLLIPOP_TEXT_SECONDARY: Int get() = if (pixelTheme) Color.rgb(190, 201, 216) else Color.rgb(184, 190, 188)
+    private val ANDROID1_TITLE_TEXT: Int get() = if (pixelTheme) PIXEL_TEXT else Color.rgb(28, 28, 28)
+    private val ANDROID1_ADDED_COLOR: Int get() = if (pixelTheme) PIXEL_GREEN else Color.rgb(145, 151, 111)
+    private val ANDROID1_DELETED_COLOR: Int get() = if (pixelTheme) PIXEL_RED else Color.rgb(177, 99, 92)
     private val android1Typeface: Typeface by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
             val regular = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSans.ttf")
@@ -450,6 +472,7 @@ class MainActivity : Activity() {
         .let { if (it == "oreo" || it == "gingerbread" || it == "android23") "lollipop" else it }
     private val lightTheme get() = when (themeName) {
         "light", "warm" -> true
+        "pixel" -> false
         "custom" -> Color.luminance(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)) > .46f
         else -> false
     }
@@ -457,12 +480,14 @@ class MainActivity : Activity() {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
         "lollipop" -> Color.rgb(19, 22, 23)
+        "pixel" -> PIXEL_BACKGROUND
         "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
         "warm" -> Color.rgb(255, 250, 243)
         "lollipop" -> Color.rgb(29, 33, 34)
+        "pixel" -> PIXEL_PANEL
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
         else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
     }
@@ -473,64 +498,84 @@ class MainActivity : Activity() {
     private val PANEL_INSET: Int get() = when (themeName) {
         "warm" -> Color.rgb(241, 231, 216)
         "lollipop" -> Color.rgb(39, 44, 45)
+        "pixel" -> PIXEL_PANEL_INSET
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
         else -> if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
     }
     private val BORDER: Int get() = when (themeName) {
         "warm" -> Color.rgb(225, 211, 194)
         "lollipop" -> Color.rgb(73, 79, 80)
+        "pixel" -> PIXEL_BORDER
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .3f)
         else -> if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
     }
     private val USER_BUBBLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(240, 226, 208)
         "lollipop" -> Color.rgb(39, 51, 59)
+        "pixel" -> Color.rgb(35, 55, 80)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
         else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
     }
     private val TEXT: Int get() = when (themeName) {
         "warm" -> Color.rgb(66, 53, 40)
         "lollipop" -> Color.rgb(237, 239, 236)
+        "pixel" -> PIXEL_TEXT
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
     }
     private val SUBTLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(109, 91, 71)
         "lollipop" -> Color.rgb(190, 195, 193)
+        "pixel" -> Color.rgb(199, 207, 220)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .84f)
         else -> if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
     }
     private val MUTED: Int get() = when (themeName) {
         "warm" -> Color.rgb(139, 121, 100)
         "lollipop" -> Color.rgb(142, 149, 147)
+        "pixel" -> Color.rgb(154, 169, 189)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .64f)
         else -> if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
     }
     private val ACCENT: Int get() = when {
         currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
         themeName == "lollipop" -> Color.rgb(111, 157, 197)
+        pixelTheme -> PIXEL_BLUE
         themeName == "warm" -> Color.rgb(146, 114, 83)
         themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
-    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(28, 31, 33) else if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (pixelTheme) PIXEL_BLUE else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(28, 31, 33)
+        "pixel" -> Color.WHITE
+        else -> if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    }
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
     private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
-    private val CODEX_USER_MESSAGE_FILL: Int get() = if (themeName == "lollipop") Color.rgb(43, 56, 65) else Color.rgb(159, 166, 203)
+    private val CODEX_USER_MESSAGE_FILL: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(43, 56, 65)
+        "pixel" -> Color.rgb(37, 61, 89)
+        else -> Color.rgb(159, 166, 203)
+    }
     private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
-    private val CODEX_USER_MESSAGE_TEXT: Int get() = if (themeName == "lollipop") Color.rgb(230, 235, 238) else Color.rgb(24, 27, 37)
+    private val CODEX_USER_MESSAGE_TEXT: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(230, 235, 238)
+        "pixel" -> PIXEL_TEXT
+        else -> Color.rgb(24, 27, 37)
+    }
     private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
-    private val CLAUDE_USER_MESSAGE_SURFACE: Int get() = if (themeName == "lollipop") Color.rgb(75, 48, 39) else CLAUDE_USER_MESSAGE_FILL
-    private val CLAUDE_USER_MESSAGE_FOREGROUND: Int get() = if (themeName == "lollipop") Color.rgb(255, 224, 209) else CLAUDE_USER_MESSAGE_TEXT
+    private val CLAUDE_USER_MESSAGE_SURFACE: Int get() = if (retroTheme) Color.rgb(75, 48, 39) else CLAUDE_USER_MESSAGE_FILL
+    private val CLAUDE_USER_MESSAGE_FOREGROUND: Int get() = if (retroTheme) Color.rgb(255, 224, 209) else CLAUDE_USER_MESSAGE_TEXT
     private val ASSISTANT_NAME_ACCENT: Int get() = when {
         themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
         else -> ACCENT
     }
     private val WARNING: Int get() = when {
+        pixelTheme -> Color.rgb(201, 208, 219)
         themeName == "lollipop" -> Color.rgb(169, 178, 180)
         lightTheme -> Color.rgb(135, 91, 28)
         else -> Color.rgb(232, 190, 112)
@@ -820,6 +865,7 @@ class MainActivity : Activity() {
 
     private fun applySystemBarTheme() {
         val lollipop = themeName == "lollipop"
+        val retro = retroTheme
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.attributes = window.attributes.apply {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
@@ -831,14 +877,18 @@ class MainActivity : Activity() {
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             window.setDecorFitsSystemWindows(false)
-            window.statusBarColor = if (lollipop) LOLLIPOP_PRIMARY_DARK else Color.TRANSPARENT
-            window.navigationBarColor = if (lollipop) Color.BLACK else Color.TRANSPARENT
+            window.statusBarColor = if (retro) LOLLIPOP_PRIMARY_DARK else Color.TRANSPARENT
+            window.navigationBarColor = when {
+                lollipop -> Color.BLACK
+                pixelTheme -> PIXEL_BACKGROUND
+                else -> Color.TRANSPARENT
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 window.isStatusBarContrastEnforced = false
                 window.isNavigationBarContrastEnforced = false
             }
         } else {
-            window.statusBarColor = if (lollipop) LOLLIPOP_PRIMARY_DARK else DARK
+            window.statusBarColor = if (retro) LOLLIPOP_PRIMARY_DARK else DARK
             window.navigationBarColor = if (lollipop) Color.BLACK else DARK
         }
         window.decorView.setBackgroundColor(DARK)
@@ -1378,7 +1428,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             background = when {
                 themeName == "custom" -> ColorDrawable(Color.TRANSPARENT)
-                themeName == "lollipop" -> lollipopSystemBarsBackground(DARK)
+                retroTheme -> lollipopSystemBarsBackground(DARK)
                 else -> ColorDrawable(DARK)
             }
         }
@@ -1466,39 +1516,39 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(2), dp(8), dp(2))
-            background = if (themeName == "lollipop") lollipopActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
+            background = if (retroTheme) lollipopActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
         val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
         }
-        val actionSize = if (themeName == "lollipop") dp(42) else dp(40)
+        val actionSize = if (retroTheme) dp(42) else dp(40)
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
-        titleView = label("Codex Remote", if (themeName == "lollipop") 20 else 14, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        titleView = label("Codex Remote", if (retroTheme) 20 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
-        val path = label("本机项目", if (themeName == "lollipop") 12 else 10, if (themeName == "lollipop") Color.rgb(72, 72, 72) else MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
+        val path = label("本机项目", if (retroTheme) 12 else 10, if (retroTheme && !pixelTheme) Color.rgb(72, 72, 72) else MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
         titleColumn.addView(path, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
         modeButton = iconButton(if (targetMode == "claude-code") "claude" else "codex", modeSwitchDescription()) { switchMode() }
-        if (themeName == "lollipop") modeButton.background = android1SegmentButtonBackground()
+        if (retroTheme) modeButton.background = android1SegmentButtonBackground()
         headerView.addView(modeButton, LinearLayout.LayoutParams(actionSize, actionSize))
         headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
         }, LinearLayout.LayoutParams(actionSize, actionSize))
         headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
         }, LinearLayout.LayoutParams(actionSize, actionSize))
-        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 42 else 44)))
+        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 42 else 44)))
     }
 
     private fun buildQueuePanel() {
@@ -1597,8 +1647,8 @@ class MainActivity : Activity() {
                 contentDescription = if (claude) "Claude Code" else "Codex"
             }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { if (index == 0) rightMargin = dp(4) else leftMargin = dp(4) })
             if (index == 0) {
-                if (themeName == "lollipop") modeSwitchNotice.addView(ImageView(this).apply {
-                    setImageResource(iconResource("chevron_right"))
+                if (retroTheme) modeSwitchNotice.addView(ImageView(this).apply {
+                    setPixelAwareImageResource(iconResource("chevron_right"))
                     imageTintList = null
                 }, LinearLayout.LayoutParams(dp(16), dp(16)))
                 else modeSwitchNotice.addView(label("→", 13, MUTED, true), LinearLayout.LayoutParams(WRAP, WRAP))
@@ -1640,8 +1690,8 @@ class MainActivity : Activity() {
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11) + systemInsetLeft, dp(8), dp(11) + systemInsetRight, dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (themeName == "lollipop") 10 else 18).toFloat(), composerGlowOpacity())
-            if (themeName == "lollipop") {
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (retroTheme) 10 else 18).toFloat(), composerGlowOpacity())
+            if (retroTheme) {
                 background = rounded(PANEL, dp(2), BORDER, dp(1))
                 elevation = 0f
             } else {
@@ -1710,7 +1760,7 @@ class MainActivity : Activity() {
         })
         composer.addView(composerInput, LinearLayout.LayoutParams(MATCH, WRAP))
 
-        if (themeName == "lollipop") {
+        if (retroTheme) {
             composer.addView(View(this).apply { setBackgroundColor(BORDER) }, LinearLayout.LayoutParams(MATCH, dp(1)).apply {
                 topMargin = dp(4)
                 bottomMargin = dp(3)
@@ -1725,13 +1775,13 @@ class MainActivity : Activity() {
         modelButton = preferenceButton("模型") { showModelOptions() }
         effortButton = preferenceButton("思考") { showEffortOptions() }
         permissionButton = preferenceButton("权限") { showPermissionOptions() }
-        val footerHeight = if (themeName == "lollipop") 46 else 40
+        val footerHeight = if (retroTheme) 46 else 40
         preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)))
         preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
         preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
         footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
-        val footerActionSize = if (themeName == "lollipop") dp(36) else dp(34)
+        val footerActionSize = if (retroTheme) dp(36) else dp(34)
         footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }.apply {
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
@@ -1741,7 +1791,7 @@ class MainActivity : Activity() {
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = if (themeName == "lollipop") lollipopFabBackground(LOLLIPOP_PRIMARY)
+            background = if (retroTheme) lollipopFabBackground(LOLLIPOP_PRIMARY)
                 else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             isClickable = true
             isFocusable = true
@@ -1755,9 +1805,9 @@ class MainActivity : Activity() {
             }
             contentDescription = "发送消息"
         }
-        val sendSize = if (themeName == "lollipop") dp(32) else dp(28)
+        val sendSize = if (retroTheme) dp(32) else dp(28)
         footer.addView(sendButton, LinearLayout.LayoutParams(sendSize, sendSize).apply {
-            leftMargin = dp(if (themeName == "lollipop") 2 else 6)
+            leftMargin = dp(if (retroTheme) 2 else 6)
             gravity = Gravity.CENTER_VERTICAL
         })
         composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(footerHeight)))
@@ -1776,6 +1826,7 @@ class MainActivity : Activity() {
 
     private fun composerGlassBackground(): Drawable {
         val fills = when (themeName) {
+            "pixel" -> intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL)
             "lollipop" -> intArrayOf(
                 Color.rgb(40, 45, 46),
                 Color.rgb(28, 32, 33),
@@ -1801,22 +1852,30 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
+            "pixel" -> PIXEL_BORDER_LIGHT
             "lollipop" -> Color.rgb(70, 78, 81)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
+            "pixel" -> PIXEL_BORDER
             "lollipop" -> Color.rgb(84, 98, 103)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
             else -> Color.rgb(43, 46, 52)
         }
-        return ComposerGlassDrawable(fills, highlight, border, dp(if (themeName == "lollipop") 10 else 18).toFloat())
+        val cornerRadius = when {
+            pixelTheme -> 0
+            retroTheme -> 10
+            else -> 18
+        }
+        return ComposerGlassDrawable(fills, highlight, border, dp(cornerRadius).toFloat())
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
+        "pixel" -> PIXEL_BLUE
         "lollipop" -> Color.rgb(111, 157, 197)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
@@ -1825,6 +1884,7 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
+        "pixel" -> 0f
         "lollipop" -> 0f
         "light" -> .30f
         "warm", "custom" -> .29f
@@ -1836,7 +1896,7 @@ class MainActivity : Activity() {
         composerGlowRunning = isRunning
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
-        if (themeName == "lollipop") {
+        if (retroTheme) {
             composerGlowDrawable.setIntensity(0f)
             return
         }
@@ -1882,10 +1942,10 @@ class MainActivity : Activity() {
             setPadding(dp(8), dp(8), dp(8), dp(8))
             contentDescription = "Codex Remote"
         }
-        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 40 else 36), dp(if (themeName == "lollipop") 40 else 36)).apply { rightMargin = dp(10) })
+        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 36), dp(if (retroTheme) 40 else 36)).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-        brandCopy.addView(label("Codex Remote", if (themeName == "lollipop") 18 else 15, TEXT, true), widthWrap())
-        brandCopy.addView(label("对话工作台", if (themeName == "lollipop") 12 else 10, MUTED), widthWrap())
+        brandCopy.addView(label("Codex Remote", if (retroTheme) 18 else 15, TEXT, true), widthWrap())
+        brandCopy.addView(label("对话工作台", if (retroTheme) 12 else 10, MUTED), widthWrap())
         brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
         drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
 
@@ -1896,7 +1956,7 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
         }
         val searchIcon = ImageView(this).apply {
-            setImageResource(sidebarIconResource("search"))
+            setPixelAwareImageResource(sidebarIconResource("search"))
             imageTintList = retroIconTint(MUTED)
             contentDescription = "搜索"
         }
@@ -1924,7 +1984,7 @@ class MainActivity : Activity() {
         drawerSearch.addTextChangedListener(SimpleTextWatcher { value ->
             searchBox.findViewWithTag<View>("sidebar_search_clear")?.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
         })
-        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 44 else 42)).apply { topMargin = dp(9) })
+        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 42)).apply { topMargin = dp(9) })
 
         sidebarNewThreadButton = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1936,13 +1996,13 @@ class MainActivity : Activity() {
             setOnClickListener { createThread() }
         }
         sidebarNewThreadIcon = ImageView(this).apply {
-            setImageResource(sidebarIconResource("add"))
+            setPixelAwareImageResource(sidebarIconResource("add"))
             setPadding(dp(4), dp(4), dp(4), dp(4))
         }
         sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
         sidebarNewThreadLabel = label("新建对话", 13, TEXT, true)
         sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
-        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 44 else 43)).apply { topMargin = dp(7) })
+        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 43)).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
@@ -1950,8 +2010,8 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(3), 0, 0, 0)
         }
-        if (themeName == "lollipop") recentHeading.addView(ImageView(this).apply {
-            setImageResource(iconResource("history"))
+        if (retroTheme) recentHeading.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("history"))
             imageTintList = null
             contentDescription = "聊天记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
@@ -1969,7 +2029,7 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(dp(48), dp(34)))
         recentHeading.addView(sidebarIconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
-        drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 40 else 36)).apply { topMargin = dp(8) })
+        drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 40 else 36)).apply { topMargin = dp(8) })
         sidebarSelectionBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -2012,14 +2072,14 @@ class MainActivity : Activity() {
         val panelWidth = min(dp(300), (availableWidth * .78f).toInt())
             .coerceAtLeast(dp(248))
             .coerceAtMost((availableWidth - dp(28)).coerceAtLeast(dp(220)))
-        val wallpaper = if (themeName == "lollipop") null else wallpaperBackground(
+        val wallpaper = if (retroTheme) null else wallpaperBackground(
             OPAQUE_PANEL,
             viewportWidthPx = availableWidth,
             viewportHeightPx = root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels,
         ) as? ThemeWallpaperDrawable
         panel.apply {
-            background = if (themeName == "lollipop") ColorDrawable(PANEL) else wallpaper ?: ColorDrawable(OPAQUE_PANEL)
-            elevation = dp(if (themeName == "lollipop") 8 else 5).toFloat()
+            background = if (retroTheme) ColorDrawable(PANEL) else wallpaper ?: ColorDrawable(OPAQUE_PANEL)
+            elevation = dp(if (retroTheme) 8 else 5).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, gravity))
@@ -2078,13 +2138,13 @@ class MainActivity : Activity() {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         setPadding(dp(1), dp(2), dp(1), dp(2))
-        background = if (themeName == "lollipop") android1SegmentButtonBackground() else rounded(Color.TRANSPARENT, dp(8))
+        background = if (retroTheme) android1SegmentButtonBackground() else rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
         isFocusable = true
         contentDescription = tr(title)
         setOnClickListener { action() }
         val iconView = ImageView(this@MainActivity).apply {
-            setImageResource(sidebarIconResource(icon))
+            setPixelAwareImageResource(sidebarIconResource(icon))
             imageTintList = retroIconTint(actionColor)
         }
         val labelView = label(title, 11, actionColor, true).apply {
@@ -2102,7 +2162,7 @@ class MainActivity : Activity() {
         val title = activeThread?.let { threadTitle(it) }
             ?: if (activeThreadId == null) "新对话" else "Codex Remote"
         titleView.text = title
-        titleView.setTextColor(if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT)
+        titleView.setTextColor(if (retroTheme) ANDROID1_TITLE_TEXT else TEXT)
         if (::modeButton.isInitialized) {
             setBrandIcon(modeButton, modeSwitchTarget())
             modeButton.contentDescription = modeSwitchDescription()
@@ -2110,7 +2170,7 @@ class MainActivity : Activity() {
         updateSidebarBrand()
         updateSidebarModeAccent()
         val path = page.findViewWithTag<TextView>("workspace_path")
-        path?.setTextColor(if (themeName == "lollipop") Color.rgb(72, 72, 72) else MUTED)
+        path?.setTextColor(if (retroTheme && !pixelTheme) Color.rgb(72, 72, 72) else MUTED)
         path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
             ?: runtime.optString("workspace", "本机项目")
         statusView.visibility = if (runtime.optBoolean("connected", false)) View.GONE else View.VISIBLE
@@ -2150,17 +2210,19 @@ class MainActivity : Activity() {
         val claudeMode = currentMode == "claude-code"
         val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
-        val newThreadShape = rounded(fill, dp(if (themeName == "lollipop") 2 else 10))
-        sidebarNewThreadButton.background = if (themeName == "lollipop") {
-            lollipopRipple(android1MetalButtonBackground())
-        } else newThreadShape
-        sidebarNewThreadButton.elevation = if (themeName == "lollipop") dp(2).toFloat() else 0f
-        val newThreadForeground = if (themeName == "lollipop") ANDROID1_TITLE_TEXT else foreground
+        val newThreadShape = rounded(fill, dp(if (retroTheme) 2 else 10))
+        sidebarNewThreadButton.background = when {
+            pixelTheme -> lollipopRipple(pixelBlockBackground(fill))
+            retroTheme -> lollipopRipple(android1MetalButtonBackground())
+            else -> newThreadShape
+        }
+        sidebarNewThreadButton.elevation = if (retroTheme) dp(2).toFloat() else 0f
+        val newThreadForeground = if (retroTheme) ANDROID1_TITLE_TEXT else foreground
         sidebarNewThreadIcon.imageTintList = retroIconTint(newThreadForeground)
         sidebarNewThreadIcon.background = rounded(
-            if (themeName == "lollipop") Color.rgb(178, 181, 181)
+            if (pixelTheme) PIXEL_PANEL_INSET else if (retroTheme) Color.rgb(178, 181, 181)
             else if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
-            dp(if (themeName == "lollipop") 2 else 7),
+            dp(if (retroTheme) 2 else 7),
         )
         sidebarNewThreadLabel.setTextColor(newThreadForeground)
         val actionColor = SUBTLE
@@ -2359,7 +2421,7 @@ class MainActivity : Activity() {
         sections.forEach { (section, entries) ->
             if (entries.isEmpty()) return@forEach
             drawerThreads.addView(label(section, 11, MUTED, true).apply {
-                setPadding(dp(9), dp(if (themeName == "lollipop") 13 else 11), 0, dp(5))
+                setPadding(dp(9), dp(if (retroTheme) 13 else 11), 0, dp(5))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
             entries.forEach { thread ->
             val id = thread.optString("id")
@@ -2367,10 +2429,10 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(if (themeName == "lollipop") 0 else dp(9), if (themeName == "lollipop") dp(2) else dp(8), dp(5), if (themeName == "lollipop") dp(2) else dp(8))
-                minimumHeight = dp(if (themeName == "lollipop") 44 else 0)
+                setPadding(if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
+                minimumHeight = dp(if (retroTheme) 44 else 0)
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
-                background = if (themeName == "lollipop") {
+                background = if (retroTheme) {
                     if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
                 } else if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
@@ -2378,7 +2440,7 @@ class MainActivity : Activity() {
                 contentDescription = threadTitle(thread)
             }
             val engine = thread.optString("engine", "codex")
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent()
                 row.addView(View(this).apply {
                     setBackgroundColor(if (selected) selectedAccent else Color.TRANSPARENT)
@@ -2386,13 +2448,13 @@ class MainActivity : Activity() {
             }
             val icon = ImageView(this).apply {
                 if (sidebarSelectionMode) {
-                    setImageResource(if (themeName == "lollipop") iconResource(if (selected) "checked" else "unchecked") else if (selected) R.drawable.ic_selection_checked else R.drawable.ic_selection_unchecked)
+                    setPixelAwareImageResource(if (retroTheme) iconResource(if (selected) "checked" else "unchecked") else if (selected) R.drawable.ic_selection_checked else R.drawable.ic_selection_unchecked)
                     imageTintList = retroIconTint(if (selected) (if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT) else MUTED)
                     contentDescription = if (selected) "已勾选" else "未勾选"
-                } else if (themeName == "lollipop") {
+                } else if (retroTheme) {
                     // A conversation row is a chat destination, not another copy of the model logo.
                     // Branded marks remain in the mode switch and cross-mode completion notices.
-                    setImageResource(iconResource("chat"))
+                    setPixelAwareImageResource(iconResource("chat"))
                     imageTintList = null
                     contentDescription = if (engine == "claude-code") "Claude Code 对话" else "Codex 对话"
                 } else {
@@ -3492,7 +3554,7 @@ class MainActivity : Activity() {
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
                     val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL
-                    background = rounded(bubbleColor, dp(if (themeName == "lollipop") 5 else 12))
+                    background = rounded(bubbleColor, dp(if (retroTheme) 5 else 12))
                 }
             }
             if (role == "assistant") {
@@ -3728,7 +3790,7 @@ class MainActivity : Activity() {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(7), dp(11), dp(7))
-            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL, dp(if (themeName == "lollipop") 5 else 12))
+            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL, dp(if (retroTheme) 5 else 12))
         }
         val text = messageText(item, "user")
         if (text.isNotBlank()) {
@@ -4012,7 +4074,7 @@ class MainActivity : Activity() {
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(9), dp(5), dp(9), dp(8))
-            background = rounded(PANEL_INSET, dp(if (themeName == "lollipop") 4 else 8), BORDER, dp(1))
+            background = rounded(PANEL_INSET, dp(if (retroTheme) 4 else 8), BORDER, dp(1))
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4061,8 +4123,8 @@ class MainActivity : Activity() {
             setOnClickListener { copyChatText(clipboardLabel, text) }
 
             addView(ImageView(this@MainActivity).apply {
-                setImageResource(iconResource("copy"))
-                imageTintList = if (themeName == "lollipop") null else ColorStateList.valueOf(iconTint("copy"))
+                setPixelAwareImageResource(iconResource("copy"))
+                imageTintList = if (retroTheme) null else ColorStateList.valueOf(iconTint("copy"))
                 scaleType = ImageView.ScaleType.FIT_CENTER
             }, LinearLayout.LayoutParams(dp(15), dp(15)))
             addView(label(actionLabel, 10, MUTED), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(4) })
@@ -4508,7 +4570,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(5), dp(2), dp(5), dp(2))
-            background = if (themeName == "lollipop") lollipopActionBarBackground() else ColorDrawable(PANEL)
+            background = if (retroTheme) lollipopActionBarBackground() else ColorDrawable(PANEL)
         }
         val addressView = label(url, 10, MUTED, translateUi = false).apply {
             maxLines = 1
@@ -4849,14 +4911,14 @@ class MainActivity : Activity() {
         }
         line.addView(ImageView(this).apply {
             setImageResource(fileDisplayIconResource(entry.path))
-            if (themeName == "lollipop") imageTintList = null
+            if (retroTheme) imageTintList = null
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
         line.addView(label("${if (compact) "" else "已更改 "}${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         return line
     }
 
@@ -4887,7 +4949,7 @@ class MainActivity : Activity() {
         }
         header.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
         header.addView(ImageView(this).apply {
-            setImageResource(iconResource("history"))
+            setPixelAwareImageResource(iconResource("history"))
             imageTintList = retroIconTint(ACCENT)
             contentDescription = "操作记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
@@ -4898,7 +4960,7 @@ class MainActivity : Activity() {
         lateinit var refreshDetails: () -> Unit
         refreshDetails = {
             val expanded = logId in expandedOperationIds
-            chevron.setImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
+            chevron.setPixelAwareImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
             if (container.childCount > 1) container.removeViews(1, container.childCount - 1)
             if (expanded) {
                 container.addView(
@@ -4935,22 +4997,22 @@ class MainActivity : Activity() {
             }
             val statusTint = when (status) {
                 "failed" -> ERROR
-                "running" -> if (themeName == "lollipop") codexBrandAccent() else ACCENT
+                "running" -> if (retroTheme) codexBrandAccent() else ACCENT
                 "stopped" -> WARNING
                 else -> when {
-                    themeName == "lollipop" -> ANDROID1_ADDED_COLOR
+                    retroTheme -> ANDROID1_ADDED_COLOR
                     lightTheme -> Color.rgb(52, 132, 75)
                     else -> Color.rgb(119, 174, 132)
                 }
             }
-            val statusIcon: View = if (themeName == "lollipop" && status == "running") {
+            val statusIcon: View = if (retroTheme && status == "running") {
                 ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                     isIndeterminate = true
                     indeterminateTintList = ColorStateList.valueOf(statusTint)
                 }
             } else {
                 ImageView(this).apply {
-                    setImageResource(when (status) {
+                    setPixelAwareImageResource(when (status) {
                         "failed" -> iconResource("alert")
                         "running" -> R.drawable.ic_progress
                         "stopped" -> iconResource("stop")
@@ -5350,17 +5412,17 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(3), dp(5), dp(3), dp(5))
         }
-        if (themeName == "lollipop") heading.addView(ImageView(this).apply {
-            setImageResource(iconResource("file"))
+        if (retroTheme) heading.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("file"))
             imageTintList = null
             contentDescription = "正在编辑的文件"
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(6) })
         heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (additions > 0) heading.addView(label("+$additions", 10, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (deletions > 0) heading.addView(label("-$deletions", 10, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (additions > 0) heading.addView(label("+$additions", 10, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         val chevron = ImageView(this).apply {
             imageTintList = retroIconTint(MUTED)
-            setImageResource(iconResource(if (expandedComposerFileChangesTurnId == turnId) "chevron_up" else "chevron_down"))
+            setPixelAwareImageResource(iconResource(if (expandedComposerFileChangesTurnId == turnId) "chevron_up" else "chevron_down"))
         }
         heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(7) })
         composerFileChanges.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -5378,7 +5440,7 @@ class MainActivity : Activity() {
         heading.setOnClickListener {
             expandedComposerFileChangesTurnId = if (expandedComposerFileChangesTurnId == turnId) null else turnId
             detailsScroll.visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
-            chevron.setImageResource(iconResource(if (detailsScroll.visibility == View.VISIBLE) "chevron_up" else "chevron_down"))
+            chevron.setPixelAwareImageResource(iconResource(if (detailsScroll.visibility == View.VISIBLE) "chevron_up" else "chevron_down"))
         }
     }
 
@@ -5392,15 +5454,15 @@ class MainActivity : Activity() {
         val controlSurface = if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(56, 56, 59)
         val controlBorder = if (lightTheme) Color.rgb(226, 226, 229) else Color.rgb(75, 75, 80)
         val copyColor = if (lightTheme) Color.rgb(88, 88, 94) else Color.rgb(199, 199, 203)
-        val addedColor = if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
-        val deletedColor = if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
+        val addedColor = if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
+        val deletedColor = if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(1), dp(1), dp(1), dp(1))
             background = rounded(PANEL, dp(11), cardBorder, dp(1))
             clipToOutline = true
             tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
-            if (themeName == "lollipop") elevation = dp(2).toFloat()
+            if (retroTheme) elevation = dp(2).toFloat()
         }
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -5409,10 +5471,10 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         val iconFrame = FrameLayout(this).apply {
-            background = rounded(if (themeName == "lollipop") LOLLIPOP_PRIMARY_LIGHT else if (lightTheme) Color.rgb(247, 247, 248) else Color.rgb(39, 39, 41), dp(10), cardBorder, dp(1))
+            background = rounded(if (retroTheme) LOLLIPOP_PRIMARY_LIGHT else if (lightTheme) Color.rgb(247, 247, 248) else Color.rgb(39, 39, 41), dp(10), cardBorder, dp(1))
         }
         iconFrame.addView(ImageView(this).apply {
-            setImageResource(iconResource("file"))
+            setPixelAwareImageResource(iconResource("file"))
             imageTintList = retroIconTint(if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
         }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
         heading.addView(iconFrame, LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(10) })
@@ -5503,7 +5565,7 @@ class MainActivity : Activity() {
                     contentDescription = "插入 ${entry.path} 到对话"
                 }
                 insert.addView(ImageView(this).apply {
-                    setImageResource(if (themeName == "lollipop") iconResource("add") else R.drawable.ic_insert_conversation)
+                    setPixelAwareImageResource(if (retroTheme) iconResource("add") else R.drawable.ic_insert_conversation)
                     imageTintList = retroIconTint(copyColor)
                 }, LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(3) })
                 insert.addView(label("插入对话", 10, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
@@ -5535,7 +5597,7 @@ class MainActivity : Activity() {
                 }
                 more.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
                 more.addView(ImageView(this).apply {
-                    setImageResource(iconResource(if (expanded || reviewing) "chevron_up" else "chevron_down"))
+                    setPixelAwareImageResource(iconResource(if (expanded || reviewing) "chevron_up" else "chevron_down"))
                     imageTintList = retroIconTint(copyColor)
                 }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5) })
                 footer.addView(more, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -5564,8 +5626,8 @@ class MainActivity : Activity() {
                 else -> "context"
             }
             val colors = when (kind) {
-                "added" -> Pair(if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), if (lightTheme) Color.rgb(223, 246, 228) else Color.rgb(24, 58, 36))
-                "deleted" -> Pair(if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), if (lightTheme) Color.rgb(252, 226, 229) else Color.rgb(67, 31, 38))
+                "added" -> Pair(if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), if (lightTheme) Color.rgb(223, 246, 228) else Color.rgb(24, 58, 36))
+                "deleted" -> Pair(if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), if (lightTheme) Color.rgb(252, 226, 229) else Color.rgb(67, 31, 38))
                 "hunk" -> Pair(ACCENT, if (lightTheme) Color.rgb(231, 236, 250) else Color.rgb(36, 43, 63))
                 else -> null
             }
@@ -5582,9 +5644,9 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(9))
             background = rounded(
-                if (themeName == "lollipop") PANEL_INSET else if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27),
+                if (retroTheme) PANEL_INSET else if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27),
                 dp(12),
-                if (themeName == "lollipop") BORDER else if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44),
+                if (retroTheme) BORDER else if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44),
                 dp(1),
             )
             tag = TAG_MESSAGE_DYNAMIC
@@ -5622,8 +5684,8 @@ class MainActivity : Activity() {
         }
         queuePanel.visibility = View.VISIBLE
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        if (themeName == "lollipop") header.addView(ImageView(this).apply {
-            setImageResource(iconResource("send"))
+        if (retroTheme) header.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("send"))
             imageTintList = null
             contentDescription = "排队消息"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
@@ -5640,8 +5702,8 @@ class MainActivity : Activity() {
             val item = visibleQueue[index]
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(if (themeName == "lollipop") 10 else 4), dp(if (themeName == "lollipop") 8 else 5), dp(if (themeName == "lollipop") 10 else 4), dp(if (themeName == "lollipop") 8 else 5))
-                if (themeName == "lollipop") {
+                setPadding(dp(if (retroTheme) 10 else 4), dp(if (retroTheme) 8 else 5), dp(if (retroTheme) 10 else 4), dp(if (retroTheme) 8 else 5))
+                if (retroTheme) {
                     background = rounded(Color.WHITE, dp(2), BORDER, dp(1))
                     elevation = dp(1).toFloat()
                 }
@@ -5691,19 +5753,19 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(0, dp(44), 1f))
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
             controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply {
-                setImageResource(if (themeName == "lollipop") iconResource("edit") else R.drawable.ic_queue_edit)
-                setPadding(dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12))
+                setPixelAwareImageResource(if (retroTheme) iconResource("edit") else R.drawable.ic_queue_edit)
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
-                setImageResource(if (themeName == "lollipop") iconResource("send") else R.drawable.ic_queue_send)
+                setPixelAwareImageResource(if (retroTheme) iconResource("send") else R.drawable.ic_queue_send)
                 imageTintList = retroIconTint(iconTint("send"))
-                setPadding(dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12))
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply {
-                setImageResource(if (themeName == "lollipop") iconResource("delete") else R.drawable.ic_queue_delete)
-                setPadding(dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12), dp(if (themeName == "lollipop") 10 else 12))
+                setPixelAwareImageResource(if (retroTheme) iconResource("delete") else R.drawable.ic_queue_delete)
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
             details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
@@ -5741,7 +5803,7 @@ class MainActivity : Activity() {
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = rounded(PANEL, dp(8), BORDER, dp(1))
-            setImageResource(if (themeName == "lollipop") iconResource("image") else android.R.drawable.ic_menu_gallery)
+            setPixelAwareImageResource(if (retroTheme) iconResource("image") else android.R.drawable.ic_menu_gallery)
             imageTintList = retroIconTint(MUTED)
             clipToOutline = true
             contentDescription = file.optString("name").ifBlank { "排队图片" }
@@ -5914,7 +5976,7 @@ class MainActivity : Activity() {
         val hasDraft = ::composerInput.isInitialized && (composerInput.text.isNotBlank() || selectedFiles.isNotEmpty())
         val canContinue = activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true
         sendButton.isEnabled = !sendBusy
-        sendButton.setImageResource(if (themeName == "lollipop") iconResource(when {
+        sendButton.setPixelAwareImageResource(if (retroTheme) iconResource(when {
             sendBusy -> "refresh"
             editingQueue -> "check"
             running -> "pause"
@@ -5936,7 +5998,7 @@ class MainActivity : Activity() {
             else -> "发送消息"
         })
         sendButton.imageTintList = retroIconTint(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
-        sendButton.background = if (themeName == "lollipop") lollipopFabBackground(LOLLIPOP_PRIMARY)
+        sendButton.background = if (retroTheme) lollipopFabBackground(LOLLIPOP_PRIMARY)
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
@@ -6487,7 +6549,7 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
             if (isSelected) row.addView(ImageView(this).apply {
-                setImageResource(iconResource("check"))
+                setPixelAwareImageResource(iconResource("check"))
                 imageTintList = retroIconTint(ACCENT)
                 contentDescription = "已选择"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { leftMargin = dp(6) })
@@ -6541,7 +6603,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), 0, dp(9), 0)
-                background = if (themeName == "lollipop") lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+                background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
                 isClickable = true
                 isFocusable = false
                 contentDescription = action.title
@@ -6551,7 +6613,7 @@ class MainActivity : Activity() {
                 }
             }
             row.addView(ImageView(this).apply {
-                setImageResource(iconResource(action.icon))
+                setPixelAwareImageResource(iconResource(action.icon))
                 imageTintList = retroIconTint(if (action.destructive) ERROR else SUBTLE)
             }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(9) })
             row.addView(label(action.title, 12, if (action.destructive) ERROR else TEXT), LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -6651,7 +6713,7 @@ class MainActivity : Activity() {
         if (sidebarVisible) setSidebarVisible(false)
 
         val overlay = FrameLayout(this).apply {
-            background = if (themeName == "lollipop") lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
+            background = if (retroTheme) lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
             elevation = dp(16).toFloat()
         }
         val layout = LinearLayout(this).apply {
@@ -6663,19 +6725,19 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
-            background = if (themeName == "lollipop") android1SettingsActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
+            background = if (retroTheme) android1SettingsActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
         header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 48 else 40), dp(if (themeName == "lollipop") 48 else 40)))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
-        titleCopy.addView(label("设置", if (themeName == "lollipop") 20 else 17, if (themeName == "lollipop") Color.WHITE else TEXT, true), widthWrap())
-        titleCopy.addView(label("偏好保存在本机", if (themeName == "lollipop") 12 else 10, if (themeName == "lollipop") Color.rgb(205, 211, 209) else MUTED), widthWrap())
+            titleCopy.addView(label("设置", if (retroTheme) 20 else 17, if (pixelTheme) PIXEL_TEXT else if (retroTheme) Color.WHITE else TEXT, true), widthWrap())
+        titleCopy.addView(label("偏好保存在本机", if (retroTheme) 12 else 10, if (retroTheme) Color.rgb(205, 211, 209) else MUTED), widthWrap())
         header.addView(titleCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 56)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 56)))
 
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -6692,12 +6754,12 @@ class MainActivity : Activity() {
         settingsOverlay = overlay
         updateInsetAwareOverlays()
 
-        val settingsAccent = if (themeName == "lollipop") LOLLIPOP_PRIMARY else ASSISTANT_NAME_ACCENT
+        val settingsAccent = if (retroTheme) LOLLIPOP_PRIMARY else ASSISTANT_NAME_ACCENT
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(5), dp(12), dp(5))
-                background = if (themeName == "lollipop") rounded(PANEL, dp(2), BORDER, dp(1)).also { elevation = 0f }
+                background = if (retroTheme) rounded(PANEL, dp(2), BORDER, dp(1)).also { elevation = 0f }
                 else rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
             }
             val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -6709,29 +6771,29 @@ class MainActivity : Activity() {
                 isFocusable = true
                 contentDescription = "$title，${if (expanded) "收起" else "展开"}"
             }
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 heading.addView(ImageView(this).apply {
-                    setImageResource(iconResource(settingsSectionIcon(title)))
+                    setPixelAwareImageResource(iconResource(settingsSectionIcon(title)))
                     imageTintList = null
                     contentDescription = "$title 设置"
                 }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(12) })
             }
             heading.addView(label(title, 14, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
             val arrow = ImageView(this).apply {
-                setImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
+                setPixelAwareImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
                 imageTintList = retroIconTint(MUTED)
             }
             heading.addView(arrow, LinearLayout.LayoutParams(dp(18), dp(18)))
             heading.setOnClickListener {
                 val open = body.visibility != View.VISIBLE
                 body.visibility = if (open) View.VISIBLE else View.GONE
-                arrow.setImageResource(iconResource(if (open) "chevron_up" else "chevron_down"))
+                arrow.setPixelAwareImageResource(iconResource(if (open) "chevron_up" else "chevron_down"))
                 heading.contentDescription = "$title，${if (open) "收起" else "展开"}"
                 if (open) expandedSettingsSections += title else expandedSettingsSections -= title
             }
-            card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(if (themeName == "lollipop") 48 else 44)))
+            card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 44)))
             body.addView(label(description, 11, MUTED).apply {
-                setPadding(if (themeName == "lollipop") dp(34) else 0, 0, 0, dp(7))
+                setPadding(if (retroTheme) dp(34) else 0, 0, 0, dp(7))
             }, widthWrap())
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             card.addView(body, widthWrap())
@@ -6745,6 +6807,7 @@ class MainActivity : Activity() {
             Triple("dark", "黑色", "低光阅读"),
             Triple("warm", "暖色", "柔和纸感"),
             Triple("lollipop", "旧经典", "银灰金属与早期 Droid 经典样式"),
+            Triple("pixel", "像素风", "深蓝像素面板与独立像素图标"),
             Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
             val selected = themeName == theme
@@ -6752,7 +6815,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
-                background = if (themeName == "lollipop") lollipopSelectableRow(selected) else if (selected) {
+                background = if (retroTheme) lollipopSelectableRow(selected) else if (selected) {
                     rounded(colorWithAlpha(settingsAccent, if (lightTheme) .12f else .18f), dp(10))
                 } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
@@ -6764,7 +6827,7 @@ class MainActivity : Activity() {
             copy.addView(label(description, 10, MUTED), widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             row.addView(ImageView(this).apply {
-                setImageResource(iconResource("check"))
+                setPixelAwareImageResource(iconResource("check"))
                 imageTintList = retroIconTint(settingsAccent)
                 visibility = if (selected) View.VISIBLE else View.INVISIBLE
                 contentDescription = if (selected) "已选择" else null
@@ -6866,7 +6929,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), 0, dp(12), 0)
-                background = if (themeName == "lollipop") lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(settingsAccent, .12f) else Color.TRANSPARENT, dp(9))
+                background = if (retroTheme) lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(settingsAccent, .12f) else Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
@@ -6878,7 +6941,7 @@ class MainActivity : Activity() {
             }
             row.addView(label(title, 13, TEXT, selected), LinearLayout.LayoutParams(0, WRAP, 1f))
             if (selected) row.addView(ImageView(this).apply {
-                setImageResource(iconResource("check"))
+                setPixelAwareImageResource(iconResource("check"))
                 imageTintList = retroIconTint(settingsAccent)
                 contentDescription = tr("已选择")
             }, LinearLayout.LayoutParams(dp(18), dp(18)))
@@ -6912,7 +6975,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(7), dp(5), dp(2), dp(5))
-                background = if (themeName == "lollipop") lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(ACCENT, .12f) else Color.TRANSPARENT, dp(10))
+                background = if (retroTheme) lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(ACCENT, .12f) else Color.TRANSPARENT, dp(10))
             }
             val copy = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -7042,7 +7105,7 @@ class MainActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(2), dp(7), dp(2), dp(7))
-        background = if (themeName == "lollipop") lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         isClickable = true
         isFocusable = false
         setOnClickListener { action() }
@@ -7051,7 +7114,7 @@ class MainActivity : Activity() {
         copy.addView(label(description, 10, MUTED), widthWrap())
         addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
         addView(ImageView(this@MainActivity).apply {
-            setImageResource(iconResource("chevron_right"))
+            setPixelAwareImageResource(iconResource("chevron_right"))
             imageTintList = retroIconTint(MUTED)
         }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(6) })
     }
@@ -7547,31 +7610,31 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(6), 0, dp(4), 0)
-            if (themeName == "lollipop") background = lollipopActionBarBackground()
+            if (retroTheme) background = lollipopActionBarBackground()
         }
-        val pathTitle = label("文件", if (themeName == "lollipop") 18 else 14, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true).apply {
+        val pathTitle = label("文件", if (retroTheme) 18 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
-        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(if (themeName == "lollipop") 42 else 48), 1f))
+        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(if (retroTheme) 42 else 48), 1f))
         val refreshButton = sidebarIconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
-        if (themeName == "lollipop") {
+        if (retroTheme) {
             refreshButton.imageTintList = null
             refreshButton.background = android1SegmentButtonBackground()
         }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 40 else 32), dp(if (themeName == "lollipop") 40 else 32)))
+        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
         val createButton = sidebarIconButton("add", "新建文件或文件夹") { }
         createButton.setOnClickListener {
             showCreateEntry(createButton, workspaceCurrentPath, browsingCwd()) {
                 workspaceRefresher?.invoke(workspaceCurrentPath)
             }
         }
-        if (themeName == "lollipop") {
+        if (retroTheme) {
             createButton.imageTintList = null
             createButton.background = android1SegmentButtonBackground()
         }
-        header.addView(createButton, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 40 else 32), dp(if (themeName == "lollipop") 40 else 32)))
-        panel.addView(header, LinearLayout.LayoutParams(MATCH, if (themeName == "lollipop") dp(42) else WRAP))
+        header.addView(createButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
+        panel.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(42) else WRAP))
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         rootInput = editField("输入服务端目录路径", manualRoot ?: currentCwd() ?: runtime.optString("workspace"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
@@ -7640,11 +7703,11 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(3 + depth * 15), dp(4), dp(2), dp(4))
-                    background = if (themeName == "lollipop") lollipopRipple() else rounded(Color.TRANSPARENT, dp(7))
+                    background = if (retroTheme) lollipopRipple() else rounded(Color.TRANSPARENT, dp(7))
                 }
                 if (isDirectory) {
                     row.addView(ImageView(this).apply {
-                        setImageResource(iconResource(if (relativePath in expandedDirectories) "chevron_down" else "chevron_right"))
+                        setPixelAwareImageResource(iconResource(if (relativePath in expandedDirectories) "chevron_down" else "chevron_right"))
                         imageTintList = retroIconTint(MUTED)
                         contentDescription = if (relativePath in expandedDirectories) "已展开" else "已收起"
                     }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(3) })
@@ -7653,8 +7716,8 @@ class MainActivity : Activity() {
                 }
                 row.addView(ImageView(this).apply {
                     val fileIcon = fileDisplayIconResource(entry.optString("name"))
-                    setImageResource(if (isDirectory) iconResource("folder") else fileIcon)
-                    imageTintList = if (isDirectory && themeName != "lollipop") ColorStateList.valueOf(ACCENT) else null
+                    setPixelAwareImageResource(if (isDirectory) iconResource("folder") else fileIcon)
+                    imageTintList = if (isDirectory && !retroTheme) ColorStateList.valueOf(ACCENT) else null
                     contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
                 }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
                 row.addView(label(entry.optString("name"), 13, TEXT, translateUi = false).apply {
@@ -8071,7 +8134,7 @@ class MainActivity : Activity() {
             else -> "class|interface|struct|enum|function|fun|def|const|let|var|if|else|for|while|return|import|export|package|true|false|null|nil"
         }
         val keywordColor = if (lightTheme) Color.rgb(104, 73, 184) else Color.rgb(197, 154, 255)
-        val stringColor = if (themeName == "lollipop") Color.rgb(139, 157, 125) else if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
+        val stringColor = if (retroTheme) Color.rgb(139, 157, 125) else if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
         val numberColor = if (lightTheme) Color.rgb(176, 83, 27) else Color.rgb(244, 176, 112)
         val commentColor = if (lightTheme) Color.rgb(103, 112, 124) else Color.rgb(132, 145, 153)
         Regex("\\b(?:$keywordSet)\\b").findAll(value).forEach { match ->
@@ -8108,13 +8171,13 @@ class MainActivity : Activity() {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(if (themeName == "lollipop") 0 else dp(10), if (themeName == "lollipop") 0 else dp(8), if (themeName == "lollipop") 0 else dp(10), dp(8))
+            setPadding(if (retroTheme) 0 else dp(10), if (retroTheme) 0 else dp(8), if (retroTheme) 0 else dp(10), dp(8))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 setPadding(dp(12), 0, dp(4), 0)
                 background = lollipopActionBarBackground()
             }
@@ -8124,19 +8187,19 @@ class MainActivity : Activity() {
             imageTintList = null
             contentDescription = fileGlyph(entry.path)
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
-        header.addView(label(entry.path.substringAfterLast('/'), if (themeName == "lollipop") 17 else 13, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply {
+        header.addView(label(entry.path.substringAfterLast('/'), if (retroTheme) 17 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, dp(34), 1f))
-        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
-        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (themeName == "lollipop") ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
+        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
+        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
         header.addView(iconButton("close", "关闭修改预览") { dialog.dismiss() }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 48 else 32), dp(if (themeName == "lollipop") 48 else 32)))
-        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (themeName == "lollipop") dp(48) else WRAP))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
 
         val lines = numberDiffLines(entry.diff)
         if (lines.isEmpty()) {
@@ -8219,7 +8282,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             isFocusableInTouchMode = true
-            setPadding(if (themeName == "lollipop") 0 else dp(12), if (themeName == "lollipop") 0 else dp(9), if (themeName == "lollipop") 0 else dp(12), dp(10))
+            setPadding(if (retroTheme) 0 else dp(12), if (retroTheme) 0 else dp(9), if (retroTheme) 0 else dp(12), dp(10))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         val previewInput = EditText(this).apply {
@@ -8238,7 +8301,7 @@ class MainActivity : Activity() {
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 setPadding(dp(12), 0, dp(4), 0)
                 background = lollipopActionBarBackground()
             }
@@ -8248,18 +8311,18 @@ class MainActivity : Activity() {
             imageTintList = null
             contentDescription = fileGlyph(path)
         }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
-        header.addView(label(path.substringAfterLast('/'), if (themeName == "lollipop") 17 else 13, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(label(path.substringAfterLast('/'), if (retroTheme) 17 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(48), 1f))
         val saveButton = textIconAction("保存", "save", "保存") { savePreviewFile(requestPath, effectiveCwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }.apply {
             visibility = View.GONE
         }
         header.addView(saveButton)
         header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 48 else 32), dp(if (themeName == "lollipop") 48 else 32)))
-        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (themeName == "lollipop") dp(48) else WRAP))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
         val loadingStatus = label("正在加载文件…", 12, MUTED).apply {
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(80), dp(12), dp(18))
@@ -8382,7 +8445,7 @@ class MainActivity : Activity() {
         terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(if (themeName == "lollipop") 0 else dp(10), 0, if (themeName == "lollipop") 0 else dp(10), dp(8))
+            setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(8))
             background = wallpaperBackground(
                 if (themeName == "custom") OPAQUE_PANEL else if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17),
                 viewportWidthPx = root.width,
@@ -8394,22 +8457,22 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, systemInsetTop, 0, 0)
-            if (themeName == "lollipop") background = lollipopActionBarBackground()
+            if (retroTheme) background = lollipopActionBarBackground()
         }
         header.addView(ImageView(this).apply {
-            setImageResource(iconResource("terminal"))
+            setPixelAwareImageResource(iconResource("terminal"))
             imageTintList = retroIconTint(SUBTLE)
             contentDescription = "本机终端"
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 22 else 18), dp(if (themeName == "lollipop") 22 else 18)).apply { rightMargin = dp(7) })
-        header.addView(label("本机终端", if (themeName == "lollipop") 18 else 13, if (themeName == "lollipop") ANDROID1_TITLE_TEXT else TEXT, true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 22 else 18), dp(if (retroTheme) 22 else 18)).apply { rightMargin = dp(7) })
+        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true), LinearLayout.LayoutParams(0, dp(48), 1f))
         header.addView(iconButton("close", "关闭终端") { closeTerminal() }.apply {
-            if (themeName == "lollipop") {
+            if (retroTheme) {
                 imageTintList = null
                 background = android1SegmentButtonBackground()
             }
-        }, LinearLayout.LayoutParams(dp(if (themeName == "lollipop") 48 else 40), dp(if (themeName == "lollipop") 48 else 40)))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
         header.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(1)))
-        shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(if (themeName == "lollipop") 48 else 44)))
+        shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(if (retroTheme) 48 else 44)))
         terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
@@ -8498,7 +8561,7 @@ class MainActivity : Activity() {
             }
         }
         (shell.getChildAt(0)?.layoutParams as? LinearLayout.LayoutParams)?.let { headerParams ->
-            val target = systemInsetTop + dp(if (themeName == "lollipop") 48 else 44)
+            val target = systemInsetTop + dp(if (retroTheme) 48 else 44)
             if (headerParams.height != target) {
                 headerParams.height = target
                 shell.getChildAt(0).layoutParams = headerParams
@@ -8549,7 +8612,7 @@ class MainActivity : Activity() {
                     when (event.optString("type")) {
                         "ready" -> {
                             terminalReady = true
-                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (themeName == "lollipop") ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
+                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
                         }
                         "error" -> {
                             terminalReady = false
@@ -9427,7 +9490,7 @@ class MainActivity : Activity() {
         textSize = adjustedTextSize(14)
         setTag(R.id.base_text_size, 14f)
         setPadding(dp(12), dp(7), dp(12), dp(7))
-        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (themeName == "lollipop") 4 else 9), BORDER, dp(1))
+        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (retroTheme) 4 else 9), BORDER, dp(1))
     }
 
     private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
@@ -9439,25 +9502,27 @@ class MainActivity : Activity() {
         textSize = adjustedTextSize(size)
         setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
-        if (themeName == "lollipop") typeface = themedTypeface(bold) else if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (retroTheme) typeface = themedTypeface(bold) else if (bold) setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER_VERTICAL
     }
 
     private fun themedTypeface(bold: Boolean = false): Typeface = when {
-        themeName != "lollipop" -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        pixelTheme -> Typeface.create("monospace", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        !retroTheme -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
         bold -> android1BoldTypeface
         else -> android1Typeface
     }
 
     private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
-        setImageResource(iconResource(icon))
-        imageTintList = if (themeName == "lollipop" && icon != "codex" && icon != "claude") null
+        setPixelAwareImageResource(iconResource(icon))
+        val pixelArtIcon = pixelTheme && iconResource(icon) in pixelIconResourceIds
+        imageTintList = if (pixelArtIcon || retroTheme && !pixelTheme && icon != "codex" && icon != "claude") null
             else ColorStateList.valueOf(iconTint(icon))
         scaleType = ImageView.ScaleType.FIT_CENTER
-        val iconPadding = if (themeName == "lollipop") dp(12) else dp(9)
+        val iconPadding = if (retroTheme) dp(12) else dp(9)
         setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
         contentDescription = tr(description)
-        background = if (themeName == "lollipop") android1SegmentButtonBackground() else ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) android1SegmentButtonBackground() else ColorDrawable(Color.TRANSPARENT)
         foreground = null
         stateListAnimator = null
         setDefaultFocusHighlightEnabled(false)
@@ -9468,7 +9533,11 @@ class MainActivity : Activity() {
 
     private fun sidebarIconButton(icon: String, description: String, action: () -> Unit): ImageButton =
         iconButton(icon, description, action).apply {
-            setImageResource(sidebarIconResource(icon))
+            val resource = sidebarIconResource(icon)
+            setPixelAwareImageResource(resource)
+            imageTintList = if (pixelTheme && resource in pixelIconResourceIds) null
+                else if (retroTheme && !pixelTheme && icon != "codex" && icon != "claude") null
+                else ColorStateList.valueOf(iconTint(icon))
             setPadding(dp(6), dp(6), dp(6), dp(6))
             tooltipText = description
         }
@@ -9476,7 +9545,15 @@ class MainActivity : Activity() {
     private fun iconTint(icon: String): Int = when {
         icon == "codex" -> codexBrandAccent()
         icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
-        themeName == "lollipop" -> when (icon) {
+        pixelTheme -> when (icon) {
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "link", "notifications" -> PIXEL_BLUE
+            "delete", "stop" -> PIXEL_RED
+            "folder", "folder_add", "pin", "file", "file_add", "copy", "paste", "open", "display", "language" -> Color.rgb(116, 180, 230)
+            "image", "palette" -> Color.rgb(201, 168, 255)
+            "chat", "history" -> PIXEL_BLUE
+            else -> PIXEL_TEXT
+        }
+        retroTheme -> when (icon) {
             "add", "arrow_up", "check", "download", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(164, 76, 65)
             "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
@@ -9494,20 +9571,77 @@ class MainActivity : Activity() {
     }
 
     private fun retroIconTint(color: Int): ColorStateList? =
-        if (themeName == "lollipop") null else ColorStateList.valueOf(color)
+        if (retroTheme) null else ColorStateList.valueOf(color)
+
+    private fun ImageView.setPixelAwareImageResource(resourceId: Int) {
+        setImageResource(resourceId)
+        if (pixelTheme && resourceId in pixelIconResourceIds) {
+            (drawable as? BitmapDrawable)?.setFilterBitmap(false)
+        }
+    }
+
+    private fun pixelIconResource(icon: String): Int? = when (icon) {
+        "search" -> R.drawable.pixel_search
+        "refresh" -> R.drawable.pixel_refresh
+        "chat", "menu" -> R.drawable.pixel_chat
+        "settings" -> R.drawable.pixel_settings
+        "link", "connection" -> R.drawable.pixel_connection
+        "terminal" -> R.drawable.pixel_terminal
+        "folder" -> R.drawable.pixel_folder
+        "add", "file_add", "folder_add" -> R.drawable.pixel_file_add
+        "arrow_up", "send" -> R.drawable.pixel_send
+        "pause" -> R.drawable.pixel_pause
+        "edit" -> R.drawable.pixel_edit
+        "check", "checked" -> R.drawable.pixel_check
+        "delete" -> R.drawable.pixel_delete
+        "palette", "theme" -> R.drawable.pixel_theme
+        "display" -> R.drawable.pixel_display
+        "language" -> R.drawable.pixel_language
+        "notifications" -> R.drawable.pixel_notifications
+        "lock", "match" -> R.drawable.pixel_match
+        "info", "about" -> R.drawable.pixel_about
+        else -> null
+    }
+
+    private fun pixelBlockBackground(fillColor: Int): Drawable {
+        val outerEdge = GradientDrawable().apply {
+            setColor(PIXEL_BORDER_SHADOW)
+            cornerRadius = 0f
+        }
+        val innerFace = GradientDrawable().apply {
+            setColor(fillColor)
+            setStroke(dp(1), PIXEL_BORDER_LIGHT)
+            cornerRadius = 0f
+        }
+        return android.graphics.drawable.LayerDrawable(arrayOf(outerEdge, innerFace)).apply {
+            setLayerInset(1, dp(1), dp(1), dp(1), dp(1))
+        }
+    }
 
     private fun android1SegmentButtonBackground(): Drawable = android.graphics.drawable.StateListDrawable().apply {
-        addState(intArrayOf(android.R.attr.state_pressed), android1MetalButtonBackground())
-        addState(intArrayOf(android.R.attr.state_focused), android1MetalButtonBackground())
-        addState(intArrayOf(android.R.attr.state_selected), android1MetalButtonBackground())
-        addState(intArrayOf(), gingerbreadButtonBackground())
+        if (pixelTheme) {
+            addState(intArrayOf(android.R.attr.state_pressed), pixelBlockBackground(PIXEL_BLUE))
+            addState(intArrayOf(android.R.attr.state_focused), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(android.R.attr.state_selected), pixelBlockBackground(PIXEL_BLUE))
+            addState(intArrayOf(), pixelBlockBackground(PIXEL_PANEL_INSET))
+        } else {
+            addState(intArrayOf(android.R.attr.state_pressed), android1MetalButtonBackground())
+            addState(intArrayOf(android.R.attr.state_focused), android1MetalButtonBackground())
+            addState(intArrayOf(android.R.attr.state_selected), android1MetalButtonBackground())
+            addState(intArrayOf(), gingerbreadButtonBackground())
+        }
     }
 
     private fun lollipopRipple(
         content: Drawable = ColorDrawable(Color.TRANSPARENT),
         rippleColor: Int = Color.argb(56, 111, 157, 197),
     ): Drawable {
-        if (themeName != "lollipop") return content
+        if (!retroTheme) return content
+        if (pixelTheme) return android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(android.R.attr.state_focused), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(), content)
+        }
         val pressed = ColorDrawable(rippleColor)
         return android.graphics.drawable.StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_pressed), android.graphics.drawable.LayerDrawable(arrayOf(content, pressed)))
@@ -9516,11 +9650,14 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun lollipopSelectableRow(selected: Boolean, selectedColor: Int = LOLLIPOP_PRIMARY_LIGHT): Drawable =
-        if (selected) ColorDrawable(selectedColor) else lollipopRipple()
+    private fun lollipopSelectableRow(selected: Boolean, selectedColor: Int = LOLLIPOP_PRIMARY_LIGHT): Drawable = when {
+        pixelTheme && selected -> pixelBlockBackground(selectedColor)
+        selected -> ColorDrawable(selectedColor)
+        else -> lollipopRipple()
+    }
 
     private fun sidebarIconResource(icon: String): Int = when {
-        themeName == "lollipop" -> iconResource(icon)
+        retroTheme -> iconResource(icon)
         else -> when (icon) {
         "add" -> R.drawable.ic_sidebar_add
         "back" -> R.drawable.ic_sidebar_back
@@ -9535,6 +9672,7 @@ class MainActivity : Activity() {
     private fun brandIconTint(engine: String): Int = when {
         engine != "claude-code" -> codexBrandAccent()
         themeName == "lollipop" -> Color.rgb(177, 112, 83)
+        pixelTheme -> Color.rgb(238, 140, 109)
         else -> ACCENT_WARM
     }
 
@@ -9544,7 +9682,11 @@ class MainActivity : Activity() {
         view.imageTintList = ColorStateList.valueOf(brandIconTint(engine))
     }
 
-    private fun codexBrandAccent(): Int = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
+    private fun codexBrandAccent(): Int = when (themeName) {
+        "lollipop" -> Color.rgb(111, 157, 197)
+        "pixel" -> PIXEL_BLUE
+        else -> if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
+    }
 
     private fun settingsSectionIcon(title: String): String = when (title) {
         "主题" -> "palette"
@@ -9558,6 +9700,7 @@ class MainActivity : Activity() {
     }
 
     private fun iconResource(icon: String): Int {
+        if (pixelTheme) pixelIconResource(icon)?.let { return it }
         if (themeName == "lollipop") return when (icon) {
             "codex" -> R.drawable.ic_brand_codex
             "claude" -> R.drawable.ic_brand_claude
@@ -9647,7 +9790,7 @@ class MainActivity : Activity() {
         setPadding(dp(4), 0, dp(4), 0)
         minWidth = dp(36)
         minHeight = dp(40)
-        background = if (themeName == "lollipop") lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         foreground = null
         stateListAnimator = null
         setDefaultFocusHighlightEnabled(false)
@@ -9657,12 +9800,12 @@ class MainActivity : Activity() {
     private fun smallButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
         setPadding(dp(9), 0, dp(9), 0)
-        background = if (themeName == "lollipop") android1SegmentButtonBackground() else rounded(PANEL_INSET, dp(7))
+        background = if (retroTheme) android1SegmentButtonBackground() else rounded(PANEL_INSET, dp(7))
         setOnClickListener { action() }
     }
 
     private fun textIconAction(value: String, icon: String, fallbackLabel: String, action: () -> Unit): View {
-        if (themeName != "lollipop") return smallButton(fallbackLabel, action)
+        if (!retroTheme) return smallButton(fallbackLabel, action)
         return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -9673,8 +9816,10 @@ class MainActivity : Activity() {
             contentDescription = tr(value)
             setOnClickListener { action() }
             addView(ImageView(this@MainActivity).apply {
-                setImageResource(iconResource(icon))
-                imageTintList = retroIconTint(iconTint(icon))
+                val resource = iconResource(icon)
+                setPixelAwareImageResource(resource)
+                imageTintList = if (themeName == "lollipop" || pixelTheme && resource in pixelIconResourceIds) null
+                    else ColorStateList.valueOf(iconTint(icon))
             }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(5) })
             addView(label(value, 11, SUBTLE, true), widthWrap())
         }
@@ -9683,47 +9828,70 @@ class MainActivity : Activity() {
     private fun dialogTextButton(value: String, color: Int, action: () -> Unit): TextView = label(value, 12, color, true).apply {
         gravity = Gravity.CENTER
         setPadding(dp(10), 0, dp(10), 0)
-        background = if (themeName == "lollipop") lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         setOnClickListener { action() }
     }
 
     private fun actionButton(value: String): Button = Button(this).apply {
         text = tr(value)
-        if (themeName == "lollipop") typeface = android1BoldTypeface
+        if (retroTheme) typeface = themedTypeface(true)
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
-        setTextColor(if (themeName == "lollipop") Color.rgb(28, 31, 33) else DARK)
+        setTextColor(if (pixelTheme) PIXEL_TEXT else if (retroTheme) Color.rgb(28, 31, 33) else DARK)
         isAllCaps = false
-        background = if (themeName == "lollipop") gingerbreadButtonBackground()
+        background = if (retroTheme) gingerbreadButtonBackground()
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
     }
 
     private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): GradientDrawable = GradientDrawable().apply {
         setColor(color)
-        cornerRadius = if (themeName == "lollipop" && radius < dp(20)) dp(2).toFloat() else radius.toFloat()
+        cornerRadius = when {
+            pixelTheme -> 0f
+            retroTheme && radius < dp(20) -> dp(2).toFloat()
+            else -> radius.toFloat()
+        }
         if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
     }
 
     private fun lollipopActionBarBackground(): GradientDrawable = GradientDrawable().apply {
-        orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(248, 248, 248), Color.rgb(220, 220, 220), Color.rgb(169, 169, 169)))
-        setStroke(dp(1), Color.rgb(107, 107, 107))
+        if (pixelTheme) {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL))
+            setStroke(dp(1), PIXEL_BORDER)
+        } else {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(248, 248, 248), Color.rgb(220, 220, 220), Color.rgb(169, 169, 169)))
+            setStroke(dp(1), Color.rgb(107, 107, 107))
+        }
         cornerRadius = 0f
     }
 
     private fun android1SettingsActionBarBackground(): GradientDrawable = GradientDrawable().apply {
-        orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(86, 86, 86), Color.rgb(50, 50, 50), Color.rgb(24, 24, 24)))
-        setStroke(dp(1), Color.rgb(116, 116, 116))
+        if (pixelTheme) {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(PIXEL_PANEL_INSET, PIXEL_BACKGROUND))
+            setStroke(dp(1), PIXEL_BORDER)
+        } else {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(86, 86, 86), Color.rgb(50, 50, 50), Color.rgb(24, 24, 24)))
+            setStroke(dp(1), Color.rgb(116, 116, 116))
+        }
         cornerRadius = 0f
     }
 
     private fun gingerbreadButtonBackground(accent: Boolean = false): GradientDrawable = GradientDrawable().apply {
-        orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(if (accent) intArrayOf(Color.rgb(213, 218, 219), Color.rgb(160, 171, 174), Color.rgb(111, 121, 124))
-            else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
-        setStroke(dp(1), if (accent) Color.rgb(225, 229, 230) else Color.rgb(112, 119, 119))
-        cornerRadius = dp(3).toFloat()
+        if (pixelTheme) {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(if (accent) intArrayOf(PIXEL_BLUE, Color.rgb(20, 100, 180)) else intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL))
+            setStroke(dp(1), PIXEL_BORDER_LIGHT)
+            cornerRadius = 0f
+        } else {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(if (accent) intArrayOf(Color.rgb(213, 218, 219), Color.rgb(160, 171, 174), Color.rgb(111, 121, 124))
+                else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
+            setStroke(dp(1), if (accent) Color.rgb(225, 229, 230) else Color.rgb(112, 119, 119))
+            cornerRadius = dp(3).toFloat()
+        }
     }
 
     private fun android1MetalButtonBackground(): GradientDrawable = GradientDrawable().apply {
@@ -9734,10 +9902,16 @@ class MainActivity : Activity() {
     }
 
     private fun lollipopFabBackground(color: Int): Drawable = GradientDrawable().apply {
-        shape = GradientDrawable.OVAL
-        orientation = GradientDrawable.Orientation.TOP_BOTTOM
-        setColors(intArrayOf(Color.rgb(213, 218, 219), color, Color.rgb(111, 121, 124)))
-        setStroke(dp(1), Color.rgb(225, 229, 230))
+        if (pixelTheme) {
+            setColor(color)
+            setStroke(dp(2), PIXEL_BORDER_LIGHT)
+            cornerRadius = 0f
+        } else {
+            shape = GradientDrawable.OVAL
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(213, 218, 219), color, Color.rgb(111, 121, 124)))
+            setStroke(dp(1), Color.rgb(225, 229, 230))
+        }
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -9838,13 +10012,13 @@ class MainActivity : Activity() {
     }
 
     private fun installThemeBackground(target: FrameLayout) {
-        target.background = if (themeName == "lollipop") lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
+        target.background = if (retroTheme) lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
     }
 
     private fun lollipopSystemBarsBackground(contentColor: Int): Drawable = LollipopSystemBarsDrawable(
         contentColor = contentColor,
         statusBarColor = LOLLIPOP_PRIMARY_DARK,
-        navigationBarColor = Color.BLACK,
+        navigationBarColor = if (pixelTheme) PIXEL_BACKGROUND else Color.BLACK,
         statusBarHeight = { systemInsetTop },
         navigationBarHeight = { systemInsetBottom },
     )
