@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
+import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand } from '../lib/terminalPathCommand'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
@@ -485,6 +486,14 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     container.addEventListener('contextmenu', handleContextMenu, true)
     const handleMouseDown = (event: MouseEvent) => {
+      // Our context menu owns right clicks. Reporting the preceding button-down
+      // to tmux would clear xterm's selection before contextmenu can read it.
+      if (event.button === 2) {
+        cacheTerminalSelection()
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
       if (event.button !== 0) return
       if (Date.now() < ignoreSyntheticMouseUntil) {
         event.preventDefault()
@@ -501,6 +510,12 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     container.addEventListener('mousedown', handleMouseDown, true)
     container.addEventListener('mouseup', blockSyntheticMouse, true)
     container.addEventListener('click', blockSyntheticMouse, true)
+    const disposeMouseSelection = xtermScreen
+      ? installTerminalMouseSelection(terminal, container, xtermScreen, {
+          selectWordAt: (clientX, clientY) => selectTerminalTextAt(terminal, xtermScreen, clientX, clientY),
+          onSelectionEnd: () => { cacheTerminalSelection() },
+        })
+      : () => {}
 
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
@@ -629,6 +644,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       container.removeEventListener('mousedown', handleMouseDown, true)
       container.removeEventListener('mouseup', blockSyntheticMouse, true)
       container.removeEventListener('click', blockSyntheticMouse, true)
+      disposeMouseSelection()
       container.removeEventListener('touchstart', handleTouchStart)
       container.removeEventListener('touchmove', handleTouchMove)
       container.removeEventListener('touchend', handleTouchEnd)

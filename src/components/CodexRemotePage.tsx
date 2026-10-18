@@ -62,6 +62,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 
@@ -3810,34 +3811,36 @@ function RemoteChatPane({
         </div>
       ) : null}
       {terminalOpen ? (
-        <Suspense fallback={(
-          <ChatOverlayPanel
-            ariaLabel="本机终端"
-            backdropLabel="关闭本机终端"
-            className="terminal-dialog"
-            onClose={() => setTerminalOpen(false)}
-            showCloseButton={false}
-            header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
-          >
-            <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
-          </ChatOverlayPanel>
-        )}>
-          <TerminalDialog
-            token={token}
-            threadId={remote.activeThread?.id}
-            cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
-            directoryRequest={terminalDirectoryRequest}
-            onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
-            onClose={() => setTerminalOpen(false)}
-            onInsertText={(value) => {
-              if (value.length >= longPasteThreshold) {
-                composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
-              } else {
-                composerHandle.current?.insertDraftAtCursor(value, true)
-              }
-            }}
-          />
-        </Suspense>
+        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
+          <Suspense fallback={(
+            <ChatOverlayPanel
+              ariaLabel="本机终端"
+              backdropLabel="关闭本机终端"
+              className="terminal-dialog"
+              onClose={() => setTerminalOpen(false)}
+              showCloseButton={false}
+              header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
+            >
+              <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
+            </ChatOverlayPanel>
+          )}>
+            <TerminalDialog
+              token={token}
+              threadId={remote.activeThread?.id}
+              cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+              directoryRequest={terminalDirectoryRequest}
+              onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
+              onClose={() => setTerminalOpen(false)}
+              onInsertText={(value) => {
+                if (value.length >= longPasteThreshold) {
+                  composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
+                } else {
+                  composerHandle.current?.insertDraftAtCursor(value, true)
+                }
+              }}
+            />
+          </Suspense>
+        </TerminalRecoveryBoundary>
       ) : null}
     </main>
   )

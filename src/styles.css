@@ -230,6 +230,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .terminal-touch-selection-overlay { position: absolute; z-index: 3; inset: 0; pointer-events: none; }
 .terminal-touch-selection-overlay > span { position: absolute; background: rgba(130, 151, 225, .42); }
 .terminal-dialog__paste-hint { position: absolute; z-index: 1; right: 14px; bottom: 14px; max-width: calc(100% - 28px); padding: 8px 11px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 8px; background: rgba(28, 31, 38, .96); color: #e3e6ed; box-shadow: 0 8px 24px rgba(0, 0, 0, .3); font-size: calc(12px + var(--mobile-font-offset)); pointer-events: none; }
+.terminal-dialog__error { display: flex; min-width: 0; min-height: 0; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 20px; color: #e3e6ed; text-align: center; }
+.terminal-dialog__error p { margin: 0; color: #9da5b4; font-size: calc(13px + var(--mobile-font-offset)); }
+.terminal-dialog__error > div { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.terminal-dialog__error button { display: inline-flex; min-height: 34px; align-items: center; justify-content: center; gap: 6px; padding: 0 11px; border: 1px solid rgba(146, 157, 184, .2); border-radius: 7px; background: rgba(122, 137, 184, .15); color: #e3e6ed; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); }
 .terminal-dialog > .chat-overlay-panel__footer { display: none; }
 .terminal-dialog__navigation { display: grid; width: min(100%, 420px); gap: 6px; margin: 0 auto; }
 .terminal-dialog__navigation-row { display: grid; min-width: 0; gap: 6px; }
