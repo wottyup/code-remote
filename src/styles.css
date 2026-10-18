@@ -365,8 +365,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-delete-dialog__list { max-height: 146px; overflow-y: auto; margin: 0; padding: 7px 10px 7px 30px; border: 1px solid rgba(224, 116, 121, .22); border-radius: 8px; background: rgba(84, 31, 36, .22); color: #f0d7d8; font-size: calc(12px + var(--mobile-font-offset)); }
 .thread-delete-dialog__list li { overflow: hidden; padding: 3px 0; text-overflow: ellipsis; white-space: nowrap; }
 .thread-delete-dialog__actions button:last-child { border-color: rgba(234, 114, 120, .5); background: #a53f46; color: #fff; }
-.workspace-file-context-menu { z-index: 100; min-width: 176px; max-height: calc(100dvh - 16px); overflow-y: auto; }
+.workspace-file-context-menu { z-index: 100; min-width: 176px; max-height: calc(100dvh - 16px); overflow-y: auto; box-sizing: border-box; }
 .workspace-file-context-menu__name { overflow: hidden; max-width: 160px; padding: 5px 8px 4px; color: #858da2; font-size: calc(11px + var(--mobile-font-offset)); text-overflow: ellipsis; white-space: nowrap; }
+.workspace-file-context-menu__group { display: contents; }
+.workspace-file-context-menu__group-label { display: none; }
+.workspace-file-context-menu__group button { width: 100%; min-width: 0; }
 .workspace-file-context-menu--light { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 15px 38px rgba(0, 0, 0, .16); }
 .workspace-file-context-menu--light .workspace-file-context-menu__name { color: #737373; }
 .workspace-file-context-menu--light button { color: #383838; }
@@ -380,6 +383,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-selection-context-menu__note::placeholder { color: #747d8e; }
 .pane-limit-notice { position: fixed; z-index: 21; top: max(17px, calc(env(safe-area-inset-top) + 6px), calc(var(--native-status-bar-inset) + 6px)); left: 50%; min-height: 31px; padding: 8px 12px; transform: translateX(-50%); border: 1px solid rgba(216, 174, 101, .35); border-radius: 999px; background: rgba(49, 39, 25, .95); color: #ecd3a4; box-shadow: 0 12px 28px rgba(0, 0, 0, .28); font-size: calc(12px + var(--mobile-font-offset)); }
 .remote-chat__header { grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; min-width: 0; padding: 0 27px; border-bottom: 1px solid var(--line); background: rgba(15, 17, 21, .72); box-shadow: 0 8px 28px rgba(0, 0, 0, .08); }
+.remote-chat__header--with-history-refresh .remote-chat__title-wrap, .remote-chat__header--with-history-refresh .remote-chat__controls { min-width: 0; flex: 1 1 0; }
+.remote-chat__header--with-history-refresh .remote-chat__controls { justify-content: flex-end; }
+.chat-history-refresh-button { width: 32px; height: 32px; min-height: 32px; flex: 0 0 32px; }
 .remote-chat__title-wrap { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .remote-chat__controls { display: flex; flex: 0 0 auto; align-items: center; gap: 13px; }
 .remote-chat__title { display: grid; min-width: 0; gap: 2px; }
@@ -2848,4 +2854,80 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .bailian-voice-input { width: 100%; min-width: 0; }
   .bailian-voice-actions { align-items: flex-start; }
   .bailian-voice-source { width: 100%; }
+}
+
+.remote-chat__header--with-history-refresh { position: relative; }
+.workspace-file-context-menu--retro {
+  width: min(292px, calc(100vw - 16px));
+  min-width: 0;
+  max-width: calc(100vw - 16px);
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid #8fa2b3;
+  border-radius: 3px;
+  background: #f8fafb;
+  color: #20252b;
+  box-shadow: 2px 3px 0 rgba(47, 67, 82, .16);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.workspace-file-context-menu--retro .workspace-file-context-menu__name {
+  max-width: none;
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid #c3cdd5;
+  color: #344b5d;
+  font: 600 12px/1.35 Arial, Helvetica, sans-serif;
+  text-overflow: ellipsis;
+}
+.workspace-file-context-menu--retro .workspace-file-context-menu__group {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px;
+}
+.workspace-file-context-menu--retro .workspace-file-context-menu__group--create,
+.workspace-file-context-menu--retro .workspace-file-context-menu__group--manage { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.workspace-file-context-menu--retro .workspace-file-context-menu__group--create,
+.workspace-file-context-menu--retro .workspace-file-context-menu__group--manage { padding-top: 7px; border-top: 1px solid #d5dce1; }
+.workspace-file-context-menu--retro .workspace-file-context-menu__group-label {
+  display: block;
+  grid-column: 1 / -1;
+  padding: 0 2px 2px;
+  color: #60717e;
+  font: 600 10px/1.3 Arial, Helvetica, sans-serif;
+}
+.workspace-file-context-menu--retro button {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 7px;
+  border: 1px solid #aab8c5;
+  border-radius: 2px;
+  background: #f0f4f7;
+  color: #203c52;
+  font: 13px/1.25 Arial, Helvetica, sans-serif;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.workspace-file-context-menu--retro button svg { flex: 0 0 auto; }
+.workspace-file-context-menu--retro button:hover:not(:disabled) { border-color: #6689a6; background: #e7eef4; color: #1e3b54; }
+.workspace-file-context-menu--retro button:disabled { cursor: default; opacity: .52; }
+.workspace-file-context-menu--retro button.workspace-file-context-menu__delete { margin-top: 0; border-top: 1px solid #cdaaaa; padding-top: 7px; color: #8b3838; }
+.workspace-file-context-menu--retro button.workspace-file-context-menu__delete:hover:not(:disabled) { border-color: #cdaaaa; background: #f7e9e9; color: #772929; }
+.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__title-wrap,
+.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { flex: 1 1 0; }
+.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { margin: 0; justify-content: flex-end; }
+
+@media (max-width: 700px) {
+  .remote-shell--theme-retro .remote-chat__header--with-history-refresh {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr);
+  }
+  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__title-wrap { display: none; }
+  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .chat-history-refresh-button { grid-column: 2; justify-self: center; }
+  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { grid-column: 3; display: flex; min-width: 0; justify-content: flex-end; overflow: visible; }
 }

@@ -2725,8 +2725,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     event.preventDefault()
     event.stopPropagation()
     const mobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
-    const menuWidth = 244
-    const menuHeight = entry.kind === 'directory' ? (mobile ? 350 : 390) : 264
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(entry.kind === 'directory' ? 480 : 320, Math.max(0, window.innerHeight - 16))
+      : entry.kind === 'directory' ? (mobile ? 350 : 390) : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
@@ -2737,8 +2739,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
 
   function openRootContextMenu(clientX: number, clientY: number) {
     if (!browsingRoot) return
-    const menuWidth = 244
-    const menuHeight = 220
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(280, Math.max(0, window.innerHeight - 16))
+      : 220
     const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8))
     const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
@@ -3089,6 +3093,19 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     return () => window.cancelAnimationFrame(frame)
   }, [previewPath])
   const previewPortalTarget = previewContainerRef.current
+  const contextMenuMissingDraftPaths = contextMenu
+    ? workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path)))
+    : []
+  const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && threadId)
+  const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.mobile && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
+  const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
+  const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuMissingDraftPaths.length > 0
+  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste
   return (
     <>
       <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
@@ -3236,18 +3253,27 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-context-menu workspace-file-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
-          {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
-          {contextMenu.entry.kind === 'directory' && !contextMenu.mobile && !contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</button> : null}
-          {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</button> : null}
-          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button> : null}
-          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button> : null}
-          {!contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
-          {contextMenu.entry.kind === 'directory' && workspaceClipboard ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button className="thread-context-menu__danger" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
+            <span className="workspace-file-context-menu__group-label">快捷操作</span>
+            {contextMenuCanBind ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
+            {contextMenuCanOpenTerminal ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</button> : null}
+            {contextMenuMissingDraftPaths.length > 0 ? <button type="button" role="menuitem" onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</button> : null}
+          </div> : null}
+          {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
+            <span className="workspace-file-context-menu__group-label">新建</span>
+            <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button>
+            <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button>
+          </div> : null}
+          {contextMenuHasFileActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--manage">
+            <span className="workspace-file-context-menu__group-label">文件操作</span>
+            {contextMenuCanRename ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
+            {contextMenuCanCopy ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+            {contextMenuCanCut ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+            {contextMenuCanPaste ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
+          </div> : null}
+          {contextMenuCanDelete ? <button className="thread-context-menu__danger workspace-file-context-menu__delete" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
         </div>,
         document.body,
       ) : null}
@@ -3345,6 +3371,8 @@ interface RemoteChatPaneProps {
   onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
+  onRefreshThreads: () => void
+  refreshThreadsDisabled: boolean
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
   onOpenWorkspaceImage: (path: string, cwd?: string) => void
   directoryRequest: WorkspaceTerminalRequest | null
@@ -3367,6 +3395,8 @@ function RemoteChatPane({
   onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
+  onRefreshThreads,
+  refreshThreadsDisabled,
   onOpenWorkspaceFile,
   onOpenWorkspaceImage,
   directoryRequest,
@@ -3603,11 +3633,19 @@ function RemoteChatPane({
   }, [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
-      <header className="remote-chat__header">
+      <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
           <div className="remote-chat__title"><span className="remote-chat__eyebrow">{activeEngineLabel} · 当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
+        {active ? <button
+          className="icon-button chat-history-refresh-button"
+          type="button"
+          aria-label="刷新对话记录"
+          title="刷新对话记录"
+          disabled={refreshThreadsDisabled}
+          onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
+        ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
           <button
             className="icon-button engine-switch-button"
@@ -5250,7 +5288,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <small className="thread-list-heading__shortcut" title={`上一条：${formatSidebarChatShortcut(sidebarChatShortcuts.previous)}；下一条：${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`}>{sidebarShortcutHint}</small>
           <div className="thread-list-heading__actions">
             <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
-            <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
           </div>
         </div>
         {sidebarSelectionMode ? <div className="sidebar-selection-bar">
@@ -5363,6 +5400,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
+                    onRefreshThreads={() => { void remote0.refreshThreads(true) }}
+                    refreshThreadsDisabled={remote0.handedOff}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
