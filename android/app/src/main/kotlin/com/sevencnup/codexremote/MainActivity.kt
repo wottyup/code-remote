@@ -26,6 +26,7 @@ import android.graphics.PixelFormat
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Outline
+import android.graphics.Rect
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
@@ -137,6 +138,70 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+
+private class PixelFrameNineSliceDrawable(
+    private val bitmap: Bitmap,
+    sourceCornerWidth: Int,
+    sourceCornerHeight: Int,
+    private val targetCornerSize: Int,
+) : Drawable() {
+    private val paint = Paint().apply {
+        isAntiAlias = false
+        isFilterBitmap = false
+    }
+    private val sourceRects = Array(9) { Rect() }
+    private val destinationRects = Array(9) { Rect() }
+    private val destinationX = IntArray(4)
+    private val destinationY = IntArray(4)
+    private var drawableAlpha = 255
+    private var drawableColorFilter: ColorFilter? = null
+    private val sourceX = intArrayOf(0, sourceCornerWidth.coerceIn(1, bitmap.width / 2), bitmap.width - sourceCornerWidth.coerceIn(1, bitmap.width / 2), bitmap.width)
+    private val sourceY = intArrayOf(0, sourceCornerHeight.coerceIn(1, bitmap.height / 2), bitmap.height - sourceCornerHeight.coerceIn(1, bitmap.height / 2), bitmap.height)
+
+    init {
+        var index = 0
+        for (row in 0..2) for (column in 0..2) {
+            sourceRects[index++].set(sourceX[column], sourceY[row], sourceX[column + 1], sourceY[row + 1])
+        }
+    }
+
+    override fun draw(canvas: Canvas) {
+        val area = bounds
+        if (area.isEmpty) return
+        val horizontalInset = min(targetCornerSize, area.width() / 2)
+        val verticalInset = min(targetCornerSize, area.height() / 2)
+        destinationX[0] = area.left
+        destinationX[1] = area.left + horizontalInset
+        destinationX[2] = area.right - horizontalInset
+        destinationX[3] = area.right
+        destinationY[0] = area.top
+        destinationY[1] = area.top + verticalInset
+        destinationY[2] = area.bottom - verticalInset
+        destinationY[3] = area.bottom
+        paint.alpha = drawableAlpha
+        paint.colorFilter = drawableColorFilter
+        var index = 0
+        for (row in 0..2) for (column in 0..2) {
+            val source = sourceRects[index]
+            val destination = destinationRects[index++]
+            destination.set(destinationX[column], destinationY[row], destinationX[column + 1], destinationY[row + 1])
+            if (!source.isEmpty && !destination.isEmpty) canvas.drawBitmap(bitmap, source, destination, paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        drawableColorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Android graphics API")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
 
 private class LollipopSystemBarsDrawable(
     private val contentColor: Int,
@@ -423,6 +488,7 @@ class MainActivity : Activity() {
     private val PIXEL_BLUE = Color.rgb(29, 136, 238)
     private val PIXEL_GREEN = Color.rgb(74, 203, 111)
     private val PIXEL_RED = Color.rgb(236, 91, 91)
+    private val pixelFrameBitmapCache = mutableMapOf<Int, Bitmap>()
     private val pixelIconResourceIds = setOf(
         R.drawable.pixel_about, R.drawable.pixel_chat, R.drawable.pixel_check,
         R.drawable.pixel_connection, R.drawable.pixel_delete, R.drawable.pixel_display,
@@ -1692,7 +1758,8 @@ class MainActivity : Activity() {
             setPadding(dp(11) + systemInsetLeft, dp(8), dp(11) + systemInsetRight, dp(6))
             composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (retroTheme) 10 else 18).toFloat(), composerGlowOpacity())
             if (retroTheme) {
-                background = rounded(PANEL, dp(2), BORDER, dp(1))
+                background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_strip, PANEL)
+                    else rounded(PANEL, dp(2), BORDER, dp(1))
                 elevation = 0f
             } else {
                 background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
@@ -3661,6 +3728,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), dp(8), dp(12), dp(8))
+                if (pixelTheme) background = pixelFrameBackground(R.drawable.pixel_frame_active, PANEL)
                 tag = TAG_MESSAGE_DYNAMIC
             }
             activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
@@ -9604,17 +9672,32 @@ class MainActivity : Activity() {
     }
 
     private fun pixelBlockBackground(fillColor: Int): Drawable {
-        val outerEdge = GradientDrawable().apply {
-            setColor(PIXEL_BORDER_SHADOW)
-            cornerRadius = 0f
+        return pixelFrameBackground(R.drawable.pixel_frame_active, fillColor)
+    }
+
+    private fun pixelFrameBackground(frameResource: Int, fillColor: Int): Drawable {
+        val bitmap = pixelFrameBitmapCache[frameResource]
+            ?: BitmapFactory.decodeResource(resources, frameResource)?.also { decoded ->
+                decoded.density = Bitmap.DENSITY_NONE
+                pixelFrameBitmapCache[frameResource] = decoded
+            }
+            ?: return ColorDrawable(fillColor)
+        val sourceCorners = when (frameResource) {
+            R.drawable.pixel_frame_square -> 54 to 52
+            R.drawable.pixel_frame_strip -> 56 to 48
+            R.drawable.pixel_frame_active -> 56 to 56
+            else -> 54 to 52
         }
-        val innerFace = GradientDrawable().apply {
-            setColor(fillColor)
-            setStroke(dp(1), PIXEL_BORDER_LIGHT)
-            cornerRadius = 0f
-        }
-        return android.graphics.drawable.LayerDrawable(arrayOf(outerEdge, innerFace)).apply {
-            setLayerInset(1, dp(1), dp(1), dp(1), dp(1))
+        val frame = PixelFrameNineSliceDrawable(
+            bitmap = bitmap,
+            sourceCornerWidth = sourceCorners.first,
+            sourceCornerHeight = sourceCorners.second,
+            targetCornerSize = dp(10),
+        )
+        return LayerDrawable(arrayOf(ColorDrawable(fillColor), frame)).apply {
+            // Leave the frame's stepped outer silhouette transparent while the
+            // frame itself covers the panel's inner edge.
+            setLayerInset(0, dp(3), dp(3), dp(3), dp(3))
         }
     }
 
@@ -9843,49 +9926,48 @@ class MainActivity : Activity() {
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
     }
 
-    private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): GradientDrawable = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = when {
-            pixelTheme -> 0f
-            retroTheme && radius < dp(20) -> dp(2).toFloat()
-            else -> radius.toFloat()
+    private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): Drawable {
+        if (pixelTheme) {
+            if (Color.alpha(color) == 0) return ColorDrawable(color)
+            val frameResource = if (radius >= dp(10)) R.drawable.pixel_frame_panel else R.drawable.pixel_frame_square
+            return pixelFrameBackground(frameResource, color)
         }
-        if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = when {
+                retroTheme && radius < dp(20) -> dp(2).toFloat()
+                else -> radius.toFloat()
+            }
+            if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+        }
     }
 
-    private fun lollipopActionBarBackground(): GradientDrawable = GradientDrawable().apply {
-        if (pixelTheme) {
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            setColors(intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL))
-            setStroke(dp(1), PIXEL_BORDER)
-        } else {
+    private fun lollipopActionBarBackground(): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_strip, PIXEL_PANEL)
+        return GradientDrawable().apply {
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
             setColors(intArrayOf(Color.rgb(248, 248, 248), Color.rgb(220, 220, 220), Color.rgb(169, 169, 169)))
             setStroke(dp(1), Color.rgb(107, 107, 107))
+            cornerRadius = 0f
         }
-        cornerRadius = 0f
     }
 
-    private fun android1SettingsActionBarBackground(): GradientDrawable = GradientDrawable().apply {
-        if (pixelTheme) {
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            setColors(intArrayOf(PIXEL_PANEL_INSET, PIXEL_BACKGROUND))
-            setStroke(dp(1), PIXEL_BORDER)
-        } else {
+    private fun android1SettingsActionBarBackground(): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_strip, PIXEL_BACKGROUND)
+        return GradientDrawable().apply {
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
             setColors(intArrayOf(Color.rgb(86, 86, 86), Color.rgb(50, 50, 50), Color.rgb(24, 24, 24)))
             setStroke(dp(1), Color.rgb(116, 116, 116))
+            cornerRadius = 0f
         }
-        cornerRadius = 0f
     }
 
-    private fun gingerbreadButtonBackground(accent: Boolean = false): GradientDrawable = GradientDrawable().apply {
-        if (pixelTheme) {
-            orientation = GradientDrawable.Orientation.TOP_BOTTOM
-            setColors(if (accent) intArrayOf(PIXEL_BLUE, Color.rgb(20, 100, 180)) else intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL))
-            setStroke(dp(1), PIXEL_BORDER_LIGHT)
-            cornerRadius = 0f
-        } else {
+    private fun gingerbreadButtonBackground(accent: Boolean = false): Drawable {
+        if (pixelTheme) return pixelFrameBackground(
+            R.drawable.pixel_frame_square,
+            if (accent) PIXEL_BLUE else PIXEL_PANEL_INSET,
+        )
+        return GradientDrawable().apply {
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
             setColors(if (accent) intArrayOf(Color.rgb(213, 218, 219), Color.rgb(160, 171, 174), Color.rgb(111, 121, 124))
                 else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
@@ -9901,12 +9983,9 @@ class MainActivity : Activity() {
         cornerRadius = dp(3).toFloat()
     }
 
-    private fun lollipopFabBackground(color: Int): Drawable = GradientDrawable().apply {
-        if (pixelTheme) {
-            setColor(color)
-            setStroke(dp(2), PIXEL_BORDER_LIGHT)
-            cornerRadius = 0f
-        } else {
+    private fun lollipopFabBackground(color: Int): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_square, color)
+        return GradientDrawable().apply {
             shape = GradientDrawable.OVAL
             orientation = GradientDrawable.Orientation.TOP_BOTTOM
             setColors(intArrayOf(Color.rgb(213, 218, 219), color, Color.rgb(111, 121, 124)))
