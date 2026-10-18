@@ -54,7 +54,7 @@ import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposer
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
-import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
@@ -5339,6 +5339,15 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
   const [imageProcessing, setImageProcessing] = useState(false)
   const [notificationError, setNotificationError] = useState<string | null>(null)
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
+  const backgroundCropDrag = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    width: number
+    height: number
+    positionX: number
+    positionY: number
+  } | null>(null)
   const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
@@ -5362,7 +5371,13 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     setImageProcessing(true)
     try {
       const customBackgroundImage = await optimizeThemeBackgroundImage(file)
-      onChange({ ...preferences, customBackgroundImage })
+      onChange({
+        ...preferences,
+        customBackgroundImage,
+        customBackgroundPositionX: 50,
+        customBackgroundPositionY: 50,
+        customBackgroundZoom: 100,
+      })
     } catch (reason) {
       setImageError(reason instanceof Error ? reason.message : '背景图片处理失败。')
     } finally {
@@ -5390,6 +5405,46 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     } finally {
       setNotificationRequestPending(false)
     }
+  }
+
+  function updateBackgroundPosition(positionX: number, positionY: number) {
+    onChange({
+      ...preferences,
+      customBackgroundPositionX: normalizeBackgroundPosition(positionX),
+      customBackgroundPositionY: normalizeBackgroundPosition(positionY),
+    })
+  }
+
+  function handleBackgroundPreviewPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!preferences.customBackgroundImage) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    backgroundCropDrag.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      width: bounds.width,
+      height: bounds.height,
+      positionX: normalizeBackgroundPosition(preferences.customBackgroundPositionX),
+      positionY: normalizeBackgroundPosition(preferences.customBackgroundPositionY),
+    }
+  }
+
+  function handleBackgroundPreviewPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = backgroundCropDrag.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    updateBackgroundPosition(
+      drag.positionX - ((event.clientX - drag.clientX) / drag.width) * 100,
+      drag.positionY - ((event.clientY - drag.clientY) / drag.height) * 100,
+    )
+  }
+
+  function endBackgroundPreviewPointer(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (backgroundCropDrag.current?.pointerId !== event.pointerId) return
+    backgroundCropDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
   }
 
   return (
@@ -5421,14 +5476,20 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                   style={option.value === 'custom' ? {
                     backgroundColor: preferences.customBackgroundColor,
                     opacity: (100 - preferences.customBackgroundTransparency) / 100,
-                    backgroundImage: preferences.customBackgroundImage
-                      ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`
-                      : 'none',
-                    backgroundPosition: 'center',
-                    backgroundSize: 'cover',
                   } : undefined}
                   aria-hidden="true"
-                />
+                >
+                  {option.value === 'custom' && preferences.customBackgroundImage ? (
+                    <span
+                      className="theme-option__preview-image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                    />
+                  ) : null}
+                </span>
                 <span><strong>{option.label}</strong><small>{option.description}</small></span>
               </button>
             ))}
@@ -5470,10 +5531,66 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                         aria-label="上传背景图片"
                       />
                     </label>
-                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined }) }}><X size={13} />清除</button> : null}
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 }) }}><X size={13} />清除</button> : null}
                   </span>
                 </span>
               </div>
+              {preferences.customBackgroundImage ? (
+                <section className="theme-background-framing" aria-label="背景图片取景调整">
+                  <div className="theme-background-framing__heading">
+                    <span><strong>调整背景区域</strong><small>拖动图片调整位置，也可以用滑块微调。</small></span>
+                    <button
+                      className="theme-background-framing__reset"
+                      type="button"
+                      onClick={() => onChange({ ...preferences, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 })}
+                    >重置取景</button>
+                  </div>
+                  <button
+                    className="theme-background-framing__preview"
+                    type="button"
+                    aria-label="拖动图片调整背景位置"
+                    onPointerDown={handleBackgroundPreviewPointerDown}
+                    onPointerMove={handleBackgroundPreviewPointerMove}
+                    onPointerUp={endBackgroundPreviewPointer}
+                    onPointerCancel={endBackgroundPreviewPointer}
+                    onLostPointerCapture={() => { backgroundCropDrag.current = null }}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 10 : 2
+                      if (event.key === 'ArrowLeft') updateBackgroundPosition(preferences.customBackgroundPositionX + step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowRight') updateBackgroundPosition(preferences.customBackgroundPositionX - step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowUp') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY + step)
+                      else if (event.key === 'ArrowDown') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY - step)
+                      else return
+                      event.preventDefault()
+                    }}
+                  >
+                    <span
+                      className="theme-background-framing__image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span className="theme-background-framing__hint">拖动调整取景</span>
+                  </button>
+                  <div className="theme-background-framing__controls">
+                    <label className="theme-background-framing__control">
+                      <span><strong>水平位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionX)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionX)} onChange={(event) => updateBackgroundPosition(Number(event.target.value), preferences.customBackgroundPositionY)} aria-label="背景图片水平位置" />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>垂直位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionY)} onChange={(event) => updateBackgroundPosition(preferences.customBackgroundPositionX, Number(event.target.value))} aria-label="背景图片垂直位置" />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>缩放</strong><output>{normalizeBackgroundZoom(preferences.customBackgroundZoom)}%</output></span>
+                      <input type="range" min="100" max="250" step="1" value={normalizeBackgroundZoom(preferences.customBackgroundZoom)} onChange={(event) => onChange({ ...preferences, customBackgroundZoom: normalizeBackgroundZoom(Number(event.target.value)) })} aria-label="背景图片缩放" />
+                    </label>
+                  </div>
+                </section>
+              ) : null}
               {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
