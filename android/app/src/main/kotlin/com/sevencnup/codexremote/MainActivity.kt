@@ -485,6 +485,8 @@ class MainActivity : Activity() {
     private val PIXEL_BORDER_LIGHT = Color.rgb(224, 222, 207)
     private val PIXEL_BORDER_SHADOW = Color.rgb(53, 68, 88)
     private val PIXEL_TEXT = Color.rgb(244, 240, 225)
+    private val PIXEL_CREAM = Color.rgb(244, 232, 203)
+    private val PIXEL_INK = Color.rgb(20, 30, 43)
     private val PIXEL_BLUE = Color.rgb(29, 136, 238)
     private val PIXEL_GREEN = Color.rgb(74, 203, 111)
     private val PIXEL_RED = Color.rgb(236, 91, 91)
@@ -2009,8 +2011,10 @@ class MainActivity : Activity() {
         sidebarBrandMark = ImageView(this).apply {
             setImageResource(R.drawable.codex_remote)
             imageTintList = null
-            background = rounded(PANEL_INSET, dp(10))
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
+                else rounded(PANEL_INSET, dp(10))
+            val markPadding = if (pixelTheme) dp(6) else dp(8)
+            setPadding(markPadding, markPadding, markPadding, markPadding)
             contentDescription = "Codex Remote"
         }
         brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 36), dp(if (retroTheme) 40 else 36)).apply { rightMargin = dp(10) })
@@ -2068,10 +2072,12 @@ class MainActivity : Activity() {
         }
         sidebarNewThreadIcon = ImageView(this).apply {
             setPixelAwareImageResource(sidebarIconResource("add"))
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            val iconInset = if (pixelTheme) 0 else dp(4)
+            setPadding(iconInset, iconInset, iconInset, iconInset)
         }
-        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
-        sidebarNewThreadLabel = label("新建对话", 13, TEXT, true)
+        val newThreadIconSize = if (pixelTheme) 30 else 27
+        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(newThreadIconSize), dp(newThreadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 10) })
+        sidebarNewThreadLabel = label("新建对话", if (pixelTheme) 14 else 13, TEXT, true)
         sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
         drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 43)).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
@@ -2086,8 +2092,8 @@ class MainActivity : Activity() {
             imageTintList = null
             contentDescription = "聊天记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
-        recentHeading.addView(label("聊天记录", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
-        recentHeading.addView(label("选择", 11, SUBTLE, true).apply {
+        recentHeading.addView(label("聊天记录", if (pixelTheme) 12 else 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(label("选择", if (pixelTheme) 12 else 11, SUBTLE, true).apply {
             tag = "sidebar_selection_toggle"
             gravity = Gravity.CENTER
             isClickable = true
@@ -2117,10 +2123,11 @@ class MainActivity : Activity() {
         val footerDivider = View(this).apply { setBackgroundColor(BORDER) }
         drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(40), 1f))
-        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(40), 1f))
-        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(40), 1f))
-        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
+        val footerHeight = if (pixelTheme) 44 else 40
+        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(footerHeight)))
 
         sidebarHost = createEdgeDrawer(drawer, Gravity.START) { setSidebarVisible(false) }
         updateInsetAwareOverlays()
@@ -2149,8 +2156,12 @@ class MainActivity : Activity() {
             viewportHeightPx = root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels,
         ) as? ThemeWallpaperDrawable
         panel.apply {
-            background = if (retroTheme) ColorDrawable(PANEL) else wallpaper ?: ColorDrawable(OPAQUE_PANEL)
-            elevation = dp(if (retroTheme) 8 else 5).toFloat()
+            background = when {
+                pixelTheme -> pixelFrameBackground(R.drawable.pixel_frame_panel, PANEL)
+                retroTheme -> ColorDrawable(PANEL)
+                else -> wallpaper ?: ColorDrawable(OPAQUE_PANEL)
+            }
+            elevation = dp(if (pixelTheme) 0 else if (retroTheme) 8 else 5).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, gravity))
@@ -2218,14 +2229,15 @@ class MainActivity : Activity() {
             setPixelAwareImageResource(sidebarIconResource(icon))
             imageTintList = retroIconTint(actionColor)
         }
-        val labelView = label(title, 11, actionColor, true).apply {
+        val labelView = label(title, if (pixelTheme) 12 else 11, actionColor, true).apply {
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
         }
         sidebarActionAccentViews += iconView to labelView
-        addView(iconView, LinearLayout.LayoutParams(dp(17), dp(17)))
-        addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
+        val iconSize = if (pixelTheme) 20 else 17
+        addView(iconView, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
+        addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(if (pixelTheme) 3 else 2) })
     }
 
     private fun renderHeader() {
@@ -2283,15 +2295,19 @@ class MainActivity : Activity() {
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
         val newThreadShape = rounded(fill, dp(if (retroTheme) 2 else 10))
         sidebarNewThreadButton.background = when {
-            pixelTheme -> lollipopRipple(pixelBlockBackground(fill))
+            pixelTheme -> pixelSidebarNewThreadBackground()
             retroTheme -> lollipopRipple(android1MetalButtonBackground())
             else -> newThreadShape
         }
-        sidebarNewThreadButton.elevation = if (retroTheme) dp(2).toFloat() else 0f
-        val newThreadForeground = if (retroTheme) ANDROID1_TITLE_TEXT else foreground
+        sidebarNewThreadButton.elevation = if (retroTheme && !pixelTheme) dp(2).toFloat() else 0f
+        val newThreadForeground = when {
+            pixelTheme -> PIXEL_INK
+            retroTheme -> ANDROID1_TITLE_TEXT
+            else -> foreground
+        }
         sidebarNewThreadIcon.imageTintList = retroIconTint(newThreadForeground)
-        sidebarNewThreadIcon.background = rounded(
-            if (pixelTheme) PIXEL_PANEL_INSET else if (retroTheme) Color.rgb(178, 181, 181)
+        sidebarNewThreadIcon.background = if (pixelTheme) ColorDrawable(Color.TRANSPARENT) else rounded(
+            if (retroTheme) Color.rgb(178, 181, 181)
             else if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
             dp(if (retroTheme) 2 else 7),
         )
@@ -2491,7 +2507,7 @@ class MainActivity : Activity() {
         visibleThreads.forEach { thread -> sections.getValue(sidebarDateSection(thread)).add(thread) }
         sections.forEach { (section, entries) ->
             if (entries.isEmpty()) return@forEach
-            drawerThreads.addView(label(section, 11, MUTED, true).apply {
+            drawerThreads.addView(label(section, if (pixelTheme) 12 else 11, MUTED, true).apply {
                 setPadding(dp(9), dp(if (retroTheme) 13 else 11), 0, dp(5))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
             entries.forEach { thread ->
@@ -2501,17 +2517,18 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
-                minimumHeight = dp(if (retroTheme) 44 else 0)
+                minimumHeight = dp(if (pixelTheme) 48 else if (retroTheme) 44 else 0)
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
                 background = if (retroTheme) {
-                    if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
+                    if (pixelTheme && selected) pixelFrameBackground(R.drawable.pixel_frame_active, Color.rgb(25, 43, 64))
+                    else if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
                 } else if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 contentDescription = threadTitle(thread)
             }
             val engine = thread.optString("engine", "codex")
-            if (retroTheme) {
+            if (retroTheme && !pixelTheme) {
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent()
                 row.addView(View(this).apply {
                     setBackgroundColor(if (selected) selectedAccent else Color.TRANSPARENT)
@@ -2534,9 +2551,10 @@ class MainActivity : Activity() {
                     contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
                 }
             }
-            row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
+            val threadIconSize = if (pixelTheme) 24 else 22
+            row.addView(icon, LinearLayout.LayoutParams(dp(threadIconSize), dp(threadIconSize)).apply { rightMargin = dp(if (pixelTheme) 10 else 9) })
             val title = threadTitle(thread)
-            val titleView = label(title, 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
+            val titleView = label(title, if (pixelTheme) 14 else 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
@@ -9681,6 +9699,21 @@ class MainActivity : Activity() {
         return pixelFrameBackground(R.drawable.pixel_frame_active, fillColor)
     }
 
+    private fun pixelSidebarNewThreadBackground(): Drawable = android.graphics.drawable.StateListDrawable().apply {
+        addState(
+            intArrayOf(android.R.attr.state_pressed),
+            pixelFrameBackground(R.drawable.pixel_frame_active, Color.rgb(225, 213, 183)),
+        )
+        addState(
+            intArrayOf(android.R.attr.state_focused),
+            pixelFrameBackground(R.drawable.pixel_frame_square, Color.rgb(250, 240, 216)),
+        )
+        addState(
+            intArrayOf(),
+            pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_CREAM),
+        )
+    }
+
     private fun pixelFrameBackground(frameResource: Int, fillColor: Int): Drawable {
         val bitmap = pixelFrameBitmapCache[frameResource]
             ?: BitmapFactory.decodeResource(resources, frameResource)?.also { decoded ->
@@ -9710,9 +9743,9 @@ class MainActivity : Activity() {
     private fun android1SegmentButtonBackground(): Drawable = android.graphics.drawable.StateListDrawable().apply {
         if (pixelTheme) {
             addState(intArrayOf(android.R.attr.state_pressed), pixelBlockBackground(PIXEL_BLUE))
-            addState(intArrayOf(android.R.attr.state_focused), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(android.R.attr.state_focused), pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_PANEL_INSET))
             addState(intArrayOf(android.R.attr.state_selected), pixelBlockBackground(PIXEL_BLUE))
-            addState(intArrayOf(), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(), pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_PANEL_INSET))
         } else {
             addState(intArrayOf(android.R.attr.state_pressed), android1MetalButtonBackground())
             addState(intArrayOf(android.R.attr.state_focused), android1MetalButtonBackground())
