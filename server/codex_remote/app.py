@@ -31,6 +31,7 @@ from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
 from .browser_payload import browser_event, browser_thread, browser_thread_summary
+from .bailian_voice_input import run_voice_input_websocket
 from .claude_code import (
     ClaudeCodeError,
     ClaudeCodeServer,
@@ -1387,7 +1388,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.21.7-dev.11", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.37.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1999,6 +2000,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+
+    @app.websocket("/api/v1/codex/voice-transcription")
+    async def voice_transcription_websocket(websocket: WebSocket) -> None:
+        await run_voice_input_websocket(websocket, auth)
 
     @app.websocket("/api/v1/codex/ws")
     async def codex_websocket(websocket: WebSocket) -> None:

@@ -24,6 +24,7 @@ import {
   ImagePlus,
   Link2,
   LoaderCircle,
+  Mic,
   Menu,
   MessagesSquare,
   Pause,
@@ -50,6 +51,7 @@ import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
+import { BailianVoiceInputController, type VoiceInputState } from '../lib/bailianVoiceInput'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
@@ -933,6 +935,7 @@ interface ComposerHandle {
 }
 
 interface MessageComposerProps {
+  token: string
   draftScope: string
   onDraftChange: (draft: string) => void
   composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
@@ -981,6 +984,7 @@ interface MessageComposerProps {
 }
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  token,
   draftScope,
   onDraftChange,
   composerHeightMemory,
@@ -1036,6 +1040,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
+  const [voiceInputState, setVoiceInputState] = useState<VoiceInputState>('idle')
+  const [voiceTranscriptPreview, setVoiceTranscriptPreview] = useState('')
+  const [voiceInputError, setVoiceInputError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
   const [mobileLayout, setMobileLayout] = useState(() => typeof window !== 'undefined' && (
     isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
@@ -1052,6 +1059,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
   const composer = useRef<HTMLTextAreaElement>(null)
+  const voiceInputController = useRef<BailianVoiceInputController | null>(null)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
   draftScopeRef.current = draftScope
@@ -1250,6 +1258,79 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const messageId = editingQueuedMessageIdRef.current
     if (messageId) onEndQueuedEdit(messageId)
   }, [onEndQueuedEdit])
+
+  useEffect(() => () => {
+    voiceInputController.current?.dispose()
+    voiceInputController.current = null
+  }, [])
+
+  function insertVoiceTranscript(text: string) {
+    const transcript = text.trim()
+    if (!transcript) {
+      setVoiceInputError('没有识别到语音内容，请再试一次。')
+      return
+    }
+    const textarea = composer.current
+    const current = draftRef.current
+    const start = textarea?.selectionStart ?? current.length
+    const end = textarea?.selectionEnd ?? start
+    const next = `${current.slice(0, start)}${transcript}${current.slice(end)}`
+    updateDraft(next)
+    window.requestAnimationFrame(() => {
+      const activeTextarea = composer.current
+      if (!activeTextarea) return
+      activeTextarea.focus({ preventScroll: true })
+      const cursor = start + transcript.length
+      activeTextarea.setSelectionRange(cursor, cursor)
+    })
+  }
+
+  async function startVoiceInput() {
+    setVoiceInputError(null)
+    setVoiceTranscriptPreview('')
+    const controller = new BailianVoiceInputController()
+    voiceInputController.current = controller
+    try {
+      await controller.start(token, {
+        onState: setVoiceInputState,
+        onPartial: setVoiceTranscriptPreview,
+        onTranscript: (text) => {
+          if (voiceInputController.current === controller) voiceInputController.current = null
+          insertVoiceTranscript(text)
+        },
+        onError: (message) => {
+          if (voiceInputController.current === controller) voiceInputController.current = null
+          setVoiceInputError(message)
+        },
+      })
+    } catch (reason) {
+      if (voiceInputController.current === controller) {
+        voiceInputController.current = null
+        setVoiceInputState('idle')
+        setVoiceInputError(reason instanceof Error ? reason.message : '无法启动语音输入。')
+      }
+    }
+  }
+
+  function toggleVoiceInput() {
+    const controller = voiceInputController.current
+    if (voiceInputState === 'connecting') {
+      controller?.cancel()
+      voiceInputController.current = null
+      return
+    }
+    if (voiceInputState === 'recording') {
+      controller?.stop()
+      return
+    }
+    if (voiceInputState === 'transcribing') {
+      controller?.cancel()
+      voiceInputController.current = null
+      setVoiceTranscriptPreview('')
+      return
+    }
+    if (voiceInputState === 'idle') void startVoiceInput()
+  }
 
   useImperativeHandle(ref, () => ({
     replaceDraft(value) {
@@ -2032,6 +2113,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           enterKeyHint="send"
         />
       </div>
+      {voiceInputError ? <p className="voice-input-status voice-input-status--error" role="alert">{voiceInputError}</p> : null}
+      {voiceInputState !== 'idle' ? (
+        <p className={`voice-input-status${voiceInputState === 'recording' ? ' voice-input-status--recording' : ''}`} role="status">
+          {voiceInputState === 'connecting' ? '正在连接阿里云语音…' : voiceInputState === 'transcribing' ? '正在转写…' : '正在录音'}
+          {voiceTranscriptPreview ? <span>{voiceTranscriptPreview}</span> : null}
+        </p>
+      ) : null}
       <div className="message-composer__footer">
         <div className="composer-preferences">
           {showCodexPreferences ? <>
@@ -2046,6 +2134,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
         </div>
         <div className="composer-actions">
+          <button
+            className={`voice-input-button${voiceInputState === 'recording' ? ' voice-input-button--recording' : ''}${voiceInputState === 'connecting' ? ' voice-input-button--busy' : ''}`}
+            type="button"
+            onClick={toggleVoiceInput}
+            aria-label={voiceInputState === 'recording' ? '停止录音' : voiceInputState === 'transcribing' ? '取消语音转写' : voiceInputState === 'connecting' ? '取消连接' : '语音输入'}
+            title={voiceInputState === 'recording' ? '停止录音并转写' : voiceInputState === 'transcribing' ? '取消语音转写' : voiceInputState === 'connecting' ? '取消连接' : '语音输入'}
+          >
+            {voiceInputState === 'recording' ? <Square size={15} /> : voiceInputState === 'idle' ? <Mic size={17} /> : voiceInputState === 'connecting' ? <X size={15} /> : <LoaderCircle className="spin" size={15} />}
+          </button>
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
@@ -5280,6 +5377,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ))}
             </div>
             <MessageComposer
+              token={token}
               key={composerDraftScope}
               ref={composerHandle}
               draftScope={composerDraftScope}
