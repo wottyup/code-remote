@@ -2635,7 +2635,7 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
+                setPadding(if (pixelTheme) dp(8) else if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
                 minimumHeight = dp(if (pixelTheme) 48 else if (retroTheme) 44 else 0)
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
                 background = if (retroTheme) {
@@ -5919,7 +5919,8 @@ class MainActivity : Activity() {
                 }
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
-            card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, TEXT, translateUi = false).apply {
+            val queueMessageTextColor = if (pixelTheme) PIXEL_INK else TEXT
+            card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, queueMessageTextColor, translateUi = false).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val images = item.optJSONArray("images")
@@ -5945,7 +5946,7 @@ class MainActivity : Activity() {
                 index == 0 && running -> "当前回复结束后自动发送；可点箭头尝试立即发送"
                 else -> null
             }
-            if (queueNotice != null) card.addView(label(queueNotice, 10, WARNING), LinearLayout.LayoutParams(MATCH, WRAP))
+            if (queueNotice != null) card.addView(label(queueNotice, 10, if (pixelTheme) Color.rgb(126, 91, 36) else WARNING), LinearLayout.LayoutParams(MATCH, WRAP))
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
             val rawEffort = item.optString(if (claudeQueueItem) "claudeEffort" else "effort")
@@ -5957,7 +5958,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
+            details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, if (pixelTheme) Color.rgb(74, 88, 106) else MUTED).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, dp(44), 1f))
@@ -7889,6 +7890,11 @@ class MainActivity : Activity() {
         footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
         footer.addView(textIconAction("粘贴", "paste", "粘贴") {
             pasteWorkspaceEntries(workspaceCurrentPath, browsingCwd()) { workspaceRefresher?.invoke(workspaceCurrentPath) }
+        }.apply {
+            if (pixelTheme) {
+                minimumHeight = dp(38)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+            }
         })
         panel.addView(footer, widthWrap())
 
