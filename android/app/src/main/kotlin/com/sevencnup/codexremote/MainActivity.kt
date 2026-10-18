@@ -1708,11 +1708,9 @@ class MainActivity : Activity() {
         val actionSize = if (retroTheme) dp(42) else dp(40)
         if (pixelTheme) menu.setPadding(dp(5), dp(5), dp(5), dp(5))
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
-        val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
+        val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         titleView = label("Codex Remote", if (retroTheme) 20 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
-        val path = label("本机项目", if (retroTheme) 12 else 10, if (retroTheme && !pixelTheme) Color.rgb(72, 72, 72) else MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
-        titleColumn.addView(path, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
         modeButton = iconButton(if (targetMode == "claude-code") "claude" else "codex", modeSwitchDescription()) { switchMode() }
@@ -2371,10 +2369,6 @@ class MainActivity : Activity() {
         }
         updateSidebarBrand()
         updateSidebarModeAccent()
-        val path = page.findViewWithTag<TextView>("workspace_path")
-        path?.setTextColor(if (retroTheme && !pixelTheme) Color.rgb(72, 72, 72) else MUTED)
-        path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-            ?: runtime.optString("workspace", "本机项目")
         statusView.visibility = if (runtime.optBoolean("connected", false)) View.GONE else View.VISIBLE
         statusView.text = runtime.optString("error").takeIf { it.isNotBlank() && it != "null" }
             ?: tr(if (runtime.optBoolean("available", false)) "Codex 已连接" else "正在连接 Codex…")
