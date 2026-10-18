@@ -3521,34 +3521,26 @@ class MainActivity : Activity() {
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || !hasImage) {
-                val contentColor = if (role == "user") {
-                    if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
-                } else TEXT
-                val content = label(if (role == "assistant") "" else text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
-                    setTextIsSelectable(true)
-                    setLineSpacing(dp(3).toFloat(), 1.3f)
-                    typeface = themedTypeface()
-                    setHorizontallyScrolling(false)
-                    breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                    hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                    maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
-                }
                 if (role == "assistant") {
-                    assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text.ifBlank { tr("（附件消息）") }))
-                    enableChatLinkClicks(content)
-                } else if (role == "user") {
+                    addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+                } else {
+                    val contentColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
+                    val content = label(text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
+                        setTextIsSelectable(true)
+                        setLineSpacing(dp(3).toFloat(), 1.3f)
+                        typeface = themedTypeface()
+                        setHorizontallyScrolling(false)
+                        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                        maxWidth = (maxBubbleWidth - dp(22)).coerceAtLeast(dp(120))
+                    }
                     Linkify.addLinks(content, Linkify.WEB_URLS)
                     content.setLinkTextColor(ACCENT)
                     enableChatLinkClicks(content)
-                }
-                val contentWidth = if (role == "user") {
                     val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
-                    naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
-                } else WRAP
-                // Specify the user's text width from Android's actual text layout.
-                // Nested WRAP_CONTENT measurement alone was collapsing to one glyph
-                // per line on some narrow devices even with maxWidth configured.
-                bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                    val contentWidth = naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
+                    bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                }
             }
             addMessageImages(bubble, item, maxBubbleWidth)
             if (role == "user") {
@@ -3569,9 +3561,20 @@ class MainActivity : Activity() {
                         setPadding(0, dp(3), dp(2), 0)
                     }, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
+                messageCopyAction(text)?.let { action ->
+                    messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
+                }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             } else {
-                row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                val messageColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.START
+                }
+                messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                messageCopyAction(text)?.let { action ->
+                    messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
+                }
+                row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             }
             val turnId = item.optString("_turnId")
             row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
@@ -3901,6 +3904,176 @@ class MainActivity : Activity() {
     private var assistantMarkdownAppearance = ""
     private var assistantMarkdownCache: Markwon? = null
     private val localInstallerLink = Regex("""\[([^\]]+)]\(<?(/[^)>\n]+\.(?:apk|exe|msi|dmg))>?\)""", RegexOption.IGNORE_CASE)
+
+    private data class AssistantMarkdownPart(
+        val markdown: String? = null,
+        val code: String? = null,
+        val language: String = "",
+    )
+
+    private fun addAssistantMarkdown(container: LinearLayout, text: String, maximumWidth: Int) {
+        splitAssistantMarkdown(text).forEach { part ->
+            if (part.code != null) {
+                container.addView(
+                    assistantCodeBlockView(part.language, part.code, maximumWidth),
+                    LinearLayout.LayoutParams(maximumWidth, WRAP).apply { topMargin = dp(4); bottomMargin = dp(4) },
+                )
+                return@forEach
+            }
+            val markdown = part.markdown.orEmpty()
+            if (markdown.isBlank()) return@forEach
+            val content = label("", 14, TEXT, translateUi = false).apply {
+                setTextIsSelectable(true)
+                setLineSpacing(dp(3).toFloat(), 1.3f)
+                typeface = themedTypeface()
+                setHorizontallyScrolling(false)
+                breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                maxWidth = maximumWidth
+            }
+            assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(markdown))
+            enableChatLinkClicks(content)
+            container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+        }
+    }
+
+    private fun splitAssistantMarkdown(text: String): List<AssistantMarkdownPart> {
+        val parts = mutableListOf<AssistantMarkdownPart>()
+        val markdown = StringBuilder()
+        var code: StringBuilder? = null
+        var fenceCharacter: Char? = null
+        var fenceLength = 0
+        var language = ""
+
+        fun flushMarkdown() {
+            if (markdown.isNotEmpty()) parts += AssistantMarkdownPart(markdown = markdown.toString())
+            markdown.setLength(0)
+        }
+
+        fun openingFence(line: String): Pair<String, String>? {
+            val indentation = line.takeWhile { it == ' ' }.length
+            if (indentation > 3) return null
+            val remainder = line.drop(indentation)
+            val character = remainder.firstOrNull()?.takeIf { it == '`' || it == '~' } ?: return null
+            val length = remainder.takeWhile { it == character }.length
+            if (length < 3) return null
+            val info = remainder.drop(length)
+            if (character == '`' && '`' in info) return null
+            val languageName = info.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                .removePrefix("{.").removeSuffix("}")
+            return character.toString().repeat(length) to languageName
+        }
+
+        fun closesFence(line: String, character: Char, minimumLength: Int): Boolean {
+            val indentation = line.takeWhile { it == ' ' }.length
+            if (indentation > 3) return false
+            val remainder = line.drop(indentation)
+            val runLength = remainder.takeWhile { it == character }.length
+            return runLength >= minimumLength && remainder.drop(runLength).all { it == ' ' || it == '\t' }
+        }
+
+        val lines = text.split('\n')
+        lines.forEachIndexed { index, rawLine ->
+            val line = rawLine.removeSuffix("\r")
+            val lineEnding = if (index < lines.lastIndex) "\n" else ""
+            val currentCode = code
+            if (currentCode == null) {
+                val opening = openingFence(line)
+                if (opening == null) {
+                    markdown.append(line).append(lineEnding)
+                } else {
+                    flushMarkdown()
+                    fenceCharacter = opening.first.first()
+                    fenceLength = opening.first.length
+                    language = opening.second
+                    code = StringBuilder()
+                }
+            } else if (fenceCharacter?.let { closesFence(line, it, fenceLength) } == true) {
+                parts += AssistantMarkdownPart(code = currentCode.toString().removeSuffix("\n"), language = language)
+                code = null
+                fenceCharacter = null
+                fenceLength = 0
+                language = ""
+            } else {
+                currentCode.append(line).append(lineEnding)
+            }
+        }
+
+        val unfinishedCode = code
+        if (unfinishedCode != null) {
+            parts += AssistantMarkdownPart(code = unfinishedCode.toString(), language = language)
+        } else {
+            flushMarkdown()
+        }
+        return parts
+    }
+
+    private fun assistantCodeBlockView(language: String, code: String, maximumWidth: Int): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(9), dp(5), dp(9), dp(8))
+            background = rounded(PANEL_INSET, dp(if (themeName == "lollipop") 4 else 8), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(
+            label(language.ifBlank { "代码" }, 10, MUTED, translateUi = language.isNotBlank()).apply {
+                if (language.isNotBlank()) text = language
+            },
+            LinearLayout.LayoutParams(0, dp(30), 1f),
+        )
+        header.addView(copyActionButton("复制代码", "代码", code), LinearLayout.LayoutParams(WRAP, dp(30)))
+        card.addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        val codeText = label(code, 12, TEXT, translateUi = false).apply {
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setHorizontallyScrolling(true)
+            setLineSpacing(dp(1).toFloat(), 1.15f)
+        }
+        val horizontalScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(codeText, FrameLayout.LayoutParams(WRAP, WRAP))
+        }
+        card.addView(horizontalScroll, LinearLayout.LayoutParams(MATCH, WRAP))
+        card.layoutParams = LinearLayout.LayoutParams(maximumWidth, WRAP)
+        return card
+    }
+
+    private fun messageCopyAction(text: String): View? =
+        text.takeIf { it.isNotBlank() }?.let { copyActionButton("复制消息", "聊天消息", it) }
+
+    private fun copyActionButton(actionLabel: String, clipboardLabel: String, text: String): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(5), 0, dp(7), 0)
+            minimumWidth = dp(40)
+            minimumHeight = dp(30)
+            background = lollipopRipple()
+            isClickable = true
+            isFocusable = true
+            contentDescription = tr(actionLabel)
+            tooltipText = tr(actionLabel)
+            setOnClickListener { copyChatText(clipboardLabel, text) }
+
+            addView(ImageView(this@MainActivity).apply {
+                setImageResource(iconResource("copy"))
+                imageTintList = if (themeName == "lollipop") null else ColorStateList.valueOf(iconTint("copy"))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, LinearLayout.LayoutParams(dp(15), dp(15)))
+            addView(label(actionLabel, 10, MUTED), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(4) })
+        }
+
+    private fun copyChatText(clipboardLabel: String, text: String) {
+        if (text.isBlank()) return
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText(tr(clipboardLabel), text))
+        showToast("已复制")
+    }
 
     private fun displayLocalInstallerPaths(text: String): String = localInstallerLink.replace(text) { match ->
         "${match.groupValues[1]}：${match.groupValues[2]}"
@@ -4631,18 +4804,7 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank()) continue
-                    val content = label("", 14, TEXT, translateUi = false).apply {
-                        setTextIsSelectable(true)
-                        setLineSpacing(dp(3).toFloat(), 1.3f)
-                        typeface = themedTypeface()
-                        setHorizontallyScrolling(false)
-                        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                        maxWidth = maximumWidth
-                    }
-                    assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(text))
-                    enableChatLinkClicks(content)
-                    container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+                    addAssistantMarkdown(container, text, maximumWidth)
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
                     pendingOperations.add(operation)
