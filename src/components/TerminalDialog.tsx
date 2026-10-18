@@ -279,9 +279,41 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     let exited = false
     let disposed = false
     let fitFrame = 0
+    let lastTerminalSelection: TerminalTouchSelection | null = null
+    let retainedTouchSelection: TerminalTouchSelection | null = null
+    let touchStart: { x: number; y: number } | null = null
+    let selectionRestoreVersion = 0
+    let selectionRestoreFrame = 0
+    let ignoreSyntheticMouseUntil = 0
     const pendingInput: string[] = []
     const send = (message: Record<string, unknown>) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
+    }
+    const cacheTerminalSelection = (point?: { x: number; y: number }) => {
+      const text = terminal.getSelection()
+      const range = terminal.getSelectionPosition()
+      if (!text || !range) return null
+      const selection = { point, text, range }
+      lastTerminalSelection = selection
+      return selection
+    }
+    const clearSelectionSnapshot = () => {
+      retainedTouchSelection = null
+      lastTerminalSelection = null
+      selectionRestoreVersion += 1
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = 0
+    }
+    const restoreSelectionAfterRelease = (selection: TerminalTouchSelection) => {
+      retainedTouchSelection = selection
+      const restoreVersion = ++selectionRestoreVersion
+      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      selectionRestoreFrame = window.requestAnimationFrame(() => {
+        selectionRestoreFrame = 0
+        if (!disposed && restoreVersion === selectionRestoreVersion && terminal.getSelection() !== selection.text) {
+          restoreTerminalTouchSelection(terminal, selection)
+        }
+      })
     }
 
     const fitAndResize = () => {
@@ -327,6 +359,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       send({ type: 'input', data })
     }
     const dispatchInput = (data: string) => {
+      clearSelectionSnapshot()
       const modifier = activeModifierRef.current
       sendInput(applyTerminalModifier(data, modifier))
       if (modifier) resetModifier()
@@ -334,12 +367,14 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     sendTerminalInput.current = dispatchInput
     terminalActions.current = {
       clear: () => {
+        clearSelectionSnapshot()
         terminal.clear()
         terminal.focus()
       },
       focus: () => terminal.focus(),
       paste: (value) => terminal.paste(value),
       selectAll: () => {
+        clearSelectionSnapshot()
         terminal.selectAll()
         return terminal.getSelection()
       },
@@ -373,17 +408,10 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       const cursorPrefix = terminal.modes.applicationCursorKeysMode ? 'O' : '['
       dispatchInput(`\x1b${cursorPrefix}${code}`)
     }
-    let lastTerminalSelection: TerminalTouchSelection | null = null
-    const cacheTerminalSelection = (point?: { x: number; y: number }) => {
-      const text = terminal.getSelection()
-      const range = terminal.getSelectionPosition()
-      if (!text || !range) return null
-      const selection = { point, text, range }
-      lastTerminalSelection = selection
-      return selection
-    }
     const selectionSubscription = terminal.onSelectionChange(() => {
-      cacheTerminalSelection()
+      const selection = cacheTerminalSelection()
+      // Some touch browsers clear xterm's programmatic range after touchend; restore it until the next user gesture.
+      if (!selection && retainedTouchSelection && !touchStart) restoreSelectionAfterRelease(retainedTouchSelection)
     })
     const showContextMenu = (clientX: number, clientY: number, selectedText = terminal.getSelection()) => {
       const menuHost = container.parentElement ?? container
@@ -397,8 +425,9 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault()
-      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection ?? retainedTouchSelection
       if (selection) {
+        retainedTouchSelection = null
         restoreTerminalTouchSelection(terminal, selection)
         showContextMenu(event.clientX, event.clientY, selection.text)
         return
@@ -407,25 +436,13 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     container.addEventListener('contextmenu', handleContextMenu)
     const handleMouseDown = (event: MouseEvent) => {
-      if (event.button === 0) lastTerminalSelection = null
+      // Browsers can synthesize a left-mouse sequence after a touch release.
+      if (event.button === 0 && Date.now() >= ignoreSyntheticMouseUntil) clearSelectionSnapshot()
     }
     container.addEventListener('mousedown', handleMouseDown)
 
     let longPressTimer = 0
-    let selectionRestoreVersion = 0
-    let selectionRestoreFrame = 0
-    let touchStart: { x: number; y: number } | null = null
     let longPressSelection: TerminalTouchSelection | null = null
-    const restoreSelectionAfterRelease = (selection: TerminalTouchSelection) => {
-      const restoreVersion = ++selectionRestoreVersion
-      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
-      selectionRestoreFrame = window.requestAnimationFrame(() => {
-        selectionRestoreFrame = 0
-        if (!disposed && restoreVersion === selectionRestoreVersion) {
-          restoreTerminalTouchSelection(terminal, selection)
-        }
-      })
-    }
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
@@ -433,7 +450,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       longPressSelection = null
     }
     const handleTouchStart = (event: TouchEvent) => {
-      selectionRestoreVersion += 1
+      clearSelectionSnapshot()
       if (event.touches.length !== 1) {
         clearLongPress()
         return
@@ -448,6 +465,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
         const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
         if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
           longPressSelection = cacheTerminalSelection(point)
+          retainedTouchSelection = longPressSelection
         }
       }, 500)
     }
@@ -457,25 +475,25 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       if (!touch || Math.hypot(touch.clientX - touchStart.x, touch.clientY - touchStart.y) > 12) clearLongPress()
     }
     const handleTouchEnd = () => {
+      ignoreSyntheticMouseUntil = Date.now() + 800
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
-      const selection = longPressSelection
+      const selection = longPressSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
       longPressSelection = null
-      if (!selection) return
-      restoreSelectionAfterRelease(selection)
+      if (selection) restoreSelectionAfterRelease(selection)
     }
     const handleMouseUp = (event: MouseEvent) => {
       if (event.button !== 0) return
-      const selection = cacheTerminalSelection() ?? lastTerminalSelection
+      const selection = cacheTerminalSelection() ?? lastTerminalSelection ?? retainedTouchSelection
       if (selection) restoreSelectionAfterRelease(selection)
     }
     const handleTouchCancel = () => {
-      selectionRestoreVersion += 1
-      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
-      selectionRestoreFrame = 0
-      lastTerminalSelection = null
+      ignoreSyntheticMouseUntil = Date.now() + 800
+      const selection = longPressSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
       clearLongPress()
+      if (selection) restoreSelectionAfterRelease(selection)
+      else clearSelectionSnapshot()
     }
     container.addEventListener('touchstart', handleTouchStart, { passive: true })
     container.addEventListener('touchmove', handleTouchMove, { passive: true })
@@ -554,6 +572,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
       container.removeEventListener('mouseup', handleMouseUp)
+      retainedTouchSelection = null
       selectionRestoreVersion += 1
       if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
       clearLongPress()
