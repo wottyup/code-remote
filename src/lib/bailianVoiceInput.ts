@@ -1,3 +1,5 @@
+import { version as appVersion } from '../../package.json'
+
 export type VoiceInputState = 'idle' | 'connecting' | 'recording' | 'transcribing'
 
 export interface BailianVoiceInputCallbacks {
@@ -51,7 +53,9 @@ export class BailianVoiceInputController {
       await this.connect(token)
       if (this.ended) throw new Error('语音输入已取消。')
 
-      await this.context.audioWorklet.addModule(new URL('/pcm16-capture-worklet.js', window.location.origin))
+      const workletUrl = new URL('/pcm16-capture-worklet.js', window.location.origin)
+      workletUrl.searchParams.set('v', appVersion)
+      await this.context.audioWorklet.addModule(workletUrl)
       this.source = this.context.createMediaStreamSource(this.stream)
       this.processor = new AudioWorkletNode(this.context, 'pcm16-capture', {
         numberOfInputs: 1,

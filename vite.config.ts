@@ -23,7 +23,7 @@ export default defineConfig({
       })
     },
   }],
-  publicDir: 'punlic',
+  publicDir: 'public',
   optimizeDeps: {
     exclude: ['pdfjs-dist'],
   },
