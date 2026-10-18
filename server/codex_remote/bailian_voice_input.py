@@ -7,6 +7,8 @@ import base64
 import inspect
 import json
 import os
+import socket
+import ssl
 import tempfile
 from contextlib import suppress
 from pathlib import Path
@@ -26,6 +28,39 @@ TRANSCRIPTION_TIMEOUT_SECONDS = 60
 
 class BailianVoiceInputError(RuntimeError):
     """A safe-to-display configuration, protocol, or upstream error."""
+
+
+def connection_error_message(error: Exception) -> str:
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None) or getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        if status_code == 401:
+            return "百炼鉴权失败（HTTP 401），请检查 DashScope API Key 是否正确且有效。"
+        if status_code == 403:
+            return "百炼拒绝访问（HTTP 403），请检查 Workspace 授权、地域和实时模型权限。"
+        if status_code == 404:
+            return "百炼未找到 Workspace 或实时模型（HTTP 404），请核对 ID、地域和模型名称。"
+        if status_code == 407:
+            return "服务器代理认证失败（HTTP 407），请检查 HTTPS 代理配置。"
+        if status_code == 429:
+            return "百炼限制了连接（HTTP 429），请检查额度或并发限制后重试。"
+        if status_code == 400:
+            return "百炼拒绝了实时会话配置（HTTP 400），请检查模型名称和语音模型权限。"
+        if status_code >= 500:
+            return f"百炼服务暂时异常（HTTP {status_code}），请稍后重试。"
+
+    error_name = type(error).__name__.lower()
+    if "proxy" in error_name:
+        return "连接百炼使用的服务器代理失败，请检查 HTTPS 代理出口。"
+    if isinstance(error, socket.gaierror):
+        return "无法解析百炼服务器域名，请检查服务器 DNS 或网络代理。"
+    if isinstance(error, ssl.SSLError):
+        return "连接百炼时 TLS 验证失败，请检查系统时间、证书和 HTTPS 代理。"
+    if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+        return "连接百炼超时，请检查服务器外网出口、HTTPS 代理和防火墙。"
+    if isinstance(error, OSError):
+        return "服务器无法连接百炼，请检查外网出口、HTTPS 代理和防火墙。"
+    return f"百炼连接失败（{type(error).__name__}），请检查网络、地域和配置。"
 
 
 def build_realtime_url(workspace_id: str, region: str, model: str) -> str:
@@ -137,6 +172,21 @@ class BailianVoiceInputSettingsStore:
             values["transcription_model"],
         )
 
+    def config_for_test(self, overrides: dict[str, Any]) -> BailianVoiceInputConfig:
+        current, _ = self._resolved()
+        requested_key = overrides.get("api_key")
+        config = BailianVoiceInputConfig(
+            api_key=requested_key if isinstance(requested_key, str) and requested_key.strip() else current["api_key"],
+            workspace_id=str(overrides.get("workspace_id", "")).strip(),
+            region=str(overrides.get("region", "cn-beijing")).strip(),
+            model=str(overrides.get("realtime_model", DEFAULT_REALTIME_MODEL)).strip(),
+            transcription_model=str(overrides.get("transcription_model", DEFAULT_TRANSCRIPTION_MODEL)).strip(),
+        )
+        config.validate()
+        if not all(char.isascii() and (char.isalnum() or char in "._-") for char in config.transcription_model):
+            raise BailianVoiceInputError("百炼转写模型名无效")
+        return config
+
     def public_view(self) -> dict[str, Any]:
         values, api_key_source = self._resolved()
         return {
@@ -243,7 +293,7 @@ class BailianVoiceInputSession:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise BailianVoiceInputError("连接百炼失败，请检查服务端网络、地域和配置。") from exc
+            raise BailianVoiceInputError(connection_error_message(exc)) from exc
 
     async def configure(self) -> None:
         await self.send_json({
@@ -309,7 +359,7 @@ class BailianVoiceInputSession:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            raise BailianVoiceInputError("向百炼发送音频失败，请检查网络后重试。") from exc
+            raise BailianVoiceInputError("与百炼通信失败，请检查网络后重试。") from exc
 
     async def close(self) -> None:
         if self._closed:
@@ -319,6 +369,34 @@ class BailianVoiceInputSession:
         if websocket is not None:
             with suppress(Exception):
                 await websocket.close()
+
+
+async def test_bailian_voice_connection(
+    config: BailianVoiceInputConfig,
+    *,
+    websocket_connect=None,
+) -> None:
+    """Validate credentials, connectivity, and session config without sending audio."""
+    session = BailianVoiceInputSession(config, websocket_connect=websocket_connect)
+    try:
+        await session.connect()
+        await session.configure()
+        deadline = asyncio.get_running_loop().time() + UPSTREAM_READY_TIMEOUT_SECONDS
+        while True:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise BailianVoiceInputError("已连接百炼，但等待语音会话就绪超时，请检查模型权限和配置。")
+            try:
+                event = await asyncio.wait_for(session.receive_event(), timeout=remaining)
+            except asyncio.TimeoutError as exc:
+                raise BailianVoiceInputError("已连接百炼，但等待语音会话就绪超时，请检查模型权限和配置。") from exc
+            event_type = str(event.get("type") or "")
+            if event_type == "error":
+                raise BailianVoiceInputError(provider_error_message(event))
+            if event_type == "session.updated":
+                return
+    finally:
+        await session.close()
 
 
 async def run_voice_input_websocket(

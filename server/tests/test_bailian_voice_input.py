@@ -5,6 +5,7 @@ import base64
 import json
 import os
 import tempfile
+from types import SimpleNamespace
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -138,6 +139,86 @@ class BailianVoiceInputTests(unittest.TestCase):
             self.assertNotIn("environment-secret", json.dumps(settings))
             self.assertTrue(store.reset()["configured"])
             self.assertEqual("environment-secret", store.get_config().api_key)
+
+    def test_connection_test_config_uses_draft_key_without_persisting_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bailian-voice-settings.json"
+            store = voice_input.BailianVoiceInputSettingsStore(path, environ={
+                "DASHSCOPE_API_KEY": "saved-environment-key",
+            })
+
+            config = store.config_for_test({
+                "api_key": "draft-key",
+                "workspace_id": "draft-workspace",
+                "region": "cn-beijing",
+                "realtime_model": "qwen3.8-omni-flash-realtime",
+                "transcription_model": "qwen3-asr-flash-realtime",
+            })
+
+            self.assertEqual("draft-key", config.api_key)
+            self.assertEqual("draft-workspace", config.workspace_id)
+            self.assertFalse(path.exists())
+
+            config = store.config_for_test({
+                "api_key": "",
+                "workspace_id": "draft-workspace",
+                "region": "cn-beijing",
+                "realtime_model": "qwen3.8-omni-flash-realtime",
+                "transcription_model": "qwen3-asr-flash-realtime",
+            })
+            self.assertEqual("saved-environment-key", config.api_key)
+
+    def test_connection_failure_messages_identify_common_statuses_without_response_details(self) -> None:
+        unauthorized = SimpleNamespace(response=SimpleNamespace(status_code=401))
+        forbidden = SimpleNamespace(response=SimpleNamespace(status_code=403))
+        not_found = SimpleNamespace(response=SimpleNamespace(status_code=404))
+
+        self.assertIn("API Key", voice_input.connection_error_message(unauthorized))
+        self.assertIn("权限", voice_input.connection_error_message(forbidden))
+        self.assertIn("Workspace", voice_input.connection_error_message(not_found))
+
+    def test_connection_test_opens_configured_session_without_audio_and_closes(self) -> None:
+        provider = FakeProviderSocket()
+        connection: dict = {}
+
+        async def connect(url: str, additional_headers=None, **kwargs):
+            connection.update(url=url, additional_headers=additional_headers)
+            return provider
+
+        config = voice_input.BailianVoiceInputConfig(
+            "server-secret", "workspace", "cn-beijing", "realtime-model", "transcription-model",
+        )
+        asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
+
+        self.assertEqual("Bearer server-secret", connection["additional_headers"]["Authorization"])
+        self.assertEqual(["session.update"], [event["type"] for event in provider.sent])
+        self.assertTrue(provider.closed)
+
+    def test_connection_test_maps_provider_setup_errors_and_closes(self) -> None:
+        provider = FakeProviderSocket()
+
+        async def send_error(raw: str) -> None:
+            event = json.loads(raw)
+            provider.sent.append(event)
+            if event.get("type") == "session.update":
+                await provider.events.put(json.dumps({
+                    "type": "error",
+                    "error": {"code": "workspace_not_found", "message": "private provider detail"},
+                }))
+
+        provider.send = send_error
+
+        async def connect(_url: str, **_kwargs):
+            return provider
+
+        config = voice_input.BailianVoiceInputConfig(
+            "server-secret", "workspace", "cn-beijing", "realtime-model", "transcription-model",
+        )
+        with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "Workspace ID") as error:
+            asyncio.run(voice_input.test_bailian_voice_connection(config, websocket_connect=connect))
+
+        self.assertNotIn("private provider detail", str(error.exception))
+        self.assertTrue(provider.closed)
 
     def test_manual_session_only_configures_transcription_and_commits_audio(self) -> None:
         provider = FakeProviderSocket()

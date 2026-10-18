@@ -37,6 +37,7 @@ from .bailian_voice_input import (
     BailianVoiceInputError,
     BailianVoiceInputSettingsStore,
     run_voice_input_websocket,
+    test_bailian_voice_connection,
 )
 from .claude_code import (
     ClaudeCodeError,
@@ -1403,7 +1404,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(image_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.37.0-dev.3", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.40.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1476,6 +1477,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return bailian_voice_settings.update(request.model_dump())
         except BailianVoiceInputError as error:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+
+    @app.post("/api/v1/settings/bailian-voice/test")
+    async def test_bailian_voice_settings(request: BailianVoiceInputSettingsRequest) -> dict[str, Any]:
+        try:
+            config = bailian_voice_settings.config_for_test(request.model_dump())
+        except BailianVoiceInputError as error:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(error)) from error
+        try:
+            await test_bailian_voice_connection(config)
+        except BailianVoiceInputError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+        return {"success": True, "message": "连接成功，百炼语音会话已就绪；本次测试未发送音频。"}
 
     @app.delete("/api/v1/settings/bailian-voice")
     async def reset_bailian_voice_settings() -> dict[str, Any]:

@@ -653,6 +653,12 @@ export const codexRemoteClient = {
       body: JSON.stringify(settings),
     })
   },
+  testBailianVoiceInputSettings(token: string, settings: BailianVoiceInputSettingsUpdate) {
+    return request<{ success: boolean; message: string }>(token, '/api/v1/settings/bailian-voice/test', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    }, { timeoutMs: 35_000 })
+  },
   resetBailianVoiceInputSettings(token: string) {
     return request<BailianVoiceInputSettings>(token, '/api/v1/settings/bailian-voice', { method: 'DELETE' })
   },

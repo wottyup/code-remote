@@ -45,7 +45,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type BailianVoiceInputSettings, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type BailianVoiceInputSettings, type BailianVoiceInputSettingsUpdate, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
@@ -5595,6 +5595,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   const [bailianApiKeyDraft, setBailianApiKeyDraft] = useState('')
   const [bailianSettingsLoading, setBailianSettingsLoading] = useState(true)
   const [bailianSettingsSaving, setBailianSettingsSaving] = useState(false)
+  const [bailianSettingsTesting, setBailianSettingsTesting] = useState(false)
   const [bailianSettingsMessage, setBailianSettingsMessage] = useState<string | null>(null)
   const [bailianSettingsError, setBailianSettingsError] = useState<string | null>(null)
   const backgroundCropDrag = useRef<{
@@ -5628,20 +5629,26 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     return () => { active = false }
   }, [token])
 
+  function bailianSettingsDraft(): BailianVoiceInputSettingsUpdate | null {
+    if (!bailianVoiceSettings) return null
+    return {
+      ...(bailianApiKeyDraft.trim() ? { api_key: bailianApiKeyDraft.trim() } : {}),
+      workspace_id: bailianVoiceSettings.workspace_id.trim(),
+      region: bailianVoiceSettings.region,
+      realtime_model: bailianVoiceSettings.realtime_model,
+      transcription_model: bailianVoiceSettings.transcription_model,
+    }
+  }
+
   async function saveBailianSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (!bailianVoiceSettings) return
+    const draft = bailianSettingsDraft()
+    if (!draft) return
     setBailianSettingsSaving(true)
     setBailianSettingsError(null)
     setBailianSettingsMessage(null)
     try {
-      const settings = await codexRemoteClient.saveBailianVoiceInputSettings(token, {
-        ...(bailianApiKeyDraft.trim() ? { api_key: bailianApiKeyDraft.trim() } : {}),
-        workspace_id: bailianVoiceSettings.workspace_id.trim(),
-        region: bailianVoiceSettings.region,
-        realtime_model: bailianVoiceSettings.realtime_model,
-        transcription_model: bailianVoiceSettings.transcription_model,
-      })
+      const settings = await codexRemoteClient.saveBailianVoiceInputSettings(token, draft)
       setBailianVoiceSettings(settings)
       setBailianApiKeyDraft('')
       setBailianSettingsMessage(settings.configured ? '已保存，语音输入现在可以使用。' : '已保存 Workspace ID；还需要配置 API Key 才能使用语音输入。')
@@ -5649,6 +5656,22 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       setBailianSettingsError(error instanceof Error ? error.message : '保存百炼配置失败。')
     } finally {
       setBailianSettingsSaving(false)
+    }
+  }
+
+  async function testBailianSettings() {
+    const draft = bailianSettingsDraft()
+    if (!draft) return
+    setBailianSettingsTesting(true)
+    setBailianSettingsError(null)
+    setBailianSettingsMessage(null)
+    try {
+      const result = await codexRemoteClient.testBailianVoiceInputSettings(token, draft)
+      setBailianSettingsMessage(`${result.message} 测试不会保存配置或发送音频；如刚修改过设置，请再点“保存配置”。`)
+    } catch (error) {
+      setBailianSettingsError(error instanceof Error ? error.message : '百炼连接测试失败。')
+    } finally {
+      setBailianSettingsTesting(false)
     }
   }
 
@@ -6059,10 +6082,13 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
                 </label>
               </details>
               <div className="bailian-voice-actions">
-                <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" disabled={bailianSettingsSaving || !bailianVoiceSettings.workspace_id.trim()}>
+                <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving || bailianSettingsTesting || !bailianVoiceSettings.workspace_id.trim() || (!bailianVoiceSettings.api_key_configured && !bailianApiKeyDraft.trim())} onClick={() => { void testBailianSettings() }}>
+                  {bailianSettingsTesting ? <><LoaderCircle className="spin" size={14} />测试中…</> : '测试连接'}
+                </button>
+                <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" disabled={bailianSettingsSaving || bailianSettingsTesting || !bailianVoiceSettings.workspace_id.trim()}>
                   {bailianSettingsSaving ? <><LoaderCircle className="spin" size={14} />保存中…</> : '保存配置'}
                 </button>
-                {bailianVoiceSettings.project_settings_saved ? <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving} onClick={() => { void resetBailianSettings() }}>恢复服务器环境变量</button> : null}
+                {bailianVoiceSettings.project_settings_saved ? <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving || bailianSettingsTesting} onClick={() => { void resetBailianSettings() }}>恢复服务器环境变量</button> : null}
                 <span className="bailian-voice-source">
                   {bailianVoiceSettings.api_key_source === 'project' ? 'Key 保存在项目服务端' : bailianVoiceSettings.api_key_source === 'environment' ? '当前使用服务器环境变量中的 Key' : '尚未配置 API Key'}
                 </span>
