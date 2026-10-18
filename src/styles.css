@@ -2954,6 +2954,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   font-family: "Fusion Pixel", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
   image-rendering: pixelated;
 }
+.remote-shell--theme-pixel .composer-dock { margin-bottom: 25px; }
+@media (max-width: 700px) {
+  .remote-shell--theme-pixel .composer-dock { margin-bottom: calc(max(8px, env(safe-area-inset-bottom), var(--native-composer-bottom-inset)) + 3px); }
+}
 .remote-shell--theme-pixel :is(.remote-sidebar, .remote-chat, .remote-workspace, .remote-pane-grid, .remote-pane-slot, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) { background: var(--pixel-panel); color: var(--pixel-text); }
 .remote-shell--theme-pixel :is(.remote-sidebar, .workspace-explorer, .remote-workspace) { border-color: var(--pixel-border-shadow); background: var(--pixel-panel); }
 .remote-shell--theme-pixel :is(.remote-chat__header, .workspace-explorer__header, .theme-settings-panel__header) {
