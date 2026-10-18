@@ -2874,14 +2874,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { grid-column: 3; display: flex; min-width: 0; justify-content: flex-end; overflow: visible; }
 }
 
-@font-face {
-  font-family: "Fusion Pixel";
-  src: url('../android/app/src/main/assets/fonts/FusionPixel12pxProportionalZhHans.ttf') format('truetype');
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-}
-
 .app-root--theme-pixel {
   --pixel-background: #070f1c;
   --pixel-panel: #0f1b2b;
@@ -2899,8 +2891,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   color-scheme: dark;
   background: var(--pixel-background);
   color: var(--pixel-text);
-  font-family: "Fusion Pixel", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
-  font-synthesis: weight style;
+  font-family: "Courier New", ui-monospace, monospace;
 }
 .app-root--theme-pixel :is(button, input:not([type="file"]):not([type="range"]):not([type="color"]), textarea, select) { font-family: inherit; }
 .app-root--theme-pixel .pair-page { background: var(--pixel-background); color: var(--pixel-text); }
@@ -2952,8 +2943,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border: 0;
   background: var(--pixel-background);
   color: var(--pixel-text);
-  font-family: "Fusion Pixel", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
-  font-synthesis: weight style;
+  font-family: "Courier New", ui-monospace, monospace;
   image-rendering: pixelated;
 }
 .remote-shell--theme-pixel :is(.remote-sidebar, .remote-chat, .remote-workspace, .remote-pane-grid, .remote-pane-slot, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) { background: var(--pixel-panel); color: var(--pixel-text); }
