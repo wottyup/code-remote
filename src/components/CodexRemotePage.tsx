@@ -2084,6 +2084,7 @@ interface WorkspaceExplorerProps {
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
+  onAddToTerminal: (path: string) => void
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   mobileDragging: boolean
@@ -2128,6 +2129,13 @@ interface WorkspaceEntryContextMenu {
   x: number
   y: number
   root?: boolean
+  mobile?: boolean
+}
+
+interface WorkspaceTerminalRequest {
+  id: number
+  paneIndex: number
+  path: string
 }
 
 interface WorkspaceClipboard {
@@ -2223,7 +2231,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2617,14 +2625,15 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
+    const mobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
     const menuWidth = 244
-    const menuHeight = entry.kind === 'directory' ? 350 : 264
+    const menuHeight = entry.kind === 'directory' ? (mobile ? 350 : 390) : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
     setSelectedPaths(paths)
     setSelectionContextMenu(null)
-    setContextMenu({ entry, paths, x, y })
+    setContextMenu({ entry, paths, x, y, mobile })
   }
 
   function openRootContextMenu(clientX: number, clientY: number) {
@@ -2636,7 +2645,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
     setSelectedPaths([])
     setSelectionContextMenu(null)
-    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true, mobile: isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint) })
   }
 
   function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
@@ -3131,6 +3140,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
         <div className={`thread-context-menu workspace-file-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
+          {contextMenu.entry.kind === 'directory' && !contextMenu.mobile && !contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</button> : null}
           {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
           {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button> : null}
           {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button> : null}
@@ -3238,6 +3248,8 @@ interface RemoteChatPaneProps {
   onOpenWorkspace: () => void
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
   onOpenWorkspaceImage: (path: string, cwd?: string) => void
+  directoryRequest: WorkspaceTerminalRequest | null
+  onDirectoryRequestHandled: (id: number) => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -3258,11 +3270,15 @@ function RemoteChatPane({
   onOpenWorkspace,
   onOpenWorkspaceFile,
   onOpenWorkspaceImage,
+  directoryRequest,
+  onDirectoryRequestHandled,
   composerHandle,
   copiedMessageId,
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const handledDirectoryRequestId = useRef(0)
   const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
@@ -3274,6 +3290,15 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+
+  useEffect(() => {
+    if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
+    handledDirectoryRequestId.current = directoryRequest.id
+    onActivate()
+    setTerminalDirectoryRequest(directoryRequest)
+    setTerminalOpen(true)
+    onDirectoryRequestHandled(directoryRequest.id)
+  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled])
 
   const activeThreadId = remote.activeThread?.id
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
@@ -3633,6 +3658,8 @@ function RemoteChatPane({
             token={token}
             threadId={remote.activeThread?.id}
             cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+            directoryRequest={terminalDirectoryRequest}
+            onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
             onClose={() => setTerminalOpen(false)}
             onInsertText={(value) => {
               if (value.length >= longPasteThreshold) {
@@ -3652,6 +3679,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
+  const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const workspaceTerminalRequestSequence = useRef(0)
   const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
@@ -5209,6 +5238,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                       workspacePreviewSequence.current += 1
                       setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image' })
                     }}
+                    directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
+                    onDirectoryRequestHandled={(id) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current)}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
                     onCopy={copyMessage}
@@ -5321,6 +5352,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
+            onAddToTerminal={(path) => {
+              workspaceTerminalRequestSequence.current += 1
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path })
+            }}
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
             mobileDragging={workspaceDragging}

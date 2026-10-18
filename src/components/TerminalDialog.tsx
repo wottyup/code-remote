@@ -4,6 +4,7 @@ import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, ClipboardPaste, C
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
 import { restoreTerminalTouchSelection, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
+import { terminalChangeDirectoryCommand } from '../lib/terminalPathCommand'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
@@ -21,6 +22,8 @@ interface TerminalDialogProps {
   token: string
   threadId?: string
   cwd?: string
+  directoryRequest: { id: number; path: string } | null
+  onDirectoryRequestConsumed: (id: number) => void
   onClose: () => void
   onInsertText: (value: string) => void
 }
@@ -108,9 +111,10 @@ function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clie
   return terminal.hasSelection()
 }
 
-export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: TerminalDialogProps) {
+export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>('connecting')
+  const [shellName, setShellName] = useState('')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
   const [activeModifier, setActiveModifier] = useState<TerminalModifier | null>(null)
@@ -118,6 +122,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
   const [manualPasteText, setManualPasteText] = useState('')
   const [desktopPasteHintVisible, setDesktopPasteHintVisible] = useState(false)
   const [connectionRound, setConnectionRound] = useState(0)
+  const handledDirectoryRequestId = useRef<number | null>(null)
   const activeModifierRef = useRef<TerminalModifier | null>(null)
   const desktopPasteHintTimer = useRef<number | undefined>(undefined)
   const terminalActions = useRef<TerminalActions>({
@@ -497,6 +502,7 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       if (payload.type === 'ready') {
         ready = true
         setStatus('connected')
+        setShellName(payload.shell ?? '')
         if (payload.cwd) setWorkingDirectory(payload.cwd)
         for (const data of pendingInput.splice(0)) send({ type: 'input', data })
         fitAndResize()
@@ -570,6 +576,14 @@ export function TerminalDialog({ token, threadId, cwd, onClose, onInsertText }: 
       terminal.dispose()
     }
   }, [connectionRound, cwd, threadId, token])
+
+  useEffect(() => {
+    if (status !== 'connected' || !shellName || !directoryRequest || handledDirectoryRequestId.current === directoryRequest.id) return
+    handledDirectoryRequestId.current = directoryRequest.id
+    terminalActions.current.paste(terminalChangeDirectoryCommand(shellName, directoryRequest.path))
+    terminalActions.current.focus()
+    onDirectoryRequestConsumed(directoryRequest.id)
+  }, [directoryRequest, onDirectoryRequestConsumed, shellName, status])
 
   const statusLabel = {
     connecting: '正在启动',
