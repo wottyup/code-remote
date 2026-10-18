@@ -3017,13 +3017,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-pixel .message-composer textarea { border: 0; background: transparent; color: var(--pixel-text); font-family: inherit; }
 .remote-shell--theme-pixel .message-composer textarea::placeholder { color: var(--pixel-muted); }
 .remote-shell--theme-pixel .send-button { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-blue); color: #fff; box-shadow: none; }
-.remote-shell--theme-pixel .send-button:hover:not(:disabled) { border-image-source: url('/pixel-theme/frames/wide-panel.png'); background: #277fd1; color: #fff; }
+.remote-shell--theme-pixel .send-button:hover:not(:disabled) { border-image-source: url('/pixel-theme/frames/square-window.png'); background: #277fd1; color: #fff; }
 .remote-shell--theme-pixel .send-button--interrupt { background: #25577d; }
 .remote-shell--theme-pixel .send-button--confirm { background: #26653b; color: #e3ffe9; }
 .remote-shell--theme-pixel .send-button--continue { background: #795918; color: #fff2ce; }
 .remote-shell--theme-pixel .attach-button,
 .remote-shell--theme-pixel .composer-menu__trigger { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-text); }
-.remote-shell--theme-pixel .composer-menu__trigger:hover { border-image-source: url('/pixel-theme/frames/wide-panel.png'); background: #253750; }
+.remote-shell--theme-pixel .composer-menu__trigger:hover { border-image-source: url('/pixel-theme/frames/square-window.png'); background: #253750; }
 .remote-shell--theme-pixel .composer-hint,
 .remote-shell--theme-pixel .composer-file-change-summary { color: var(--pixel-secondary); }
 .remote-shell--theme-pixel .composer-queue { border: 8px solid transparent; border-image: url('/pixel-theme/frames/wide-window.png') 52 54 52 54 / 8px / 0 stretch; background: var(--pixel-panel); }
