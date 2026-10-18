@@ -4,7 +4,9 @@ import asyncio
 import base64
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import codex_remote.bailian_voice_input as voice_input
@@ -89,10 +91,53 @@ class BailianVoiceInputTests(unittest.TestCase):
         with self.assertRaises(voice_input.BailianVoiceInputError):
             voice_input.build_realtime_url("workspace", "us-west-1", "model")
 
-    def test_missing_credentials_are_reported_without_logging_or_echoing_keys(self) -> None:
+    def test_missing_credentials_return_a_setup_hint(self) -> None:
         config = voice_input.BailianVoiceInputConfig("", "", "cn-beijing", "model", "qwen3-asr-flash-realtime")
-        with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "DASHSCOPE_API_KEY"):
+        with self.assertRaisesRegex(voice_input.BailianVoiceInputError, "项目设置"):
             config.validate()
+
+    def test_settings_store_persists_secret_privately_and_keeps_it_out_of_public_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "bailian-voice-settings.json"
+            store = voice_input.BailianVoiceInputSettingsStore(path, environ={})
+            settings = store.update({
+                "api_key": "project-secret",
+                "workspace_id": "project-workspace",
+                "region": "cn-beijing",
+                "realtime_model": voice_input.DEFAULT_REALTIME_MODEL,
+                "transcription_model": voice_input.DEFAULT_TRANSCRIPTION_MODEL,
+            })
+
+            self.assertTrue(settings["configured"])
+            self.assertEqual("project", settings["api_key_source"])
+            self.assertNotIn("api_key", settings)
+            self.assertNotIn("project-secret", json.dumps(settings))
+            self.assertEqual("project-secret", voice_input.BailianVoiceInputSettingsStore(path, environ={}).get_config().api_key)
+            if os.name != "nt":
+                self.assertEqual(0o600, path.stat().st_mode & 0o777)
+
+            settings = store.update({
+                "api_key": "",
+                "workspace_id": "project-workspace",
+                "region": "cn-beijing",
+                "realtime_model": voice_input.DEFAULT_REALTIME_MODEL,
+                "transcription_model": voice_input.DEFAULT_TRANSCRIPTION_MODEL,
+            })
+            self.assertTrue(settings["configured"])
+            self.assertEqual("project-secret", store.get_config().api_key)
+
+    def test_settings_store_falls_back_to_environment_and_reset_restores_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = voice_input.BailianVoiceInputSettingsStore(Path(directory) / "settings.json", environ={
+                "DASHSCOPE_API_KEY": "environment-secret",
+                "BAILIAN_WORKSPACE_ID": "environment-workspace",
+            })
+            settings = store.public_view()
+            self.assertTrue(settings["configured"])
+            self.assertEqual("environment", settings["api_key_source"])
+            self.assertNotIn("environment-secret", json.dumps(settings))
+            self.assertTrue(store.reset()["configured"])
+            self.assertEqual("environment-secret", store.get_config().api_key)
 
     def test_manual_session_only_configures_transcription_and_commits_audio(self) -> None:
         provider = FakeProviderSocket()

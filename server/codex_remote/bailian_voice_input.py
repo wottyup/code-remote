@@ -7,9 +7,10 @@ import base64
 import inspect
 import json
 import os
-import re
+import tempfile
 from contextlib import suppress
-from typing import Any, AsyncIterator
+from pathlib import Path
+from typing import Any
 from urllib.parse import quote
 
 
@@ -84,11 +85,123 @@ class BailianVoiceInputConfig:
     def validate(self) -> None:
         if not self.api_key or not self.workspace_id:
             raise BailianVoiceInputError(
-                "尚未配置百炼语音输入，请在服务端设置 DASHSCOPE_API_KEY 和 BAILIAN_WORKSPACE_ID。"
+                "尚未配置百炼语音输入，请在项目设置中填写 API Key 和 Workspace ID。"
             )
         build_realtime_url(self.workspace_id, self.region, self.model)
         if not self.transcription_model:
             raise BailianVoiceInputError("百炼转写模型配置无效")
+
+
+class BailianVoiceInputSettingsStore:
+    """Persist server-side provider settings without exposing the API key to clients."""
+
+    def __init__(self, path: Path, environ: Any | None = None) -> None:
+        self.path = Path(path)
+        self.environ = os.environ if environ is None else environ
+
+    def _read(self) -> dict[str, str]:
+        try:
+            value = json.loads(self.path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        return {
+            key: item.strip()
+            for key, item in value.items()
+            if key in {"api_key", "workspace_id", "region", "realtime_model", "transcription_model"}
+            and isinstance(item, str)
+            and item.strip()
+        }
+
+    def _resolved(self) -> tuple[dict[str, str], str | None]:
+        stored = self._read()
+        env = self.environ
+        values = {
+            "api_key": stored.get("api_key") or str(env.get("DASHSCOPE_API_KEY", "")).strip(),
+            "workspace_id": stored.get("workspace_id") or str(env.get("BAILIAN_WORKSPACE_ID", "")).strip(),
+            "region": stored.get("region") or str(env.get("BAILIAN_REGION", "cn-beijing")).strip(),
+            "realtime_model": stored.get("realtime_model") or str(env.get("BAILIAN_REALTIME_MODEL", DEFAULT_REALTIME_MODEL)).strip(),
+            "transcription_model": stored.get("transcription_model") or str(env.get("BAILIAN_TRANSCRIPTION_MODEL", DEFAULT_TRANSCRIPTION_MODEL)).strip(),
+        }
+        api_key_source = "project" if stored.get("api_key") else "environment" if values["api_key"] else None
+        return values, api_key_source
+
+    def get_config(self) -> BailianVoiceInputConfig:
+        values, _ = self._resolved()
+        return BailianVoiceInputConfig(
+            values["api_key"],
+            values["workspace_id"],
+            values["region"],
+            values["realtime_model"],
+            values["transcription_model"],
+        )
+
+    def public_view(self) -> dict[str, Any]:
+        values, api_key_source = self._resolved()
+        return {
+            "configured": bool(values["api_key"] and values["workspace_id"]),
+            "api_key_configured": bool(values["api_key"]),
+            "api_key_source": api_key_source,
+            "project_settings_saved": self.path.is_file(),
+            "workspace_id": values["workspace_id"],
+            "region": values["region"],
+            "realtime_model": values["realtime_model"],
+            "transcription_model": values["transcription_model"],
+        }
+
+    def update(self, values: dict[str, Any]) -> dict[str, Any]:
+        stored = self._read()
+        api_key = values.get("api_key")
+        if api_key is not None and not isinstance(api_key, str):
+            raise BailianVoiceInputError("API Key 格式无效")
+        if isinstance(api_key, str) and api_key.strip():
+            stored["api_key"] = api_key.strip()
+
+        workspace_id = str(values.get("workspace_id", "")).strip()
+        region = str(values.get("region", "cn-beijing")).strip().lower()
+        realtime_model = str(values.get("realtime_model", DEFAULT_REALTIME_MODEL)).strip()
+        transcription_model = str(values.get("transcription_model", DEFAULT_TRANSCRIPTION_MODEL)).strip()
+        build_realtime_url(workspace_id, region, realtime_model)
+        if not transcription_model or not all(
+            char.isascii() and (char.isalnum() or char in "._-") for char in transcription_model
+        ):
+            raise BailianVoiceInputError("百炼转写模型名无效")
+
+        stored.update({
+            "workspace_id": workspace_id,
+            "region": region,
+            "realtime_model": realtime_model,
+            "transcription_model": transcription_model,
+        })
+        self._write(stored)
+        return self.public_view()
+
+    def reset(self) -> dict[str, Any]:
+        with suppress(FileNotFoundError):
+            self.path.unlink()
+        return self.public_view()
+
+    def _write(self, values: dict[str, str]) -> None:
+        try:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            descriptor, temporary_path = tempfile.mkstemp(
+                prefix=f".{self.path.name}.", suffix=".tmp", dir=self.path.parent,
+            )
+            try:
+                with os.fdopen(descriptor, "w", encoding="utf-8") as settings_file:
+                    json.dump(values, settings_file, ensure_ascii=False)
+                    settings_file.write("\n")
+                    settings_file.flush()
+                    os.fsync(settings_file.fileno())
+                os.replace(temporary_path, self.path)
+                os.chmod(self.path, 0o600)
+            except Exception:
+                with suppress(FileNotFoundError):
+                    os.unlink(temporary_path)
+                raise
+        except OSError as error:
+            raise BailianVoiceInputError("无法安全保存百炼配置，请检查服务目录权限。") from error
 
 
 class BailianVoiceInputSession:
@@ -208,7 +321,11 @@ class BailianVoiceInputSession:
                 await websocket.close()
 
 
-async def run_voice_input_websocket(websocket: Any, auth: Any) -> None:
+async def run_voice_input_websocket(
+    websocket: Any,
+    auth: Any,
+    config_provider: Any | None = None,
+) -> None:
     """Authenticate a browser, proxy PCM frames to Bailian, and relay only ASR."""
     await websocket.accept()
     try:
@@ -223,13 +340,15 @@ async def run_voice_input_websocket(websocket: Any, auth: Any) -> None:
         not isinstance(hello, dict)
         or hello.get("type") != "voice.transcription.hello"
         or hello.get("protocol_version") != 1
+        or not isinstance(hello.get("token"), str)
         or not auth.accepts(hello.get("token"))
     ):
         with suppress(Exception):
             await websocket.close(code=1008, reason="invalid pairing token or protocol")
         return
 
-    session = BailianVoiceInputSession(BailianVoiceInputConfig.from_environment())
+    config = config_provider() if config_provider is not None else BailianVoiceInputConfig.from_environment()
+    session = BailianVoiceInputSession(config)
     client_task: asyncio.Task | None = None
     provider_task: asyncio.Task | None = None
     try:

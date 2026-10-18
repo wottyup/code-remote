@@ -66,16 +66,9 @@ Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-
 
 ## 阿里云百炼语音输入（可选）
 
-在启动 Codex Remote 的服务端环境中配置百炼 API Key 和同地域的 Workspace ID；北京地域为默认值：
+首次使用时，在网页版左侧“设置”→“阿里云百炼语音”中填写 API Key、Workspace ID 和地域，保存后立即生效，无需重启。API Key 保存在服务端本机的配置文件中，不会返回给浏览器；Linux/macOS 下该文件仅允许服务用户读写。默认实时模型为 `qwen3.8-omni-flash-realtime`，默认转写模型为 `qwen3-asr-flash-realtime`；模型也可以在高级设置中调整。
 
-```bash
-export DASHSCOPE_API_KEY="<百炼 API Key>"
-export BAILIAN_WORKSPACE_ID="<Workspace ID>"
-export BAILIAN_REGION="cn-beijing"
-pnpm --filter codex-remote start
-```
-
-默认实时模型为 `qwen3.8-omni-flash-realtime`，默认转写模型为 `qwen3-asr-flash-realtime`。也可设置 `BAILIAN_REGION=ap-southeast-1` 和可选的 `BAILIAN_REALTIME_MODEL`、`BAILIAN_TRANSCRIPTION_MODEL`。使用仓库提供的 systemd unit 时，把这些变量写入 `/etc/codex-remote.env`，不要写入仓库或网页。服务端只用它们连接百炼，不会把 API Key 发给浏览器。
+仍可通过 `DASHSCOPE_API_KEY`、`BAILIAN_WORKSPACE_ID`、`BAILIAN_REGION`、`BAILIAN_REALTIME_MODEL` 和 `BAILIAN_TRANSCRIPTION_MODEL` 环境变量配置。环境变量会作为项目设置的回退值；“恢复服务器环境变量”会清除项目内保存的配置。
 
 语音输入仅转写并插入输入框，不会自动发送。浏览器麦克风要求 HTTPS 安全连接；电脑本机的 `localhost` 可直接使用，但手机通过局域网 IP 访问 HTTP 页面时，浏览器会禁止麦克风，需要通过 HTTPS 访问。
 

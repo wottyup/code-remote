@@ -45,7 +45,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type BailianVoiceInputSettings, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
@@ -5343,7 +5343,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -5506,7 +5506,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange }: {
+  token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
   onClose: () => void
@@ -5519,6 +5520,12 @@ function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onC
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
   const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
+  const [bailianVoiceSettings, setBailianVoiceSettings] = useState<BailianVoiceInputSettings | null>(null)
+  const [bailianApiKeyDraft, setBailianApiKeyDraft] = useState('')
+  const [bailianSettingsLoading, setBailianSettingsLoading] = useState(true)
+  const [bailianSettingsSaving, setBailianSettingsSaving] = useState(false)
+  const [bailianSettingsMessage, setBailianSettingsMessage] = useState<string | null>(null)
+  const [bailianSettingsError, setBailianSettingsError] = useState<string | null>(null)
   const backgroundCropDrag = useRef<{
     pointerId: number
     clientX: number
@@ -5536,6 +5543,60 @@ function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onC
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
+
+  useEffect(() => {
+    let active = true
+    setBailianSettingsLoading(true)
+    void codexRemoteClient.bailianVoiceInputSettings(token).then((settings) => {
+      if (active) setBailianVoiceSettings(settings)
+    }).catch((error: unknown) => {
+      if (active) setBailianSettingsError(error instanceof Error ? error.message : '读取百炼配置失败。')
+    }).finally(() => {
+      if (active) setBailianSettingsLoading(false)
+    })
+    return () => { active = false }
+  }, [token])
+
+  async function saveBailianSettings(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!bailianVoiceSettings) return
+    setBailianSettingsSaving(true)
+    setBailianSettingsError(null)
+    setBailianSettingsMessage(null)
+    try {
+      const settings = await codexRemoteClient.saveBailianVoiceInputSettings(token, {
+        ...(bailianApiKeyDraft.trim() ? { api_key: bailianApiKeyDraft.trim() } : {}),
+        workspace_id: bailianVoiceSettings.workspace_id.trim(),
+        region: bailianVoiceSettings.region,
+        realtime_model: bailianVoiceSettings.realtime_model,
+        transcription_model: bailianVoiceSettings.transcription_model,
+      })
+      setBailianVoiceSettings(settings)
+      setBailianApiKeyDraft('')
+      setBailianSettingsMessage(settings.configured ? '已保存，语音输入现在可以使用。' : '已保存 Workspace ID；还需要配置 API Key 才能使用语音输入。')
+    } catch (error) {
+      setBailianSettingsError(error instanceof Error ? error.message : '保存百炼配置失败。')
+    } finally {
+      setBailianSettingsSaving(false)
+    }
+  }
+
+  async function resetBailianSettings() {
+    if (!window.confirm('清除项目内保存的百炼配置，并改用服务器环境变量？')) return
+    setBailianSettingsSaving(true)
+    setBailianSettingsError(null)
+    setBailianSettingsMessage(null)
+    try {
+      const settings = await codexRemoteClient.resetBailianVoiceInputSettings(token)
+      setBailianVoiceSettings(settings)
+      setBailianApiKeyDraft('')
+      setBailianSettingsMessage(settings.configured ? '已恢复使用服务器环境变量。' : '项目内配置已清除，目前尚未配置百炼凭证。')
+    } catch (error) {
+      setBailianSettingsError(error instanceof Error ? error.message : '清除百炼配置失败。')
+    } finally {
+      setBailianSettingsSaving(false)
+    }
+  }
 
   useEffect(() => {
     if (!recordingShortcut) return
@@ -5691,7 +5752,7 @@ function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onC
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>界面和通知偏好保存在当前设备，不会影响 Codex 会话。</p>
+          <p>界面偏好保存在当前设备；百炼语音配置保存在服务端。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
@@ -5869,6 +5930,77 @@ function ThemeSettingsPanel({ preferences, onChange, onClose, chatShortcuts, onC
           </div>
           <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
+        </section>
+
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading">
+            <div><h2>阿里云百炼语音</h2><p>在这里配置语音转文字服务，无需编辑服务器环境文件或重启。</p></div>
+            {bailianVoiceSettings ? <span className="theme-settings-card__badge">{bailianVoiceSettings.configured ? '已配置' : '待配置'}</span> : null}
+          </div>
+          {bailianSettingsLoading ? <p className="theme-settings-hint bailian-voice-loading">正在读取配置…</p> : bailianVoiceSettings ? (
+            <form className="bailian-voice-form" onSubmit={(event) => { void saveBailianSettings(event) }}>
+              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-api-key">
+                <span><strong>API Key</strong><small>{bailianVoiceSettings.api_key_configured ? '已配置；留空不会修改现有 Key。' : '填写百炼 DashScope API Key。'}</small></span>
+                <input
+                  id="bailian-api-key"
+                  className="bailian-voice-input"
+                  type="password"
+                  value={bailianApiKeyDraft}
+                  autoComplete="new-password"
+                  placeholder={bailianVoiceSettings.api_key_configured ? '已配置，留空则保持不变' : '粘贴 API Key'}
+                  onChange={(event) => setBailianApiKeyDraft(event.target.value)}
+                />
+              </label>
+              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-workspace-id">
+                <span><strong>Workspace ID</strong><small>百炼实时语音模型所属的业务空间 ID。</small></span>
+                <input
+                  id="bailian-workspace-id"
+                  className="bailian-voice-input"
+                  type="text"
+                  value={bailianVoiceSettings.workspace_id}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="填写 Workspace ID"
+                  onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, workspace_id: event.target.value })}
+                />
+              </label>
+              <label className="theme-control-row bailian-voice-row" htmlFor="bailian-region">
+                <span><strong>服务地域</strong><small>需要与百炼业务空间所在地域一致。</small></span>
+                <select
+                  id="bailian-region"
+                  className="bailian-voice-input bailian-voice-select"
+                  value={bailianVoiceSettings.region}
+                  onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, region: event.target.value as BailianVoiceInputSettings['region'] })}
+                >
+                  <option value="cn-beijing">中国（北京）</option>
+                  <option value="ap-southeast-1">新加坡</option>
+                </select>
+              </label>
+              <details className="bailian-voice-advanced">
+                <summary>高级模型设置</summary>
+                <label className="theme-control-row bailian-voice-row" htmlFor="bailian-realtime-model">
+                  <span><strong>实时模型</strong><small>需已在百炼开通实时语音权限。</small></span>
+                  <input id="bailian-realtime-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.realtime_model} onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, realtime_model: event.target.value })} />
+                </label>
+                <label className="theme-control-row bailian-voice-row" htmlFor="bailian-transcription-model">
+                  <span><strong>转写模型</strong><small>用于将录音识别为文字。</small></span>
+                  <input id="bailian-transcription-model" className="bailian-voice-input" type="text" value={bailianVoiceSettings.transcription_model} onChange={(event) => setBailianVoiceSettings({ ...bailianVoiceSettings, transcription_model: event.target.value })} />
+                </label>
+              </details>
+              <div className="bailian-voice-actions">
+                <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" disabled={bailianSettingsSaving || !bailianVoiceSettings.workspace_id.trim()}>
+                  {bailianSettingsSaving ? <><LoaderCircle className="spin" size={14} />保存中…</> : '保存配置'}
+                </button>
+                {bailianVoiceSettings.project_settings_saved ? <button className="theme-notification-toggle" type="button" disabled={bailianSettingsSaving} onClick={() => { void resetBailianSettings() }}>恢复服务器环境变量</button> : null}
+                <span className="bailian-voice-source">
+                  {bailianVoiceSettings.api_key_source === 'project' ? 'Key 保存在项目服务端' : bailianVoiceSettings.api_key_source === 'environment' ? '当前使用服务器环境变量中的 Key' : '尚未配置 API Key'}
+                </span>
+              </div>
+              <p className="theme-settings-hint bailian-voice-hint">API Key 只保存在运行 Codex Remote 的服务器，不会回传到浏览器。通过局域网填写时建议使用 HTTPS；已保存的 Key 不会显示，可随时在此替换。</p>
+              {bailianSettingsMessage ? <p className="bailian-voice-message" role="status" aria-live="polite">{bailianSettingsMessage}</p> : null}
+              {bailianSettingsError ? <p className="theme-notification-error bailian-voice-error" role="alert">{bailianSettingsError}</p> : null}
+            </form>
+          ) : <p className="theme-settings-hint">{bailianSettingsError ?? '读取百炼配置失败。关闭设置后重新打开可重试。'}</p>}
         </section>
 
         <section className="theme-settings-card">

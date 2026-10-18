@@ -105,6 +105,25 @@ export interface CodexRuntime {
   error: string | null
 }
 
+export interface BailianVoiceInputSettings {
+  configured: boolean
+  api_key_configured: boolean
+  api_key_source: 'project' | 'environment' | null
+  project_settings_saved: boolean
+  workspace_id: string
+  region: 'cn-beijing' | 'ap-southeast-1'
+  realtime_model: string
+  transcription_model: string
+}
+
+export interface BailianVoiceInputSettingsUpdate {
+  api_key?: string
+  workspace_id: string
+  region: 'cn-beijing' | 'ap-southeast-1'
+  realtime_model: string
+  transcription_model: string
+}
+
 export interface CodexWorkspaceEntry {
   name: string
   path: string
@@ -624,6 +643,18 @@ export const codexRemoteClient = {
   },
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
+  bailianVoiceInputSettings(token: string) {
+    return request<BailianVoiceInputSettings>(token, '/api/v1/settings/bailian-voice')
+  },
+  saveBailianVoiceInputSettings(token: string, settings: BailianVoiceInputSettingsUpdate) {
+    return request<BailianVoiceInputSettings>(token, '/api/v1/settings/bailian-voice', {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    })
+  },
+  resetBailianVoiceInputSettings(token: string) {
+    return request<BailianVoiceInputSettings>(token, '/api/v1/settings/bailian-voice', { method: 'DELETE' })
   },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
