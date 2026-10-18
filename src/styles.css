@@ -2899,7 +2899,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   color-scheme: dark;
   background: var(--pixel-background);
   color: var(--pixel-text);
-  font-family: "Fusion Pixel", sans-serif;
+  font-family: "Fusion Pixel", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  font-synthesis: weight style;
 }
 .app-root--theme-pixel :is(button, input:not([type="file"]):not([type="range"]):not([type="color"]), textarea, select) { font-family: inherit; }
 .app-root--theme-pixel .pair-page { background: var(--pixel-background); color: var(--pixel-text); }
@@ -2951,7 +2952,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border: 0;
   background: var(--pixel-background);
   color: var(--pixel-text);
-  font-family: "Fusion Pixel", sans-serif;
+  font-family: "Fusion Pixel", "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", "Segoe UI", sans-serif;
+  font-synthesis: weight style;
   image-rendering: pixelated;
 }
 .remote-shell--theme-pixel :is(.remote-sidebar, .remote-chat, .remote-workspace, .remote-pane-grid, .remote-pane-slot, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) { background: var(--pixel-panel); color: var(--pixel-text); }
