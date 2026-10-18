@@ -3606,14 +3606,16 @@ class MainActivity : Activity() {
             activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
                 ?: System.currentTimeMillis()
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
-            val currentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
-                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") && normalizedOperationStatus(item) == "running" }
             val turnId = lastTurn?.optString("id").orEmpty()
-            val liveItem = liveActivityItem?.takeIf { liveActivityTurnId != null }
-            val historyIsCurrentTurn = liveActivityTurnId == null || liveActivityTurnId == turnId
+            val completedLiveItemId = liveActivityItem
+                ?.takeIf { liveActivityItemCompleted && liveActivityTurnId == turnId }
+                ?.optString("id")
+                ?.takeIf(String::isNotBlank)
+            val currentActivityItem = latestRunningActivityItem(lastItems, completedLiveItemId)
+            val liveItem = liveActivityItem?.takeIf { !liveActivityItemCompleted && liveActivityTurnId == turnId }
             val activityText = when {
-                liveItem != null && !liveActivityItemCompleted -> runningActivityText(liveItem)
-                historyIsCurrentTurn && currentOperation != null -> runningActivityText(currentOperation)
+                liveItem != null -> runningActivityText(liveItem)
+                currentActivityItem != null -> runningActivityText(currentActivityItem)
                 else -> "正在思考"
             }
             activeActivityText = label(activityText, 12, activityColor).apply {
@@ -3806,16 +3808,19 @@ class MainActivity : Activity() {
         val type = normalizedType(operation.optString("type"))
         val operationName = operationLabel(operation)
         val statusLabel = when (operationName) {
+            "思考" -> "正在思考"
+            "整理计划" -> "正在整理执行计划"
+            "生成回复" -> "正在生成回复"
             "查看文件" -> "正在读取"
             "搜索文件" -> "正在搜索文件"
             "执行命令" -> "正在运行"
             "修改文件" -> "正在修改文件"
-            "搜索资料" -> "正在搜索资料"
+            "搜索资料" -> "正在搜索文件"
             "查看图片" -> "正在查看图片"
             "生成图片" -> "正在生成图片"
-            "读取技能" -> "正在读取技能"
             "运行子任务" -> if (type == "collabagenttoolcall") "正在协调子任务" else "正在运行子任务"
-            "调用工具" -> if (type == "mcptoolcall") "正在调用 MCP 工具" else "正在调用工具"
+            "调用 MCP 工具" -> "正在调用 MCP 工具"
+            "调用工具" -> "正在调用工具"
             else -> "正在处理"
         }
         val detail = when {
@@ -3829,6 +3834,17 @@ class MainActivity : Activity() {
             else -> operationDisplayPath(operation) ?: operationDetail(operation).takeIf(String::isNotBlank)
         }
         return detail?.let { "$statusLabel $it" } ?: statusLabel
+    }
+
+    private fun latestRunningActivityItem(items: JSONArray?, excludedItemId: String? = null): JSONObject? {
+        if (items == null) return null
+        for (index in items.length() - 1 downTo 0) {
+            val item = items.optJSONObject(index) ?: continue
+            if (normalizedType(item.optString("type")) == "usermessage") continue
+            if (!excludedItemId.isNullOrBlank() && item.optString("id") == excludedItemId) continue
+            if (normalizedOperationStatus(item) == "running") return item
+        }
+        return null
     }
 
     private var assistantMarkdownAppearance = ""
@@ -4793,15 +4809,27 @@ class MainActivity : Activity() {
                 else -> "执行命令"
             }
         }
+        if (type in setOf("mcptoolcall", "dynamictoolcall", "collabagenttoolcall")) {
+            val toolType = listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"))
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+            return when {
+                SEARCH_TOOL_PATTERN.containsMatchIn(toolType) -> "搜索文件"
+                FILE_TOOL_PATTERN.containsMatchIn(toolType) -> "查看文件"
+                type == "collabagenttoolcall" -> "运行子任务"
+                type == "mcptoolcall" -> "调用 MCP 工具"
+                else -> "调用工具"
+            }
+        }
         return when (type) {
             "filechange" -> "修改文件"
-            "mcptoolcall", "dynamictoolcall" -> "调用工具"
-            "collabagenttoolcall", "subagentactivity" -> "运行子任务"
+            "subagentactivity" -> "运行子任务"
             "websearch" -> "搜索资料"
             "imageview" -> "查看图片"
             "imagegeneration" -> "生成图片"
             "reasoning" -> "思考"
             "plan" -> "整理计划"
+            "agentmessage" -> "生成回复"
             else -> operation.optString("description").ifBlank { "处理任务" }
         }
     }
@@ -8692,7 +8720,7 @@ class MainActivity : Activity() {
                         if (method == "item/started" || method == "item/completed") {
                             val item = params.optJSONObject("item")
                             val type = normalizedType(item?.optString("type").orEmpty())
-                            if (item != null && type !in setOf("usermessage", "agentmessage", "reasoning", "plan")) {
+                            if (item != null && type != "usermessage") {
                                 val turnId = params.optString("turnId").ifBlank {
                                     activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                                 }
@@ -8701,7 +8729,14 @@ class MainActivity : Activity() {
                                     liveActivityItemCompleted = method == "item/completed"
                                     liveActivityTurnId = turnId
                                     activeActivityText?.let { activityText ->
-                                        activityText.text = if (liveActivityItemCompleted) "正在思考" else operationActivityLabel(item)
+                                        activityText.text = if (liveActivityItemCompleted) {
+                                            val turns = activeThread?.optJSONArray("turns")
+                                            val matchingTurn = turns?.let { allTurns ->
+                                                (0 until allTurns.length()).mapNotNull { allTurns.optJSONObject(it) }
+                                                    .lastOrNull { it.optString("id") == turnId }
+                                            }
+                                            runningActivityText(latestRunningActivityItem(matchingTurn?.optJSONArray("items"), item.optString("id")))
+                                        } else operationActivityLabel(item)
                                         startActivityShimmer(activityText)
                                     }
                                 }
@@ -9615,8 +9650,10 @@ class MainActivity : Activity() {
         private val OPERATION_PATH_KEYS = setOf(
             "path", "filepath", "file_path", "filename", "target_path", "source_path", "imagepath", "image_path",
         )
-        private val SEARCH_COMMAND_PATTERN = Regex("(?:^|\\s)(?:rg|grep|find|fd)(?:\\s|$)", RegexOption.IGNORE_CASE)
-        private val VIEW_COMMAND_PATTERN = Regex("(?:^|\\s)(?:cat|head|tail|sed|less|bat)(?:\\s|$)", RegexOption.IGNORE_CASE)
+        private val SEARCH_COMMAND_PATTERN = Regex("""(?:^|[\s"'|;&])(?:\S*/)?(?:rg|grep|find|fd|ag|ack)(?=$|[\s"';&|])""", RegexOption.IGNORE_CASE)
+        private val VIEW_COMMAND_PATTERN = Regex("""(?:^|[\s"'|;&])(?:\S*/)?(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])""", RegexOption.IGNORE_CASE)
+        private val SEARCH_TOOL_PATTERN = Regex("(?:search|find|grep|query)", RegexOption.IGNORE_CASE)
+        private val FILE_TOOL_PATTERN = Regex("(?:read|file|directory|folder|list)", RegexOption.IGNORE_CASE)
         private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
         private val WHITESPACE_PATTERN = Regex("\\s+")
         private const val MAX_CACHED_THREADS = 32

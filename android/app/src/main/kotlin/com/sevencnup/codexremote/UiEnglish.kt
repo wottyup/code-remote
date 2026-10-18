@@ -171,9 +171,30 @@ internal object UiEnglish {
         "打开文件" to "Open file", "排队图片" to "Queued image",
     )
 
+    private val activityLabels = mapOf(
+        "正在思考" to "Thinking",
+        "正在整理执行计划" to "Preparing an execution plan",
+        "正在生成回复" to "Writing a response",
+        "正在读取" to "Reading",
+        "正在运行" to "Running",
+        "正在搜索文件" to "Searching files",
+        "正在修改文件" to "Editing files",
+        "正在查看图片" to "Viewing image",
+        "正在生成图片" to "Generating image",
+        "正在读取技能" to "Reading skill",
+        "正在运行子任务" to "Running subtask",
+        "正在协调子任务" to "Coordinating subtask",
+        "正在调用 MCP 工具" to "Calling MCP tool",
+        "正在调用工具" to "Calling tool",
+        "正在处理" to "Working",
+    )
+
     fun translate(value: String): String {
         strings[value]?.let { return it }
         extra[value]?.let { return it }
+        activityLabels.entries.firstOrNull { (source, _) -> value == source || value.startsWith("$source ") }?.let { (source, translated) ->
+            return translated + value.removePrefix(source)
+        }
         return when {
             value.startsWith("排队消息 · ") -> value.replaceFirst("排队消息 · ", "Queued messages · ")
             value.startsWith("最近编辑文件 · ") -> value.replaceFirst("最近编辑文件 · ", "Recently edited files · ")
