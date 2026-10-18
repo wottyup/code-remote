@@ -2391,6 +2391,25 @@ class MainActivity : Activity() {
 
     private fun threadTitleKey(threadId: String) = "$activeConnectionId:$threadId"
 
+    private fun knownEmptyThreadsKey() = connectionScopedKey("known_empty_thread_ids")
+
+    private fun isKnownEmptyThread(threadId: String): Boolean =
+        prefs.getStringSet(knownEmptyThreadsKey(), emptySet())?.contains(threadId) == true
+
+    private fun markKnownEmptyThread(threadId: String) {
+        if (threadId.isBlank()) return
+        val key = knownEmptyThreadsKey()
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        ids.add(threadId)
+        prefs.edit().putStringSet(key, ids).apply()
+    }
+
+    private fun clearKnownEmptyThread(threadId: String) {
+        val key = knownEmptyThreadsKey()
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: return
+        if (ids.remove(threadId)) prefs.edit().putStringSet(key, ids).apply()
+    }
+
     private fun threadTitle(thread: JSONObject): String {
         val title = listOf(thread.optString("name"), thread.optString("preview"))
             .firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
@@ -2543,6 +2562,7 @@ class MainActivity : Activity() {
                     selectedSidebarThreadIds.removeAll(removed)
                     pinnedThreadIds.removeAll(removed)
                     removed.forEach { id ->
+                        clearKnownEmptyThread(id)
                         syncRevisions.remove(id)
                         displayedThreadTitles.remove(threadTitleKey(id))
                         pausedThreadKeys.remove(threadTitleKey(id))
@@ -3089,7 +3109,10 @@ class MainActivity : Activity() {
         workspaceLoadedPath = null
         workspaceLoadingPath = null
         val hasCachedHistory = activeThread?.optJSONArray("turns") != null
-        historyLoadingThreadId = if (hasCachedHistory) null else id
+        val hasLoadedTurns = (activeThread?.optJSONArray("turns")?.length() ?: 0) > 0
+        if (hasLoadedTurns) clearKnownEmptyThread(id)
+        val knownEmptyThread = !hasLoadedTurns && isKnownEmptyThread(id)
+        historyLoadingThreadId = if (hasCachedHistory || knownEmptyThread) null else id
         historyLoadError = null
         historySelectionGeneration += 1
         visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
@@ -3105,7 +3128,9 @@ class MainActivity : Activity() {
         restoreCurrentDraftFiles()
         followMessageBottom = true
         renderMessages(true)
-        if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
+        if (!knownEmptyThread) {
+            if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
+        }
         refreshQueue(true)
         socket?.send(JSONObject().put("type", "thread.subscribe").put("thread_id", id).toString())
     }
@@ -3298,6 +3323,7 @@ class MainActivity : Activity() {
 
     private fun refreshActiveThread(showLoading: Boolean, fullHistory: Boolean = false) {
         val threadId = activeThreadId ?: return
+        if (isKnownEmptyThread(threadId) && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) return
         val connection = connectionGeneration
         val profileId = activeConnectionId
         val api = RemoteApi(endpoint, token)
@@ -6067,6 +6093,7 @@ class MainActivity : Activity() {
                         val createdScope = outgoingScope.removeSuffix("_new") + "_${created.optString("id")}"
                         pendingUserMessages.remove(outgoingScope)?.let { pendingUserMessages[createdScope] = it }
                         if (sendConnection == connectionGeneration) {
+                            markKnownEmptyThread(created.optString("id"))
                             threads = JSONArray().put(created).also { old ->
                                 for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
                             }
@@ -6145,7 +6172,9 @@ class MainActivity : Activity() {
                     if (!response.optBoolean("sent", false)) removePendingUserMessage(outgoingScope, payload.optString("id"))
                     else markPendingUserMessageAccepted(outgoingScope, payload.optString("id"))
                     if (sendConnection != connectionGeneration) return@post
-                    if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
+                    if (response.optBoolean("sent", false)) {
+                        deliveredQueueIds += payload.optString("id")
+                    }
                     if (activeThreadId == threadId) {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
@@ -6481,7 +6510,9 @@ class MainActivity : Activity() {
                 handler.post {
                     if (actionConnection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = result.optJSONArray("queue") ?: JSONArray()
-                    if (action == "send-now" && result.optBoolean("sent", false)) pausedThreadKeys.remove(threadTitleKey(threadId))
+                    if (action == "send-now" && result.optBoolean("sent", false)) {
+                        pausedThreadKeys.remove(threadTitleKey(threadId))
+                    }
                     renderQueue()
                     updateSendButton()
                     if (result.optBoolean("sent", false)) refreshActiveThread(false)
@@ -6509,7 +6540,12 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val thread = RemoteApi(endpoint, token).post("/api/v1/codex/threads", body)
-                handler.post { refreshThreads(false); selectThread(thread); setSidebarVisible(false) }
+                handler.post {
+                    markKnownEmptyThread(thread.optString("id"))
+                    refreshThreads(false)
+                    selectThread(thread)
+                    setSidebarVisible(false)
+                }
             } catch (error: Exception) { handler.post { showStatus(error.message ?: "新建对话失败") } }
         }
     }
@@ -6614,6 +6650,7 @@ class MainActivity : Activity() {
                     renderHeader()
                 }
                 syncRevisions.remove(id)
+                clearKnownEmptyThread(id)
                 draftFilesByScope.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 pendingUserMessages.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 displayedThreadTitles.remove(threadTitleKey(id))
@@ -9166,7 +9203,10 @@ class MainActivity : Activity() {
         when (method) {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread != null) handler.post { pausedThreadKeys.remove(threadTitleKey(eventThread)) }
+                if (eventThread != null) handler.post {
+                    pausedThreadKeys.remove(threadTitleKey(eventThread))
+                    clearKnownEmptyThread(eventThread)
+                }
                 if (eventThread == activeThreadId) {
                     running = true
                     clearLiveActivity()
@@ -9181,7 +9221,7 @@ class MainActivity : Activity() {
                 if (eventThread == activeThreadId) {
                     running = false
                     clearLiveActivity()
-                    if (foreground) handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    if (foreground) handler.post { clearKnownEmptyThread(eventThread.orEmpty()); renderHeader(); refreshActiveThread(false); refreshQueue(false) }
                     else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
                     pendingCompletionNoticeThreadId = eventThread
