@@ -6128,6 +6128,57 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
+function safeMessageLinkHref(value: string) {
+  const candidate = /^www\./i.test(value) ? `https://${value}` : value
+  try {
+    const parsed = new URL(candidate)
+    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? parsed.href : null
+  } catch {
+    return null
+  }
+}
+
+function trimMessageLinkPunctuation(value: string) {
+  let result = value.replace(/[.,!?;:，。！？；：、]+$/u, '')
+  for (const [opening, closing] of [['(', ')'], ['[', ']']] as const) {
+    while (result.endsWith(closing)
+      && [...result].filter((character) => character === closing).length > [...result].filter((character) => character === opening).length) {
+      result = result.slice(0, -1)
+    }
+  }
+  return result
+}
+
+function renderMessageInlineLinks(value: string, keyPrefix: string): ReactNode {
+  const linkPattern = /\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:|www\.)[^\s)]+)\)|((?:https?:\/\/|mailto:|www\.)[^\s<]+)/gi
+  const nodes: ReactNode[] = []
+  let cursor = 0
+  let linkIndex = 0
+  let match: RegExpExecArray | null
+  while ((match = linkPattern.exec(value)) !== null) {
+    const markdownLabel = match[1]
+    const isMarkdownLink = markdownLabel !== undefined
+    const rawUrl = isMarkdownLink ? match[2] : match[3]
+    if (!rawUrl) continue
+
+    const visibleUrl = isMarkdownLink ? rawUrl : trimMessageLinkPunctuation(rawUrl)
+    const href = safeMessageLinkHref(visibleUrl)
+    if (!href || !visibleUrl) continue
+
+    const linkStart = match.index
+    const linkEnd = isMarkdownLink ? match.index + match[0].length : match.index + visibleUrl.length
+    if (linkStart > cursor) nodes.push(value.slice(cursor, linkStart))
+    nodes.push(
+      <a key={`${keyPrefix}-link-${linkIndex++}`} href={href} target="_blank" rel="noopener noreferrer">
+        {markdownLabel ?? visibleUrl}
+      </a>,
+    )
+    cursor = linkEnd
+  }
+  if (cursor < value.length) nodes.push(value.slice(cursor))
+  return nodes.length > 0 ? nodes : value
+}
+
 function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
   const lines = value.replace(/\r\n?/g, '\n').split('\n')
   const elements: ReactNode[] = []
@@ -6138,7 +6189,8 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
 
   const flushPlainText = () => {
     if (plainLines.length === 0) return
-    elements.push(<div className="chat-message__text" key={`${keyPrefix}-text-${plainIndex++}`}>{plainLines.join('\n')}</div>)
+    const textKey = `${keyPrefix}-text-${plainIndex++}`
+    elements.push(<div className="chat-message__text" key={textKey}>{renderMessageInlineLinks(plainLines.join('\n'), textKey)}</div>)
     plainLines = []
   }
 
@@ -6155,10 +6207,10 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
       <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
         <table className="chat-message__table">
           <thead>
-            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{cell}</th>)}</tr>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-header-${index}`)}</th>)}</tr>
           </thead>
           <tbody>
-            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{cell}</td>)}</tr>)}
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-row-${rowIndex}-cell-${index}`)}</td>)}</tr>)}
           </tbody>
         </table>
       </div>,

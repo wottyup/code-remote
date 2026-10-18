@@ -535,6 +535,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (prefers-reduced-motion: reduce) { .operation-activity__text { animation: none; background-position: 50% center; } }
 .chat-message__content { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; margin-top: 5px; color: #d5d8de; font: 14.5px/1.72 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(14.5px + var(--mobile-font-offset)); overflow-wrap: break-word; }
 .chat-message__text { white-space: pre-wrap; }
+.chat-message__content a { color: var(--chat-message-link, #67c4cf); overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: .14em; }
+.chat-message__content a:hover { text-decoration-thickness: 2px; }
 .chat-message__table-scroll { --chat-message-table-border: #4a505b; --chat-message-table-header: rgba(255, 255, 255, .07); box-sizing: border-box; width: 100%; max-width: 100%; margin: 8px 0 11px; overflow: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
 .chat-message__table { width: max-content; min-width: 100%; border-collapse: collapse; font: inherit; line-height: inherit; }
 .chat-message__table th, .chat-message__table td { padding: 6px 10px; border: 1px solid var(--chat-message-table-border); overflow-wrap: anywhere; text-align: left; vertical-align: top; white-space: normal; }
@@ -1063,6 +1065,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .file-change-card__diff-line--deleted { color: #8f302d; }
 .remote-shell--theme-light .file-change-card__diff-line--hunk { color: #5c626d; }
 .remote-shell--theme-light .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.remote-shell--theme-light .chat-message__content { --chat-message-link: #005cc5; }
 .remote-shell--theme-light .operation-log { background: transparent; color: #383838; }
 .remote-shell--theme-light .operation-log > summary > svg { color: #777; }
 .remote-shell--theme-light .operation-log > summary > span { color: #303030; }
@@ -1211,6 +1214,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .remote-sidebar__footer { color: #8b7d6d; border-color: #e8ded2; }
 .remote-shell--theme-warm .connection-label { border-color: #e6d7c5; background: #f8efe5; color: #806f5e; }
 .remote-shell--theme-warm .chat-message--assistant .chat-message__body { border: 0; border-radius: 0; background: transparent; box-shadow: none; }
+.remote-shell--theme-warm .chat-message__content { --chat-message-link: #397b7c; }
 .remote-shell--theme-warm .chat-message__content, .remote-shell--theme-warm .chat-message__meta { color: #514335; }
 .remote-shell--theme-warm .chat-message__table-scroll { --chat-message-table-border: #d7c7b4; --chat-message-table-header: #f5ebdf; }
 .remote-shell--theme-warm .chat-message__timing, .remote-shell--theme-warm .chat-message__sent-at { color: #8d7964; }
@@ -1351,6 +1355,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .scroll-to-bottom:hover { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .theme-settings-card { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: none; }
 .remote-shell--theme-custom .chat-message__content, .remote-shell--theme-custom .chat-message__meta, .remote-shell--theme-custom .chat-message--user .chat-message__content { color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .chat-message__content { --chat-message-link: #89b4fa; }
 .remote-shell--theme-custom .chat-message__table-scroll { --chat-message-table-border: var(--custom-theme-border); --chat-message-table-header: var(--custom-theme-control); }
 .remote-shell--theme-custom .chat-message__timing, .remote-shell--theme-custom .chat-message__sent-at { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .running-indicator__elapsed { color: var(--custom-theme-text-color); opacity: .72; }
