@@ -227,6 +227,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .terminal-dialog__screen .xterm { height: 100%; }
 .terminal-dialog__screen .xterm-helper-textarea:focus-visible { outline: 0; }
 .terminal-dialog__screen .xterm-viewport { overscroll-behavior: contain; touch-action: pan-y; -webkit-overflow-scrolling: touch; }
+.terminal-touch-selection-overlay { position: absolute; z-index: 3; inset: 0; pointer-events: none; }
+.terminal-touch-selection-overlay > span { position: absolute; background: rgba(130, 151, 225, .42); }
 .terminal-dialog__paste-hint { position: absolute; z-index: 1; right: 14px; bottom: 14px; max-width: calc(100% - 28px); padding: 8px 11px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 8px; background: rgba(28, 31, 38, .96); color: #e3e6ed; box-shadow: 0 8px 24px rgba(0, 0, 0, .3); font-size: calc(12px + var(--mobile-font-offset)); pointer-events: none; }
 .terminal-dialog > .chat-overlay-panel__footer { display: none; }
 .terminal-dialog__navigation { display: grid; width: min(100%, 420px); gap: 6px; margin: 0 auto; }

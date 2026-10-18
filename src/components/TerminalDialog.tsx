@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Clipboard, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
 import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
-import { restoreTerminalTouchSelection, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
+import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand } from '../lib/terminalPathCommand'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
@@ -281,10 +281,17 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     let fitFrame = 0
     let lastTerminalSelection: TerminalTouchSelection | null = null
     let retainedTouchSelection: TerminalTouchSelection | null = null
+    let retainedTouchLines: { row: number; start: number; end: number; text: string }[] = []
     let touchStart: { x: number; y: number } | null = null
-    let selectionRestoreVersion = 0
-    let selectionRestoreFrame = 0
+    let longPressTimer = 0
+    let longPressSelection: TerminalTouchSelection | null = null
     let ignoreSyntheticMouseUntil = 0
+    let overlayGeometry = ''
+    const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
+    const selectionOverlay = document.createElement('div')
+    selectionOverlay.className = 'terminal-touch-selection-overlay'
+    selectionOverlay.setAttribute('aria-hidden', 'true')
+    xtermScreen?.append(selectionOverlay)
     const pendingInput: string[] = []
     const send = (message: Record<string, unknown>) => {
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message))
@@ -299,21 +306,51 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     const clearSelectionSnapshot = () => {
       retainedTouchSelection = null
+      retainedTouchLines = []
       lastTerminalSelection = null
-      selectionRestoreVersion += 1
-      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
-      selectionRestoreFrame = 0
+      overlayGeometry = ''
+      selectionOverlay.replaceChildren()
     }
-    const restoreSelectionAfterRelease = (selection: TerminalTouchSelection) => {
+    const drawTouchSelection = () => {
+      if (!retainedTouchSelection || !xtermScreen) return
+      if (retainedTouchLines.some(({ row, start, end, text }) => terminal.buffer.active.getLine(row)?.translateToString(false, start, end) !== text)) {
+        clearSelectionSnapshot()
+        return
+      }
+      const bounds = xtermScreen.getBoundingClientRect()
+      const viewport = {
+        cols: terminal.cols,
+        rows: terminal.rows,
+        viewportY: terminal.buffer.active.viewportY,
+        width: bounds.width,
+        height: bounds.height,
+      }
+      const geometry = `${viewport.cols}:${viewport.rows}:${viewport.viewportY}:${viewport.width}:${viewport.height}:${retainedTouchSelection.range.start.x}:${retainedTouchSelection.range.start.y}:${retainedTouchSelection.range.end.x}:${retainedTouchSelection.range.end.y}`
+      if (geometry === overlayGeometry) return
+      overlayGeometry = geometry
+      selectionOverlay.replaceChildren(...terminalTouchSelectionRects(retainedTouchSelection, viewport).map((rectangle) => {
+        const highlight = document.createElement('span')
+        highlight.style.left = `${rectangle.left}px`
+        highlight.style.top = `${rectangle.top}px`
+        highlight.style.width = `${rectangle.width}px`
+        highlight.style.height = `${rectangle.height}px`
+        return highlight
+      }))
+    }
+    const retainTouchSelection = (selection: TerminalTouchSelection) => {
       retainedTouchSelection = selection
-      const restoreVersion = ++selectionRestoreVersion
-      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
-      selectionRestoreFrame = window.requestAnimationFrame(() => {
-        selectionRestoreFrame = 0
-        if (!disposed && restoreVersion === selectionRestoreVersion && terminal.getSelection() !== selection.text) {
-          restoreTerminalTouchSelection(terminal, selection)
-        }
+      lastTerminalSelection = selection
+      retainedTouchLines = [...new Set([selection.range.start.y, selection.range.end.y])].flatMap((row) => {
+        const start = row === selection.range.start.y ? selection.range.start.x : 0
+        const end = row === selection.range.end.y ? selection.range.end.x : terminal.cols
+        if (end <= start) return []
+        const text = terminal.buffer.active.getLine(row)?.translateToString(false, start, end)
+        return text === undefined ? [] : [{ row, start, end, text }]
       })
+      overlayGeometry = ''
+      drawTouchSelection()
+      // The browser may clear xterm's own range on release. The independent overlay now owns the highlight.
+      terminal.clearSelection()
     }
 
     const fitAndResize = () => {
@@ -372,7 +409,10 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
         terminal.focus()
       },
       focus: () => terminal.focus(),
-      paste: (value) => terminal.paste(value),
+      paste: (value) => {
+        clearSelectionSnapshot()
+        terminal.paste(value)
+      },
       selectAll: () => {
         clearSelectionSnapshot()
         terminal.selectAll()
@@ -384,8 +424,8 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       if (event.type !== 'keydown' || (!event.ctrlKey && !event.metaKey) || event.altKey) return true
 
       const key = event.key.toLowerCase()
-      if (key === 'c' && terminal.hasSelection()) {
-        const selection = terminal.getSelection()
+      if (key === 'c' && (retainedTouchSelection || terminal.hasSelection())) {
+        const selection = retainedTouchSelection?.text ?? terminal.getSelection()
         if (!selection) return true
         event.preventDefault()
         event.stopPropagation()
@@ -409,10 +449,11 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       dispatchInput(`\x1b${cursorPrefix}${code}`)
     }
     const selectionSubscription = terminal.onSelectionChange(() => {
-      const selection = cacheTerminalSelection()
-      // Some touch browsers clear xterm's programmatic range after touchend; restore it until the next user gesture.
-      if (!selection && retainedTouchSelection && !touchStart) restoreSelectionAfterRelease(retainedTouchSelection)
+      cacheTerminalSelection()
     })
+    const renderSubscription = terminal.onRender(drawTouchSelection)
+    const scrollSubscription = terminal.onScroll(drawTouchSelection)
+    const resizeSubscription = terminal.onResize(drawTouchSelection)
     const showContextMenu = (clientX: number, clientY: number, selectedText = terminal.getSelection()) => {
       const menuHost = container.parentElement ?? container
       const bounds = menuHost.getBoundingClientRect()
@@ -425,24 +466,42 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     const handleContextMenu = (event: MouseEvent) => {
       event.preventDefault()
-      const selection = cacheTerminalSelection() ?? lastTerminalSelection ?? retainedTouchSelection
+      event.stopPropagation()
+      if (touchStart && !longPressSelection && !retainedTouchSelection && xtermScreen) {
+        if (selectTerminalTextAt(terminal, xtermScreen, touchStart.x, touchStart.y)) {
+          longPressSelection = cacheTerminalSelection(touchStart)
+          if (longPressTimer) window.clearTimeout(longPressTimer)
+          longPressTimer = 0
+        }
+      }
+      const selection = retainedTouchSelection ?? longPressSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
       if (selection) {
-        retainedTouchSelection = null
-        restoreTerminalTouchSelection(terminal, selection)
+        if (touchStart) retainTouchSelection(selection)
+        else if (!retainedTouchSelection) restoreTerminalTouchSelection(terminal, selection)
         showContextMenu(event.clientX, event.clientY, selection.text)
         return
       }
       showContextMenu(event.clientX, event.clientY)
     }
-    container.addEventListener('contextmenu', handleContextMenu)
+    container.addEventListener('contextmenu', handleContextMenu, true)
     const handleMouseDown = (event: MouseEvent) => {
-      // Browsers can synthesize a left-mouse sequence after a touch release.
-      if (event.button === 0 && Date.now() >= ignoreSyntheticMouseUntil) clearSelectionSnapshot()
+      if (event.button !== 0) return
+      if (Date.now() < ignoreSyntheticMouseUntil) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        return
+      }
+      clearSelectionSnapshot()
     }
-    container.addEventListener('mousedown', handleMouseDown)
+    const blockSyntheticMouse = (event: MouseEvent) => {
+      if (event.button !== 0 || Date.now() >= ignoreSyntheticMouseUntil) return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    container.addEventListener('mousedown', handleMouseDown, true)
+    container.addEventListener('mouseup', blockSyntheticMouse, true)
+    container.addEventListener('click', blockSyntheticMouse, true)
 
-    let longPressTimer = 0
-    let longPressSelection: TerminalTouchSelection | null = null
     const clearLongPress = () => {
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
@@ -451,6 +510,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     }
     const handleTouchStart = (event: TouchEvent) => {
       clearSelectionSnapshot()
+      terminal.clearSelection()
       if (event.touches.length !== 1) {
         clearLongPress()
         return
@@ -462,10 +522,8 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       touchStart = point
       longPressTimer = window.setTimeout(() => {
         longPressTimer = 0
-        const xtermScreen = container.querySelector<HTMLElement>('.xterm-screen')
         if (touchStart && xtermScreen && selectTerminalTextAt(terminal, xtermScreen, point.x, point.y)) {
           longPressSelection = cacheTerminalSelection(point)
-          retainedTouchSelection = longPressSelection
         }
       }, 500)
     }
@@ -475,25 +533,27 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       if (!touch || Math.hypot(touch.clientX - touchStart.x, touch.clientY - touchStart.y) > 12) clearLongPress()
     }
     const handleTouchEnd = () => {
-      ignoreSyntheticMouseUntil = Date.now() + 800
       if (longPressTimer) window.clearTimeout(longPressTimer)
       longPressTimer = 0
       touchStart = null
-      const selection = longPressSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
+      const selection = longPressSelection ?? retainedTouchSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
       longPressSelection = null
-      if (selection) restoreSelectionAfterRelease(selection)
+      if (selection) {
+        ignoreSyntheticMouseUntil = Date.now() + 1_000
+        retainTouchSelection(selection)
+      }
     }
     const handleMouseUp = (event: MouseEvent) => {
       if (event.button !== 0) return
-      const selection = cacheTerminalSelection() ?? lastTerminalSelection ?? retainedTouchSelection
-      if (selection) restoreSelectionAfterRelease(selection)
+      cacheTerminalSelection()
     }
     const handleTouchCancel = () => {
-      ignoreSyntheticMouseUntil = Date.now() + 800
-      const selection = longPressSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
+      const selection = longPressSelection ?? retainedTouchSelection ?? cacheTerminalSelection() ?? lastTerminalSelection
       clearLongPress()
-      if (selection) restoreSelectionAfterRelease(selection)
-      else clearSelectionSnapshot()
+      if (selection) {
+        ignoreSyntheticMouseUntil = Date.now() + 1_000
+        retainTouchSelection(selection)
+      } else clearSelectionSnapshot()
     }
     container.addEventListener('touchstart', handleTouchStart, { passive: true })
     container.addEventListener('touchmove', handleTouchMove, { passive: true })
@@ -565,16 +625,17 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       window.removeEventListener('resize', updateFontSize)
       fontPreferenceObserver?.disconnect()
       resizeObserver?.disconnect()
-      container.removeEventListener('contextmenu', handleContextMenu)
-      container.removeEventListener('mousedown', handleMouseDown)
+      container.removeEventListener('contextmenu', handleContextMenu, true)
+      container.removeEventListener('mousedown', handleMouseDown, true)
+      container.removeEventListener('mouseup', blockSyntheticMouse, true)
+      container.removeEventListener('click', blockSyntheticMouse, true)
       container.removeEventListener('touchstart', handleTouchStart)
       container.removeEventListener('touchmove', handleTouchMove)
       container.removeEventListener('touchend', handleTouchEnd)
       container.removeEventListener('touchcancel', handleTouchCancel)
       container.removeEventListener('mouseup', handleMouseUp)
-      retainedTouchSelection = null
-      selectionRestoreVersion += 1
-      if (selectionRestoreFrame) window.cancelAnimationFrame(selectionRestoreFrame)
+      clearSelectionSnapshot()
+      selectionOverlay.remove()
       clearLongPress()
       stopControlRepeat()
       if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
@@ -590,6 +651,9 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       }
       dataSubscription.dispose()
       selectionSubscription.dispose()
+      renderSubscription.dispose()
+      scrollSubscription.dispose()
+      resizeSubscription.dispose()
       send({ type: 'close' })
       socket.close()
       terminal.dispose()
