@@ -711,6 +711,7 @@ class MainActivity : Activity() {
     private var liveActivityItem: JSONObject? = null
     private var liveActivityItemCompleted = false
     private var liveActivityTurnId: String? = null
+    private var liveActivityLabel: String? = null
     private val activityTick = object : Runnable {
         override fun run() {
             if (!running || activeActivityTimer == null) return
@@ -3607,17 +3608,7 @@ class MainActivity : Activity() {
                 ?: System.currentTimeMillis()
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
             val turnId = lastTurn?.optString("id").orEmpty()
-            val completedLiveItemId = liveActivityItem
-                ?.takeIf { liveActivityItemCompleted && liveActivityTurnId == turnId }
-                ?.optString("id")
-                ?.takeIf(String::isNotBlank)
-            val currentActivityItem = latestRunningActivityItem(lastItems, completedLiveItemId)
-            val liveItem = liveActivityItem?.takeIf { !liveActivityItemCompleted && liveActivityTurnId == turnId }
-            val activityText = when {
-                liveItem != null -> runningActivityText(liveItem)
-                currentActivityItem != null -> runningActivityText(currentActivityItem)
-                else -> "正在思考"
-            }
+            val activityText = activityLineText(turnId, lastItems)
             activeActivityText = label(activityText, 12, activityColor).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
@@ -3818,6 +3809,11 @@ class MainActivity : Activity() {
             "搜索资料" -> "正在搜索文件"
             "查看图片" -> "正在查看图片"
             "生成图片" -> "正在生成图片"
+            "读取技能" -> when (type) {
+                "mcptoolcall" -> "正在调用 MCP 工具"
+                "collabagenttoolcall" -> "正在协调子任务"
+                else -> "正在调用工具"
+            }
             "运行子任务" -> if (type == "collabagenttoolcall") "正在协调子任务" else "正在运行子任务"
             "调用 MCP 工具" -> "正在调用 MCP 工具"
             "调用工具" -> "正在调用工具"
@@ -3836,15 +3832,70 @@ class MainActivity : Activity() {
         return detail?.let { "$statusLabel $it" } ?: statusLabel
     }
 
-    private fun latestRunningActivityItem(items: JSONArray?, excludedItemId: String? = null): JSONObject? {
+    private fun latestRunningActivityItem(items: JSONArray?, excludedItemId: String?, operationOnly: Boolean?): JSONObject? {
         if (items == null) return null
         for (index in items.length() - 1 downTo 0) {
             val item = items.optJSONObject(index) ?: continue
             if (normalizedType(item.optString("type")) == "usermessage") continue
             if (!excludedItemId.isNullOrBlank() && item.optString("id") == excludedItemId) continue
+            if (operationOnly != null && isOperationActivityItem(item) != operationOnly) continue
             if (normalizedOperationStatus(item) == "running") return item
         }
         return null
+    }
+
+    private fun isOperationActivityItem(item: JSONObject): Boolean = normalizedType(item.optString("type")) in setOf(
+        "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall",
+        "websearch", "imageview", "imagegeneration", "subagentactivity",
+    )
+
+    private fun activityLabelForItem(item: JSONObject?): String {
+        if (item == null) return "正在思考"
+        return when (normalizedType(item.optString("type"))) {
+            "reasoning" -> "正在思考"
+            "plan" -> "正在整理执行计划"
+            "agentmessage" -> "正在生成回复"
+            "commandexecution" -> "正在执行命令"
+            "filechange" -> "正在修改文件"
+            "mcptoolcall" -> "正在调用 MCP 工具"
+            "dynamictoolcall" -> "正在调用工具"
+            "websearch" -> "正在搜索资料"
+            "imageview" -> "正在查看图片"
+            "imagegeneration" -> "正在生成图片"
+            "collabagenttoolcall" -> "正在协调子任务"
+            "subagentactivity" -> "正在运行子任务"
+            else -> "正在处理"
+        }
+    }
+
+    private fun activityLineText(turnId: String, items: JSONArray?): String {
+        val liveMatchesTurn = liveActivityTurnId == turnId
+        val completedLiveItemId = liveActivityItem
+            ?.takeIf { liveMatchesTurn && liveActivityItemCompleted }
+            ?.optString("id")
+            ?.takeIf(String::isNotBlank)
+        val liveItem = liveActivityItem?.takeIf { liveMatchesTurn && !liveActivityItemCompleted }
+        val activeOperation = liveItem?.takeIf(::isOperationActivityItem)
+            ?: latestRunningActivityItem(items, completedLiveItemId, operationOnly = true)
+        if (activeOperation != null) return runningActivityText(activeOperation)
+        if (liveMatchesTurn && !liveActivityLabel.isNullOrBlank()) return liveActivityLabel.orEmpty()
+        if (liveItem != null) return activityLabelForItem(liveItem)
+        return activityLabelForItem(latestRunningActivityItem(items, null, operationOnly = false))
+    }
+
+    private fun updateActiveActivityText() {
+        val turns = activeThread?.optJSONArray("turns")
+        val turn = turns?.let { allTurns ->
+            if (!liveActivityTurnId.isNullOrBlank()) {
+                (0 until allTurns.length()).mapNotNull { allTurns.optJSONObject(it) }
+                    .lastOrNull { it.optString("id") == liveActivityTurnId }
+            } else allTurns.optJSONObject(allTurns.length() - 1)
+        }
+        val turnId = turn?.optString("id").orEmpty().ifBlank { liveActivityTurnId.orEmpty() }
+        activeActivityText?.let { textView ->
+            textView.text = tr(activityLineText(turnId, turn?.optJSONArray("items")))
+            startActivityShimmer(textView)
+        }
     }
 
     private var assistantMarkdownAppearance = ""
@@ -4609,10 +4660,6 @@ class MainActivity : Activity() {
         }, widthWrap())
     }
 
-    private fun operationActivityLabel(operation: JSONObject): String {
-        return runningActivityText(operation)
-    }
-
     private fun operationDisplayPath(operation: JSONObject): String? {
         val path = operationPaths(operation).firstOrNull() ?: run {
             val command = operation.optString("command")
@@ -4627,6 +4674,7 @@ class MainActivity : Activity() {
         liveActivityItem = null
         liveActivityItemCompleted = false
         liveActivityTurnId = null
+        liveActivityLabel = null
     }
 
     private fun inlineFileChangeView(entry: FileChangeEntry, compact: Boolean = false): LinearLayout {
@@ -4815,7 +4863,8 @@ class MainActivity : Activity() {
                 .joinToString(" ")
             return when {
                 SEARCH_TOOL_PATTERN.containsMatchIn(toolType) -> "搜索文件"
-                FILE_TOOL_PATTERN.containsMatchIn(toolType) -> "查看文件"
+                FILE_TOOL_PATTERN.containsMatchIn(toolType) && !SKILL_TOOL_PATTERN.containsMatchIn(toolType) -> "查看文件"
+                SKILL_TOOL_PATTERN.containsMatchIn(toolType) -> "读取技能"
                 type == "collabagenttoolcall" -> "运行子任务"
                 type == "mcptoolcall" -> "调用 MCP 工具"
                 else -> "调用工具"
@@ -8708,7 +8757,44 @@ class MainActivity : Activity() {
             "item/agentMessage/delta" -> {
                 val eventThread = eventThreadId(params)
                 if (eventThread == activeThreadId) {
-                    if (foreground) handler.post { scheduleActiveThreadRefresh() }
+                    if (foreground) handler.post {
+                        if (eventThread != activeThreadId) return@post
+                        val turnId = params.optString("turnId").ifBlank {
+                            activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                        }
+                        if (turnId.isNotBlank()) {
+                            val itemId = params.optString("itemId").ifBlank { "agent-message-live" }
+                            liveActivityItem = JSONObject().put("id", itemId).put("type", "agentMessage").put("status", "inProgress")
+                            liveActivityItemCompleted = false
+                            liveActivityTurnId = turnId
+                            liveActivityLabel = "正在回复"
+                            updateActiveActivityText()
+                        }
+                        scheduleActiveThreadRefresh()
+                    }
+                    else backgroundThreadDirty = true
+                }
+            }
+            "turn/plan/updated", "reasoning/summaryTextDelta" -> {
+                val eventThread = eventThreadId(params)
+                if (eventThread == activeThreadId) {
+                    if (foreground) handler.post {
+                        if (eventThread != activeThreadId) return@post
+                        val turnId = params.optString("turnId").ifBlank {
+                            liveActivityTurnId.orEmpty().ifBlank {
+                                activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                            }
+                        }
+                        if (turnId.isNotBlank()) {
+                            if (!liveActivityTurnId.isNullOrBlank() && liveActivityTurnId != turnId) {
+                                liveActivityItem = null
+                                liveActivityItemCompleted = false
+                            }
+                            liveActivityTurnId = turnId
+                            liveActivityLabel = if (method == "turn/plan/updated") "正在整理执行计划" else "正在思考"
+                            updateActiveActivityText()
+                        }
+                    }
                     else backgroundThreadDirty = true
                 }
             }
@@ -8725,21 +8811,35 @@ class MainActivity : Activity() {
                                     activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                                 }
                                 if (turnId.isNotBlank()) {
-                                    liveActivityItem = item
-                                    liveActivityItemCompleted = method == "item/completed"
-                                    liveActivityTurnId = turnId
-                                    activeActivityText?.let { activityText ->
-                                        activityText.text = if (liveActivityItemCompleted) {
-                                            val turns = activeThread?.optJSONArray("turns")
-                                            val matchingTurn = turns?.let { allTurns ->
-                                                (0 until allTurns.length()).mapNotNull { allTurns.optJSONObject(it) }
-                                                    .lastOrNull { it.optString("id") == turnId }
-                                            }
-                                            runningActivityText(latestRunningActivityItem(matchingTurn?.optJSONArray("items"), item.optString("id")))
-                                        } else operationActivityLabel(item)
-                                        startActivityShimmer(activityText)
+                                    if (method == "item/started") {
+                                        liveActivityItem = item
+                                        liveActivityItemCompleted = false
+                                        liveActivityTurnId = turnId
+                                        liveActivityLabel = activityLabelForItem(item)
+                                        updateActiveActivityText()
+                                    } else if (liveActivityTurnId == turnId && liveActivityItem?.optString("id") == item.optString("id")) {
+                                        liveActivityItem = item
+                                        liveActivityItemCompleted = true
+                                        if (type != "agentmessage") liveActivityLabel = "正在思考"
+                                        updateActiveActivityText()
                                     }
                                 }
+                            }
+                        } else if (method == "item/fileChange/patchUpdated") {
+                            val turnId = params.optString("turnId").ifBlank {
+                                activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                            }
+                            if (turnId.isNotBlank()) {
+                                val itemId = params.optString("itemId").ifBlank { "file-change-live" }
+                                liveActivityItem = JSONObject()
+                                    .put("id", itemId)
+                                    .put("type", "fileChange")
+                                    .put("status", "inProgress")
+                                    .put("changes", params.optJSONArray("changes") ?: JSONArray())
+                                liveActivityItemCompleted = false
+                                liveActivityTurnId = turnId
+                                liveActivityLabel = "正在修改文件"
+                                updateActiveActivityText()
                             }
                         }
                         scheduleActiveThreadRefresh()
@@ -9654,6 +9754,7 @@ class MainActivity : Activity() {
         private val VIEW_COMMAND_PATTERN = Regex("""(?:^|[\s"'|;&])(?:\S*/)?(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])""", RegexOption.IGNORE_CASE)
         private val SEARCH_TOOL_PATTERN = Regex("(?:search|find|grep|query)", RegexOption.IGNORE_CASE)
         private val FILE_TOOL_PATTERN = Regex("(?:read|file|directory|folder|list)", RegexOption.IGNORE_CASE)
+        private val SKILL_TOOL_PATTERN = Regex("skill", RegexOption.IGNORE_CASE)
         private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
         private val WHITESPACE_PATTERN = Regex("\\s+")
         private const val MAX_CACHED_THREADS = 32
