@@ -498,6 +498,10 @@ class MainActivity : Activity() {
         R.drawable.pixel_send, R.drawable.pixel_settings, R.drawable.pixel_terminal,
         R.drawable.pixel_theme,
     )
+    private val pixelTypeface: Typeface by lazy(LazyThreadSafetyMode.NONE) {
+        runCatching { Typeface.createFromAsset(assets, "fonts/FusionPixel12pxProportionalZhHans.ttf") }
+            .getOrElse { Typeface.create("monospace", Typeface.NORMAL) }
+    }
     private val pixelTheme get() = themeName == "pixel"
     private val retroTheme get() = themeName == "lollipop" || pixelTheme
     private val LOLLIPOP_PRIMARY: Int get() = if (pixelTheme) PIXEL_BLUE else Color.rgb(160, 171, 174)
@@ -9553,6 +9557,7 @@ class MainActivity : Activity() {
         setText(value)
         inputType = inputTypeValue
         typeface = themedTypeface()
+        if (pixelTheme) paintFlags = paintFlags and Paint.ANTI_ALIAS_FLAG.inv()
         setTextColor(TEXT)
         setHintTextColor(MUTED)
         textSize = adjustedTextSize(14)
@@ -9571,11 +9576,12 @@ class MainActivity : Activity() {
         setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
         if (retroTheme) typeface = themedTypeface(bold) else if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (pixelTheme) paintFlags = paintFlags and Paint.ANTI_ALIAS_FLAG.inv()
         gravity = Gravity.CENTER_VERTICAL
     }
 
     private fun themedTypeface(bold: Boolean = false): Typeface = when {
-        pixelTheme -> Typeface.create("monospace", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        pixelTheme -> Typeface.create(pixelTypeface, if (bold) Typeface.BOLD else Typeface.NORMAL)
         !retroTheme -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
         bold -> android1BoldTypeface
         else -> android1Typeface
