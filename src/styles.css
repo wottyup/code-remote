@@ -130,6 +130,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row__copy small { flex: 0 0 auto; color: #777e88; font-size: calc(11px + var(--mobile-font-offset)); }
 .thread-row__pin { flex: 0 0 auto; color: #d8b66f; }
 .thread-row__engine { color: #aabaff !important; }
+.thread-row__engine--codex { color: #7188c2 !important; }
 .thread-row__completion-dot { display: inline-block; width: 7px; height: 7px; flex: 0 0 auto; border: 1px solid rgba(207, 255, 221, .72); border-radius: 50%; background: #65c889; box-shadow: 0 0 0 3px rgba(101, 200, 137, .13), 0 0 9px rgba(101, 200, 137, .5); }
 .remote-shell--claude-mode .remote-sidebar { --sidebar-selection-border: #d89780; --sidebar-selection-bg: rgba(238, 140, 109, .16); }
 .remote-shell--claude-mode .thread-row__checkbox--checked { border-color: #ee8c6d; background: #af624b; }

@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.38.0-dev.1] - 支持 Codex 与 Claude Code 混合并发聊天
+
 ## [0.37.0-dev.5] - 调整 Claude 输入框默认高度与 Codex 图标颜色
 
 ## [0.37.0-dev.4] - 调整网页刷新入口与旧经典文件菜单布局

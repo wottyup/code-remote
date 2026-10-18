@@ -5174,13 +5174,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     return byModel
   }, [availableModels])
-  const sidebarThreads = useMemo(() => remote0.threads
-    .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
+  const sidebarThreads = useMemo(() => [...remote0.threads]
     .sort((left, right) => {
       const leftPinned = pinnedThreadIds.has(left.id)
       const rightPinned = pinnedThreadIds.has(right.id)
       return Number(rightPinned) - Number(leftPinned)
-    }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
+    }), [pinnedThreadIds, remote0.threads])
   const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
   const visibleSidebarThreads = useMemo(() => normalizedSidebarSearch
     ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
@@ -5337,13 +5336,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   else void selectThread(thread)
                 }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
                   <span className="thread-row__icon">{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />}</span>
-                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta"><small className={`thread-row__engine${thread.engine === 'claude-code' ? '' : ' thread-row__engine--codex'}`}>{thread.engine === 'claude-code' ? 'Claude' : 'Codex'}</small>{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                   {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
                 </button>
               )
             })}
           </Fragment>)}
-          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
+          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
           {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
