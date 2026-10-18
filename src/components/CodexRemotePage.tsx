@@ -5291,7 +5291,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       onTouchCancelCapture={handleSidebarTouchCancel}
     >
       {completionToast ? (
-        <div className="thread-completion-toast" role="status" aria-live="polite">
+        <div className={`thread-completion-toast thread-completion-toast--${completionToast.engine}`} role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
             <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
             <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} · 点击查看这条对话</small></span>

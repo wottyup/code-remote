@@ -2723,6 +2723,25 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .thread-completion-toast__copy small,
 .remote-shell--theme-retro .thread-completion-toast__close { color: #496b4e; }
 
+/* Completion notices can come from either engine, regardless of the visible pane. */
+.remote-shell .thread-completion-toast--codex { border-color: rgba(113, 136, 194, .58); }
+.remote-shell .thread-completion-toast--codex .thread-completion-toast__icon {
+  border-color: rgba(113, 136, 194, .58);
+  background: rgba(113, 136, 194, .2);
+  color: #7188c2;
+}
+.remote-shell .thread-completion-toast--codex .thread-completion-toast__open:hover,
+.remote-shell .thread-completion-toast--codex .thread-completion-toast__close:hover { background: rgba(113, 136, 194, .12); }
+.remote-shell .thread-completion-toast--claude-code { border-color: rgba(238, 140, 109, .62); }
+.remote-shell .thread-completion-toast--claude-code .thread-completion-toast__icon {
+  border-color: rgba(238, 140, 109, .58);
+  background: rgba(238, 140, 109, .2);
+  color: #ee8c6d;
+}
+.remote-shell .thread-completion-toast--claude-code .thread-completion-toast__icon .engine-brand-icon--claude-code { background-color: currentColor; }
+.remote-shell .thread-completion-toast--claude-code .thread-completion-toast__open:hover,
+.remote-shell .thread-completion-toast--claude-code .thread-completion-toast__close:hover { background: rgba(238, 140, 109, .12); }
+
 @media (max-width: 700px) {
   .remote-shell--theme-retro .thread-completion-toast {
     top: max(120px, calc(env(safe-area-inset-top) + 108px), calc(var(--native-status-bar-inset) + 108px));
