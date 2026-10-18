@@ -648,6 +648,10 @@ export const codexRemoteClient = {
     if (cwd) query.set('cwd', cwd)
     return request<CodexWorkspaceImage>(token, `/api/v1/codex/workspace/image?${query.toString()}`)
   },
+  codexViewedImage(token: string, threadId: string, path: string) {
+    const query = new URLSearchParams({ path })
+    return request<CodexWorkspaceImage>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/viewed-image?${query.toString()}`)
+  },
   saveWorkspaceFile(token: string, cwd: string | undefined, path: string, content: string, revision: string) {
     return request<CodexWorkspaceFile>(token, '/api/v1/codex/workspace/file', {
       method: 'POST',

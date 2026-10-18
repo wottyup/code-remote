@@ -2142,6 +2142,7 @@ interface WorkspacePreviewRequest {
   path: string
   diff?: string
   kind?: 'text' | 'image'
+  viewedByCodexThreadId?: string
 }
 
 interface WorkspaceSelectionContextMenu {
@@ -2285,6 +2286,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
+  const [previewViewedByCodexThreadId, setPreviewViewedByCodexThreadId] = useState<string | null>(null)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
   const [previewKind, setPreviewKind] = useState<'text' | 'image'>('text')
   const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
@@ -2330,6 +2332,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
     setPreviewDiff(null)
     setPreviewKind('text')
     setMobilePreviewDialog(false)
@@ -2394,7 +2397,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     }
   }, [browsingRoot, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text') => {
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string) => {
     if (previewSaving) return
     if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
     if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
@@ -2410,6 +2413,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
     setPreviewCwd(requestedCwd)
+    setPreviewViewedByCodexThreadId(viewedByCodexThreadId ?? null)
     setPreviewDiff(kind === 'text' ? diff ?? null : null)
     setPreviewKind(kind)
     setMobilePreviewDialog(mobileDialog)
@@ -2421,7 +2425,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     setPreviewLoading(true)
     try {
       if (kind === 'image') {
-        const image = await codexRemoteClient.workspaceImage(token, requestedCwd, path)
+        const image = viewedByCodexThreadId
+          ? await codexRemoteClient.codexViewedImage(token, viewedByCodexThreadId, path)
+          : await codexRemoteClient.workspaceImage(token, requestedCwd, path)
         if (generation !== previewRequestGeneration.current) return
         setPreviewImage(image)
       } else {
@@ -2557,6 +2563,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     if (previewDirty) return
     setPreviewPath(null)
     setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
     setPreviewDiff(null)
     setPreviewKind('text')
     setMobilePreviewDialog(false)
@@ -2588,7 +2595,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
     if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
     handledPreviewRequest.current = previewRequest.id
-    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind)
+    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind, previewRequest.viewedByCodexThreadId)
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
@@ -3159,7 +3166,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
                   </>
                 ) : null}
                 {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button> : null}
-                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind, previewViewedByCodexThreadId ?? undefined)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
               </div>
             </div>
             {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? '读取图片…' : '读取文件内容…'}</div> : null}
@@ -3331,7 +3338,7 @@ interface RemoteChatPaneProps {
   onRefreshThreads: () => void
   refreshThreadsDisabled: boolean
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
-  onOpenWorkspaceImage: (path: string, cwd?: string) => void
+  onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => void
   directoryRequest: WorkspaceTerminalRequest | null
   onDirectoryRequestHandled: (id: number) => void
   composerHandle: RefObject<ComposerHandle | null>
@@ -3411,8 +3418,8 @@ function RemoteChatPane({
   const openViewedImagePreview = useCallback((path: string) => {
     const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
     onActivate()
-    onOpenWorkspaceImage(workspaceRelativePath(cwd, path), cwd)
-  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.runtime.workspace])
+    onOpenWorkspaceImage(path, cwd, remote.activeThread?.id)
+  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.activeThread?.id, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
@@ -5367,10 +5374,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                       workspacePreviewSequence.current += 1
                       setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
                     }}
-                    onOpenWorkspaceImage={(path, cwd) => {
+                    onOpenWorkspaceImage={(path, cwd, viewedByCodexThreadId) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
-                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image' })
+                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image', viewedByCodexThreadId })
                     }}
                     directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
                     onDirectoryRequestHandled={(id) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current)}

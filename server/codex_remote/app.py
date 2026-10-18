@@ -850,6 +850,64 @@ def workspace_image_preview(base: Path, relative_path: str, managed_image_root: 
         if any(part in {"", ".", ".."} for part in normalized_parts):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效")
         candidate = workspace_path(base, relative_path)
+    return _image_preview_payload(base, candidate, managed_image_root)
+
+
+IMAGE_VIEW_PATH_KEYS = {
+    "path", "filepath", "file_path", "filename", "target_path", "source_path",
+    "imagepath", "image_path", "imagefile", "image_file",
+}
+
+
+def codex_image_view_paths(thread: dict[str, Any]) -> set[str]:
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return set()
+    paths: set[str] = set()
+    for turn in turns:
+        items = turn.get("items") if isinstance(turn, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type", "")).replace("-", "").replace("_", "").lower()
+            if item_type != "imageview":
+                continue
+            stack: list[tuple[dict[str, Any], int]] = [(item, 0)]
+            while stack:
+                value, depth = stack.pop()
+                if depth > 4:
+                    continue
+                for key, entry in value.items():
+                    if key.lower() in IMAGE_VIEW_PATH_KEYS and isinstance(entry, str) and entry.strip():
+                        paths.add(entry.strip())
+                    elif isinstance(entry, dict):
+                        stack.append((entry, depth + 1))
+                    elif isinstance(entry, list):
+                        stack.extend((child, depth + 1) for child in entry if isinstance(child, dict))
+    return paths
+
+
+def codex_viewed_image_preview(
+    base: Path,
+    path: str,
+    thread: dict[str, Any],
+    managed_image_root: Path | None = None,
+) -> dict[str, str | int]:
+    if not path or len(path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效或过长")
+    if path.strip() not in codex_image_view_paths(thread):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="这张图片不在此 Codex 会话的查看记录中")
+    try:
+        is_absolute = path.startswith(("/", "\\")) or (len(path) > 1 and path[1] == ":")
+        candidate = Path(path).expanduser().resolve() if is_absolute else (base / path).resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效") from error
+    return _image_preview_payload(base, candidate, managed_image_root)
+
+
+def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path | None) -> dict[str, str | int]:
     media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
     if media_type is None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
@@ -1646,6 +1704,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_image_preview(base, path, image_directory)
+
+    @app.get("/api/v1/codex/threads/{thread_id}/viewed-image")
+    async def codex_viewed_image(thread_id: str, path: str = "") -> dict[str, str | int]:
+        if is_claude_thread_id(thread_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到 Codex 会话")
+        try:
+            thread = await app_server.read_thread(thread_id)
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        is_absolute = path.startswith(("/", "\\")) or (len(path) > 1 and path[1] == ":")
+        if is_absolute:
+            base = app_server.workspace
+        else:
+            cwd = shared_state.thread_workspace(thread_id) or thread.get("cwd")
+            base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return codex_viewed_image_preview(base, path, thread, image_directory)
 
     @app.post("/api/v1/codex/workspace/file")
     async def save_workspace_file(request: WorkspaceFileSaveRequest) -> dict[str, str | int | bool]:
