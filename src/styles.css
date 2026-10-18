@@ -3024,6 +3024,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-pixel .attach-button,
 .remote-shell--theme-pixel .composer-menu__trigger { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-text); }
 .remote-shell--theme-pixel .composer-menu__trigger:hover { border-image-source: url('/pixel-theme/frames/square-window.png'); background: #253750; }
+.remote-shell--theme-pixel.remote-shell .message-composer__footer :is(.composer-menu__trigger, .send-button, .stop-button, .attach-button):hover:not(:disabled),
+.remote-shell--theme-pixel.remote-shell .message-composer__footer .composer-menu--open .composer-menu__trigger { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; }
 .remote-shell--theme-pixel .composer-hint,
 .remote-shell--theme-pixel .composer-file-change-summary { color: var(--pixel-secondary); }
 .remote-shell--theme-pixel .composer-queue { border: 8px solid transparent; border-image: url('/pixel-theme/frames/wide-window.png') 52 54 52 54 / 8px / 0 stretch; background: var(--pixel-panel); }
