@@ -3459,6 +3459,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .ai-group-chat__settings-field select { width: 100%; min-width: 0; min-height: 33px; padding: 4px 7px; border: 1px solid var(--line); border-radius: 7px; outline: 0; background: var(--panel-raised); color: inherit; font: inherit; font-size: calc(12px + var(--mobile-font-offset)); }
 .ai-group-chat__settings-field select:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent); }
 .ai-group-chat__settings-field select:disabled { cursor: not-allowed; opacity: .55; }
+.ai-group-chat__settings-hint { margin: 0; color: var(--muted); font-size: calc(10px + var(--mobile-font-offset)); line-height: 1.45; }
 .ai-group-chat__settings-trigger { display: inline-flex; min-width: 30px; height: 29px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 5px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); }
 .ai-group-chat__settings-trigger:hover, .ai-group-chat__settings-trigger[aria-expanded='true'] { background: var(--panel-raised); color: inherit; }
 .ai-group-chat__settings-trigger:disabled { cursor: not-allowed; opacity: .5; }

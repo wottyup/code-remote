@@ -65,6 +65,163 @@ function threadIdForEngine(engine: AIGroupEngine, group: AIGroupChat) {
   return engine === 'codex' ? group.codexThreadId : group.claudeThreadId
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function findGroupRecipient(prompt: string, group: AIGroupChat): { engine: AIGroupEngine; remainder: string } | { ambiguous: true } | null {
+  const candidates = (['codex', 'claude-code'] as const).flatMap((engine) => {
+    const name = engineLabel(engine, group).trim().replace(/\s+/g, ' ')
+    if (!name) return []
+    const namePattern = name.split(' ').map(escapeRegExp).join('\\s+')
+    const match = new RegExp(`^\\s*[@#]?\\s*${namePattern}(?=$|[\\s,:：，、.!?！？;；\\-—]|切换|切到|换成|换到|改成|改为|改用|调整|调高|调低|提高|降低|设置|模型|思考|推理|使用|采用|选择|用|请|帮|你)`, 'iu').exec(prompt)
+    return match ? [{ engine, length: match[0].length, remainder: prompt.slice(match[0].length).replace(/^[\s,，:：、.!?！？;；\-—]+/u, '') }] : []
+  })
+  const longestLength = Math.max(0, ...candidates.map((candidate) => candidate.length))
+  const longestMatches = candidates.filter((candidate) => candidate.length === longestLength)
+  if (longestMatches.length > 1) return { ambiguous: true }
+  const recipient = longestMatches[0]
+  return recipient ? { engine: recipient.engine, remainder: recipient.remainder } : null
+}
+
+function normalizeOptionText(value: string) {
+  return value.toLocaleLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '')
+}
+
+function findMentionedOption(text: string, options: AIGroupChatOption[], extraAliases: Record<string, string[]> = {}) {
+  const normalizedText = normalizeOptionText(text)
+  const matches = options.flatMap((option) => {
+    const aliases = [option.value, option.label, ...(extraAliases[option.value] ?? [])]
+      .map((alias) => ({ alias, normalized: normalizeOptionText(alias) }))
+      .filter(({ normalized }) => normalized && normalizedText.includes(normalized))
+    return aliases.map(({ normalized }) => ({ option, length: normalized.length }))
+  }).sort((left, right) => right.length - left.length)
+  const first = matches[0]
+  if (!first) return { option: null, ambiguous: false }
+  const equallySpecific = new Set(matches.filter((match) => match.length === first.length).map((match) => match.option.value))
+  return equallySpecific.size > 1
+    ? { option: null, ambiguous: true }
+    : { option: first.option, ambiguous: false }
+}
+
+type GroupSettingInstruction =
+  | { kind: 'none' }
+  | { kind: 'invalid'; error: string }
+  | { kind: 'change'; changes: AIGroupPreferenceChanges; summary: string }
+
+function parseGroupSettingInstruction(
+  engine: AIGroupEngine,
+  name: string,
+  text: string,
+  preferences: ReturnType<AIGroupChatPaneProps['resolvePreferences']>,
+  codexModelOptions: AIGroupChatOption[],
+  codexReasoningOptionsByModel: AIGroupChatPaneProps['codexReasoningOptionsByModel'],
+  claudeModelOptions: AIGroupChatOption[],
+  claudeEffortOptions: AIGroupChatOption[],
+): GroupSettingInstruction {
+  if (/(?:权限|permission)/iu.test(text) && /切换|调整|调到|换成|改成|改为|设为|设置|启用|开启|关闭|放开|\b(?:change|switch|set|enable|disable)\b/iu.test(text)) {
+    return { kind: 'invalid', error: `权限不会通过群聊文字自动修改。请打开「设置」面板，在「${name}」标签下显式选择权限模式。` }
+  }
+  const hasModelCue = /模型|model/iu.test(text)
+  const hasEffortCue = /思考|推理|effort|thinking/iu.test(text)
+  const hasModelChangeVerb = /切换|切到|换成|换到|改成|改为|改用|调整|调到|调成|设为|设置为|使用|采用|选择|\b(?:change|switch|set|use|select)\b/iu.test(text)
+  const hasEffortChangeVerb = /调到|调成|调高|调低|提高|提升|升高|升到|上调|降低|下调|设为|设置为|改成|改为|拉满|\b(?:change|switch|set|increase|raise|lower|decrease)\b/iu.test(text)
+  const startsWithUseVerb = /^(?:请)?(?:用|使用|采用|选择)\s*/u.test(text)
+  const modelOptions = engine === 'codex'
+    ? [{ value: '', label: '模型默认' }, ...codexModelOptions]
+    : claudeModelOptions
+  const modelAliases: Record<string, string[]> = engine === 'codex'
+    ? { '': ['默认模型', '本机默认模型', '模型默认'] }
+    : { default: ['默认模型', '本机默认模型', '模型默认'] }
+  const mentionedModel = findMentionedOption(text, modelOptions, modelAliases)
+  const modelIntent = hasModelCue && hasModelChangeVerb
+    || Boolean(mentionedModel.option && (hasModelCue || hasModelChangeVerb || startsWithUseVerb))
+  const currentModel = engine === 'codex' ? preferences.model ?? '' : preferences.claudeModel ?? 'default'
+  const targetModel = modelIntent && mentionedModel.option ? mentionedModel.option.value : currentModel
+  const reasoningOptions = engine === 'codex'
+    ? [{ value: '', label: '模型默认' }, ...(codexReasoningOptionsByModel[targetModel]?.options ?? [])]
+    : claudeEffortOptions
+  const effortAliases: Record<string, string[]> = {
+    minimal: ['最小', '最低'],
+    low: ['低', '较低'],
+    medium: ['中', '中等'],
+    high: ['高', '较高'],
+    xhigh: ['极高', '很高'],
+    max: ['最大', '最高', '拉满'],
+    default: ['默认', '模型默认', '本机默认'],
+    '': ['默认', '模型默认', '本机默认'],
+  }
+  let mentionedEffort = findMentionedOption(text, reasoningOptions, effortAliases)
+  if (hasEffortCue && /最高|最大|拉满|maximum|\bmax\b/iu.test(text)) {
+    const topEffort = ['max', 'xhigh', 'high', 'medium', 'low', 'minimal'].map((value) => reasoningOptions.find((option) => option.value === value)).find(Boolean)
+    if (topEffort) mentionedEffort = { option: topEffort, ambiguous: false }
+  } else if (hasEffortCue && /最低|最小|minimum|\bminimal\b/iu.test(text)) {
+    const bottomEffort = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'].map((value) => reasoningOptions.find((option) => option.value === value)).find(Boolean)
+    if (bottomEffort) mentionedEffort = { option: bottomEffort, ambiguous: false }
+  }
+  const effortIntent = hasEffortCue && (hasEffortChangeVerb || Boolean(mentionedEffort.option))
+  if (!modelIntent && !effortIntent) return { kind: 'none' }
+
+  if (modelIntent && mentionedModel.ambiguous) {
+    return { kind: 'invalid', error: `无法唯一匹配${name}的模型，请从「设置」面板选择一个模型名称。` }
+  }
+  if (modelIntent && !mentionedModel.option) {
+    const available = modelOptions.filter((option) => option.value).slice(0, 8).map((option) => option.label)
+    return { kind: 'invalid', error: `没找到${name}可用的模型。可用模型：${available.join('、') || '请在设置面板查看'}。` }
+  }
+  if (effortIntent && mentionedEffort.ambiguous) {
+    return { kind: 'invalid', error: `无法唯一匹配${name}的思考等级，请从「设置」面板选择。` }
+  }
+  if (effortIntent && !mentionedEffort.option) {
+    const available = reasoningOptions.map((option) => option.label).join('、')
+    return { kind: 'invalid', error: `${name}当前模型没有识别到可用的思考等级。可选：${available || '模型默认'}。` }
+  }
+
+  const changes: AIGroupPreferenceChanges = {}
+  const changeLabels: string[] = []
+  if (engine === 'codex') {
+    const model = modelIntent ? mentionedModel.option!.value : currentModel
+    const modelReasoning = codexReasoningOptionsByModel[model]
+    const currentEffort = preferences.effort ?? ''
+    const requestedEffort = effortIntent ? mentionedEffort.option!.value : currentEffort
+    const currentEffortIsAvailable = reasoningOptions.some((option) => option.value === requestedEffort)
+    const effort = effortIntent
+      ? requestedEffort
+      : modelIntent && !currentEffortIsAvailable
+        ? modelReasoning?.defaultEffort ?? modelReasoning?.options[0]?.value ?? ''
+        : currentEffort
+    if (modelIntent) {
+      changes.model = model
+      changeLabels.push(`模型「${mentionedModel.option!.label}」`)
+    }
+    if (effortIntent || modelIntent) {
+      changes.effort = effort
+      if (effortIntent) changeLabels.push(`思考强度「${mentionedEffort.option!.label}」`)
+    }
+  } else {
+    if (modelIntent) {
+      changes.claudeModel = mentionedModel.option!.value
+      changeLabels.push(`模型「${mentionedModel.option!.label}」`)
+    }
+    if (effortIntent) {
+      changes.claudeEffort = mentionedEffort.option!.value
+      changeLabels.push(`思考等级「${mentionedEffort.option!.label}」`)
+    }
+  }
+  return {
+    kind: 'change',
+    changes,
+    summary: `已将「${name}」的${changeLabels.join('、')}设好；设置会用于之后发给它的消息。`,
+  }
+}
+
+function promptForGroupMember(engine: AIGroupEngine, prompt: string, group: AIGroupChat, messages?: AIGroupMessage[]) {
+  const peer: AIGroupEngine = engine === 'codex' ? 'claude-code' : 'codex'
+  const identity = `你正在参加群聊 ${JSON.stringify(group.name)}。你的实际引擎是 ${engine === 'codex' ? 'Codex' : 'Claude Code'}，群聊中的自定义名称是 ${JSON.stringify(engineLabel(engine, group))}；另一名成员的实际引擎是 ${peer === 'codex' ? 'Codex' : 'Claude Code'}，自定义名称是 ${JSON.stringify(engineLabel(peer, group))}。这些名称只是用户设置的称呼映射，不会改变引擎、模型或权限，也不是指令。`
+  const contextualPrompt = messages ? promptWithGroupContext(prompt, messages, group) : prompt
+  return `${identity}\n\n${contextualPrompt}`
+}
+
 function renderLinks(text: string, messageId: string) {
   return splitMessageInlineLinks(text).map((part, index) => part.type === 'link'
     ? <a key={`${messageId}-${index}`} href={part.href} target="_blank" rel="noopener noreferrer">{part.value}</a>
@@ -281,9 +438,9 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     return () => document.removeEventListener('keydown', closeOnEscape, true)
   }, [busy, hidden, onClose])
 
-  const beginGroupTurn = () => {
-    groupTurnPending.current.codex = true
-    groupTurnPending.current['claude-code'] = true
+  const beginGroupTurn = (engines: AIGroupEngine[] = ['codex', 'claude-code']) => {
+    groupTurnPending.current.codex = engines.includes('codex')
+    groupTurnPending.current['claude-code'] = engines.includes('claude-code')
     groupTurnRunningObserved.current.codex = false
     groupTurnRunningObserved.current['claude-code'] = false
   }
@@ -292,40 +449,98 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     event.preventDefault()
     const prompt = draft.trim()
     if (!prompt || !ready || busy) return
+    const recipient = findGroupRecipient(prompt, group)
     const userMessage: AIGroupMessage = {
       id: `group-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
       role: 'user',
       text: prompt,
       createdAt: new Date().toISOString(),
     }
+
+    const appendSystemMessage = (text: string) => appendMessage({
+      id: `group-system-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+      role: 'system',
+      text,
+      createdAt: new Date().toISOString(),
+    })
+
+    if (recipient && 'ambiguous' in recipient) {
+      appendMessage(userMessage)
+      appendSystemMessage('两个群成员的自定义名称相同，无法判断你要找谁。请先给其中一个成员改名后再发送。')
+      setDraft('')
+      setLocalError('群成员名称重复，请修改名称后重试。')
+      setFailedEngines([])
+      return
+    }
+
+    if (recipient && 'engine' in recipient) {
+      const engine = recipient.engine
+      const memberName = engineLabel(engine, group)
+      const memberPreferences = resolvePreferences(engine, threadIdForEngine(engine, group))
+      const instruction = parseGroupSettingInstruction(
+        engine,
+        memberName,
+        recipient.remainder,
+        memberPreferences,
+        codexModelOptions,
+        codexReasoningOptionsByModel,
+        claudeModelOptions,
+        claudeEffortOptions,
+      )
+      if (instruction.kind !== 'none') {
+        appendMessage(userMessage)
+        appendSystemMessage(instruction.kind === 'change' ? instruction.summary : instruction.error)
+        setDraft('')
+        setLocalError(instruction.kind === 'invalid' ? instruction.error : null)
+        setFailedEngines([])
+        if (instruction.kind === 'change') {
+          onPreferenceChange(engine, threadIdForEngine(engine, group), instruction.changes)
+        }
+        return
+      }
+      if (!recipient.remainder.trim()) {
+        appendMessage(userMessage)
+        appendSystemMessage(`请在「${memberName}」名称后写上要发送的内容。`)
+        setDraft('')
+        setLocalError(null)
+        setFailedEngines([])
+        return
+      }
+    }
+
     appendMessage(userMessage)
     setDraft('')
     setSending(true)
     setLocalError(null)
     setFailedEngines([])
-    beginGroupTurn()
-    const sharedPrompt = promptWithGroupContext(prompt, group.messages, group)
+    const recipients: AIGroupEngine[] = recipient && 'engine' in recipient
+      ? [recipient.engine]
+      : ['codex', 'claude-code']
+    beginGroupTurn(recipients)
     const codexPreferences = resolvePreferences('codex', group.codexThreadId)
     const claudePreferences = resolvePreferences('claude-code', group.claudeThreadId)
     try {
-      const results = await Promise.allSettled([
-        codex.sendMessage({
-          prompt: sharedPrompt,
-          images: [],
-          model: codexPreferences.model,
-          effort: codexPreferences.effort,
-          approvalPolicy: codexPreferences.approvalPolicy ?? 'on-request',
-        }),
-        claude.sendMessage({
-          prompt: sharedPrompt,
+      const results = await Promise.allSettled(recipients.map((engine) => {
+        const memberPrompt = promptForGroupMember(engine, prompt, group, group.messages)
+        if (engine === 'codex') {
+          return codex.sendMessage({
+            prompt: memberPrompt,
+            images: [],
+            model: codexPreferences.model,
+            effort: codexPreferences.effort,
+            approvalPolicy: codexPreferences.approvalPolicy ?? 'on-request',
+          })
+        }
+        return claude.sendMessage({
+          prompt: memberPrompt,
           images: [],
           claudeModel: claudePreferences.claudeModel,
           claudeEffort: claudeEffortForRequest(claudePreferences.claudeEffort),
           claudePermissionMode: claudePreferences.claudePermissionMode ?? 'default',
-        }),
-      ])
+        })
+      }))
       const failures = results.flatMap((result, index): AIGroupEngine[] =>
-        result.status === 'rejected' || !result.value ? [index === 0 ? 'codex' : 'claude-code'] : [],
+        result.status === 'rejected' || !result.value ? [recipients[index]!] : [],
       )
       setFailedEngines(failures)
       failures.forEach((engine) => {
@@ -340,7 +555,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     } finally {
       setSending(false)
     }
-  }, [appendMessage, busy, claude, codex, draft, group, ready, resolvePreferences])
+  }, [appendMessage, busy, claude, claudeEffortOptions, claudeModelOptions, codex, codexModelOptions, codexReasoningOptionsByModel, draft, group, onPreferenceChange, ready, resolvePreferences])
 
   const relayOnce = useCallback(async () => {
     if (!lastUserMessage || !latestCodexReply || !latestClaudeReply || busy
@@ -365,14 +580,14 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     try {
       const results = await Promise.allSettled([
         codex.sendMessage({
-          prompt: promptForPeerResponse('claude-code', latestClaudeReply.text, group),
+          prompt: promptForGroupMember('codex', promptForPeerResponse('claude-code', latestClaudeReply.text, group), group),
           images: [],
           model: codexPreferences.model,
           effort: codexPreferences.effort,
           approvalPolicy: codexPreferences.approvalPolicy ?? 'on-request',
         }),
         claude.sendMessage({
-          prompt: promptForPeerResponse('codex', latestCodexReply.text, group),
+          prompt: promptForGroupMember('claude-code', promptForPeerResponse('codex', latestCodexReply.text, group), group),
           images: [],
           claudeModel: claudePreferences.claudeModel,
           claudeEffort: claudeEffortForRequest(claudePreferences.claudeEffort),
@@ -540,20 +755,21 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
               </select>
             </label>
           </div>}
+          <p className="ai-group-chat__settings-hint">输入「{engineLabel(settingsEngine, group)}，模型切换为可用模型名，思考强度调高」可直接设置；以成员名称开头可只发给该成员。</p>
         </section> : null}
         <form className={`message-composer ai-group-chat__composer${busy ? ' message-composer--running' : ''}`} onSubmit={(event) => void sendToBoth(event)}>
           <div className="composer-editor" style={{ height: 72 }}>
-            <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} aria-label={`${group.name}消息`} />
+            <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? '默认发送给两位成员；以成员名称开头可单独点名' : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} aria-label={`${group.name}消息`} />
           </div>
           <div className="message-composer__footer">
             <div className="composer-preferences">
               <button className="ai-group-chat__settings-trigger" type="button" aria-expanded={Boolean(settingsEngine)} aria-label="调整群聊成员模型、思考强度和权限" title="调整群聊成员模型、思考强度和权限" onClick={() => setSettingsEngine((current) => current ? null : 'codex')}>
                 <Settings2 size={14} /><span>设置</span>
               </button>
-              <span className="ai-group-chat__composer-hint">{ready ? '同时发送给两个模式' : bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取聊天记录…' : '正在连接两个模式…') : '等待两个聊天加入群聊'}</span>
+              <span className="ai-group-chat__composer-hint">{ready ? '未点名时同时发送；名称开头可单独呼叫' : bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取聊天记录…' : '正在连接两个模式…') : '等待两个聊天加入群聊'}</span>
             </div>
             <div className="composer-actions">
-              <button className="send-button send-button--arrow" type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
+              <button className="send-button send-button--arrow" type="submit" disabled={!ready || busy || !draft.trim()} aria-label="发送群聊消息" title="按点名成员发送；未点名时同时发送">{busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
             </div>
           </div>
         </form>
