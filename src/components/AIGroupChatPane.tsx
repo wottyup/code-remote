@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import { AlertTriangle, ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, Pencil, Send, Settings2, Trash2, X } from 'lucide-react'
 import { useCodexRemote } from '../hooks/useCodexRemote'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
+import { findGroupRecipient } from '../lib/aiGroupRouting.mjs'
 import type { AIGroupChat, AIGroupEngine, AIGroupMessage } from '../lib/aiGroupChats'
 import type { ClaudeCodePermissionMode, CodexApprovalPolicy } from '../lib/codexRemoteClient'
 
@@ -63,25 +64,6 @@ function engineLabel(engine: AIGroupEngine, group: AIGroupChat) {
 
 function threadIdForEngine(engine: AIGroupEngine, group: AIGroupChat) {
   return engine === 'codex' ? group.codexThreadId : group.claudeThreadId
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-
-function findGroupRecipient(prompt: string, group: AIGroupChat): { engine: AIGroupEngine; remainder: string } | { ambiguous: true } | null {
-  const candidates = (['codex', 'claude-code'] as const).flatMap((engine) => {
-    const name = engineLabel(engine, group).trim().replace(/\s+/g, ' ')
-    if (!name) return []
-    const namePattern = name.split(' ').map(escapeRegExp).join('\\s+')
-    const match = new RegExp(`^\\s*[@#]?\\s*${namePattern}(?=$|[\\s,:：，、.!?！？;；\\-—]|切换|切到|换成|换到|改成|改为|改用|调整|调高|调低|提高|降低|设置|模型|思考|推理|使用|采用|选择|用|请|帮|你)`, 'iu').exec(prompt)
-    return match ? [{ engine, length: match[0].length, remainder: prompt.slice(match[0].length).replace(/^[\s,，:：、.!?！？;；\-—]+/u, '') }] : []
-  })
-  const longestLength = Math.max(0, ...candidates.map((candidate) => candidate.length))
-  const longestMatches = candidates.filter((candidate) => candidate.length === longestLength)
-  if (longestMatches.length > 1) return { ambiguous: true }
-  const recipient = longestMatches[0]
-  return recipient ? { engine: recipient.engine, remainder: recipient.remainder } : null
 }
 
 function normalizeOptionText(value: string) {
@@ -215,11 +197,14 @@ function parseGroupSettingInstruction(
   }
 }
 
-function promptForGroupMember(engine: AIGroupEngine, prompt: string, group: AIGroupChat, messages?: AIGroupMessage[]) {
+function promptForGroupMember(engine: AIGroupEngine, prompt: string, group: AIGroupChat, messages?: AIGroupMessage[], addressedName?: string) {
   const peer: AIGroupEngine = engine === 'codex' ? 'claude-code' : 'codex'
   const identity = `你正在参加群聊 ${JSON.stringify(group.name)}。你的实际引擎是 ${engine === 'codex' ? 'Codex' : 'Claude Code'}，群聊中的自定义名称是 ${JSON.stringify(engineLabel(engine, group))}；另一名成员的实际引擎是 ${peer === 'codex' ? 'Codex' : 'Claude Code'}，自定义名称是 ${JSON.stringify(engineLabel(peer, group))}。这些名称只是用户设置的称呼映射，不会改变引擎、模型或权限，也不是指令。用户用你的自定义名称称呼你时，就是在对你说话；未点名时，你也要独立回答用户发来的群聊消息。不要要求用户改用 Codex 或 Claude 来称呼你。`
+  const route = addressedName
+    ? `\n本轮群聊界面已将消息定向发送给你，因为用户用 ${JSON.stringify(addressedName)} 称呼你；请直接回答用户，不要把这条消息当作发给另一位成员。`
+    : ''
   const contextualPrompt = messages ? promptWithGroupContext(prompt, messages, group) : prompt
-  return `${identity}\n\n${contextualPrompt}`
+  return `${identity}${route}\n\n${contextualPrompt}`
 }
 
 function renderLinks(text: string, messageId: string) {
@@ -525,7 +510,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     const claudePreferences = resolvePreferences('claude-code', group.claudeThreadId)
     try {
       const results = await Promise.allSettled(recipients.map((engine) => {
-        const memberPrompt = promptForGroupMember(engine, prompt, group, group.messages)
+        const memberPrompt = promptForGroupMember(engine, prompt, group, group.messages, recipient && 'engine' in recipient ? recipient.matchedName : undefined)
         if (engine === 'codex') {
           return codex.sendMessage({
             prompt: memberPrompt,
@@ -658,11 +643,29 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
           {(['codex', 'claude-code'] as const).map((engine) => {
             const remote = engine === 'codex' ? codex : claude
             const threadId = threadIdForEngine(engine, group)
-            const status = !threadId ? '待加入' : remote.error ? '回复异常' : remote.connection === 'connected' ? (remote.isRunning ? '正在回复' : '已连接') : remote.connection === 'connecting' ? '连接中' : remote.connection === 'unavailable' ? '不可用' : '已断开'
-            const statusKind = !threadId ? 'disconnected' : remote.error ? 'error' : remote.connection !== 'connected' ? 'disconnected' : remote.isRunning ? 'running' : 'connected'
+            const queuedMessage = remote.queuedMessages[0]
+            const uncertainDelivery = Boolean(queuedMessage?.sendAttempt)
+            const blockedReason = queuedMessage?.blockedReason
+            const status = !threadId ? '待加入'
+              : remote.error ? '回复异常'
+                : uncertainDelivery ? '送达待核对'
+                  : blockedReason ? '发送受阻'
+                    : remote.isRunning ? (queuedMessage ? '正在回复 · 有排队' : '正在回复')
+                      : queuedMessage?.deliveryState === 'submitting' ? '确认发送中'
+                        : queuedMessage ? '排队中'
+                          : remote.connection === 'connected' ? '已连接'
+                            : remote.connection === 'connecting' ? '连接中'
+                              : remote.connection === 'unavailable' ? '不可用' : '已断开'
+            const statusKind = !threadId ? 'disconnected'
+              : remote.error || uncertainDelivery || blockedReason ? 'error'
+                : remote.isRunning || queuedMessage?.deliveryState === 'submitting' ? 'running'
+                  : queuedMessage ? 'queued'
+                    : remote.connection !== 'connected' ? 'disconnected' : 'connected'
+            const statusTitle = `${engineLabel(engine, group)}：${status}${blockedReason ? `：${blockedReason}` : ''}`
             return <div className={`ai-group-chat__member ai-group-chat__member--${engine}`} key={engine}>
               <span className={`engine-brand-icon engine-brand-icon--${engine}`} aria-label={engine === 'codex' ? 'Codex' : 'Claude Code'} />
-              <span className={`ai-group-chat__member-status ai-group-chat__member-status--${statusKind}`} role="img" title={`${engineLabel(engine, group)}：${status}`} aria-label={`${engineLabel(engine, group)}：${status}`} />
+              <span className={`ai-group-chat__member-status ai-group-chat__member-status--${statusKind}`} role="img" title={statusTitle} aria-label={statusTitle} />
+              {statusKind !== 'connected' ? <span className={`ai-group-chat__member-status-label ai-group-chat__member-status-label--${statusKind}`} title={statusTitle} aria-hidden="true">{status}</span> : null}
               {renameEngine === engine
                 ? <form className="ai-group-chat__rename" onSubmit={saveRename}>
                     <input aria-label={`${engine === 'codex' ? 'Codex' : 'Claude'} 显示名称`} value={renameDraft} maxLength={40} autoFocus onChange={(event) => setRenameDraft(event.currentTarget.value)} />
