@@ -494,7 +494,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-settings-message { margin: 0 0 8px; color: #91c99d; font-size: calc(12px + var(--mobile-font-offset)); }
 .cpa-usage-settings-message--error { color: #e59a9b; }
 .cpa-usage-panel__header-actions { display: flex; flex: 0 0 auto; gap: 8px; }
-.cpa-usage-panel__content { width: min(100%, 1180px); }
+.cpa-usage-panel__content { width: 100%; }
 .cpa-usage-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; color: #8e96a5; font-size: calc(11px + var(--mobile-font-offset)); }
 .cpa-usage-toolbar__controls { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 9px; }
 .cpa-usage-key-filter { display: inline-flex; min-width: 0; min-height: 36px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid rgba(146, 157, 184, .2); border-radius: 9px; background: rgba(10, 11, 14, .34); color: #929aaa; white-space: nowrap; }
