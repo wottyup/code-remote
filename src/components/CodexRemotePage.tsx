@@ -51,6 +51,7 @@ import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
+import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
@@ -3864,6 +3865,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarEngineFilter, setSidebarEngineFilter] = useState<ChatEngine | null>(null)
   const [sidebarChatShortcuts, setSidebarChatShortcuts] = useState(readSidebarChatShortcuts)
   useEffect(() => saveSidebarChatShortcuts(sidebarChatShortcuts), [sidebarChatShortcuts])
   const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
@@ -5165,10 +5167,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       return Number(rightPinned) - Number(leftPinned)
     }), [pinnedThreadIds, remote0.threads])
   const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
-  const visibleSidebarThreads = useMemo(() => normalizedSidebarSearch
-    ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
-      .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
-    : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
+  const visibleSidebarThreads = useMemo(() => filterSidebarThreads(sidebarThreads, sidebarEngineFilter, normalizedSidebarSearch), [normalizedSidebarSearch, sidebarEngineFilter, sidebarThreads])
+  const sidebarHasActiveFilter = Boolean(normalizedSidebarSearch || sidebarEngineFilter)
   const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
   const sidebarShortcutHint = `${formatSidebarChatShortcut(sidebarChatShortcuts.previous)} / ${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`
 
@@ -5212,6 +5212,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSelectedSidebarThreadIds(new Set())
     setThreadContextMenu(null)
     clearThreadLongPress()
+  }
+
+  function toggleSidebarEngineFilter(engine: ChatEngine) {
+    setSidebarEngineFilter((current) => current === engine ? null : engine)
   }
 
   function toggleSidebarThreadSelection(threadId: string) {
@@ -5287,9 +5291,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
+          <div className="sidebar-engine-filters" role="group" aria-label="按聊天模式筛选">
+            {(['codex', 'claude-code'] as const).map((engine) => {
+              const engineLabel = engine === 'claude-code' ? 'Claude' : 'Codex'
+              const active = sidebarEngineFilter === engine
+              return <button className={`sidebar-engine-filter sidebar-engine-filter--${engine}`} type="button" key={engine} onClick={() => toggleSidebarEngineFilter(engine)} aria-label={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`} aria-pressed={active} title={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`}><EngineBrandIcon engine={engine} size={17} /></button>
+            })}
+          </div>
         </div>
         <div className="thread-list-heading">
-          <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
+          <span>{normalizedSidebarSearch ? '搜索结果' : sidebarEngineFilter === 'codex' ? 'Codex 对话' : sidebarEngineFilter === 'claude-code' ? 'Claude 对话' : '聊天记录'}</span>
           <small className="thread-list-heading__shortcut" title={`上一条：${formatSidebarChatShortcut(sidebarChatShortcuts.previous)}；下一条：${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`}>{sidebarShortcutHint}</small>
           <div className="thread-list-heading__actions">
             <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
@@ -5328,8 +5339,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               )
             })}
           </Fragment>)}
-          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
-          {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
+          {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
