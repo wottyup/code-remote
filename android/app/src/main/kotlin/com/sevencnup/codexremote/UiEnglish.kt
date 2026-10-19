@@ -62,6 +62,7 @@ internal object UiEnglish {
         "本机默认模型" to "Device default model", "本机默认权限" to "Device default permission",
         "添加图片或文件" to "Add image or file", "发送消息" to "Send message",
         "语音输入" to "Voice input", "停止语音输入" to "Stop voice input",
+        "正在结束语音输入" to "Finishing voice input",
         "正在加载离线语音模型…" to "Loading offline speech model…",
         "未获得麦克风权限，无法使用语音输入" to "Microphone permission denied. Voice input is unavailable.",
         "设备不支持 16kHz 录音" to "This device does not support 16 kHz recording",

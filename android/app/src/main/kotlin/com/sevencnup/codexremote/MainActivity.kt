@@ -2031,6 +2031,7 @@ class MainActivity : Activity() {
         updateComposerPreferences()
         updateSendButton()
         updateVoiceButton()
+        ensureOfflineVoiceInput().preload()
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
     }
@@ -6276,6 +6277,7 @@ class MainActivity : Activity() {
                 stopVoiceInput()
                 return
             }
+            OfflineVoiceInput.State.FINISHING -> return
             OfflineVoiceInput.State.IDLE -> Unit
         }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
@@ -6288,6 +6290,9 @@ class MainActivity : Activity() {
 
     private fun startVoiceInput() {
         if (!::composerInput.isInitialized || !composerInput.isAttachedToWindow) return
+        // A previous discard can only still be pending while the model was
+        // loading; no audio from that attempt exists, so a fresh start is safe.
+        voiceDiscardResults = false
         voiceBaseText = composerInput.text.toString()
         ensureOfflineVoiceInput().start()
     }
@@ -6333,10 +6338,17 @@ class MainActivity : Activity() {
     }
 
     private fun applyVoiceComposerText(text: String) {
-        if (!::composerInput.isInitialized || composerInput.text.toString() == text) return
+        if (!::composerInput.isInitialized) return
+        val editable = composerInput.text
+        if (editable.toString() == text) return
+        // Replace only the changed suffix so partial results do not rebuild the
+        // entire Editable and re-layout the whole composer on every update.
+        var prefix = 0
+        val limit = minOf(editable.length, text.length)
+        while (prefix < limit && editable[prefix] == text[prefix]) prefix++
         voiceApplyingText = true
         try {
-            composerInput.setText(text)
+            editable.replace(prefix, editable.length, text.substring(prefix))
             composerInput.setSelection(text.length)
         } finally {
             voiceApplyingText = false
@@ -6357,15 +6369,21 @@ class MainActivity : Activity() {
         val button = voiceButton ?: return
         val listening = voiceInputState == OfflineVoiceInput.State.LISTENING
         val loading = voiceInputState == OfflineVoiceInput.State.LOADING
+        val finishing = voiceInputState == OfflineVoiceInput.State.FINISHING
+        val busy = loading || finishing
         button.setPixelAwareImageResource(iconResource(if (listening) "stop" else "mic"))
         button.imageTintList = when {
             retroTheme && !pixelTheme -> null
             listening -> ColorStateList.valueOf(if (pixelTheme) PIXEL_RED else ERROR)
             else -> ColorStateList.valueOf(iconTint("mic"))
         }
-        button.alpha = if (loading) 0.55f else 1f
-        button.isEnabled = !loading
-        button.contentDescription = tr(if (listening) "停止语音输入" else "语音输入")
+        button.alpha = if (busy) 0.55f else 1f
+        button.isEnabled = !busy
+        button.contentDescription = tr(when {
+            listening -> "停止语音输入"
+            finishing -> "正在结束语音输入"
+            else -> "语音输入"
+        })
         button.background = if (retroTheme) android1SegmentButtonBackground() else ColorDrawable(Color.TRANSPARENT)
     }
 
