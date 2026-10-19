@@ -63,6 +63,14 @@ export interface CPAUsageAnalyticsResponse {
   timeline?: CPAUsageTimelinePoint[]
   model_stats?: CPAUsageModelStat[]
   account_stats?: CPAUsageAccountStat[]
+  filter_options?: {
+    api_key_hashes?: string[]
+  }
+}
+
+export interface CPAUsageAnalyticsRequestOptions {
+  apiKeyHashes?: string[]
+  filterSelectorsOnly?: boolean
 }
 
 const settingsStorageKey = 'codex-remote.cpa-usage-settings'
@@ -133,6 +141,7 @@ export async function fetchCPAUsageAnalytics(
   settings: CPAUsageSettings,
   range: CPAUsageRange,
   signal?: AbortSignal,
+  options: CPAUsageAnalyticsRequestOptions = {},
 ): Promise<CPAUsageAnalyticsResponse> {
   const baseUrl = normalizeCPAUsageBaseUrl(settings.baseUrl)
   const managementKey = settings.managementKey.trim()
@@ -162,14 +171,17 @@ export async function fetchCPAUsageAnalytics(
         from_ms: fromMs,
         to_ms: toMs,
         time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
-        include: {
-          summary: true,
-          summary_profile: 'compact',
-          timeline: true,
-          model_stats: true,
-          account_stats: true,
-          granularity: range === 'today' ? 'hour' : 'day',
-        },
+        ...(options.apiKeyHashes?.length ? { filters: { api_key_hashes: options.apiKeyHashes } } : {}),
+        include: options.filterSelectorsOnly
+          ? { filter_options: true, filter_selectors: true }
+          : {
+              summary: true,
+              summary_profile: 'compact',
+              timeline: true,
+              model_stats: true,
+              account_stats: true,
+              granularity: range === 'today' ? 'hour' : 'day',
+            },
       }),
       signal: timeout.signal,
     })

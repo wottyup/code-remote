@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ChartColumnIncreasing, Database, RefreshCw, Settings2, X } from 'lucide-react'
+import { Activity, ChartColumnIncreasing, Database, DollarSign, Filter, RefreshCw, Settings2, X } from 'lucide-react'
 import {
   fetchCPAUsageAnalytics,
   type CPAUsageAccountStat,
@@ -12,6 +12,7 @@ import {
 } from '../lib/cpaUsageStats'
 
 const numberFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+const moneyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const percentFormatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
 const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
@@ -66,10 +67,45 @@ export function CPAUsageStatsPanel({
   onClose: () => void
 }) {
   const [range, setRange] = useState<CPAUsageRange>('today')
+  const [selectedApiKeyHash, setSelectedApiKeyHash] = useState('')
+  const [apiKeyHashes, setApiKeyHashes] = useState<string[]>([])
+  const [filterLoading, setFilterLoading] = useState(false)
+  const [filterError, setFilterError] = useState<string | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const [data, setData] = useState<CPAUsageAnalyticsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setSelectedApiKeyHash('')
+    setApiKeyHashes([])
+  }, [settings.baseUrl, settings.managementKey])
+
+  useEffect(() => {
+    if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
+      setApiKeyHashes([])
+      setFilterLoading(false)
+      setFilterError(null)
+      return
+    }
+    const controller = new AbortController()
+    setFilterLoading(true)
+    setFilterError(null)
+    fetchCPAUsageAnalytics(settings, range, controller.signal, { filterSelectorsOnly: true })
+      .then((response) => {
+        const hashes = response.filter_options?.api_key_hashes ?? []
+        setApiKeyHashes([...new Set(hashes.filter((hash) => typeof hash === 'string' && hash.trim()).map((hash) => hash.trim()))])
+      })
+      .catch((reason) => {
+        if (!controller.signal.aborted) {
+          setFilterError(reason instanceof Error ? reason.message : '读取调用方密钥筛选项失败。')
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setFilterLoading(false)
+      })
+    return () => controller.abort()
+  }, [range, refreshKey, settings.baseUrl, settings.managementKey])
 
   useEffect(() => {
     if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
@@ -82,7 +118,9 @@ export function CPAUsageStatsPanel({
     setData(null)
     setLoading(true)
     setError(null)
-    fetchCPAUsageAnalytics(settings, range, controller.signal)
+    fetchCPAUsageAnalytics(settings, range, controller.signal, {
+      apiKeyHashes: selectedApiKeyHash ? [selectedApiKeyHash] : undefined,
+    })
       .then(setData)
       .catch((reason) => {
         if (!controller.signal.aborted) {
@@ -93,7 +131,7 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, settings.baseUrl, settings.managementKey])
+  }, [range, refreshKey, selectedApiKeyHash, settings.baseUrl, settings.managementKey])
 
   const models = useMemo(
     () => [...(data?.model_stats ?? [])].sort((a, b) => b.total_tokens - a.total_tokens),
@@ -105,7 +143,10 @@ export function CPAUsageStatsPanel({
   )
   const summary = data?.summary
   const configured = Boolean(settings.baseUrl.trim() && settings.managementKey.trim())
-  const hasStats = Boolean(summary?.total_calls || summary?.total_tokens || models.length || accounts.length)
+  const hasStats = Boolean(summary?.total_calls || summary?.total_tokens || summary?.total_cost || models.length || accounts.length)
+  const visibleApiKeyHashes = selectedApiKeyHash && !apiKeyHashes.includes(selectedApiKeyHash)
+    ? [selectedApiKeyHash, ...apiKeyHashes]
+    : apiKeyHashes
 
   return (
     <main className="theme-settings-panel cpa-usage-panel" aria-label="Token 用量统计">
@@ -131,14 +172,26 @@ export function CPAUsageStatsPanel({
         ) : (
           <>
             <section className="cpa-usage-toolbar">
-              <div className="cpa-usage-range-tabs" role="group" aria-label="统计时间范围">
-                {([
-                  ['today', '今天'],
-                  ['7d', '近 7 天'],
-                  ['30d', '近 30 天'],
-                ] as const).map(([value, label]) => (
-                  <button className={range === value ? 'cpa-usage-range-tabs__active' : ''} key={value} type="button" aria-pressed={range === value} onClick={() => setRange(value)}>{label}</button>
-                ))}
+              <div className="cpa-usage-toolbar__controls">
+                <div className="cpa-usage-range-tabs" role="group" aria-label="统计时间范围">
+                  {([
+                    ['today', '今天'],
+                    ['7d', '近 7 天'],
+                    ['30d', '近 30 天'],
+                  ] as const).map(([value, label]) => (
+                    <button className={range === value ? 'cpa-usage-range-tabs__active' : ''} key={value} type="button" aria-pressed={range === value} onClick={() => setRange(value)}>{label}</button>
+                  ))}
+                </div>
+                <label className="cpa-usage-key-filter">
+                  <Filter size={14} aria-hidden="true" />
+                  <span>调用方密钥</span>
+                  <select value={selectedApiKeyHash} aria-label="按调用方密钥筛选" onChange={(event) => setSelectedApiKeyHash(event.target.value)}>
+                    <option value="">全部调用方密钥</option>
+                    {visibleApiKeyHashes.map((hash) => <option value={hash} key={hash}>密钥 · {hash.slice(0, 8)}</option>)}
+                  </select>
+                </label>
+                {filterLoading && !apiKeyHashes.length ? <span className="cpa-usage-filter-status">正在读取密钥…</span> : null}
+                {filterError ? <span className="cpa-usage-filter-status cpa-usage-filter-status--error" title={filterError}>密钥筛选项加载失败</span> : null}
               </div>
               {data?.generated_at_ms ? <span>更新于 {dateTimeFormatter.format(new Date(data.generated_at_ms))}</span> : null}
             </section>
@@ -149,6 +202,7 @@ export function CPAUsageStatsPanel({
               <>
                 <section className="cpa-usage-summary-grid" aria-label="Token 用量概览">
                   <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--primary"><span><Activity size={14} />总 Token</span><strong>{count(summary.total_tokens)}</strong><small>{count(summary.total_calls)} 次请求</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--cost"><span><DollarSign size={14} />金额</span><strong>{moneyFormatter.format(Number.isFinite(summary.total_cost) ? summary.total_cost : 0)}</strong><small>已配置单价模型</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>输入</span><strong>{count(summary.input_tokens)}</strong><small>input tokens</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>输出</span><strong>{count(summary.output_tokens)}</strong><small>output tokens</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card">
@@ -179,7 +233,7 @@ export function CPAUsageStatsPanel({
                 </div>
               </>
             ) : null}
-            <p className="theme-settings-hint cpa-usage-disclaimer">Token 数量直接显示 CPAMP 收到的用量统计，不在 Codex Remote 中推算。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。</p>
+            <p className="theme-settings-hint cpa-usage-disclaimer">Token 数量直接显示 CPAMP 收到的用量统计，不在 Codex Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。</p>
           </>
         )}
       </div>
