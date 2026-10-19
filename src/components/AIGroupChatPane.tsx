@@ -437,11 +437,11 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
       </section>
       <div className="composer-dock ai-group-chat__composer-dock">
         <form className={`message-composer ai-group-chat__composer${busy ? ' message-composer--running' : ''}`} onSubmit={(event) => void sendToBoth(event)}>
-          <div className="composer-editor" style={{ height: 88 }}>
+          <div className="composer-editor" style={{ height: 72 }}>
             <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} aria-label={`${group.name}消息`} />
           </div>
           <div className="message-composer__footer">
-            <div className="composer-preferences"><span className="ai-group-chat__composer-hint">{!ready ? (bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取原聊天记录…' : '正在连接两个原聊天…') : '群聊不创建新会话；请从侧边栏加入已有聊天。') : '消息会同时发给两个成员，各自使用自己的模型与权限。'}</span></div>
+            <div className="composer-preferences"><span className="ai-group-chat__composer-hint">{ready ? '同时发送给两个模式' : bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取聊天记录…' : '正在连接两个模式…') : '等待两个聊天加入群聊'}</span></div>
             <div className="composer-actions">
               <button className="send-button send-button--arrow" type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
             </div>
