@@ -3423,6 +3423,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .ai-group-chat__member { display: inline-flex; min-width: 0; align-items: center; gap: 3px; }
 .ai-group-chat__member > .engine-brand-icon { width: 15px; height: 15px; color: #92a7dd; }
 .ai-group-chat__member--claude-code > .engine-brand-icon { color: #d97757; }
+.ai-group-chat__member-status { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #777e88; }
+.ai-group-chat__member-status--connected { background: #52ad7b; }
+.ai-group-chat__member-status--running { background: #aabaff; box-shadow: 0 0 0 3px rgba(170, 186, 255, .14); animation: ai-group-chat-status-pulse 1.2s ease-in-out infinite; }
+.ai-group-chat__member-status--error { background: #e16d73; box-shadow: 0 0 0 3px rgba(225, 109, 115, .14); }
+@keyframes ai-group-chat-status-pulse { 50% { opacity: .48; } }
 .ai-group-chat__member-name { display: inline-flex; min-width: 0; align-items: center; gap: 4px; padding: 4px 5px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); }
 .ai-group-chat__member-name:hover { background: var(--panel-raised); color: inherit; }
 .ai-group-chat__member-name > span { max-width: 92px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
