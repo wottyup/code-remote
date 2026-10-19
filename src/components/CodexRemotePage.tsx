@@ -4624,6 +4624,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }, [])
 
+  const updateAIGroupChatPreferences = useCallback((engine: AIGroupEngine, threadId: string | null, changes: Partial<ComposerPreferences>) => {
+    if (!threadId) return
+    const engineChanges: Partial<ComposerPreferences> = engine === 'codex'
+      ? { model: changes.model, effort: changes.effort, approvalPolicy: changes.approvalPolicy }
+      : { claudeModel: changes.claudeModel, claudeEffort: changes.claudeEffort, claudePermissionMode: changes.claudePermissionMode }
+    setThreadComposerPreferences((current) => ({
+      ...current,
+      [threadId]: mergeComposerPreferences(
+        resolvedComposerPreferences(defaultComposerPreferences, current[threadId]),
+        engineChanges,
+      ),
+    }))
+  }, [defaultComposerPreferences])
+
   const resolveAIGroupChatPreferences = useCallback((engine: ChatEngine, threadId: string | null): ComposerPreferences => {
     const preferences = resolvedComposerPreferences(
       defaultComposerPreferences,
@@ -5665,6 +5679,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onBusyChange={updateAIGroupChatBusy}
               onDeleteGroup={deleteAIGroupChat}
               onGroupChange={updateAIGroupChat}
+              onPreferenceChange={updateAIGroupChatPreferences}
+              codexModelOptions={modelOptions}
+              codexReasoningOptionsByModel={reasoningOptionsByModel}
+              codexApprovalOptions={approvalPolicyOptions}
+              claudeModelOptions={claudeModelOptions}
+              claudeEffortOptions={claudeEffortOptions}
+              claudePermissionModeOptions={claudePermissionModeOptions}
               resolvePreferences={resolveAIGroupChatPreferences}
             /> : <>
             <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
@@ -5837,6 +5858,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         onBusyChange={updateAIGroupChatBusy}
         onDeleteGroup={deleteAIGroupChat}
         onGroupChange={updateAIGroupChat}
+        onPreferenceChange={updateAIGroupChatPreferences}
+        codexModelOptions={modelOptions}
+        codexReasoningOptionsByModel={reasoningOptionsByModel}
+        codexApprovalOptions={approvalPolicyOptions}
+        claudeModelOptions={claudeModelOptions}
+        claudeEffortOptions={claudeEffortOptions}
+        claudePermissionModeOptions={claudePermissionModeOptions}
         resolvePreferences={resolveAIGroupChatPreferences}
       />)}
     </div>

@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
-import { AlertTriangle, ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, Pencil, Send, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, Pencil, Send, Settings2, Trash2, X } from 'lucide-react'
 import { useCodexRemote } from '../hooks/useCodexRemote'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import type { AIGroupChat, AIGroupEngine, AIGroupMessage } from '../lib/aiGroupChats'
 import type { ClaudeCodePermissionMode, CodexApprovalPolicy } from '../lib/codexRemoteClient'
+
+interface AIGroupChatOption {
+  value: string
+  label: string
+}
+
+interface AIGroupPreferenceChanges {
+  model?: string
+  effort?: string
+  approvalPolicy?: CodexApprovalPolicy
+  claudeModel?: string
+  claudeEffort?: string
+  claudePermissionMode?: ClaudeCodePermissionMode
+}
 
 interface AIGroupChatPaneProps {
   token: string
@@ -17,6 +31,13 @@ interface AIGroupChatPaneProps {
   onBusyChange: (groupId: string, busy: boolean) => void
   onDeleteGroup: (groupId: string) => void
   onGroupChange: (groupId: string, update: (current: AIGroupChat) => AIGroupChat) => void
+  onPreferenceChange: (engine: AIGroupEngine, threadId: string | null, changes: AIGroupPreferenceChanges) => void
+  codexModelOptions: AIGroupChatOption[]
+  codexReasoningOptionsByModel: Record<string, { options: AIGroupChatOption[]; defaultEffort?: string }>
+  codexApprovalOptions: AIGroupChatOption[]
+  claudeModelOptions: AIGroupChatOption[]
+  claudeEffortOptions: AIGroupChatOption[]
+  claudePermissionModeOptions: AIGroupChatOption[]
   resolvePreferences: (engine: AIGroupEngine, threadId: string | null) => {
     model?: string
     effort?: string
@@ -109,11 +130,12 @@ function latestAssistantAfterLastUser(messages: AIGroupMessage[], engine: AIGrou
   return [...messages.slice(lastUserIndex + 1)].reverse().find((message) => message.role === 'assistant' && message.engine === engine && !message.streaming) ?? null
 }
 
-export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthorized, onClose, onOpenSidebar, onOpenWorkspace, onBusyChange, onDeleteGroup, onGroupChange, resolvePreferences }: AIGroupChatPaneProps) {
+export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthorized, onClose, onOpenSidebar, onOpenWorkspace, onBusyChange, onDeleteGroup, onGroupChange, onPreferenceChange, codexModelOptions, codexReasoningOptionsByModel, codexApprovalOptions, claudeModelOptions, claudeEffortOptions, claudePermissionModeOptions, resolvePreferences }: AIGroupChatPaneProps) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [relaying, setRelaying] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [settingsEngine, setSettingsEngine] = useState<AIGroupEngine | null>(null)
   const [failedEngines, setFailedEngines] = useState<AIGroupEngine[]>([])
   const [renameEngine, setRenameEngine] = useState<AIGroupEngine | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
@@ -218,6 +240,30 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     && claude.activeThread?.id === group.claudeThreadId
     && !codex.loadingHistory
     && !claude.loadingHistory
+  const codexPreferences = resolvePreferences('codex', group.codexThreadId)
+  const claudePreferences = resolvePreferences('claude-code', group.claudeThreadId)
+  const codexSelectedModel = codexPreferences.model ?? ''
+  const codexModelReasoning = codexReasoningOptionsByModel[codexSelectedModel]
+  const codexEffortIsAvailable = Boolean(codexPreferences.effort && codexModelReasoning?.options.some((option) => option.value === codexPreferences.effort))
+  const codexSelectedEffort = codexEffortIsAvailable ? codexPreferences.effort ?? '' : ''
+  const preferencesDisabled = !ready || busy
+
+  const updateCodexModel = (model: string) => {
+    const modelReasoning = codexReasoningOptionsByModel[model]
+    const currentEffort = codexPreferences.effort
+    const effort = !model
+      ? ''
+      : !modelReasoning
+        ? currentEffort ?? ''
+        : modelReasoning.options.some((option) => option.value === currentEffort)
+          ? currentEffort ?? ''
+          : modelReasoning.defaultEffort ?? modelReasoning.options[0]?.value ?? ''
+    onPreferenceChange('codex', group.codexThreadId, { model, effort })
+  }
+
+  const updateGroupPreference = (engine: AIGroupEngine, changes: AIGroupPreferenceChanges) => {
+    onPreferenceChange(engine, engine === 'codex' ? group.codexThreadId : group.claudeThreadId, changes)
+  }
 
   useEffect(() => {
     onBusyChange(group.id, busy)
@@ -442,12 +488,70 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
         </div>
       </section>
       <div className="composer-dock ai-group-chat__composer-dock">
+        {settingsEngine ? <section className="ai-group-chat__settings-panel" aria-label="群聊成员设置">
+          <div className="ai-group-chat__settings-heading">
+            <div className="ai-group-chat__settings-tabs" role="tablist" aria-label="选择要设置的群聊成员">
+              {(['codex', 'claude-code'] as const).map((engine) => <button
+                type="button"
+                role="tab"
+                aria-selected={settingsEngine === engine}
+                className={`ai-group-chat__settings-tab${settingsEngine === engine ? ' ai-group-chat__settings-tab--active' : ''}`}
+                key={engine}
+                onClick={() => setSettingsEngine(engine)}
+              >
+                <span className={`engine-brand-icon engine-brand-icon--${engine}`} aria-hidden="true" />
+                {engine === 'codex' ? 'Codex' : 'Claude'}
+              </button>)}
+            </div>
+            <button type="button" className="ai-group-chat__settings-close" onClick={() => setSettingsEngine(null)} aria-label="关闭群聊设置"><X size={15} /></button>
+          </div>
+          {settingsEngine === 'codex' ? <div className="ai-group-chat__settings-fields">
+            <label className="ai-group-chat__settings-field"><span>模型</span>
+              <select value={codexSelectedModel} disabled={preferencesDisabled || codexModelOptions.length === 0} onChange={(event) => updateCodexModel(event.currentTarget.value)}>
+                <option value="">本机默认模型</option>
+                {codexModelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="ai-group-chat__settings-field"><span>思考强度</span>
+              <select value={codexSelectedEffort} disabled={preferencesDisabled || !codexModelReasoning?.options.length} onChange={(event) => updateGroupPreference('codex', { effort: event.currentTarget.value })}>
+                <option value="">模型默认</option>
+                {(codexModelReasoning?.options ?? []).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="ai-group-chat__settings-field"><span>权限</span>
+              <select value={codexPreferences.approvalPolicy ?? 'on-request'} disabled={preferencesDisabled} onChange={(event) => updateGroupPreference('codex', { approvalPolicy: event.currentTarget.value as CodexApprovalPolicy })}>
+                {codexApprovalOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div> : <div className="ai-group-chat__settings-fields">
+            <label className="ai-group-chat__settings-field"><span>Claude 模型</span>
+              <select value={claudePreferences.claudeModel ?? 'default'} disabled={preferencesDisabled} onChange={(event) => updateGroupPreference('claude-code', { claudeModel: event.currentTarget.value })}>
+                {claudeModelOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="ai-group-chat__settings-field"><span>思考等级</span>
+              <select value={claudePreferences.claudeEffort ?? 'default'} disabled={preferencesDisabled} onChange={(event) => updateGroupPreference('claude-code', { claudeEffort: event.currentTarget.value })}>
+                {claudeEffortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+            <label className="ai-group-chat__settings-field"><span>权限模式</span>
+              <select value={claudePreferences.claudePermissionMode ?? 'default'} disabled={preferencesDisabled} onChange={(event) => updateGroupPreference('claude-code', { claudePermissionMode: event.currentTarget.value as ClaudeCodePermissionMode })}>
+                {claudePermissionModeOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </label>
+          </div>}
+        </section> : null}
         <form className={`message-composer ai-group-chat__composer${busy ? ' message-composer--running' : ''}`} onSubmit={(event) => void sendToBoth(event)}>
           <div className="composer-editor" style={{ height: 72 }}>
             <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} aria-label={`${group.name}消息`} />
           </div>
           <div className="message-composer__footer">
-            <div className="composer-preferences"><span className="ai-group-chat__composer-hint">{ready ? '同时发送给两个模式' : bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取聊天记录…' : '正在连接两个模式…') : '等待两个聊天加入群聊'}</span></div>
+            <div className="composer-preferences">
+              <button className="ai-group-chat__settings-trigger" type="button" aria-expanded={Boolean(settingsEngine)} aria-label="调整群聊成员模型、思考强度和权限" title="调整群聊成员模型、思考强度和权限" onClick={() => setSettingsEngine((current) => current ? null : 'codex')}>
+                <Settings2 size={14} /><span>设置</span>
+              </button>
+              <span className="ai-group-chat__composer-hint">{ready ? '同时发送给两个模式' : bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取聊天记录…' : '正在连接两个模式…') : '等待两个聊天加入群聊'}</span>
+            </div>
             <div className="composer-actions">
               <button className="send-button send-button--arrow" type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
             </div>
