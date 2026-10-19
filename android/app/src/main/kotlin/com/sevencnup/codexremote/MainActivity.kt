@@ -816,6 +816,7 @@ class MainActivity : Activity() {
     private val selectedSidebarThreadIds = mutableSetOf<String>()
     private var sidebarSelectionMode = false
     private var sidebarSelectionBusy = false
+    private var sidebarEngineFilter: String? = null
     private var visibleSidebarThreadIds = emptyList<String>()
     private var running = false
     private val pausedThreadKeys = mutableSetOf<String>()
@@ -976,6 +977,8 @@ class MainActivity : Activity() {
     private lateinit var sidebarNewThreadButton: LinearLayout
     private lateinit var sidebarNewThreadIcon: ImageView
     private lateinit var sidebarNewThreadLabel: TextView
+    private lateinit var sidebarCodexFilterButton: ImageButton
+    private lateinit var sidebarClaudeFilterButton: ImageButton
     private val sidebarActionAccentViews = mutableListOf<Pair<ImageView, TextView>>()
     private lateinit var sidebarBrandMark: ImageView
     private lateinit var sendButton: ImageView
@@ -2212,7 +2215,17 @@ class MainActivity : Activity() {
         sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(newThreadIconSize), dp(newThreadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 10) })
         sidebarNewThreadLabel = label("新建对话", if (pixelTheme) 14 else 13, TEXT, true)
         sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
-        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 43)).apply { topMargin = dp(7) })
+        val newThreadControl = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val controlHeight = dp(if (retroTheme) 44 else 43)
+        newThreadControl.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(0, controlHeight, 1f))
+        sidebarCodexFilterButton = sidebarEngineFilterButton("codex")
+        sidebarClaudeFilterButton = sidebarEngineFilterButton("claude-code")
+        newThreadControl.addView(sidebarCodexFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(5) })
+        newThreadControl.addView(sidebarClaudeFilterButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply { leftMargin = dp(4) })
+        drawer.addView(newThreadControl, LinearLayout.LayoutParams(MATCH, controlHeight).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
@@ -2225,7 +2238,9 @@ class MainActivity : Activity() {
             imageTintList = null
             contentDescription = "聊天记录"
         }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
-        recentHeading.addView(label("聊天记录", if (pixelTheme) 12 else 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(label("聊天记录", if (pixelTheme) 12 else 11, MUTED, true).apply {
+            tag = "sidebar_thread_heading"
+        }, LinearLayout.LayoutParams(0, dp(34), 1f))
         recentHeading.addView(label("选择", if (pixelTheme) 12 else 11, SUBTLE, true).apply {
             tag = "sidebar_selection_toggle"
             gravity = Gravity.CENTER
@@ -2472,6 +2487,78 @@ class MainActivity : Activity() {
             icon.imageTintList = retroIconTint(actionColor)
             label.setTextColor(actionColor)
         }
+        if (::sidebarCodexFilterButton.isInitialized && ::sidebarClaudeFilterButton.isInitialized) {
+            updateSidebarEngineFilterButtons()
+        }
+    }
+
+    private fun sidebarEngineFilterButton(engine: String): ImageButton = ImageButton(this).apply {
+        setBrandIcon(this, engine)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(dp(8), dp(8), dp(8), dp(8))
+        isFocusable = true
+        isClickable = true
+        setOnClickListener {
+            sidebarEngineFilter = if (sidebarEngineFilter == engine) null else engine
+            updateSidebarEngineFilterButtons()
+            renderSidebar(force = true)
+        }
+    }
+
+    private fun sidebarEngineFilterDescription(engine: String, active: Boolean): String = when {
+        engine == "claude-code" && active -> "取消 Claude 筛选，显示全部聊天"
+        engine == "claude-code" -> "只显示 Claude 对话"
+        active -> "取消 Codex 筛选，显示全部聊天"
+        else -> "只显示 Codex 对话"
+    }
+
+    private fun updateSidebarEngineFilterButtons() {
+        listOf("codex" to sidebarCodexFilterButton, "claude-code" to sidebarClaudeFilterButton).forEach { (engine, button) ->
+            val active = sidebarEngineFilter == engine
+            val tint = brandIconTint(engine)
+            val description = tr(sidebarEngineFilterDescription(engine, active))
+            button.imageTintList = ColorStateList.valueOf(tint)
+            button.contentDescription = description
+            button.tooltipText = description
+            button.isSelected = active
+            button.stateListAnimator = null
+            button.background = when {
+                pixelTheme -> {
+                    val resting = pixelFrameBackground(
+                        if (active) R.drawable.pixel_frame_active else R.drawable.pixel_frame_square,
+                        if (active) colorWithAlpha(tint, .20f) else PIXEL_PANEL_INSET,
+                    )
+                    android.graphics.drawable.StateListDrawable().apply {
+                        val pressed = pixelBlockBackground(if (active) colorWithAlpha(tint, .30f) else PIXEL_PANEL_INSET)
+                        addState(intArrayOf(android.R.attr.state_pressed), pressed)
+                        addState(intArrayOf(android.R.attr.state_focused), pressed)
+                        addState(intArrayOf(), resting)
+                    }
+                }
+                retroTheme -> lollipopRipple(
+                    if (active) rounded(
+                        if (engine == "claude-code") Color.rgb(248, 233, 226) else LOLLIPOP_PRIMARY_LIGHT,
+                        0,
+                        colorWithAlpha(tint, .45f),
+                        dp(1),
+                    ) else ColorDrawable(Color.TRANSPARENT),
+                    colorWithAlpha(tint, .2f),
+                )
+                else -> {
+                    val resting = if (active) rounded(
+                        colorWithAlpha(tint, if (lightTheme) .14f else .20f),
+                        dp(7),
+                        colorWithAlpha(tint, .4f),
+                        dp(1),
+                    ) else rounded(Color.TRANSPARENT, dp(7))
+                    android.graphics.drawable.RippleDrawable(
+                        ColorStateList.valueOf(colorWithAlpha(tint, .18f)),
+                        resting,
+                        rounded(Color.WHITE, dp(7)),
+                    )
+                }
+            }
+        }
     }
 
     private fun threadLastActiveMillis(thread: JSONObject): Long {
@@ -2502,7 +2589,7 @@ class MainActivity : Activity() {
     }
 
     private fun bulkSelectedThreads(): List<JSONObject> = (0 until threads.length()).mapNotNull { threads.optJSONObject(it) }
-        .filter { it.optString("engine", "codex") == currentMode && it.optString("id") in selectedSidebarThreadIds }
+        .filter { it.optString("id") in selectedSidebarThreadIds }
 
     private fun sidebarSelectionAction(title: String, color: Int = SUBTLE, action: () -> Unit): TextView =
         label(title, 11, color, true).apply {
@@ -2566,7 +2653,7 @@ class MainActivity : Activity() {
         val selected = bulkSelectedThreads()
         if (selected.isEmpty()) return
         val ids = selected.map { it.optString("id") }
-        val selectedMode = currentMode
+        val selectedModes = selected.associate { it.optString("id") to it.optString("engine", "codex") }
         showConfirmDialog("批量删除聊天", "删除选中的 ${ids.size} 个聊天？此操作无法撤销。", "删除", destructive = true) {
             val generation = connectionGeneration
             val api = RemoteApi(endpoint, token)
@@ -2588,8 +2675,9 @@ class MainActivity : Activity() {
                         syncRevisions.remove(id)
                         displayedThreadTitles.remove(threadTitleKey(id))
                         pausedThreadKeys.remove(threadTitleKey(id))
-                        draftFilesByScope.remove(connectionScopedKey("draft_${selectedMode}_$id"))
-                        pendingUserMessages.remove(connectionScopedKey("draft_${selectedMode}_$id"))
+                        val engine = selectedModes[id] ?: "codex"
+                        draftFilesByScope.remove(connectionScopedKey("draft_${engine}_$id"))
+                        pendingUserMessages.remove(connectionScopedKey("draft_${engine}_$id"))
                     }
                     if (activeThreadId?.let { it in removed } == true) {
                         prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
@@ -2631,12 +2719,21 @@ class MainActivity : Activity() {
         sidebarRenderDirty = false
         drawerThreads.removeAllViews()
         val query = if (::drawerSearch.isInitialized) drawerSearch.text.toString().trim().lowercase(Locale.ROOT) else ""
+        val heading = when {
+            query.isNotBlank() -> "搜索结果"
+            sidebarEngineFilter == "codex" -> "Codex 对话"
+            sidebarEngineFilter == "claude-code" -> "Claude 对话"
+            else -> "聊天记录"
+        }
+        drawer.findViewWithTag<TextView>("sidebar_thread_heading")?.text = tr(heading)
         val filtered = mutableListOf<JSONObject>()
         for (index in 0 until threads.length()) {
             val thread = threads.optJSONObject(index) ?: continue
-            if (thread.optString("engine", "codex") != currentMode) continue
+            val engine = thread.optString("engine", "codex")
+            if (sidebarEngineFilter != null && engine != sidebarEngineFilter) continue
             val title = threadTitle(thread)
-            if (query.isNotBlank() && !title.lowercase(Locale.ROOT).contains(query)) continue
+            val preview = thread.optString("preview").lowercase(Locale.ROOT)
+            if (query.isNotBlank() && !title.lowercase(Locale.ROOT).contains(query) && !preview.contains(query)) continue
             filtered += thread
         }
         filtered.sortWith(compareByDescending<JSONObject> { pinnedThreadIds.contains(it.optString("id")) }
@@ -2651,11 +2748,17 @@ class MainActivity : Activity() {
                 setPadding(dp(12), dp(28), dp(12), dp(28))
             }
             empty.addView(ImageView(this).apply {
-                setImageResource(if (currentMode == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                setColorFilter(if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent())
+                val emptyEngine = sidebarEngineFilter ?: currentMode
+                setImageResource(if (emptyEngine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
+                setColorFilter(brandIconTint(emptyEngine))
                 alpha = .55f
             }, LinearLayout.LayoutParams(dp(24), dp(24)).apply { bottomMargin = dp(9) })
-            empty.addView(label(if (query.isBlank()) "当前模式暂无对话" else "没有匹配的对话", 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
+            val emptyLabel = when {
+                query.isNotBlank() -> "没有匹配的对话"
+                sidebarEngineFilter != null -> "该模式暂无对话"
+                else -> "暂无对话"
+            }
+            empty.addView(label(emptyLabel, 12, MUTED).apply { gravity = Gravity.CENTER }, widthWrap())
             drawerThreads.addView(empty, widthWrap())
         }
         val sections = linkedMapOf<String, MutableList<JSONObject>>()
@@ -2668,24 +2771,24 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(MATCH, WRAP))
             entries.forEach { thread ->
             val id = thread.optString("id")
+            val engine = thread.optString("engine", "codex")
             val selected = if (sidebarSelectionMode) id in selectedSidebarThreadIds else id == activeThreadId
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(if (pixelTheme) dp(8) else if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
                 minimumHeight = dp(if (pixelTheme) 48 else if (retroTheme) 44 else 0)
-                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
+                val selectedAccent = if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
                 background = if (retroTheme) {
                     if (pixelTheme && selected) pixelFrameBackground(R.drawable.pixel_frame_active, Color.rgb(25, 43, 64))
-                    else if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
+                    else if (selected) ColorDrawable(if (engine == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
                 } else if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 contentDescription = threadTitle(thread)
             }
-            val engine = thread.optString("engine", "codex")
             if (retroTheme && !pixelTheme) {
-                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent()
+                val selectedAccent = if (engine == "claude-code") brandIconTint(engine) else codexBrandAccent()
                 row.addView(View(this).apply {
                     setBackgroundColor(if (selected) selectedAccent else Color.TRANSPARENT)
                 }, LinearLayout.LayoutParams(dp(3), MATCH).apply { rightMargin = dp(8) })
