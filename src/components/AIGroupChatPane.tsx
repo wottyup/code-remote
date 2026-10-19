@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
-import { ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, MessagesSquare, Pencil, Send, Trash2, X } from 'lucide-react'
+import { AlertTriangle, ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, Pencil, Send, Trash2, X } from 'lucide-react'
 import { useCodexRemote } from '../hooks/useCodexRemote'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import type { AIGroupChat, AIGroupEngine, AIGroupMessage } from '../lib/aiGroupChats'
@@ -344,7 +344,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
   }, [busy, claude, codex, group, lastUserMessage, latestClaudeReply, latestCodexReply, onGroupChange, resolvePreferences])
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
       event.preventDefault()
       event.currentTarget.form?.requestSubmit()
     }
@@ -373,21 +373,22 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     && !busy
 
   return (
-    <div className="ai-group-chat" ref={containerRef} role="region" aria-label={`${group.name}群聊`} hidden={hidden}>
-        <header className="ai-group-chat__header">
-          <button className="ai-group-chat__sidebar-button" type="button" aria-label="打开聊天列表" onClick={onOpenSidebar}><Menu size={18} /></button>
-          <button className="ai-group-chat__workspace-button" type="button" aria-label="打开文件面板" onClick={onOpenWorkspace}><FolderOpen size={17} /></button>
-          <div className="ai-group-chat__title"><span className="ai-group-chat__title-icon"><MessagesSquare size={17} /></span><div><h2 id="ai-group-chat-title">{group.name}</h2><p>两个成员各自接续原聊天记忆、模型与权限</p></div></div>
-          <div className="ai-group-chat__header-actions">
-            {!group.codexThreadId && !group.claudeThreadId ? <button type="button" className="ai-group-chat__delete-empty" onClick={() => onDeleteGroup(group.id)} aria-label="删除空群聊" title="删除空群聊"><Trash2 size={16} /></button> : null}
+    <main className="remote-chat conversation-pane ai-group-chat" ref={containerRef} role="region" aria-label={`${group.name}群聊`} hidden={hidden}>
+      <header className="remote-chat__header">
+        <div className="remote-chat__title-wrap">
+          <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={onOpenSidebar}><Menu size={20} /></button>
+          <div className="remote-chat__title">
+            <span className="remote-chat__eyebrow">AI 群聊 · Codex + Claude</span>
+            <strong>{group.name}</strong>
+            <span>各自延续原聊天记忆、模型与权限</span>
           </div>
-        </header>
-        <div className="ai-group-chat__participants" aria-live="polite">
+        </div>
+        <div className="remote-chat__controls ai-group-chat__controls" aria-live="polite">
           {(['codex', 'claude-code'] as const).map((engine) => {
             const remote = engine === 'codex' ? codex : claude
             const threadId = threadIdForEngine(engine, group)
             const status = !threadId ? '待加入' : remote.connection === 'connected' ? (remote.isRunning ? '正在回复' : '已连接') : remote.connection === 'connecting' ? '连接中' : remote.connection === 'unavailable' ? '不可用' : '已断开'
-            return <div className={`ai-group-chat__participant ai-group-chat__participant--${engine}`} key={engine}>
+            return <div className={`ai-group-chat__member ai-group-chat__member--${engine}`} key={engine}>
               <span className={`engine-brand-icon engine-brand-icon--${engine}`} aria-label={engine === 'codex' ? 'Codex' : 'Claude Code'} />
               {renameEngine === engine
                 ? <form className="ai-group-chat__rename" onSubmit={saveRename}>
@@ -395,36 +396,58 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
                     <button type="submit" aria-label="保存名称" disabled={!renameDraft.trim()}><Check size={13} /></button>
                     <button type="button" aria-label="取消重命名" onClick={() => setRenameEngine(null)}><X size={13} /></button>
                   </form>
-                : <><span className="ai-group-chat__participant-name">{engineLabel(engine, group)}</span><small>{status}</small><button type="button" className="ai-group-chat__rename-trigger" title={`重命名 ${engineLabel(engine, group)}`} aria-label={`重命名 ${engineLabel(engine, group)}`} onClick={() => startRename(engine)}><Pencil size={12} /></button></>}
+                : <button type="button" className="ai-group-chat__member-name" title={`重命名 ${engineLabel(engine, group)} · ${status}`} aria-label={`重命名 ${engineLabel(engine, group)}，状态：${status}`} onClick={() => startRename(engine)}>
+                    <span>{engineLabel(engine, group)}</span><Pencil size={11} />
+                  </button>}
             </div>
           })}
+          <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={onOpenWorkspace}><FolderOpen size={17} /></button>
+          {!group.codexThreadId && !group.claudeThreadId ? <button type="button" className="icon-button ai-group-chat__delete-empty" onClick={() => onDeleteGroup(group.id)} aria-label="删除空群聊" title="删除空群聊"><Trash2 size={16} /></button> : null}
         </div>
-        <div className="ai-group-chat__messages" ref={messageList} aria-live="polite">
-          {group.messages.length === 0 ? <div className="ai-group-chat__empty"><MessagesSquare size={23} /><strong>{bothMembersJoined ? '把问题同时交给两边' : '先把两个模式的聊天加入群聊'}</strong><span>{bothMembersJoined ? '它们会沿用各自原聊天的历史分别回答。你也可以让它们互相回应一轮。' : '在侧边栏找到已有聊天，右键选择「加入群聊」。两边都加入后即可开始群聊。'}</span></div> : null}
-          {group.messages.map((message) => (
-            message.role === 'system'
-              ? <div className="ai-group-chat__system-message" key={message.id}>{message.text}</div>
-              : <article className={`ai-group-chat__message ai-group-chat__message--${message.role}${message.engine ? ` ai-group-chat__message--${message.engine}` : ''}`} key={message.id}>
-                  {message.role === 'assistant' ? <div className="ai-group-chat__message-author"><span className={`engine-brand-icon engine-brand-icon--${message.engine}`} aria-hidden="true" />{engineLabel(message.engine ?? 'codex', group)}{message.streaming ? <LoaderCircle className="spin" size={12} /> : null}</div> : <div className="ai-group-chat__message-author">你</div>}
-                  <div className="ai-group-chat__message-text">{renderLinks(message.text, message.id)}</div>
-                </article>
-          ))}
+      </header>
+      <section className="message-stream" ref={messageList} aria-live="polite" aria-label={`${group.name}群聊消息`}>
+        <div className={`message-stream__content${group.messages.length === 0 ? ' message-stream__content--welcome' : ''}`}>
+          {group.messages.length === 0 ? <div className="welcome-state ai-group-chat__empty">
+            <h1>{bothMembersJoined ? '把问题同时交给两边' : '先把两个模式的聊天加入群聊'}</h1>
+            <p>{bothMembersJoined ? '它们会沿用各自原聊天的历史分别回答。你也可以让它们互相回应一轮。' : '在侧边栏找到已有聊天，右键选择「加入群聊」。两边都加入后即可开始群聊。'}</p>
+          </div> : null}
+          {group.messages.map((message) => message.role === 'system'
+            ? <div className="ai-group-chat__system-message" key={message.id}>{message.text}</div>
+            : <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id} key={message.id}>
+                <div className="chat-message__body">
+                  {message.role === 'assistant' ? <div className="chat-message__meta">
+                    <strong className={`chat-message__assistant-name chat-message__assistant-name--${message.engine === 'claude-code' ? 'claude' : 'codex'}`}>{engineLabel(message.engine ?? 'codex', group)}</strong>
+                    {message.streaming ? <span><LoaderCircle className="spin" size={12} />正在回复</span> : null}
+                  </div> : null}
+                  <div className="chat-message__content"><div className="chat-message__text">{renderLinks(message.text, message.id)}</div></div>
+                </div>
+              </article>)}
+          {(localError || failedEngines.length > 0) ? <div className="remote-error ai-group-chat__error" role="alert">
+            <AlertTriangle size={15} />
+            <span>
+              {localError ? <strong>{localError} </strong> : null}
+              {failedEngines.map((engine) => {
+                const error = engine === 'codex' ? codex.error : claude.error
+                return <span className="ai-group-chat__error-detail" key={engine}><strong>{engineLabel(engine, group)}：</strong>{error?.trim() || '模式没有返回具体错误，请检查该模式的连接状态或后端日志。'}</span>
+              })}
+            </span>
+          </div> : null}
+          {canRelay ? <div className="ai-group-chat__relay-row"><button type="button" className="ai-group-chat__relay" onClick={() => void relayOnce()}><ArrowLeftRight size={14} />互相回应一轮</button><span>由你触发；每条用户消息最多一轮</span></div> : null}
         </div>
-        {(localError || failedEngines.length > 0) ? <div className="ai-group-chat__error" role="alert">
-          {localError ? <strong>{localError}</strong> : null}
-          {failedEngines.map((engine) => {
-            const error = engine === 'codex' ? codex.error : claude.error
-            return <div className="ai-group-chat__error-detail" key={engine}>
-              <strong>{engineLabel(engine, group)}：</strong>{error?.trim() || '模式没有返回具体错误，请检查该模式的连接状态或后端日志。'}
+      </section>
+      <div className="composer-dock ai-group-chat__composer-dock">
+        <form className={`message-composer ai-group-chat__composer${busy ? ' message-composer--running' : ''}`} onSubmit={(event) => void sendToBoth(event)}>
+          <div className="composer-editor" style={{ height: 88 }}>
+            <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} aria-label={`${group.name}消息`} />
+          </div>
+          <div className="message-composer__footer">
+            <div className="composer-preferences"><span className="ai-group-chat__composer-hint">{!ready ? (bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取原聊天记录…' : '正在连接两个原聊天…') : '群聊不创建新会话；请从侧边栏加入已有聊天。') : '消息会同时发给两个成员，各自使用自己的模型与权限。'}</span></div>
+            <div className="composer-actions">
+              <button className="send-button send-button--arrow" type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={16} /> : <Send size={16} />}</button>
             </div>
-          })}
-        </div> : null}
-        {canRelay ? <div className="ai-group-chat__relay-row"><button type="button" className="ai-group-chat__relay" onClick={() => void relayOnce()}><ArrowLeftRight size={14} />互相回应一轮</button><span>由你触发；每条用户消息最多一轮</span></div> : null}
-        <form className="ai-group-chat__composer" onSubmit={(event) => void sendToBoth(event)}>
-          <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…（Ctrl/⌘ + Enter 发送）` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} rows={3} aria-label={`${group.name}消息`} />
-          <button type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button>
+          </div>
         </form>
-        {!ready ? <div className="ai-group-chat__footnote">{bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取原聊天记录…' : '正在连接两个原聊天…') : '群聊不创建新会话；请从侧边栏右键把已有聊天加入。'}</div> : <div className="ai-group-chat__footnote">群聊汇总保存在此浏览器；每条消息会进入成员各自的原聊天。</div>}
-    </div>
+      </div>
+    </main>
   )
 }
