@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.51.0-dev.1] - 新增 Codex 与 Claude Code AI 群聊
+
 ## [0.50.0-dev.1] - 新增安卓聊天内文档预览并收紧输入框底部间距
 
 ## [0.49.1-dev.8] - 修复安卓聊天中 Markdown 附件展开为全文

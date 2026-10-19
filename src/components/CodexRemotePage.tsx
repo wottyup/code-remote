@@ -63,6 +63,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { AIGroupChatDialog } from './AIGroupChatDialog'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
@@ -3899,6 +3900,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
+  const [aiGroupChatOpen, setAiGroupChatOpen] = useState(false)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -3948,6 +3950,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(false)
     setWorkspaceOpen(false)
   }, [])
+  const closeAIGroupChat = useCallback(() => setAiGroupChatOpen(false), [])
+  const refreshAIGroupChatThreads = useCallback(() => {
+    void remote0.refreshThreads(true)
+  }, [remote0.refreshThreads])
   const openSidebarPanel = useCallback(() => {
     const focused = document.activeElement
     if (isMobileLayout() && focused instanceof HTMLTextAreaElement && focused.closest('.message-composer')) focused.blur()
@@ -4216,7 +4222,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const touch = event.touches[0]
     if (!touch) return
-    const globalOverlayOpen = settingsOpen || usageStatsOpen
+    const globalOverlayOpen = settingsOpen || usageStatsOpen || aiGroupChatOpen
       || Boolean(threadRenameTarget)
       || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
@@ -4349,7 +4355,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (!action) return
     event.preventDefault()
     if (action === 'close-global') {
-      if (settingsOpen) closeSettingsPanel()
+      if (aiGroupChatOpen) closeAIGroupChat()
+      else if (settingsOpen) closeSettingsPanel()
       else if (usageStatsOpen) closeUsageStatsPanel()
       else if (threadRenameTarget) closeThreadRename()
       else if (threadDeleteTargets) closeThreadDelete()
@@ -4461,6 +4468,35 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const snapshot = composerPreferencesFrom(preferences)
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }, [])
+
+  const resolveAIGroupChatPreferences = useCallback((engine: ChatEngine, threadId: string | null): ComposerPreferences => {
+    const preferences = resolvedComposerPreferences(
+      defaultComposerPreferences,
+      threadId ? threadComposerPreferences[threadId] : undefined,
+    )
+    return engine === 'codex'
+      ? { model: preferences.model, effort: preferences.effort, approvalPolicy: preferences.approvalPolicy }
+      : {
+          claudeModel: preferences.claudeModel ?? 'default',
+          claudeEffort: preferences.claudeEffort ?? 'default',
+          claudePermissionMode: preferences.claudePermissionMode ?? 'default',
+        }
+  }, [defaultComposerPreferences, threadComposerPreferences])
+
+  const rememberAIGroupChatThread = useCallback((engine: ChatEngine, threadId: string) => {
+    const preferences = resolveAIGroupChatPreferences(engine, null)
+    rememberThreadComposerPreferences(threadId, engine === 'codex'
+      ? {
+          model: preferences.model,
+          effort: preferences.effort,
+          approvalPolicy: preferences.approvalPolicy ?? 'on-request',
+        }
+      : {
+          claudeModel: preferences.claudeModel ?? 'default',
+          claudeEffort: preferences.claudeEffort ?? 'default',
+          claudePermissionMode: preferences.claudePermissionMode ?? 'default',
+        })
+  }, [rememberThreadComposerPreferences, resolveAIGroupChatPreferences])
 
   const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
@@ -5352,6 +5388,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className="sidebar-settings sidebar-settings--group-chat" type="button" aria-label="AI 群聊" title="AI 群聊" onClick={() => { setSidebarOpen(false); setAiGroupChatOpen(true) }}><MessagesSquare size={16} /><span>AI 群聊</span></button>
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
@@ -5570,6 +5607,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
         </>
       )}
+      {aiGroupChatOpen ? <AIGroupChatDialog token={token} onUnauthorized={onUnauthorized} onClose={closeAIGroupChat} onThreadsChanged={refreshAIGroupChatThreads} resolvePreferences={resolveAIGroupChatPreferences} onThreadCreated={rememberAIGroupChatThread} /> : null}
     </div>
   )
 }
