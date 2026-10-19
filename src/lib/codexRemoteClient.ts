@@ -15,6 +15,7 @@ export interface CodexThread {
 
 export interface CodexThreadDetails extends CodexThread {
   turns?: unknown[]
+  historyContentRevision?: string
   codexRemoteWorkspaceChanges?: Record<string, unknown>
 }
 
@@ -144,6 +145,7 @@ export interface RemoteEvent {
   heartbeats?: boolean
   id?: string
   threadId?: string
+  revision?: string
   pinned?: boolean
   method?: string
   params?: Record<string, unknown>
@@ -586,6 +588,7 @@ async function readThreadWithChanges(token: string, threadId: string, key: strin
   if (thread.id !== threadId) throw new Error('聊天同步返回了不匹配的对话，请刷新后重试。')
   const revision = response.historySync?.revision
   if (typeof revision === 'string' && revision) {
+    thread = { ...thread, historyContentRevision: revision }
     if (revision !== cached?.revision || response.historySync?.baseRevision === undefined) {
       await writeThreadTransportCache(key, { thread, revision })
     }

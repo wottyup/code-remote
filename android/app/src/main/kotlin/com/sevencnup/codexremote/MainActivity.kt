@@ -790,6 +790,12 @@ class MainActivity : Activity() {
     private val connectionProfiles = mutableListOf<ConnectionProfile>()
     private val draftFilesByScope = mutableMapOf<String, MutableList<JSONObject>>()
     private val pendingUserMessages = mutableMapOf<String, MutableList<JSONObject>>()
+    private val remoteUserMessageOverlays = mutableMapOf<String, LinkedHashMap<String, JSONObject>>()
+    private val finishedTurnStates = linkedMapOf<String, JSONObject>()
+    private val pendingLiveTurnIds = mutableMapOf<String, String>()
+    private var turnLifecycleGeneration = 0L
+    private var threadListRefreshScheduled = false
+    private var lastThreadListRefreshAt = 0L
     private var activeConnectionId = ""
     @Volatile private var connectionGeneration = 0L
     @Volatile private var backgroundThreadDirty = false
@@ -1028,8 +1034,9 @@ class MainActivity : Activity() {
     private val refreshRunnable = object : Runnable {
         override fun run() {
             if (token.isNotBlank() && foreground) {
+                // Metadata is a cheap backstop even when the socket appears healthy.
+                refreshThreads(false)
                 if (!socketConnected) {
-                    refreshThreads(false)
                     refreshActiveThread(false)
                     refreshQueue(false)
                     connectSocket()
@@ -1419,6 +1426,10 @@ class MainActivity : Activity() {
         threads = JSONArray()
         models = JSONArray()
         queuedMessages = JSONArray()
+        remoteUserMessageOverlays.clear()
+        finishedTurnStates.clear()
+        pendingLiveTurnIds.clear()
+        turnLifecycleGeneration++
         running = false
         pendingApproval = null
         pendingCompletionNoticeThreadId = null
@@ -3080,6 +3091,7 @@ class MainActivity : Activity() {
 
     private fun refreshThreads(showErrors: Boolean) {
         if (token.isBlank()) return
+        lastThreadListRefreshAt = android.os.SystemClock.uptimeMillis()
         val generation = connectionGeneration
         val api = RemoteApi(endpoint, token)
         io.execute {
@@ -3105,8 +3117,16 @@ class MainActivity : Activity() {
                             current.put("name", latest.optString("name"))
                             current.put("preview", latest.optString("preview"))
                             current.put("cwd", latest.optString("cwd"))
-                            latest.optJSONObject("status")?.let { current.put("status", it) }
-                            running = isThreadRunning(current)
+                            // Sidebar metadata must not replace the lifecycle of loaded history.
+                            if (current.optJSONArray("turns") == null) {
+                                latest.optJSONObject("status")?.let { current.put("status", it) }
+                            }
+                            val latestRevision = latest.optString("historyRevision")
+                            if ((latestRevision.isNotBlank() && latestRevision != current.optString("historyRevision")) ||
+                                (latestRevision.isBlank() && latest.opt("updatedAt") != current.opt("updatedAt"))) {
+                                clearKnownEmptyThread(selected)
+                                scheduleActiveThreadRefresh()
+                            }
                             renderHeader()
                         }
                     } else if (showErrors && result.length() > 0) {
@@ -3127,6 +3147,19 @@ class MainActivity : Activity() {
     private fun findThread(id: String): JSONObject? = (0 until threads.length())
         .mapNotNull { threads.optJSONObject(it) }
         .firstOrNull { it.optString("id") == id }
+
+    private fun scheduleThreadListRefresh() {
+        if (!foreground) { backgroundListDirty = true; return }
+        if (threadListRefreshScheduled) return
+        val generation = connectionGeneration
+        threadListRefreshScheduled = true
+        val elapsed = android.os.SystemClock.uptimeMillis() - lastThreadListRefreshAt
+        handler.postDelayed({
+            threadListRefreshScheduled = false
+            if (generation == connectionGeneration && foreground) refreshThreads(false)
+            else backgroundListDirty = true
+        }, (5_000L - elapsed).coerceAtLeast(500L))
+    }
 
     private fun selectThread(thread: JSONObject, eagerDiskCache: Boolean = false) {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
@@ -3366,6 +3399,8 @@ class MainActivity : Activity() {
         if (isKnownEmptyThread(threadId) && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) return
         val connection = connectionGeneration
         val profileId = activeConnectionId
+        val lifecycleGeneration = turnLifecycleGeneration
+        val previousHistory = activeThread
         val api = RemoteApi(endpoint, token)
         if (showLoading && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) {
             historyLoadingThreadId = threadId
@@ -3396,7 +3431,7 @@ class MainActivity : Activity() {
                     val changedTurns = response.optJSONArray("turns") ?: JSONArray()
                     (0 until changedTurns.length()).mapNotNull { changedTurns.optJSONObject(it)?.optString("id")?.takeIf(String::isNotBlank) }
                 } else emptyList()
-                val merged = if (revision != null) mergeHistory(threadId, activeThread, response, revision) else response
+                val merged = if (revision != null) mergeHistory(threadId, previousHistory, response, revision) else response
                 val responseIsCompleteWindow = revision != null && response.has("turns") &&
                     response.optJSONObject("historySync")?.optString("baseRevision").orEmpty().isBlank()
                 if (merged == null && !responseIsCompleteWindow) {
@@ -3417,20 +3452,25 @@ class MainActivity : Activity() {
                 val newRevision = sync?.optString("revision")?.takeIf { !it.isNullOrBlank() && it != "null" }
                 if (resolved.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
                 if (connection != connectionGeneration) return@execute
-                writeThreadHistoryCache(threadId, resolved, newRevision, profileId)
                 handler.post {
                     if (connection != connectionGeneration) return@post
                     finishThreadRead(threadId)
                     if (activeThreadId != threadId) return@post
+                    if (lifecycleGeneration != turnLifecycleGeneration || !reconcileLiveHistory(resolved)) {
+                        scheduleActiveThreadRefresh()
+                        return@post
+                    }
                     if (newRevision != null) syncRevisions[threadId] = newRevision
                     activeThread = resolved
                     historyMemoryCache[threadId] = resolved
                     historyLoadingThreadId = null
                     historyLoadError = null
                     running = isThreadRunning(resolved)
+                    if (!running) clearLiveActivity()
                     renderHeader()
                     if (historyChanged) renderMessages(false, incrementalTurnId)
                     updateComposerFileChanges()
+                    io.execute { writeThreadHistoryCache(threadId, resolved, newRevision, profileId) }
                 }
             } catch (error: Exception) {
                 handler.post {
@@ -3452,6 +3492,7 @@ class MainActivity : Activity() {
     }
 
     private fun scheduleActiveThreadRefresh() {
+        if (!foreground) { backgroundThreadDirty = true; return }
         if (activeThreadRefreshScheduled) return
         val elapsed = android.os.SystemClock.uptimeMillis() - lastActiveThreadRefreshAt
         val delay = (900L - elapsed).coerceAtLeast(0L)
@@ -3715,6 +3756,7 @@ class MainActivity : Activity() {
                 timelineTextBuilders[block]?.let { block.put("text", it.toString()) }
             }
         }
+        appendRemoteUserMessageOverlays(messages)
         appendPendingUserMessages(messages)
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
         val showWelcomeTitle = effectiveIncrementalTurnId == null && !hasConversationMessages && (
@@ -4129,6 +4171,70 @@ class MainActivity : Activity() {
         }
         if (remaining.isEmpty()) pendingUserMessages.remove(scope) else pendingUserMessages[scope] = remaining.toMutableList()
         remaining.forEach { messages += "user" to it }
+    }
+
+    private fun rememberRemoteUserMessage(threadId: String, turnId: String?, item: JSONObject): Boolean {
+        if (threadId != activeThreadId || normalizedType(item.optString("type")) != "usermessage") return false
+        val itemId = item.optString("id").takeIf { it.isNotBlank() && it != "null" } ?: return false
+        val text = messageText(item, "user").trim()
+        val imageCount = item.optJSONArray("content")?.let { content ->
+            (0 until content.length()).count { index ->
+                normalizedType(content.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
+            }
+        } ?: 0
+        if (text.isBlank() && imageCount == 0) return false
+
+        val existingTurns = activeThread?.optJSONArray("turns")
+        if (existingTurns != null && (0 until existingTurns.length()).any { turnIndex ->
+                val items = existingTurns.optJSONObject(turnIndex)?.optJSONArray("items") ?: return@any false
+                (0 until items.length()).any { items.optJSONObject(it)?.optString("id") == itemId }
+            }) {
+            remoteUserMessageOverlays[threadId]?.remove(itemId)
+            return false
+        }
+
+        val pending = pendingUserMessages[draftStorageKey()].orEmpty()
+        val alreadyShownLocally = pending.any { local ->
+            val expectedText = local.optString("_matchText").trim()
+            (expectedText.isNotBlank() && expectedText == text) ||
+                (expectedText.isBlank() && local.optInt("_imageCount") > 0 && imageCount >= local.optInt("_imageCount"))
+        }
+        if (alreadyShownLocally) return false
+
+        val resolvedTurnId = turnId?.takeIf { it.isNotBlank() && it != "null" }
+            ?: liveActivityTurnId?.takeIf { it.isNotBlank() }
+        val overlay = shallowCopyObject(item).put("_displayTime", messageTime(item, JSONObject(), false).ifBlank { currentMessageTime() })
+        resolvedTurnId?.let { overlay.put("_turnId", it) }
+        val overlays = remoteUserMessageOverlays.getOrPut(threadId) { linkedMapOf() }
+        overlays[itemId] = overlay
+        while (overlays.size > 16) overlays.remove(overlays.keys.first())
+        return true
+    }
+
+    private fun appendRemoteUserMessageOverlays(messages: MutableList<Pair<String, JSONObject>>) {
+        val threadId = activeThreadId ?: return
+        val overlays = remoteUserMessageOverlays[threadId] ?: return
+        val iterator = overlays.entries.iterator()
+        while (iterator.hasNext()) {
+            val (itemId, item) = iterator.next()
+            val turns = activeThread?.optJSONArray("turns") ?: JSONArray()
+            val confirmed = (0 until turns.length()).any { index ->
+                val items = turns.optJSONObject(index)?.optJSONArray("items") ?: return@any false
+                (0 until items.length()).any { items.optJSONObject(it)?.optString("id") == itemId }
+            }
+            if (confirmed || messages.any { (role, message) -> role == "user" && message.optString("id") == itemId }) {
+                iterator.remove()
+                continue
+            }
+            val turnId = item.optString("_turnId")
+            val sameTurnIndex = if (turnId.isBlank()) -1 else messages.indexOfFirst { (role, message) ->
+                role == "assistant" && message.optString("_turnId") == turnId
+            }
+            val renderedItem = shallowCopyObject(item)
+            if (sameTurnIndex >= 0) messages.add(sameTurnIndex, "user" to renderedItem)
+            else messages += "user" to renderedItem
+        }
+        if (overlays.isEmpty()) remoteUserMessageOverlays.remove(threadId)
     }
 
     private fun removePendingUserMessage(scope: String, requestId: String) {
@@ -9439,7 +9545,12 @@ class MainActivity : Activity() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 if (socket !== webSocket || generation != connectionGeneration) return
                 lastSocketActivityAt = System.currentTimeMillis()
-                try { handleSocketEvent(JSONObject(text)) } catch (_: JSONException) { }
+                try {
+                    val event = JSONObject(text)
+                    handler.post {
+                        if (socket === webSocket && generation == connectionGeneration) handleSocketEvent(event)
+                    }
+                } catch (_: JSONException) { }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -9492,9 +9603,13 @@ class MainActivity : Activity() {
                     handler.post { renderMessages(false) }
                 }
             }
-            "threads.changed" -> {
-                if (foreground) handler.post { refreshThreads(false) }
-                else backgroundListDirty = true
+            "threads.changed", "claude.threads.changed" -> scheduleThreadListRefresh()
+            "thread.history.changed" -> {
+                val threadId = event.optString("threadId")
+                if (threadId == activeThreadId && event.optString("revision") != activeThread?.optString("historyRevision")) {
+                    clearKnownEmptyThread(threadId)
+                    scheduleActiveThreadRefresh()
+                }
             }
             "remote.queue.changed" -> {
                 if (event.optString("threadId") == activeThreadId) {
@@ -9509,42 +9624,64 @@ class MainActivity : Activity() {
     private fun handleNotificationEvent(event: JSONObject) {
         val method = event.optString("method")
         val params = event.optJSONObject("params") ?: JSONObject()
+        val threadId = eventThreadId(params) ?: activeThreadId.takeIf { targetsActiveThread(params) }
+        val turnId = eventTurnId(params)
+        if (threadId != null && turnId != null && finishedTurnStates.containsKey("$threadId:$turnId") &&
+            method != "turn/completed" && method != "turn/workspaceChanges") {
+            if (threadId == activeThreadId) scheduleActiveThreadRefresh()
+            return
+        }
         when (method) {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread != null) handler.post {
+                if (eventThread != null && turnId != null) pendingLiveTurnIds[eventThread] = turnId
+                if (eventThread != null) run {
                     pausedThreadKeys.remove(threadTitleKey(eventThread))
                     clearKnownEmptyThread(eventThread)
                 }
                 if (eventThread == activeThreadId) {
+                    turnLifecycleGeneration++
                     running = true
                     clearLiveActivity()
                     liveActivityTurnId = params.optString("turnId").ifBlank { params.optJSONObject("turn")?.optString("id").orEmpty() }
                         .takeIf(String::isNotBlank)
-                    if (foreground) handler.post { renderHeader(); renderMessages(false) }
+                    if (foreground) run {
+                        renderHeader()
+                        renderMessages(false)
+                        scheduleActiveThreadRefresh()
+                    }
                     else backgroundThreadDirty = true
                 }
             }
             "turn/completed" -> {
                 val eventThread = eventThreadId(params)
+                if (eventThread != null && turnId != null) {
+                    rememberFinishedTurn(eventThread, turnId, params.optJSONObject("turn") ?: JSONObject().put("status", "completed"))
+                }
                 if (eventThread == activeThreadId) {
+                    turnLifecycleGeneration++
+                    // A completion from the previous turn cannot stop a newer reply.
+                    if (turnId != null && liveActivityTurnId != null && turnId != liveActivityTurnId) {
+                        scheduleActiveThreadRefresh()
+                        return
+                    }
                     running = false
                     clearLiveActivity()
-                    if (foreground) handler.post { clearKnownEmptyThread(eventThread.orEmpty()); renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    if (foreground) run { clearKnownEmptyThread(eventThread.orEmpty()); renderHeader(); refreshActiveThread(false); refreshQueue(false) }
                     else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
                     pendingCompletionNoticeThreadId = eventThread
                 }
                 if (!foreground && eventThread != null) showSystemNotification(eventThread)
-                if (foreground) handler.post { refreshThreads(false) }
+                if (foreground) run { refreshThreads(false) }
                 else backgroundListDirty = true
             }
             "item/agentMessage/delta" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) {
-                    if (foreground) handler.post {
-                        if (eventThread != activeThreadId) return@post
-                        val turnId = params.optString("turnId").ifBlank {
+                if (targetsActiveThread(params)) {
+                    if (foreground) run {
+                        if (!targetsActiveThread(params)) return@run
+                        val turnId = eventTurnId(params).orEmpty().ifBlank {
                             activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                         }
                         if (turnId.isNotBlank()) {
@@ -9561,11 +9698,10 @@ class MainActivity : Activity() {
                 }
             }
             "turn/plan/updated", "reasoning/summaryTextDelta" -> {
-                val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) {
-                    if (foreground) handler.post {
-                        if (eventThread != activeThreadId) return@post
-                        val turnId = params.optString("turnId").ifBlank {
+                if (targetsActiveThread(params)) {
+                    if (foreground) run {
+                        if (!targetsActiveThread(params)) return@run
+                        val turnId = eventTurnId(params).orEmpty().ifBlank {
                             liveActivityTurnId.orEmpty().ifBlank {
                                 activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                             }
@@ -9585,14 +9721,17 @@ class MainActivity : Activity() {
             }
             "item/started", "item/completed", "item/fileChange/patchUpdated", "turn/workspaceChanges" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread == activeThreadId) {
-                    if (foreground) handler.post {
-                        if (eventThread != activeThreadId) return@post
+                if (targetsActiveThread(params)) {
+                    if (foreground) run {
+                        if (!targetsActiveThread(params)) return@run
+                        val targetThreadId = eventThread ?: activeThreadId ?: return@run
                         if (method == "item/started" || method == "item/completed") {
                             val item = params.optJSONObject("item")
                             val type = normalizedType(item?.optString("type").orEmpty())
-                            if (item != null && type != "usermessage") {
-                                val turnId = params.optString("turnId").ifBlank {
+                            if (item != null && type == "usermessage") {
+                                if (rememberRemoteUserMessage(targetThreadId, eventTurnId(params), item)) renderMessages(false)
+                            } else if (item != null && type != "usermessage") {
+                                val turnId = eventTurnId(params).orEmpty().ifBlank {
                                     activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                                 }
                                 if (turnId.isNotBlank()) {
@@ -9611,7 +9750,7 @@ class MainActivity : Activity() {
                                 }
                             }
                         } else if (method == "item/fileChange/patchUpdated") {
-                            val turnId = params.optString("turnId").ifBlank {
+                            val turnId = eventTurnId(params).orEmpty().ifBlank {
                                 activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                             }
                             if (turnId.isNotBlank()) {
@@ -9633,7 +9772,7 @@ class MainActivity : Activity() {
                 }
             }
             "thread/name/updated" -> {
-                handler.post {
+                run {
                     eventThreadId(params)?.let { threadId ->
                         val name = params.optString("threadName")
                         if (name.isNotBlank()) displayedThreadTitles[threadTitleKey(threadId)] = name
@@ -9643,13 +9782,13 @@ class MainActivity : Activity() {
                 }
             }
             "thread/deleted" -> {
-                handler.post {
+                run {
                     eventThreadId(params)?.let { displayedThreadTitles.remove(threadTitleKey(it)) }
                     if (foreground) refreshThreads(false) else backgroundListDirty = true
                 }
             }
             "remote.pins.changed" -> {
-                if (foreground) handler.post { refreshThreads(false) }
+                if (foreground) run { refreshThreads(false) }
                 else backgroundListDirty = true
             }
         }
@@ -9658,6 +9797,18 @@ class MainActivity : Activity() {
     private fun eventThreadId(params: JSONObject): String? {
         params.optString("threadId").takeIf { it.isNotBlank() && it != "null" }?.let { return it }
         return params.optJSONObject("turn")?.optString("threadId")?.takeIf { it.isNotBlank() && it != "null" }
+    }
+
+    private fun eventTurnId(params: JSONObject): String? {
+        params.optString("turnId").takeIf { it.isNotBlank() && it != "null" }?.let { return it }
+        return params.optJSONObject("turn")?.optString("id")?.takeIf { it.isNotBlank() && it != "null" }
+    }
+
+    private fun targetsActiveThread(params: JSONObject): Boolean {
+        val eventThread = eventThreadId(params)
+        if (eventThread != null) return eventThread == activeThreadId
+        val eventTurn = eventTurnId(params)
+        return eventTurn != null && eventTurn == liveActivityTurnId
     }
 
     private fun respondApproval(decision: String) {
@@ -9787,7 +9938,7 @@ class MainActivity : Activity() {
         val pieces = mutableListOf<String>()
         for (index in 0 until content.length()) {
             val part = content.optJSONObject(index) ?: continue
-            if (part.optString("type") == "text") pieces += part.optString("text")
+            if (part.has("text") && part.opt("text") is String) pieces += part.optString("text")
         }
         return pieces.joinToString("").ifBlank { item.optString("text") }
     }
@@ -9866,12 +10017,42 @@ class MainActivity : Activity() {
     }
 
     private fun isThreadRunning(thread: JSONObject): Boolean {
-        val status = thread.optJSONObject("status")?.optString("type")
-        if (status == "active" || status == "running") return true
-        val turns = thread.optJSONArray("turns") ?: return false
-        val last = turns.optJSONObject(turns.length() - 1) ?: return false
-        val state = last.optString("status").lowercase(Locale.ROOT)
-        return state == "inprogress" || state == "running"
+        val threadId = thread.optString("id")
+        if (pendingLiveTurnIds.containsKey(threadId)) return true
+        val turns = thread.optJSONArray("turns")
+        val last = turns?.optJSONObject(turns.length() - 1)
+        if (last != null) {
+            if (finishedTurnStates.containsKey("$threadId:${last.optString("id")}")) return false
+            return last.optString("status").lowercase(Locale.ROOT) in setOf("inprogress", "running", "active", "started")
+        }
+        return thread.optJSONObject("status")?.optString("type")?.lowercase(Locale.ROOT) in setOf("active", "running", "inprogress", "started")
+    }
+
+    private fun rememberFinishedTurn(threadId: String, turnId: String, turn: JSONObject) {
+        finishedTurnStates["$threadId:$turnId"] = JSONObject().put("status", turn.optString("status").ifBlank { "completed" })
+            .put("completedAt", turn.opt("completedAt"))
+        if (pendingLiveTurnIds[threadId] == turnId) pendingLiveTurnIds.remove(threadId)
+        while (finishedTurnStates.size > 2048) finishedTurnStates.remove(finishedTurnStates.keys.first())
+    }
+
+    private fun reconcileLiveHistory(thread: JSONObject): Boolean {
+        val threadId = thread.optString("id")
+        val turns = thread.optJSONArray("turns") ?: JSONArray()
+        val waitingFor = pendingLiveTurnIds[threadId]
+        if (waitingFor != null && (0 until turns.length()).none { turns.optJSONObject(it)?.optString("id") == waitingFor }) return false
+        if (waitingFor != null) pendingLiveTurnIds.remove(threadId)
+        for (index in 0 until turns.length()) {
+            val turn = turns.optJSONObject(index) ?: continue
+            val turnId = turn.optString("id")
+            if (turn.optString("status").lowercase(Locale.ROOT) in setOf("completed", "failed", "interrupted", "cancelled", "canceled")) {
+                rememberFinishedTurn(threadId, turnId, turn)
+            } else finishedTurnStates["$threadId:$turnId"]?.let { completed ->
+                turn.put("status", completed.optString("status"))
+                if (completed.has("completedAt")) turn.put("completedAt", completed.opt("completedAt"))
+            }
+        }
+        turns.optJSONObject(turns.length() - 1)?.let { thread.put("status", JSONObject().put("type", it.optString("status"))) }
+        return true
     }
 
     private fun normalizedType(value: String) = value.replace("-", "").replace("_", "").lowercase(Locale.ROOT)

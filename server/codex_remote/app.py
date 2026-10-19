@@ -1836,9 +1836,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             # Capture before reading: a concurrent append must leave this
             # response stale, rather than claiming to contain the new data.
             revision = app_server.thread_history_revision(thread_id)
-            thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns))
+            thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns, compact=True))
             if revision is not None:
-                thread["historyRevision"] = revision
+                thread.setdefault("historyRevision", revision)
             bound_cwd = shared_state.thread_workspace(thread_id)
             if bound_cwd:
                 thread = {**thread, "cwd": bound_cwd}
@@ -2277,10 +2277,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await websocket.send_json(event)
 
         async def send_events() -> None:
+            last_history_version: tuple[str, str] | None = None
             while True:
                 event = browser_event(await queue.get(), thread_id=subscribed_thread_id, filter_thread=filter_thread)
                 if event is None:
                     continue
+                if event.get("type") == "threads.changed" and subscribed_thread_id:
+                    revision = app_server.thread_history_revision(subscribed_thread_id)
+                    version = (subscribed_thread_id, revision) if revision is not None else None
+                    if version is not None and version != last_history_version:
+                        last_history_version = version
+                        await send_event({"type": "thread.history.changed", "threadId": subscribed_thread_id,
+                                          "revision": revision})
                 if event.get("method") in {"item/started", "item/completed"}:
                     params = event.get("params")
                     item = params.get("item") if isinstance(params, dict) else None

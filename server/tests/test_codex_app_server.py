@@ -419,6 +419,8 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_windows_websocket_runtime_does_not_fallback_on_codex_errors(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server._use_windows_websocket = True
+        # This fixture switches transports after construction on Linux.
+        app_server._runtime_mode = "shared"
         app_server._start_runtime = AsyncMock(side_effect=CodexRuntimeError("Codex app-server 启动失败：网络超时"))  # type: ignore[method-assign]
         app_server._resolve_executable = Mock(return_value="codex.exe")  # type: ignore[method-assign]
 
@@ -667,6 +669,21 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(live_thread, await app_server.read_thread("disk-1"))
         app_server.request.assert_awaited_once()
+
+    async def test_compact_read_uses_current_projection_during_active_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._initialized = True
+        app_server._process = Mock(returncode=None)
+        history = {"id": "chat", "turns": [{"id": "live", "status": "inProgress", "items": [
+            {"id": "user", "type": "userMessage", "content": [{"text": "latest"}]},
+        ]}]}
+        app_server._active_turn_ids["chat"] = "live"
+        app_server._history.read_thread = Mock(return_value=history)
+        app_server.request = AsyncMock(side_effect=AssertionError("browser history must not fetch a huge native snapshot"))
+
+        self.assertEqual(history, await app_server.read_thread("chat", compact=True))
+        app_server._history.read_thread.assert_called_once_with("chat", tail_turns=None, compact=True)
+        app_server.request.assert_not_awaited()
 
     async def test_status_only_read_uses_live_idle_status_over_stale_history(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

@@ -475,6 +475,7 @@ class CodexAppServer:
         *,
         include_turns: bool = True,
         tail_turns: int | None = None,
+        compact: bool = False,
     ) -> dict[str, Any]:
         active_before = self._active_turn_ids.get(thread_id)
         history_limit = tail_turns if include_turns else 1
@@ -482,6 +483,7 @@ class CodexAppServer:
             self._history.read_thread,
             thread_id,
             tail_turns=history_limit,
+            **({"compact": True} if compact else {}),
         )
         runtime_turn_id = self._active_turn_ids.get(thread_id)
         thread: dict[str, Any] | None = None
@@ -497,7 +499,7 @@ class CodexAppServer:
                     thread = candidate
             except CodexRuntimeError as error:
                 read_error = error
-        elif (tail_turns is not None or runtime_turn_id is None) and isinstance(history_thread, dict):
+        elif (compact or tail_turns is not None or runtime_turn_id is None) and isinstance(history_thread, dict):
             thread = history_thread
         else:
             try:

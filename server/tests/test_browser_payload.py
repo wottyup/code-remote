@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
@@ -8,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi.middleware.gzip import GZipMiddleware
+from starlette.websockets import WebSocketDisconnect
 
 from codex_remote.app import create_app, enrich_thread_images
 from codex_remote.browser_payload import browser_event, browser_item, browser_thread, browser_thread_summary
@@ -92,6 +94,54 @@ class BrowserPayloadTests(unittest.TestCase):
 
 
 class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
+    async def test_selected_thread_history_notification_is_lightweight_and_deduplicated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(Path(directory) / 'auth.json')}):
+                app = create_app(Path(directory))
+            server = app.state.codex
+            server.connect = AsyncMock(return_value={"connected": True})
+            revisions = {'selected': '1:100', 'other': '2:200'}
+            server.thread_history_revision = lambda thread_id: revisions.get(thread_id)
+            incoming = asyncio.Queue()
+            outgoing = asyncio.Queue()
+
+            class Socket:
+                async def accept(self): pass
+                async def close(self, **kwargs): pass
+                async def send_json(self, event): await outgoing.put(event)
+                async def receive_json(self):
+                    event = await incoming.get()
+                    if event is None: raise WebSocketDisconnect()
+                    return event
+
+            endpoint = next(route.endpoint for route in app.routes if getattr(route, 'path', '') == '/api/v1/codex/ws')
+            await incoming.put({'type': 'codex.client.hello', 'protocol_version': 1, 'token': 'test', 'thread_id': 'selected'})
+            with patch.object(app.state.auth, 'accepts', return_value=True):
+                task = asyncio.create_task(endpoint(Socket()))
+                try:
+                    self.assertEqual('connection', (await asyncio.wait_for(outgoing.get(), 1))['type'])
+                    for _ in range(2):
+                        await server.notify_threads_changed()
+                    first = await asyncio.wait_for(outgoing.get(), 1)
+                    self.assertEqual({'type': 'thread.history.changed', 'threadId': 'selected', 'revision': '1:100'}, first)
+                    self.assertEqual('threads.changed', (await asyncio.wait_for(outgoing.get(), 1))['type'])
+                    self.assertEqual('threads.changed', (await asyncio.wait_for(outgoing.get(), 1))['type'])
+                    self.assertTrue(outgoing.empty())
+                    revisions['selected'] = '3:300'
+                    await server.notify_threads_changed()
+                    changed = await asyncio.wait_for(outgoing.get(), 1)
+                    self.assertEqual('3:300', changed['revision'])
+                    self.assertEqual('selected', changed['threadId'])
+                    await outgoing.get()
+                    await incoming.put(None)
+                    await asyncio.wait_for(task, 1)
+                    self.assertEqual(0, len(server._subscribers))
+                finally:
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    app.state.shared_state.close()
+                    await app.state.claude_code.close()
+
     async def test_read_and_list_endpoints_project_payload_and_capture_revision_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

@@ -4,15 +4,18 @@ import json
 import logging
 import mimetypes
 import sqlite3
+import threading
+from collections import OrderedDict
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .browser_payload import browser_item
+
 
 MAX_PREVIEW_LENGTH = 4_000
 SUMMARY_SCAN_LINES = 120
-MAX_PROJECTION_LAG_BYTES = 64 * 1024 * 1024
 logger = logging.getLogger(__name__)
 
 
@@ -110,6 +113,8 @@ class CodexHistoryStore:
         self.history_index = self.codex_home / "thread_history_1.sqlite"
         self._path_index: dict[str, Path] | None = None
         self._index_entries: dict[str, dict[str, Any]] | None = None
+        self._projection_lock = threading.RLock()
+        self._browser_items: OrderedDict[tuple[str, str, str, int], dict[str, Any]] = OrderedDict()
 
     def list_threads(self) -> list[dict[str, Any]]:
         entries = self._load_index_entries()
@@ -229,35 +234,48 @@ class CodexHistoryStore:
             # running desktop process may temporarily hold an index lock.
             logger.warning("Could not remove deleted thread %s from %s", thread_id, path, exc_info=True)
 
-    def read_thread(self, thread_id: str, *, tail_turns: int | None = None) -> dict[str, Any] | None:
+    def read_thread(self, thread_id: str, *, tail_turns: int | None = None, compact: bool = False) -> dict[str, Any] | None:
         path = self._load_path_index().get(thread_id)
         if path is None:
             return None
 
         entries = self._load_index_entries()
         index_entry = entries.get(thread_id, {})
-        if tail_turns is not None:
-            projected = self._read_projected_tail(thread_id, path, index_entry, tail_turns)
-            if projected is not None:
-                return projected
-        turns: dict[str, dict[str, Any]] = {}
-        turn_order: list[str] = []
-        session_meta: dict[str, Any] = {}
-        latest_time: str | None = None
-        latest_user_text = ""
+        try:
+            source_stat = path.stat()
+        except OSError:
+            return None
+        source_revision = f"{source_stat.st_mtime_ns}:{source_stat.st_size}"
+        projected = None
+        if tail_turns is not None or compact:
+            with self._projection_lock:
+                projected = self._read_projected_tail(thread_id, path, index_entry, tail_turns, compact=compact)
+        offset = projected.pop("_rolloutOffset") if projected is not None else 0
+        if projected is not None and offset == source_stat.st_size:
+            return {**projected, "historyRevision": source_revision}
+        turns: dict[str, dict[str, Any]] = {turn["id"]: turn for turn in projected["turns"]} if projected else {}
+        turn_order: list[str] = list(turns)
+        projected_turn_count = len(turns)
+        session_meta: dict[str, Any] = (self._read_file_summary(path) or {}) if projected else {}
+        latest_time: str | None = projected.get("updatedAt") if projected else None
+        latest_user_text = projected.get("preview", "") if projected else ""
         first_time: str | None = None
         model: str | None = None
-        active_turn_id: str | None = None
+        active_turn_id: str | None = turn_order[-1] if turn_order else None
 
         try:
-            lines = path.open("r", encoding="utf-8", errors="replace")
+            lines = path.open("rb")
+            lines.seek(offset)
         except OSError:
             return None
 
         with lines:
             for raw_line in lines:
+                # A writer may have only appended part of the next JSONL record.
+                if not raw_line.endswith(b"\n"):
+                    break
                 try:
-                    envelope = json.loads(raw_line)
+                    envelope = json.loads(raw_line.decode("utf-8", errors="replace"))
                 except json.JSONDecodeError:
                     continue
                 if not isinstance(envelope, dict):
@@ -310,10 +328,18 @@ class CodexHistoryStore:
                     if not isinstance(item, dict):
                         continue
                     normalised = _normalise_item(item)
+                    normalised.setdefault("createdAt", timestamp)
+                    if compact:
+                        if normalised.get("type") in {"reasoning", "plan"}:
+                            continue
+                        normalised = browser_item(normalised)
                     item_id = normalised.get("id")
-                    if isinstance(item_id, str) and any(existing.get("id") == item_id for existing in turn["items"]):
-                        continue
-                    turn["items"].append(normalised)
+                    existing_index = next((index for index, existing in enumerate(turn["items"])
+                                           if isinstance(item_id, str) and existing.get("id") == item_id), None)
+                    if existing_index is None:
+                        turn["items"].append(normalised)
+                    else:
+                        turn["items"][existing_index] = normalised
                     if normalised.get("type") == "userMessage":
                         text = _text_from_content(normalised.get("content"))
                         if text:
@@ -365,12 +391,15 @@ class CodexHistoryStore:
                     if active_turn_id == turn_id:
                         active_turn_id = None
                 elif event_type in {"turn_aborted", "turn_failed"}:
-                    turn["status"] = "failed"
+                    turn["status"] = "interrupted" if event_type == "turn_aborted" else "failed"
                     turn["completedAt"] = timestamp
                     if active_turn_id == turn_id:
                         active_turn_id = None
 
         turns_list = [turns[turn_id] for turn_id in turn_order]
+        total_turns = (projected["totalTurns"] - projected_turn_count if projected else 0) + len(turns_list)
+        if tail_turns is not None:
+            turns_list = turns_list[-max(1, min(int(tail_turns), 100)):]
         session_id = session_meta.get("id") or thread_id
         cwd = session_meta.get("cwd")
         title = index_entry.get("thread_name")
@@ -393,6 +422,9 @@ class CodexHistoryStore:
             "model": model,
             "status": {"type": turns_list[-1].get("status", "completed")} if turns_list else {"type": "notLoaded"},
             "turns": turns_list,
+            "historyRevision": source_revision,
+            **({"historyWindowed": True, "totalTurns": total_turns,
+                "historyPartial": total_turns > len(turns_list)} if tail_turns is not None else {}),
         }
 
     def _read_projected_tail(
@@ -400,23 +432,26 @@ class CodexHistoryStore:
         thread_id: str,
         path: Path,
         index_entry: dict[str, Any],
-        limit: int,
+        limit: int | None,
+        *,
+        compact: bool = False,
     ) -> dict[str, Any] | None:
         """Read a bounded history window from Codex's own rollout projection.
 
-        A small lag is allowed while an active turn is being projected because
-        live WebSocket events fill that edge. Missing or materially stale data
-        falls back to the JSONL source of truth.
+        The caller replays every complete JSONL record beyond the projection's
+        offset. A byte-size threshold cannot decide whether history is fresh.
         """
         if not self.history_index.is_file():
             return None
-        bounded_limit = max(1, min(int(limit), 100))
+        bounded_limit = max(1, min(int(limit), 100)) if limit is not None else -1
         try:
             rollout_size = path.stat().st_size
             with closing(sqlite3.connect(
                 f"file:{self.history_index.as_posix()}?mode=ro", uri=True, timeout=5,
             )) as connection:
                 connection.row_factory = sqlite3.Row
+                # Keep the cursor, turn headers and items on one SQLite snapshot.
+                connection.execute("BEGIN")
                 projection = connection.execute(
                     "SELECT next_rollout_byte_offset FROM thread_history_projection_state WHERE thread_id = ?",
                     (thread_id,),
@@ -425,8 +460,6 @@ class CodexHistoryStore:
                     return None
                 projection_offset = int(projection["next_rollout_byte_offset"])
                 if projection_offset < 0 or projection_offset > rollout_size:
-                    return None
-                if rollout_size - projection_offset > MAX_PROJECTION_LAG_BYTES:
                     return None
                 total_turns = int(connection.execute(
                     "SELECT COUNT(*) FROM thread_turns WHERE thread_id = ?",
@@ -447,24 +480,43 @@ class CodexHistoryStore:
                 turn_ids = [row["turn_id"] for row in turn_rows]
                 items_by_turn: dict[str, list[dict[str, Any]]] = {turn_id: [] for turn_id in turn_ids}
                 if turn_ids:
-                    placeholders = ",".join("?" for _ in turn_ids)
+                    compact_filter = "AND lower(item_type) NOT IN ('reasoning', 'plan')" if compact else ""
+                    payload_column = "" if compact else ", item_json"
                     item_rows = connection.execute(
-                        f"""SELECT turn_id, created_at_ms, item_json
+                        f"""SELECT turn_id, item_id, created_at_ms, updated_at_ordinal {payload_column}
                             FROM thread_items
-                            WHERE thread_id = ? AND turn_id IN ({placeholders})
+                            WHERE thread_id = ? AND turn_id IN (
+                                SELECT turn_id FROM thread_turns WHERE thread_id = ?
+                                ORDER BY rollout_ordinal DESC LIMIT ?
+                            ) {compact_filter}
                             ORDER BY rollout_ordinal, updated_at_ordinal""",
-                        (thread_id, *turn_ids),
+                        (thread_id, thread_id, bounded_limit),
                     )
                     for row in item_rows:
+                        key = (thread_id, row["turn_id"], row["item_id"], row["updated_at_ordinal"])
+                        cached = self._browser_items.get(key) if compact else None
+                        if cached is not None:
+                            self._browser_items.move_to_end(key)
+                            items_by_turn[row["turn_id"]].append(browser_item(cached))
+                            continue
+                        raw = connection.execute(
+                            "SELECT item_json FROM thread_items WHERE thread_id = ? AND turn_id = ? AND item_id = ?",
+                            (thread_id, row["turn_id"], row["item_id"]),
+                        ).fetchone()[0] if compact else row["item_json"]
                         try:
-                            item = json.loads(row["item_json"])
+                            item = json.loads(raw)
                         except (json.JSONDecodeError, TypeError):
                             continue
                         if not isinstance(item, dict):
                             continue
                         normalized = _normalise_item(item)
                         normalized.setdefault("createdAt", _iso_time(row["created_at_ms"]))
-                        items_by_turn[row["turn_id"]].append(normalized)
+                        if compact:
+                            normalized = browser_item(normalized)
+                            self._browser_items[key] = normalized
+                            while len(self._browser_items) > 20_000:
+                                self._browser_items.popitem(last=False)
+                        items_by_turn[row["turn_id"]].append(browser_item(normalized) if compact else normalized)
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return None
 
@@ -522,10 +574,11 @@ class CodexHistoryStore:
             "status": {"type": turns[-1].get("status", "completed")} if turns else {"type": "notLoaded"},
             "turns": turns,
             "totalTurns": total_turns,
-            "historyWindowed": True,
+            "_rolloutOffset": projection_offset,
         }
-        if total_turns > len(turns):
-            result["historyPartial"] = True
+        if limit is not None:
+            result["historyWindowed"] = True
+            result["historyPartial"] = total_turns > len(turns)
         return result
 
     def _thread_summary(self, session_id: str, entry: dict[str, Any], path: Path | None) -> dict[str, Any]:
