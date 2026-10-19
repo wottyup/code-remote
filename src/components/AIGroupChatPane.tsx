@@ -30,6 +30,12 @@ interface AIGroupChatPaneProps {
 const maxGroupContextCharacters = 28_000
 const maxRelayedReplyCharacters = 28_000
 
+function claudeEffortForRequest(value?: string) {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max'
+    ? value
+    : undefined
+}
+
 function engineLabel(engine: AIGroupEngine, group: AIGroupChat) {
   return engine === 'codex' ? group.codexName : group.claudeName
 }
@@ -268,7 +274,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
           prompt: sharedPrompt,
           images: [],
           claudeModel: claudePreferences.claudeModel,
-          claudeEffort: claudePreferences.claudeEffort,
+          claudeEffort: claudeEffortForRequest(claudePreferences.claudeEffort),
           claudePermissionMode: claudePreferences.claudePermissionMode ?? 'default',
         }),
       ])
@@ -323,7 +329,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
           prompt: promptForPeerResponse('codex', latestCodexReply.text, group),
           images: [],
           claudeModel: claudePreferences.claudeModel,
-          claudeEffort: claudePreferences.claudeEffort,
+          claudeEffort: claudeEffortForRequest(claudePreferences.claudeEffort),
           claudePermissionMode: claudePreferences.claudePermissionMode ?? 'default',
         }),
       ])
