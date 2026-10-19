@@ -14,3 +14,9 @@ ANDROID_HOME=/path/to/android-sdk ./gradlew assembleDebug
 ```
 
 APK 输出在 `app/build/outputs/apk/debug/codex-remote-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
+
+## 离线语音输入
+
+聊天输入框右侧的麦克风按钮使用 sherpa-onnx 在本机识别语音，音频不会上传到电脑或云端。首次使用会请求麦克风权限并加载约 25 MB 的中文流式模型，之后点击麦克风即可边说边把文字写入输入框；再次点击或暂停 APP 会结束录音。
+
+模型为 `csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（Apache-2.0，int8），放在 `app/src/main/assets/offline-asr/`，来源与许可证见该目录下的 `MODEL_NOTICE.txt`。当前模型以中文为主，英文单词识别能力有限，也暂不包含标点模型。

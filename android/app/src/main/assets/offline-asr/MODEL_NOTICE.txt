@@ -1,0 +1,12 @@
+Model: sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
+Source: https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
+Author: csukuangfj
+License: Apache License 2.0 (see LICENSE-APACHE-2.0.txt)
+
+Files bundled in this directory:
+  encoder-epoch-99-avg-1.int8.onnx
+  decoder-epoch-99-avg-1.int8.onnx
+  joiner-epoch-99-avg-1.int8.onnx
+  tokens.txt
+
+This is a Chinese streaming Zipformer transducer model quantized to int8.

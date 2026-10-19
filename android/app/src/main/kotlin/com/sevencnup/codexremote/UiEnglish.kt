@@ -61,6 +61,11 @@ internal object UiEnglish {
         "最大" to "Maximum", "最小" to "Minimum", "本机默认" to "Device default",
         "本机默认模型" to "Device default model", "本机默认权限" to "Device default permission",
         "添加图片或文件" to "Add image or file", "发送消息" to "Send message",
+        "语音输入" to "Voice input", "停止语音输入" to "Stop voice input",
+        "正在加载离线语音模型…" to "Loading offline speech model…",
+        "未获得麦克风权限，无法使用语音输入" to "Microphone permission denied. Voice input is unavailable.",
+        "设备不支持 16kHz 录音" to "This device does not support 16 kHz recording",
+        "系统录音设备未能初始化" to "The recording device could not be initialized",
         "发送" to "Send", "发送消息…" to "Write a message…",
         "暂停当前回复" to "Pause reply", "继续回复：发送续写请求" to "Continue reply by sending a follow-up",
         "已停止当前回复；点继续会发送续写请求" to "Reply stopped. Continue sends a follow-up request.",
@@ -217,6 +222,9 @@ internal object UiEnglish {
             value.startsWith("显示更早的 ") -> value.replaceFirst("显示更早的 ", "Show ").replace(" 轮对话", " older turns")
             value.startsWith("点按重试 · ") -> value.replaceFirst("点按重试 · ", "Tap to retry · ")
             value.endsWith("\n点此重新加载") -> value.removeSuffix("\n点此重新加载") + "\nTap to reload"
+            value.startsWith("离线语音模型加载失败") -> value.replaceFirst("离线语音模型加载失败", "Could not load offline speech model")
+            value.startsWith("语音识别初始化失败") -> value.replaceFirst("语音识别初始化失败", "Could not initialize speech recognition")
+            value.startsWith("语音识别失败") -> value.replaceFirst("语音识别失败", "Speech recognition failed")
             value.startsWith("打开文件 ") -> value.replaceFirst("打开文件 ", "Open file ")
             value.startsWith("查看图片 ") -> value.replaceFirst("查看图片 ", "View image ")
             value.startsWith("思考开始时间 ") -> value.replaceFirst("思考开始时间 ", "Thinking started at ")
