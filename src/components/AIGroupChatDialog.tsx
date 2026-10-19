@@ -103,6 +103,7 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
   const [sending, setSending] = useState(false)
   const [relaying, setRelaying] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
+  const [failedEngines, setFailedEngines] = useState<AIGroupEngine[]>([])
   const [renameEngine, setRenameEngine] = useState<AIGroupEngine | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const messageList = useRef<HTMLDivElement>(null)
@@ -239,6 +240,7 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
     setDraft('')
     setSending(true)
     setLocalError(null)
+    setFailedEngines([])
     beginGroupTurn()
     const sharedPrompt = promptWithGroupContext(prompt, group.messages, group)
     const codexPreferences = resolvePreferences('codex', group.codexThreadId)
@@ -260,16 +262,18 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
           claudePermissionMode: claudePreferences.claudePermissionMode ?? 'default',
         }),
       ])
-      const rejected = results.filter((result) => result.status === 'rejected' || (result.status === 'fulfilled' && !result.value))
-      results.forEach((result, index) => {
-        if (result.status === 'rejected' || !result.value) {
-          const engine = index === 0 ? 'codex' : 'claude-code'
-          groupTurnPending.current[engine] = false
-          groupTurnRunningObserved.current[engine] = false
-        }
+      const failures = results.flatMap((result, index): AIGroupEngine[] =>
+        result.status === 'rejected' || !result.value ? [index === 0 ? 'codex' : 'claude-code'] : [],
+      )
+      setFailedEngines(failures)
+      failures.forEach((engine) => {
+        groupTurnPending.current[engine] = false
+        groupTurnRunningObserved.current[engine] = false
       })
-      if (rejected.length > 0) {
-        setLocalError(rejected.length === 2 ? '两边都没有接受这条消息。' : '有一边没有接受这条消息，请查看对应模式状态。')
+      if (failures.length > 0) {
+        setLocalError(failures.length === 2
+          ? '两个成员都没有接受这条消息。'
+          : `${engineLabel(failures[0]!, group)}没有接受这条消息。`)
       }
     } finally {
       setSending(false)
@@ -281,6 +285,7 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
       || group.relayUsedForUserMessageId === lastUserMessage.id) return
     setRelaying(true)
     setLocalError(null)
+    setFailedEngines([])
     onGroupChange(group.id, (current) => ({
       ...current,
       updatedAt: new Date().toISOString(),
@@ -312,15 +317,16 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
           claudePermissionMode: claudePreferences.claudePermissionMode ?? 'default',
         }),
       ])
-      if (results.some((result) => result.status === 'rejected' || (result.status === 'fulfilled' && !result.value))) {
+      const failures = results.flatMap((result, index): AIGroupEngine[] =>
+        result.status === 'rejected' || !result.value ? [index === 0 ? 'codex' : 'claude-code'] : [],
+      )
+      setFailedEngines(failures)
+      if (failures.length > 0) {
         setLocalError('交叉回应没有完整送达；已接受的那一边会继续回复。')
       }
-      results.forEach((result, index) => {
-        if (result.status === 'rejected' || !result.value) {
-          const engine = index === 0 ? 'codex' : 'claude-code'
-          groupTurnPending.current[engine] = false
-          groupTurnRunningObserved.current[engine] = false
-        }
+      failures.forEach((engine) => {
+        groupTurnPending.current[engine] = false
+        groupTurnRunningObserved.current[engine] = false
       })
     } finally {
       setRelaying(false)
@@ -394,7 +400,15 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
                 </article>
           ))}
         </div>
-        {(localError || codex.error || claude.error) ? <div className="ai-group-chat__error" role="alert"><span>{localError ?? [codex.error, claude.error].filter(Boolean).join(' · ')}</span></div> : null}
+        {(localError || failedEngines.length > 0) ? <div className="ai-group-chat__error" role="alert">
+          {localError ? <strong>{localError}</strong> : null}
+          {failedEngines.map((engine) => {
+            const error = engine === 'codex' ? codex.error : claude.error
+            return <div className="ai-group-chat__error-detail" key={engine}>
+              <strong>{engineLabel(engine, group)}：</strong>{error?.trim() || '模式没有返回具体错误，请检查该模式的连接状态或后端日志。'}
+            </div>
+          })}
+        </div> : null}
         {canRelay ? <div className="ai-group-chat__relay-row"><button type="button" className="ai-group-chat__relay" onClick={() => void relayOnce()}><ArrowLeftRight size={14} />互相回应一轮</button><span>由你触发；每条用户消息最多一轮</span></div> : null}
         <form className="ai-group-chat__composer" onSubmit={(event) => void sendToBoth(event)}>
           <textarea value={draft} onChange={(event) => setDraft(event.currentTarget.value)} onKeyDown={handleComposerKeyDown} placeholder={ready ? `发给 ${group.codexName} 和 ${group.claudeName}…（Ctrl/⌘ + Enter 发送）` : bothMembersJoined ? '正在恢复两个原聊天…' : '请先把 Codex 和 Claude 聊天加入群聊'} disabled={!ready || busy} rows={3} aria-label={`${group.name}消息`} />
