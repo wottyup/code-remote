@@ -3,6 +3,7 @@ import { AlertTriangle, ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, P
 import { useCodexRemote } from '../hooks/useCodexRemote'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import { findGroupRecipient } from '../lib/aiGroupRouting.mjs'
+import { advanceGroupReplyWait } from '../lib/aiGroupReplySync.mjs'
 import type { AIGroupChat, AIGroupEngine, AIGroupMessage } from '../lib/aiGroupChats'
 import type { ClaudeCodePermissionMode, CodexApprovalPolicy } from '../lib/codexRemoteClient'
 
@@ -319,7 +320,6 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
       const seen = observedIds.current[engine]
       const active = activeGroupReplyIds.current[engine]
       const historyLoading = !threadId || remote.activeThread?.id !== threadId || remote.loadingHistory
-      if (groupTurnPending.current[engine] && remote.isRunning) groupTurnRunningObserved.current[engine] = true
       const incoming: AIGroupMessage[] = []
       let finalReplyCaptured = false
       for (const message of remote.messages) {
@@ -343,10 +343,15 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
           }
         }
       }
-      if (groupTurnPending.current[engine] && !remote.isRunning && (groupTurnRunningObserved.current[engine] || finalReplyCaptured)) {
-        groupTurnPending.current[engine] = false
-        groupTurnRunningObserved.current[engine] = false
-      }
+      const replyWait = advanceGroupReplyWait({
+        pending: groupTurnPending.current[engine],
+        isRunning: remote.isRunning,
+        runningTurnId: remote.runningTurnId,
+        runningObserved: groupTurnRunningObserved.current[engine],
+        finalReplyCaptured,
+      })
+      groupTurnRunningObserved.current[engine] = replyWait.runningObserved
+      if (replyWait.completed) groupTurnPending.current[engine] = false
       if (seen.size > 3_000) {
         const recent = [...seen].slice(-1_500)
         seen.clear()
