@@ -1,4 +1,5 @@
 import { deleteThreadTransportCache, readThreadTransportCache, writeThreadTransportCache, type ThreadTransportSnapshot } from './threadTransportCache'
+import { eventTimestamp } from './turnTiming'
 
 export interface CodexThread {
   id: string
@@ -351,7 +352,10 @@ export function userMessageFromEventItem(value: unknown, turnId: string | null):
   const images = imagesFromContent(item.content)
   if (!text && images.length === 0 && documents.length === 0) return null
 
-  const sentAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at) ?? new Date().toISOString()
+  const sentAt = parsedTimestampFromFields(
+    item,
+    'createdAt', 'created_at', 'sentAt', 'sent_at', 'timestamp', 'timestampMs', 'timestamp_ms',
+  ) ?? new Date().toISOString()
   return {
     id: `remote-user-${itemId}`,
     sourceItemId: itemId,
@@ -368,12 +372,15 @@ export function userMessageFromEventItem(value: unknown, turnId: string | null):
 }
 
 function parsedTimestamp(value: unknown): string | null {
-  if (typeof value === 'number') {
-    const normalized = value > 10_000_000_000 ? value : value * 1000
-    const date = new Date(normalized)
-    return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  const timestamp = eventTimestamp(value)
+  return timestamp === null ? null : new Date(timestamp).toISOString()
+}
+
+function parsedTimestampFromFields(value: Record<string, unknown>, ...fields: string[]) {
+  for (const field of fields) {
+    const timestamp = parsedTimestamp(value[field])
+    if (timestamp) return timestamp
   }
-  if (typeof value === 'string' && !Number.isNaN(Date.parse(value))) return new Date(value).toISOString()
   return null
 }
 
@@ -389,8 +396,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
     const turnId = typeof turn.id === 'string' ? turn.id : undefined
-    const turnStartedAt = parsedTimestamp(turn.startedAt)
-    const turnCompletedAt = parsedTimestamp(turn.completedAt)
+    const turnStartedAt = parsedTimestampFromFields(turn, 'startedAt', 'started_at', 'startedAtMs', 'started_at_ms', 'createdAt', 'created_at')
+    const turnCompletedAt = parsedTimestampFromFields(turn, 'completedAt', 'completed_at', 'completedAtMs', 'completed_at_ms')
     const replyDurationMs = turnStartedAt && turnCompletedAt
       ? Math.max(0, Date.parse(turnCompletedAt) - Date.parse(turnStartedAt))
       : undefined
@@ -409,7 +416,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const documents = [...originalPdfAttachments.documents, ...textDocumentAttachments.documents]
       const images = itemType === 'usermessage' ? imagesFromContent(item.content) : []
       if (!text && images.length === 0 && documents.length === 0) continue
-      const itemCreatedAt = parsedTimestamp(item.createdAt ?? item.timestamp ?? item.created_at)
+      const itemCreatedAt = parsedTimestampFromFields(
+        item,
+        'createdAt', 'created_at', 'sentAt', 'sent_at', 'timestamp', 'timestampMs', 'timestamp_ms',
+      )
       const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
 
       if (itemType === 'agentmessage' && assistantMessage) {
@@ -423,7 +433,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: itemType === 'usermessage' ? 'user' : 'assistant',
         text,
-        createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt),
+        createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt ?? turn.started_at),
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
