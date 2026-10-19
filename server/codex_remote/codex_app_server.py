@@ -23,6 +23,7 @@ from websockets.asyncio.client import connect as websocket_connect
 from .codex_history import CodexHistoryStore
 
 logger = logging.getLogger(__name__)
+_APP_SERVER_MAX_MESSAGE_SIZE = 256 * 1024 * 1024
 
 
 class CodexRuntimeError(RuntimeError):
@@ -1098,8 +1099,8 @@ class CodexAppServer:
                 "stdout": asyncio.subprocess.DEVNULL if self._use_windows_websocket else asyncio.subprocess.PIPE,
                 "stderr": asyncio.subprocess.PIPE,
                 # thread/read returns a whole conversation as one JSONL line.
-                # Keep enough room for large Codex histories; asyncio defaults to 64 KiB.
-                "limit": 64 * 1024 * 1024,
+                # Allow large histories while keeping a finite per-message cap.
+                "limit": _APP_SERVER_MAX_MESSAGE_SIZE,
             }
             if os.name == "nt" and executable.lower().endswith((".cmd", ".bat")):
                 process = await asyncio.create_subprocess_shell(
@@ -1165,7 +1166,7 @@ class CodexAppServer:
                     additional_headers={"Authorization": f"Bearer {token}"},
                     proxy=None,
                     open_timeout=0.5,
-                    max_size=64 * 1024 * 1024,
+                    max_size=_APP_SERVER_MAX_MESSAGE_SIZE,
                     compression=None,
                 )
                 self._websocket_server_owned = True
