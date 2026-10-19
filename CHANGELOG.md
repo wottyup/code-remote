@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.56.0-dev.1] - 共享 CPA Manager 用量统计连接配置
+
 ## [0.55.1-dev.5] - 支持在 Android 侧边栏筛选 Codex 与 Claude 聊天
 
 ## [0.55.1-dev.4] - 修复 AI 群聊排队消息的回复同步竞态

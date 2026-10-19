@@ -49,6 +49,13 @@ from .codex_app_server import (
     CodexThreadBusyError,
     CodexThreadNotFoundError,
 )
+from .cpa_usage import (
+    CPAUsageError,
+    CPAUsageSettingsStore,
+    connection_probe_payload,
+    normalize_manager_base_url,
+    request_manager_analytics,
+)
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
@@ -102,6 +109,19 @@ async def watch_codex_history(app_server: CodexAppServer) -> None:
 
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
+
+
+class CPAUsageSettingsUpdateRequest(BaseModel):
+    base_url: str = Field(min_length=1, max_length=2_048)
+    management_key: str | None = Field(default=None, max_length=4_096)
+
+
+class CPAUsageAnalyticsRequest(BaseModel):
+    from_ms: int = Field(ge=0)
+    to_ms: int = Field(ge=0)
+    time_zone: str = Field(default="UTC", min_length=1, max_length=128)
+    filters: dict[str, Any] | None = None
+    include: dict[str, Any] | None = None
 
 
 class PairingStateError(RuntimeError):
@@ -1474,6 +1494,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
+    cpa_usage_settings = CPAUsageSettingsStore(shared_state)
     claude_code = ClaudeCodeServer(
         os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
         configured_workspace,
@@ -1609,6 +1630,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
+    app.state.cpa_usage_settings = cpa_usage_settings
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1678,6 +1700,61 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except PairingStateError as error:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
         return {"unpaired": True}
+
+    @app.get("/api/v1/cpa-usage/settings")
+    async def get_cpa_usage_settings() -> dict[str, Any]:
+        settings = cpa_usage_settings.get_credentials()
+        return {"baseUrl": settings["base_url"], "configured": bool(settings["base_url"] and settings["management_key"])}
+
+    @app.post("/api/v1/cpa-usage/settings")
+    async def save_cpa_usage_settings(request: CPAUsageSettingsUpdateRequest) -> dict[str, Any]:
+        try:
+            base_url = normalize_manager_base_url(request.base_url)
+            previous = cpa_usage_settings.get_credentials()
+            management_key = (request.management_key or "").strip()
+            if not management_key:
+                if previous["base_url"] != base_url or not previous["management_key"]:
+                    raise CPAUsageError("请填写 Manager 管理密钥；修改服务器地址时需要重新输入密钥。", status_code=422)
+                management_key = previous["management_key"]
+            await asyncio.to_thread(
+                request_manager_analytics,
+                base_url,
+                management_key,
+                connection_probe_payload(),
+            )
+            cpa_usage_settings.save(base_url, management_key)
+        except CPAUsageError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        except (OSError, sqlite3.Error) as error:
+            logger.exception("Could not persist shared CPA Manager settings")
+            raise HTTPException(status_code=500, detail="无法在 Codex Remote 服务端保存 Manager 配置。") from error
+        return {"baseUrl": base_url, "configured": True}
+
+    @app.delete("/api/v1/cpa-usage/settings")
+    async def clear_cpa_usage_settings() -> dict[str, bool]:
+        try:
+            cpa_usage_settings.clear()
+        except (OSError, sqlite3.Error) as error:
+            logger.exception("Could not clear shared CPA Manager settings")
+            raise HTTPException(status_code=500, detail="无法清除 Codex Remote 服务端的 Manager 配置。") from error
+        return {"cleared": True}
+
+    @app.post("/api/v1/cpa-usage/analytics")
+    async def cpa_usage_analytics(request: CPAUsageAnalyticsRequest) -> dict[str, Any]:
+        if request.from_ms > request.to_ms:
+            raise HTTPException(status_code=422, detail="统计开始时间不能晚于结束时间。")
+        settings = cpa_usage_settings.get_credentials()
+        if not settings["base_url"] or not settings["management_key"]:
+            raise HTTPException(status_code=409, detail="请先在设置中连接 CPA Manager Server。")
+        try:
+            return await asyncio.to_thread(
+                request_manager_analytics,
+                settings["base_url"],
+                settings["management_key"],
+                request.model_dump(exclude_none=True) if hasattr(request, "model_dump") else request.dict(exclude_none=True),
+            )
+        except CPAUsageError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
     @app.get("/api/v1/codex/status")
     async def codex_status() -> dict[str, Any]:

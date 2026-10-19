@@ -58,11 +58,15 @@ function UsageTimeline({ points }: { points: CPAUsageTimelinePoint[] }) {
 }
 
 export function CPAUsageStatsPanel({
+  token,
   settings,
+  settingsLoaded,
   onOpenSettings,
   onClose,
 }: {
+  token: string
   settings: CPAUsageSettings
+  settingsLoaded: boolean
   onOpenSettings: () => void
   onClose: () => void
 }) {
@@ -79,10 +83,10 @@ export function CPAUsageStatsPanel({
   useEffect(() => {
     setSelectedApiKeyHash('')
     setApiKeyHashes([])
-  }, [settings.baseUrl, settings.managementKey])
+  }, [settings.baseUrl, settings.configured])
 
   useEffect(() => {
-    if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
+    if (!settings.configured) {
       setApiKeyHashes([])
       setFilterLoading(false)
       setFilterError(null)
@@ -91,7 +95,7 @@ export function CPAUsageStatsPanel({
     const controller = new AbortController()
     setFilterLoading(true)
     setFilterError(null)
-    fetchCPAUsageAnalytics(settings, range, controller.signal, { filterSelectorsOnly: true })
+    fetchCPAUsageAnalytics(token, range, controller.signal, { filterSelectorsOnly: true })
       .then((response) => {
         const hashes = response.filter_options?.api_key_hashes ?? []
         setApiKeyHashes([...new Set(hashes.filter((hash) => typeof hash === 'string' && hash.trim()).map((hash) => hash.trim()))])
@@ -105,10 +109,10 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setFilterLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, settings.baseUrl, settings.managementKey])
+  }, [range, refreshKey, settings.baseUrl, settings.configured, token])
 
   useEffect(() => {
-    if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
+    if (!settings.configured) {
       setData(null)
       setLoading(false)
       setError(null)
@@ -118,7 +122,7 @@ export function CPAUsageStatsPanel({
     setData(null)
     setLoading(true)
     setError(null)
-    fetchCPAUsageAnalytics(settings, range, controller.signal, {
+    fetchCPAUsageAnalytics(token, range, controller.signal, {
       apiKeyHashes: selectedApiKeyHash ? [selectedApiKeyHash] : undefined,
     })
       .then(setData)
@@ -131,7 +135,7 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, selectedApiKeyHash, settings.baseUrl, settings.managementKey])
+  }, [range, refreshKey, selectedApiKeyHash, settings.baseUrl, settings.configured, token])
 
   const models = useMemo(
     () => [...(data?.model_stats ?? [])].sort((a, b) => b.total_tokens - a.total_tokens),
@@ -142,7 +146,7 @@ export function CPAUsageStatsPanel({
     [data?.account_stats],
   )
   const summary = data?.summary
-  const configured = Boolean(settings.baseUrl.trim() && settings.managementKey.trim())
+  const configured = settings.configured
   const hasStats = Boolean(summary?.total_calls || summary?.total_tokens || summary?.total_cost || models.length || accounts.length)
   const visibleApiKeyHashes = selectedApiKeyHash && !apiKeyHashes.includes(selectedApiKeyHash)
     ? [selectedApiKeyHash, ...apiKeyHashes]
@@ -162,11 +166,13 @@ export function CPAUsageStatsPanel({
         </div>
       </header>
       <div className="theme-settings-panel__content cpa-usage-panel__content">
-        {!configured ? (
+        {!settingsLoaded ? (
+          <div className="cpa-usage-loading"><RefreshCw size={16} className="spin" />正在读取共享连接设置…</div>
+        ) : !configured ? (
           <section className="theme-settings-card cpa-usage-connect-prompt">
             <Database size={25} />
             <h2>先连接你的 Manager Server</h2>
-            <p>填写部署域名和 Manager 密钥后，这里会显示该服务记录到的 Token 用量。</p>
+            <p>在设置中连接 Manager Server 后，这里会显示该服务记录到的 Token 用量。</p>
             <button className="theme-notification-toggle theme-notification-toggle--enabled" type="button" onClick={onOpenSettings}><Settings2 size={14} />前往设置</button>
           </section>
         ) : (

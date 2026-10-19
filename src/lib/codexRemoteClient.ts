@@ -644,6 +644,39 @@ export const codexRemoteClient = {
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
+  cpaUsageSettings(token: string) {
+    return request<{ baseUrl: string; configured: boolean }>(token, '/api/v1/cpa-usage/settings')
+  },
+  saveCPAUsageSettings(token: string, settings: { baseUrl: string; managementKey: string }) {
+    return request<{ baseUrl: string; configured: boolean }>(token, '/api/v1/cpa-usage/settings', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: settings.baseUrl, management_key: settings.managementKey }),
+    }, { timeoutMs: 30_000 })
+  },
+  clearCPAUsageSettings(token: string) {
+    return request<{ cleared: boolean }>(token, '/api/v1/cpa-usage/settings', { method: 'DELETE' })
+  },
+  cpaUsageAnalytics<T = {
+    generated_at_ms: number
+    granularity?: string
+    summary?: Record<string, number>
+    timeline?: Array<Record<string, number | string>>
+    model_stats?: Array<Record<string, number | string>>
+    account_stats?: Array<Record<string, number | string>>
+    filter_options?: { api_key_hashes?: string[] }
+  }>(token: string, payload: {
+    from_ms: number
+    to_ms: number
+    time_zone: string
+    filters?: { api_key_hashes: string[] }
+    include: Record<string, boolean | string>
+  }, signal?: AbortSignal): Promise<T> {
+    return request<T>(token, '/api/v1/cpa-usage/analytics', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    }, { timeoutMs: 30_000 })
+  },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
     if (cwd) query.set('cwd', cwd)

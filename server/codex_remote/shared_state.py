@@ -81,6 +81,19 @@ class SharedStateStore:
     def close(self) -> None:
         self.connection.close()
 
+    def get_metadata(self, key: str) -> str | None:
+        row = self.connection.execute("SELECT value FROM state_metadata WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        self.connection.execute(
+            "INSERT INTO state_metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+    def delete_metadata(self, key: str) -> None:
+        self.connection.execute("DELETE FROM state_metadata WHERE key = ?", (key,))
+
     def thread_ids(self) -> list[str]:
         rows = self.connection.execute("SELECT DISTINCT thread_id FROM queued_messages").fetchall()
         return [row[0] for row in rows]
