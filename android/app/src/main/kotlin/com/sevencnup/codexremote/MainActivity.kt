@@ -142,6 +142,7 @@ import kotlin.math.roundToInt
 
 private data class TextDocumentAttachmentPreview(
     val name: String,
+    val content: String,
     val characterCount: Int,
 )
 
@@ -1883,7 +1884,7 @@ class MainActivity : Activity() {
         composerGlowRunning = false
         composerDock = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(2), dp(12), dp(12))
+            setPadding(dp(12), dp(2), dp(12), dp(4))
             background = ColorDrawable(Color.TRANSPARENT)
             clipChildren = false
             clipToPadding = false
@@ -5430,6 +5431,7 @@ class MainActivity : Activity() {
         val visibleText = USER_DOCUMENT_ATTACHMENT_PATTERN.replace(rawText) { match ->
             attachments += TextDocumentAttachmentPreview(
                 name = match.groupValues[1].trim(),
+                content = match.groupValues[2],
                 characterCount = match.groupValues[2].length,
             )
             ""
@@ -5467,6 +5469,11 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(horizontalPadding, dp(7), horizontalPadding, dp(7))
+                isClickable = true
+                isFocusable = true
+                contentDescription = "打开文档 ${attachment.name}"
+                foreground = lollipopRipple()
+                setOnClickListener { showTextDocumentPreview(attachment) }
                 background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
                     else rounded(PANEL_INSET, dp(if (retroTheme) 4 else 8), BORDER, dp(1))
             }
@@ -5484,6 +5491,71 @@ class MainActivity : Activity() {
             container.addView(card, LinearLayout.LayoutParams(cardWidth, WRAP).apply {
                 topMargin = dp(5)
             })
+        }
+    }
+
+    private fun showTextDocumentPreview(attachment: TextDocumentAttachmentPreview) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(if (retroTheme) 0 else dp(12), if (retroTheme) 0 else dp(9), if (retroTheme) 0 else dp(12), dp(8))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            if (retroTheme) {
+                setPadding(dp(12), 0, dp(4), 0)
+                background = lollipopActionBarBackground()
+            }
+        }
+        header.addView(ImageView(this).apply {
+            setPixelAwareImageResource(fileDisplayIconResource(attachment.name))
+            contentDescription = fileGlyph(attachment.name)
+        }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(8) })
+        header.addView(label(attachment.name, if (retroTheme) 17 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+        }, LinearLayout.LayoutParams(0, dp(42), 1f))
+        header.addView(iconButton("close", "关闭文档预览") { dialog.dismiss() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
+        layout.addView(label("${java.text.NumberFormat.getIntegerInstance(Locale.CHINA).format(attachment.characterCount)} 个字符", 10, MUTED, translateUi = false).apply {
+            setPadding(dp(4), dp(2), dp(4), dp(5))
+        }, LinearLayout.LayoutParams(MATCH, WRAP))
+        val markdownContent = label("", 14, TEXT, translateUi = false).apply {
+            setTextIsSelectable(true)
+            setLineSpacing(dp(3).toFloat(), 1.3f)
+            typeface = themedTypeface()
+            setHorizontallyScrolling(false)
+            breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+            hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+            setPadding(dp(5), dp(7), dp(5), dp(12))
+        }
+        if (attachment.content.isBlank()) {
+            markdownContent.text = tr("此文档没有可预览的文本")
+        } else {
+            assistantMarkdown.setMarkdown(markdownContent, displayLocalInstallerPaths(attachment.content))
+            enableChatLinkClicks(markdownContent)
+        }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(markdownContent, FrameLayout.LayoutParams(MATCH, WRAP))
+        }
+        layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3) })
+        dialog.setContentView(layout)
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(MATCH, (resources.displayMetrics.heightPixels * .88f).toInt())
+            setGravity(Gravity.BOTTOM)
         }
     }
 
