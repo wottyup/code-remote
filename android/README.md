@@ -17,6 +17,6 @@ APK 输出在 `app/build/outputs/apk/debug/codex-remote-android-<版本号>-debu
 
 ## 离线语音输入
 
-聊天输入框右侧的麦克风按钮使用 sherpa-onnx 在本机识别语音，音频不会上传到电脑或云端。约 25 MB 的中文流式模型会在聊天输入框出现后于后台预加载，首次点击通常会直接开始录音；如果模型仍在加载，点击会在加载完成后自动开始。首次使用会请求麦克风权限，之后点击麦克风即可边说边把文字写入输入框；再次点击或暂停 APP 会结束录音。
+聊天输入框右侧的麦克风按钮使用 sherpa-onnx 在本机识别语音，音频不会上传到电脑或云端。约 160 MB 的中文流式模型会在聊天输入框出现后于后台预加载，首次点击通常会直接开始录音；如果模型仍在加载，点击会在加载完成后自动开始。首次使用会请求麦克风权限，之后点击麦克风即可边说边把文字写入输入框；再次点击或暂停 APP 会结束录音。录音会优先使用系统语音识别输入源，并在设备支持时启用系统降噪和自动增益。
 
-模型为 `csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（Apache-2.0，int8），放在 `app/src/main/assets/offline-asr/`，来源与许可证见该目录下的 `MODEL_NOTICE.txt`。当前模型以中文为主，英文单词识别能力有限，也暂不包含标点模型。
+模型为 `csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30`（由 multi-zh-hans zipformer-large 转换，int8），放在 `app/src/main/assets/offline-asr/`，来源和授权说明见该目录下的 `MODEL_NOTICE.txt`。它比旧的 14M 模型在噪声环境下准确率更高，代价是安装包明显变大。当前模型以中文为主，英文单词识别能力有限，也暂不包含标点模型。

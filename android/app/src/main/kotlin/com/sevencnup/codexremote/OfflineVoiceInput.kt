@@ -4,9 +4,12 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
 import com.k2fsa.sherpa.onnx.EndpointConfig
 import com.k2fsa.sherpa.onnx.EndpointRule
 import com.k2fsa.sherpa.onnx.FeatureConfig
@@ -45,6 +48,8 @@ class OfflineVoiceInput(
     @Volatile private var wantListening = false
     @Volatile private var activeStream: OnlineStream? = null
     @Volatile private var audioRecord: AudioRecord? = null
+    private var noiseSuppressor: NoiseSuppressor? = null
+    private var gainControl: AutomaticGainControl? = null
     private var loadThread: Thread? = null
     private var recordThread: Thread? = null
 
@@ -77,20 +82,21 @@ class OfflineVoiceInput(
         loading = true
         loadThread = thread(name = "offline-asr-load") {
             try {
+                val loadStartedAt = SystemClock.elapsedRealtime()
                 val created = OnlineRecognizer(
                     appContext.assets,
                     OnlineRecognizerConfig(
                         featConfig = FeatureConfig(sampleRate = SAMPLE_RATE, featureDim = 80),
                         modelConfig = OnlineModelConfig(
                             transducer = OnlineTransducerModelConfig(
-                                encoder = "$MODEL_DIR/encoder-epoch-99-avg-1.int8.onnx",
-                                decoder = "$MODEL_DIR/decoder-epoch-99-avg-1.int8.onnx",
-                                joiner = "$MODEL_DIR/joiner-epoch-99-avg-1.int8.onnx",
+                                encoder = "$MODEL_DIR/encoder.int8.onnx",
+                                decoder = "$MODEL_DIR/decoder.onnx",
+                                joiner = "$MODEL_DIR/joiner.int8.onnx",
                             ),
                             tokens = "$MODEL_DIR/tokens.txt",
-                            numThreads = 2,
+                            numThreads = RECOGNIZER_THREADS,
                             provider = "cpu",
-                            modelType = "zipformer",
+                            modelType = "zipformer2",
                             debug = false,
                         ),
                         decodingMethod = "greedy_search",
@@ -113,6 +119,7 @@ class OfflineVoiceInput(
                     recognizer = created
                 }
                 loading = false
+                Log.d(TAG, "model ready in ${SystemClock.elapsedRealtime() - loadStartedAt} ms")
                 val announced = loadingAnnounced
                 loadingAnnounced = false
                 if (released) return@thread
@@ -192,11 +199,13 @@ class OfflineVoiceInput(
             postState(State.IDLE)
             return
         }
+        enableAudioEffects(record)
         val stream = try {
             synchronized(lock) {
                 // Keep the recognizer alive while creating the stream; release()
                 // takes the same lock before freeing the native object.
                 if (released || !recording) {
+                    releaseAudioEffects()
                     runCatching { record.release() }
                     if (!released) postState(State.IDLE)
                     return
@@ -204,6 +213,7 @@ class OfflineVoiceInput(
                 current.createStream()
             }
         } catch (error: Throwable) {
+            releaseAudioEffects()
             runCatching { record.release() }
             recording = false
             wantListening = false
@@ -214,6 +224,7 @@ class OfflineVoiceInput(
         synchronized(lock) {
             if (released || !recording) {
                 runCatching { stream.release() }
+                releaseAudioEffects()
                 runCatching { record.release() }
                 // stop() may have arrived while the recorder was being set up.
                 if (!released) postState(State.IDLE)
@@ -234,12 +245,19 @@ class OfflineVoiceInput(
         val buffer = ShortArray(READ_SAMPLES)
         var lastPostedPartial = ""
         var lastPartialPostAt = 0L
+        var highPassPrevInput = 0f
+        var highPassPrevOutput = 0f
+        var audioSamples = 0L
+        var decodeNanos = 0L
+        var recordStartedAt = 0L
+        var firstPartialLogged = false
         try {
             if (!recording) return
             record.startRecording()
             if (record.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 throw IllegalStateException("录音设备没有进入工作状态")
             }
+            recordStartedAt = SystemClock.uptimeMillis()
             // Only claim to be listening once the microphone is actually live.
             if (recording) postState(State.LISTENING)
             while (recording) {
@@ -249,11 +267,25 @@ class OfflineVoiceInput(
                     break
                 }
                 if (count == 0) continue
-                val samples = FloatArray(count) { buffer[it] / 32768.0f }
+                val samples = FloatArray(count)
+                for (i in 0 until count) {
+                    val raw = buffer[i] / 32768.0f
+                    val filtered = AUDIO_HIGH_PASS_ALPHA * (highPassPrevOutput + raw - highPassPrevInput)
+                    highPassPrevInput = raw
+                    highPassPrevOutput = filtered
+                    samples[i] = filtered
+                }
+                audioSamples += count
                 stream.acceptWaveform(samples, SAMPLE_RATE)
+                val decodeStartedAt = System.nanoTime()
                 while (current.isReady(stream)) current.decode(stream)
+                decodeNanos += System.nanoTime() - decodeStartedAt
                 val text = current.getResult(stream).text
                 val now = SystemClock.uptimeMillis()
+                if (!firstPartialLogged && text.isNotEmpty()) {
+                    firstPartialLogged = true
+                    Log.d(TAG, "first partial after ${now - recordStartedAt} ms")
+                }
                 if (text != lastPostedPartial &&
                     (text.isEmpty() || now - lastPartialPostAt >= PARTIAL_POST_INTERVAL_MS)
                 ) {
@@ -277,10 +309,17 @@ class OfflineVoiceInput(
         } catch (error: Throwable) {
             if (recording && !released) postError("语音识别失败：${error.message ?: "未知错误"}")
         } finally {
+            if (audioSamples > 0) {
+                val audioMs = audioSamples * 1000L / SAMPLE_RATE
+                val decodeMs = decodeNanos / 1_000_000L
+                val rtf = decodeNanos.toDouble() / (audioSamples.toDouble() / SAMPLE_RATE * 1_000_000_000.0)
+                Log.d(TAG, "session audio=${audioMs} ms decode=${decodeMs} ms rtf=${String.format(java.util.Locale.US, "%.2f", rtf)}")
+            }
             recording = false
             wantListening = false
             activeStream = null
             audioRecord = null
+            releaseAudioEffects()
             runCatching { stream.release() }
             runCatching { record.release() }
             if (!released) postState(State.IDLE)
@@ -315,6 +354,36 @@ class OfflineVoiceInput(
         return null
     }
 
+    /**
+     * Applies the platform noise suppressor and automatic gain control when the
+     * device exposes them. Both are optional: a missing or failing effect must
+     * never prevent recording.
+     */
+    private fun enableAudioEffects(record: AudioRecord) {
+        val ns = runCatching {
+            NoiseSuppressor.create(record.audioSessionId)
+        }.getOrNull()
+        val nsEnabled = ns != null && runCatching { ns.enabled = true }.isSuccess
+        noiseSuppressor = if (nsEnabled) ns else null
+        if (ns != null && !nsEnabled) runCatching { ns.release() }
+
+        val agc = runCatching {
+            AutomaticGainControl.create(record.audioSessionId)
+        }.getOrNull()
+        val agcEnabled = agc != null && runCatching { agc.enabled = true }.isSuccess
+        gainControl = if (agcEnabled) agc else null
+        if (agc != null && !agcEnabled) runCatching { agc.release() }
+
+        Log.d(TAG, "audio effects ns=$nsEnabled agc=$agcEnabled")
+    }
+
+    private fun releaseAudioEffects() {
+        runCatching { noiseSuppressor?.release() }
+        runCatching { gainControl?.release() }
+        noiseSuppressor = null
+        gainControl = null
+    }
+
     private fun postState(state: State) {
         mainHandler.post { if (!released) onState(state) }
     }
@@ -333,9 +402,14 @@ class OfflineVoiceInput(
 
     companion object {
         const val SAMPLE_RATE = 16000
+        private const val TAG = "OfflineVoiceInput"
         private const val MODEL_DIR = "offline-asr"
         private const val READ_SAMPLES = 640 // 40 ms
         private const val PARTIAL_POST_INTERVAL_MS = 60L
         private const val FLUSH_SAMPLES = SAMPLE_RATE / 4 // 250 ms
+        // First-order 80 Hz high-pass: removes rumble and DC without touching
+        // the speech band. alpha = 1 / (1 + 2 * pi * 80 / 16000).
+        private const val AUDIO_HIGH_PASS_ALPHA = 0.9695f
+        private val RECOGNIZER_THREADS = Runtime.getRuntime().availableProcessors().coerceIn(2, 4)
     }
 }

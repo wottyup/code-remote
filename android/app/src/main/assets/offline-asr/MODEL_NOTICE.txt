@@ -1,12 +1,19 @@
-Model: sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
-Source: https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23
-Author: csukuangfj
-License: Apache License 2.0 (see LICENSE-APACHE-2.0.txt)
+Model: sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30
+Source: https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-zh-int8-2025-06-30
+Upstream checkpoint: https://huggingface.co/yuekai/icefall-asr-multi-zh-hans-zipformer-large
+Training recipe: https://github.com/k2-fsa/icefall/tree/master/egs/multi_zh-hans
+Converter: sherpa-onnx (https://github.com/k2-fsa/sherpa-onnx)
 
 Files bundled in this directory:
-  encoder-epoch-99-avg-1.int8.onnx
-  decoder-epoch-99-avg-1.int8.onnx
-  joiner-epoch-99-avg-1.int8.onnx
+  encoder.int8.onnx (int8, about 154 MB)
+  decoder.onnx (fp32, about 5 MB)
+  joiner.int8.onnx (int8, about 1 MB)
   tokens.txt
 
-This is a Chinese streaming Zipformer transducer model quantized to int8.
+This is a Chinese streaming Zipformer transducer trained on the multi-zh-hans
+corpus. It is much more noise-robust than the previous 14M WenetSpeech model,
+at the cost of a larger APK.
+
+License: the converted model repository does not publish a license file; the
+upstream checkpoint and the training corpora have their own terms. Verify the
+terms before redistributing the APK or model files.
