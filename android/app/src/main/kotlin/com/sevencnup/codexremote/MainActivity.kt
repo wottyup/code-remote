@@ -865,7 +865,7 @@ class MainActivity : Activity() {
     private var queueTouchActive = false
     private var queueRenderDirty = false
     private var expandedOperationIds = mutableSetOf<String>()
-    private var fullyExpandedOperationIds = mutableSetOf<String>()
+    private val operationPageIndexes = mutableMapOf<String, Int>()
     private var expandedFileChangeIds = mutableSetOf<String>()
     private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
@@ -953,6 +953,7 @@ class MainActivity : Activity() {
     private var activeActivityTimer: TextView? = null
     private var activityShimmerAnimator: ValueAnimator? = null
     private var activeActivityStartedAt = 0L
+    private var activeActivityTimerTurnId: String? = null
     private var liveActivityItem: JSONObject? = null
     private var liveActivityItemCompleted = false
     private var liveActivityTurnId: String? = null
@@ -960,9 +961,11 @@ class MainActivity : Activity() {
     private val activityTick = object : Runnable {
         override fun run() {
             if (!running || activeActivityTimer == null) return
-            val elapsed = ((System.currentTimeMillis() - activeActivityStartedAt).coerceAtLeast(0L) / 1000L)
+            val elapsedMillis = (SystemClock.elapsedRealtime() - activeActivityStartedAt).coerceAtLeast(0L)
+            val elapsed = elapsedMillis / 1000L
             activeActivityTimer?.text = "已用 ${elapsed / 60L}分${elapsed % 60L}秒"
-            handler.postDelayed(this, 1000L)
+            val nextSecond = (1000L - elapsedMillis % 1000L).coerceAtLeast(16L)
+            handler.postDelayed(this, nextSecond)
         }
     }
     private lateinit var welcomeTitleView: TextView
@@ -4087,8 +4090,15 @@ class MainActivity : Activity() {
                 contentDescription = "正在思考"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             val lastTurn = turns.optJSONObject(turns.length() - 1)
-            activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
-                ?: System.currentTimeMillis()
+            val timerTurnId = "${activeThreadId.orEmpty()}:${lastTurn?.optString("id").orEmpty()}"
+            if (activeActivityTimerTurnId != timerTurnId) {
+                val nowWall = System.currentTimeMillis()
+                val startedAtWall = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
+                    ?: nowWall
+                val elapsedBeforeRender = (nowWall - startedAtWall).coerceAtLeast(0L)
+                activeActivityStartedAt = SystemClock.elapsedRealtime() - elapsedBeforeRender
+                activeActivityTimerTurnId = timerTurnId
+            }
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
             val turnId = lastTurn?.optString("id").orEmpty()
             val activityText = activityLineText(turnId, lastItems)
@@ -4110,6 +4120,8 @@ class MainActivity : Activity() {
             handler.removeCallbacks(activityTick)
             activeActivityText = null
             activeActivityTimer = null
+            activeActivityStartedAt = 0L
+            activeActivityTimerTurnId = null
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
@@ -5469,9 +5481,16 @@ class MainActivity : Activity() {
         maximumWidth: Int,
         refreshDetails: () -> Unit,
     ): LinearLayout {
-        val showAll = logId in fullyExpandedOperationIds
         val list = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(5), 0, 0, dp(3)) }
-        val visibleOperations = if (showAll) operations else operations.take(8)
+        val firstPageCount = 8
+        val pageSize = OPERATION_LOG_PAGE_SIZE
+        val pageCount = if (operations.size <= firstPageCount) 1 else
+            1 + (operations.size - firstPageCount + pageSize - 1) / pageSize
+        val pageIndex = operationPageIndexes.getOrPut(logId) { 0 }.coerceIn(0, (pageCount - 1).coerceAtLeast(0))
+        operationPageIndexes[logId] = pageIndex
+        val startIndex = if (pageIndex == 0) 0 else firstPageCount + (pageIndex - 1) * pageSize
+        val endIndex = minOf(operations.size, startIndex + if (pageIndex == 0) firstPageCount else pageSize)
+        val visibleOperations = operations.subList(startIndex.coerceAtMost(endIndex), endIndex)
         visibleOperations.forEach { operation ->
             val isFileChange = normalizedType(operation.optString("type")) == "filechange"
             val changedFiles = if (isFileChange) parseFileChanges(operation.opt("changes")) else emptyList()
@@ -5535,14 +5554,34 @@ class MainActivity : Activity() {
                 })
             }
         }
-        if (!showAll && operations.size > visibleOperations.size) {
-            list.addView(label("查看其余 ${operations.size - visibleOperations.size} 项", 11, ACCENT, true).apply {
-                setPadding(dp(21), dp(4), 0, dp(4))
-                setOnClickListener {
-                    fullyExpandedOperationIds.add(logId)
-                    refreshDetails()
-                }
-            }, widthWrap())
+        if (pageCount > 1) {
+            val pager = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(20), dp(5), dp(4), dp(4))
+            }
+            if (pageIndex > 0) {
+                pager.addView(label("上一批", 11, ACCENT, true).apply {
+                    setPadding(dp(5), dp(4), dp(8), dp(4))
+                    setOnClickListener {
+                        operationPageIndexes[logId] = pageIndex - 1
+                        refreshDetails()
+                    }
+                }, LinearLayout.LayoutParams(WRAP, WRAP))
+            }
+            pager.addView(label("${startIndex + 1}–$endIndex / ${operations.size}", 10, MUTED).apply {
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (pageIndex < pageCount - 1) {
+                pager.addView(label("下一批", 11, ACCENT, true).apply {
+                    setPadding(dp(8), dp(4), dp(5), dp(4))
+                    setOnClickListener {
+                        operationPageIndexes[logId] = pageIndex + 1
+                        refreshDetails()
+                    }
+                }, LinearLayout.LayoutParams(WRAP, WRAP))
+            }
+            list.addView(pager, LinearLayout.LayoutParams(maximumWidth - dp(7), WRAP))
         }
         return list
     }
@@ -10848,6 +10887,7 @@ class MainActivity : Activity() {
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
         private const val DEFAULT_VISIBLE_HISTORY_TURNS = 12
+        private const val OPERATION_LOG_PAGE_SIZE = 50
         private const val MAX_VISIBLE_SIDEBAR_THREADS = 80
         private val OPERATION_PATH_KEYS = setOf(
             "path", "filepath", "file_path", "filename", "target_path", "source_path", "imagepath", "image_path",

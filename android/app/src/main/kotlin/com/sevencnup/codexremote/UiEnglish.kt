@@ -75,6 +75,7 @@ internal object UiEnglish {
         "用时" to "Time",
         "回到底部" to "Scroll to bottom", "最近编辑文件" to "Recently edited files",
         "操作记录" to "Activity log", "展开或收起最近编辑文件" to "Toggle recently edited files",
+        "上一批" to "Previous batch", "下一批" to "Next batch",
         "修改文件" to "Changed files", "查看文件" to "View file", "查看图片" to "View image",
         "关闭图片" to "Close image", "关闭文件预览" to "Close file preview",
         "关闭修改预览" to "Close diff preview", "文件" to "File", "文件夹" to "Folder",
