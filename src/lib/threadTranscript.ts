@@ -60,6 +60,7 @@ export function createThreadTranscript(
     ? options.generatedAt.toISOString()
     : displayTime(options.generatedAt) || new Date().toISOString()
   const title = threadTitle(thread)
+  const assistantLabel = thread.engine === 'claude-code' || thread.id.startsWith('claude:') ? 'Claude Code' : 'Codex'
   const lines = [
     `# ${options.heading ?? '对话记录'}`,
     '',
@@ -80,7 +81,7 @@ export function createThreadTranscript(
   }
 
   messages.forEach((message, index) => {
-    const label = message.role === 'user' ? '用户' : 'Codex'
+    const label = message.role === 'user' ? '用户' : assistantLabel
     lines.push('', '---', '', `### ${index + 1}. ${label}`)
     const time = messageTime(message)
     if (time) lines.push('', `- 时间：${inlineCode(time)}`)
