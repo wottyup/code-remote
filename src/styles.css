@@ -572,7 +572,34 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .cpa-usage-summary-card > strong, .remote-shell--theme-warm .cpa-usage-connect-prompt h2, .remote-shell--theme-warm .cpa-usage-table td { color: #46382c; }
 .remote-shell--theme-retro .cpa-usage-summary-card, .remote-shell--theme-retro .cpa-usage-range-tabs { border: 1px solid #a8b7c4; border-radius: 2px; background: #fff; box-shadow: none; }
 .remote-shell--theme-retro .cpa-usage-summary-card--primary { background: #edf3f8; }
+.remote-shell--theme-retro .cpa-usage-panel { color: #263744; }
+.remote-shell--theme-retro .cpa-usage-toolbar { color: #536474; }
+.remote-shell--theme-retro .cpa-usage-key-filter { border-color: #a8b7c4; background: #f0f4f7; color: #405463; }
+.remote-shell--theme-retro .cpa-usage-key-filter > span { color: #526271; }
+.remote-shell--theme-retro .cpa-usage-key-filter select { color: #263744; color-scheme: light; }
+.remote-shell--theme-retro .cpa-usage-key-filter select option { background: #fff; color: #263744; }
+.remote-shell--theme-retro .cpa-usage-filter-status { color: #596a78; }
+.remote-shell--theme-retro .cpa-usage-filter-status--error { color: #8b3838; }
+.remote-shell--theme-retro .cpa-usage-range-tabs button { color: #405463; }
+.remote-shell--theme-retro .cpa-usage-range-tabs button:hover { color: #203c55; }
+.remote-shell--theme-retro .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: #8fa7b9; background: #dce8f3; color: #183d5d; }
+.remote-shell--theme-retro .cpa-usage-summary-card > span { color: #536474; }
+.remote-shell--theme-retro .cpa-usage-summary-card > strong { color: #20252b; }
+.remote-shell--theme-retro .cpa-usage-summary-card--primary > strong { color: #234764; }
+.remote-shell--theme-retro .cpa-usage-summary-card--cost > strong { color: #2f6b3a; }
+.remote-shell--theme-retro .cpa-usage-summary-card > small { color: #657481; }
 .remote-shell--theme-retro .cpa-usage-timeline__bar { border-radius: 0; background: #477da7; }
+.remote-shell--theme-retro .cpa-usage-timeline__item small { color: #536474; }
+.remote-shell--theme-retro .cpa-usage-table th { color: #526271; }
+.remote-shell--theme-retro .cpa-usage-table td { color: #263744; }
+.remote-shell--theme-retro .cpa-usage-table td:first-child small { color: #657481; }
+.remote-shell--theme-retro :is(.cpa-usage-empty, .cpa-usage-loading) { color: #526271; }
+.remote-shell--theme-retro .cpa-usage-error { border-color: #d2aaaa; background: #f8eded; color: #633636; }
+.remote-shell--theme-retro .cpa-usage-error button { border-color: #c8a5a5; background: #f3e2e2; color: #633636; }
+.remote-shell--theme-retro .cpa-usage-error button:hover { background: #edd6d6; color: #512626; }
+.remote-shell--theme-retro .cpa-usage-connect-prompt > svg { color: #365b7b; }
+.remote-shell--theme-retro .cpa-usage-connect-prompt h2 { color: #283844; }
+.remote-shell--theme-retro .cpa-usage-connect-prompt p { color: #526271; }
 .remote-shell--theme-pixel .cpa-usage-settings-input { border: 2px solid var(--pixel-border); border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-text); }
 .remote-shell--theme-custom .cpa-usage-summary-card > strong, .remote-shell--theme-custom .cpa-usage-table td { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .cpa-usage-summary-card > span, .remote-shell--theme-custom .cpa-usage-summary-card > small, .remote-shell--theme-custom .cpa-usage-toolbar, .remote-shell--theme-custom .cpa-usage-table th, .remote-shell--theme-custom .cpa-usage-timeline__item small { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
