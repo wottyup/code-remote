@@ -3970,6 +3970,14 @@ class MainActivity : Activity() {
                         LinearLayout.LayoutParams(WRAP, WRAP),
                     )
                 }
+                item.optLong("_duration", 0L).takeIf { it > 0L }?.let { durationMs ->
+                    meta.addView(
+                        label("${tr("用时")} ${formatTurnDuration(durationMs)}", 10, MUTED).apply {
+                            setPadding(dp(7), 0, 0, 0)
+                        },
+                        LinearLayout.LayoutParams(WRAP, WRAP),
+                    )
+                }
                 bubble.addView(meta, LinearLayout.LayoutParams((maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), WRAP))
             }
             val rawText = messageText(item, role)
@@ -9917,6 +9925,22 @@ class MainActivity : Activity() {
             firstJsonValue(turn, "startedAt", "started_at", "startedAtMs", "started_at_ms", "createdAt", "created_at", "timestamp", "timestampMs", "timestamp_ms")
         }
         return formatMessageTime(itemValue ?: turnValue)
+    }
+
+    private fun formatTurnDuration(durationMs: Long): String {
+        val totalSeconds = durationMs.coerceAtLeast(0L) / 1000L
+        val hours = totalSeconds / 3600L
+        val minutes = totalSeconds % 3600L / 60L
+        val seconds = totalSeconds % 60L
+        return if (appLanguage == "en") {
+            if (hours > 0L) "${hours}h ${minutes}m ${seconds}s"
+            else if (minutes > 0L) "${minutes}m ${seconds}s"
+            else "${seconds}s"
+        } else {
+            if (hours > 0L) "${hours}小时${minutes}分${seconds}秒"
+            else if (minutes > 0L) "${minutes}分${seconds}秒"
+            else "${seconds}秒"
+        }
     }
 
     private fun currentMessageTime(): String = formatMessageTime(Instant.now().toString())

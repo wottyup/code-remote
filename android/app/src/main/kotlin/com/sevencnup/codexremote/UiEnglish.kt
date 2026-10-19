@@ -72,6 +72,7 @@ internal object UiEnglish {
         "继续回复失败" to "Could not continue reply", "暂停失败" to "Could not pause reply",
         "发送失败" to "Send failed", "新建对话失败" to "Could not create chat",
         "正在思考…" to "Thinking…", "正在等待连接…" to "Waiting for connection…",
+        "用时" to "Time",
         "回到底部" to "Scroll to bottom", "最近编辑文件" to "Recently edited files",
         "操作记录" to "Activity log", "展开或收起最近编辑文件" to "Toggle recently edited files",
         "修改文件" to "Changed files", "查看文件" to "View file", "查看图片" to "View image",
