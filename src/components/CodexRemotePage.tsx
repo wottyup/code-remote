@@ -65,7 +65,7 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
-import { AIGroupChatDialog } from './AIGroupChatDialog'
+import { AIGroupChatPane } from './AIGroupChatPane'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
@@ -3905,6 +3905,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [aiGroupChatOpen, setAiGroupChatOpen] = useState(false)
   const [aiGroupChats, setAIGroupChats] = useState<AIGroupChat[]>(readAIGroupChats)
   const [activeAIGroupChatId, setActiveAIGroupChatId] = useState<string | null>(null)
+  const [busyAIGroupChatIds, setBusyAIGroupChatIds] = useState<Set<string>>(() => new Set())
   const [threadJoinGroupTarget, setThreadJoinGroupTarget] = useState<CodexThread | null>(null)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
@@ -3959,15 +3960,37 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const closeAIGroupChat = useCallback(() => setAiGroupChatOpen(false), [])
   const openAIGroupChat = useCallback((groupId: string) => {
+    if (settingsOpen || usageStatsOpen) {
+      setSettingsOpen(false)
+      setUsageStatsOpen(false)
+      if (getPanelHistoryEntry(window.history.state)) window.history.back()
+    }
+    setWorkspacePreviewRequest(null)
     setActiveAIGroupChatId(groupId)
     setAiGroupChatOpen(true)
     setSidebarOpen(false)
-  }, [])
+    setWorkspaceOpen(false)
+  }, [settingsOpen, usageStatsOpen])
   const updateAIGroupChat = useCallback((groupId: string, update: (current: AIGroupChat) => AIGroupChat) => {
     setAIGroupChats((current) => current.map((group) => group.id === groupId ? update(group) : group))
   }, [])
+  const updateAIGroupChatBusy = useCallback((groupId: string, busy: boolean) => {
+    setBusyAIGroupChatIds((current) => {
+      if (current.has(groupId) === busy) return current
+      const next = new Set(current)
+      if (busy) next.add(groupId)
+      else next.delete(groupId)
+      return next
+    })
+  }, [])
   const deleteAIGroupChat = useCallback((groupId: string) => {
     setAIGroupChats((current) => current.filter((group) => group.id !== groupId))
+    setBusyAIGroupChatIds((current) => {
+      if (!current.has(groupId)) return current
+      const next = new Set(current)
+      next.delete(groupId)
+      return next
+    })
     if (activeAIGroupChatId === groupId) setAiGroupChatOpen(false)
   }, [activeAIGroupChatId])
   const createAIGroupChat = useCallback(() => {
@@ -4215,6 +4238,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const group = groupForThread(thread)
     if (!group) return false
     setAIGroupChats((current) => current.filter((candidate) => candidate.id !== group.id))
+    setBusyAIGroupChatIds((current) => {
+      if (!current.has(group.id)) return current
+      const next = new Set(current)
+      next.delete(group.id)
+      return next
+    })
     if (activeAIGroupChatId === group.id) setAiGroupChatOpen(false)
     return true
   }
@@ -4348,7 +4377,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const touch = event.touches[0]
     if (!touch) return
-    const globalOverlayOpen = settingsOpen || usageStatsOpen || aiGroupChatOpen || Boolean(threadJoinGroupTarget)
+    const globalOverlayOpen = settingsOpen || usageStatsOpen || Boolean(threadJoinGroupTarget)
       || Boolean(threadRenameTarget)
       || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
@@ -5053,11 +5082,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   async function createThread() {
     setSidebarOpen(false)
+    setAiGroupChatOpen(false)
     await createThreadForPane(selectedPaneIndex)
   }
 
   async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
     setSidebarOpen(false)
+    setAiGroupChatOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
@@ -5421,6 +5452,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   const activeAIGroupChat = aiGroupChats.find((group) => group.id === activeAIGroupChatId) ?? null
+  const visibleAIGroupChat = !settingsOpen && !usageStatsOpen && aiGroupChatOpen ? activeAIGroupChat : null
+  const mountedAIGroupChats = aiGroupChats.filter((group) => group.id === activeAIGroupChatId || busyAIGroupChatIds.has(group.id))
   const contextMenuGroup = threadContextMenu ? groupForThread(threadContextMenu.thread) : undefined
 
   return (
@@ -5459,7 +5492,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <section className="sidebar-ai-groups" aria-label="AI 群聊">
           <div className="sidebar-ai-groups__heading"><span><MessagesSquare size={14} />群聊</span><button type="button" aria-label="创建群聊" title={aiGroupChats.length >= 24 ? '群聊数量已达上限' : '创建群聊'} disabled={aiGroupChats.length >= 24} onClick={createAIGroupChat}><Plus size={15} /></button></div>
           {aiGroupChats.length > 0 ? <div className="sidebar-ai-groups__list">
-            {aiGroupChats.map((group) => <button className={'sidebar-ai-group' + (aiGroupChatOpen && activeAIGroupChatId === group.id ? ' sidebar-ai-group--active' : '')} type="button" key={group.id} title={group.name} aria-label={`打开群聊：${group.name}`} onClick={() => openAIGroupChat(group.id)}>
+            {aiGroupChats.map((group) => <button className={'sidebar-ai-group' + (aiGroupChatOpen && activeAIGroupChatId === group.id ? ' sidebar-ai-group--active' : '')} type="button" key={group.id} title={group.name} aria-label={`打开群聊：${group.name}`} aria-current={aiGroupChatOpen && activeAIGroupChatId === group.id ? 'page' : undefined} onClick={() => openAIGroupChat(group.id)}>
               <MessagesSquare size={15} />
               <span className="sidebar-ai-group__name">{group.name}</span>
               <span className="sidebar-ai-group__members" aria-label={`${group.codexThreadId ? '有 Codex 成员' : '缺少 Codex 成员'}；${group.claudeThreadId ? '有 Claude 成员' : '缺少 Claude 成员'}`}>
@@ -5495,7 +5528,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <div className="thread-list__section">{section.label}</div>
             {section.threads.map((thread) => {
               const paneIndex = paneIndexForThread(thread.id)
-              const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
+              const isActive = !aiGroupChatOpen && !sidebarSelectionMode && paneIndex === selectedPaneIndex
               const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
               const isPinned = pinnedThreadIds.has(thread.id)
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
@@ -5619,6 +5652,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : (
         <>
           <section className="remote-workspace">
+            {visibleAIGroupChat ? <AIGroupChatPane
+              key={`${visibleAIGroupChat.id}:${visibleAIGroupChat.codexThreadId ?? ''}:${visibleAIGroupChat.claudeThreadId ?? ''}`}
+              token={token}
+              group={visibleAIGroupChat}
+              hidden={false}
+              containerRef={paneGrid}
+              onUnauthorized={onUnauthorized}
+              onClose={closeAIGroupChat}
+              onOpenSidebar={openSidebarPanel}
+              onOpenWorkspace={openWorkspacePanel}
+              onBusyChange={updateAIGroupChatBusy}
+              onDeleteGroup={deleteAIGroupChat}
+              onGroupChange={updateAIGroupChat}
+              resolvePreferences={resolveAIGroupChatPreferences}
+            /> : <>
             <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
               {openPaneIndexes.map((paneIndex) => (
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
@@ -5706,6 +5754,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
             />
+            </>}
           </section>
           <div
             className="workspace-resize-handle"
@@ -5776,7 +5825,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
         </>
       )}
-      {aiGroupChatOpen && activeAIGroupChat ? <AIGroupChatDialog key={activeAIGroupChat.id} token={token} group={activeAIGroupChat} onUnauthorized={onUnauthorized} onClose={closeAIGroupChat} onDeleteGroup={deleteAIGroupChat} onGroupChange={updateAIGroupChat} resolvePreferences={resolveAIGroupChatPreferences} /> : null}
+      {mountedAIGroupChats.filter((group) => group.id !== visibleAIGroupChat?.id).map((group) => <AIGroupChatPane
+        key={`${group.id}:${group.codexThreadId ?? ''}:${group.claudeThreadId ?? ''}`}
+        token={token}
+        group={group}
+        hidden
+        onUnauthorized={onUnauthorized}
+        onClose={closeAIGroupChat}
+        onOpenSidebar={openSidebarPanel}
+        onOpenWorkspace={openWorkspacePanel}
+        onBusyChange={updateAIGroupChatBusy}
+        onDeleteGroup={deleteAIGroupChat}
+        onGroupChange={updateAIGroupChat}
+        resolvePreferences={resolveAIGroupChatPreferences}
+      />)}
     </div>
   )
 }

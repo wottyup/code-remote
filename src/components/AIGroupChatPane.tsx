@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
-import { ArrowLeftRight, Check, LoaderCircle, MessagesSquare, Pencil, Send, Trash2, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
+import { ArrowLeftRight, Check, FolderOpen, LoaderCircle, Menu, MessagesSquare, Pencil, Send, Trash2, X } from 'lucide-react'
 import { useCodexRemote } from '../hooks/useCodexRemote'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import type { AIGroupChat, AIGroupEngine, AIGroupMessage } from '../lib/aiGroupChats'
 import type { ClaudeCodePermissionMode, CodexApprovalPolicy } from '../lib/codexRemoteClient'
 
-interface AIGroupChatDialogProps {
+interface AIGroupChatPaneProps {
   token: string
   group: AIGroupChat
+  hidden: boolean
+  containerRef?: RefObject<HTMLDivElement | null>
   onUnauthorized: () => void
   onClose: () => void
+  onOpenSidebar: () => void
+  onOpenWorkspace: () => void
+  onBusyChange: (groupId: string, busy: boolean) => void
   onDeleteGroup: (groupId: string) => void
   onGroupChange: (groupId: string, update: (current: AIGroupChat) => AIGroupChat) => void
   resolvePreferences: (engine: AIGroupEngine, threadId: string | null) => {
@@ -98,7 +103,7 @@ function latestAssistantAfterLastUser(messages: AIGroupMessage[], engine: AIGrou
   return [...messages.slice(lastUserIndex + 1)].reverse().find((message) => message.role === 'assistant' && message.engine === engine && !message.streaming) ?? null
 }
 
-export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDeleteGroup, onGroupChange, resolvePreferences }: AIGroupChatDialogProps) {
+export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthorized, onClose, onOpenSidebar, onOpenWorkspace, onBusyChange, onDeleteGroup, onGroupChange, resolvePreferences }: AIGroupChatPaneProps) {
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [relaying, setRelaying] = useState(false)
@@ -193,9 +198,9 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
 
   useEffect(() => {
     const list = messageList.current
-    if (!list) return
+    if (!list || hidden) return
     list.scrollTop = list.scrollHeight
-  }, [group.messages])
+  }, [group.messages, hidden])
 
   const latestCodexReply = latestAssistantAfterLastUser(group.messages, 'codex')
   const latestClaudeReply = latestAssistantAfterLastUser(group.messages, 'claude-code')
@@ -209,6 +214,11 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
     && !claude.loadingHistory
 
   useEffect(() => {
+    onBusyChange(group.id, busy)
+  }, [busy, group.id, onBusyChange])
+
+  useEffect(() => {
+    if (hidden) return
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || busy) return
       event.preventDefault()
@@ -217,7 +227,7 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
     }
     document.addEventListener('keydown', closeOnEscape, true)
     return () => document.removeEventListener('keydown', closeOnEscape, true)
-  }, [busy, onClose])
+  }, [busy, hidden, onClose])
 
   const beginGroupTurn = () => {
     groupTurnPending.current.codex = true
@@ -363,13 +373,13 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
     && !busy
 
   return (
-    <div className="ai-group-chat-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose() }}>
-      <section className="ai-group-chat" role="dialog" aria-modal="true" aria-labelledby="ai-group-chat-title">
+    <div className="ai-group-chat" ref={containerRef} role="region" aria-label={`${group.name}群聊`} hidden={hidden}>
         <header className="ai-group-chat__header">
+          <button className="ai-group-chat__sidebar-button" type="button" aria-label="打开聊天列表" onClick={onOpenSidebar}><Menu size={18} /></button>
+          <button className="ai-group-chat__workspace-button" type="button" aria-label="打开文件面板" onClick={onOpenWorkspace}><FolderOpen size={17} /></button>
           <div className="ai-group-chat__title"><span className="ai-group-chat__title-icon"><MessagesSquare size={17} /></span><div><h2 id="ai-group-chat-title">{group.name}</h2><p>两个成员各自接续原聊天记忆、模型与权限</p></div></div>
           <div className="ai-group-chat__header-actions">
             {!group.codexThreadId && !group.claudeThreadId ? <button type="button" className="ai-group-chat__delete-empty" onClick={() => onDeleteGroup(group.id)} aria-label="删除空群聊" title="删除空群聊"><Trash2 size={16} /></button> : null}
-            <button type="button" className="ai-group-chat__close" onClick={onClose} disabled={busy} aria-label="关闭 AI 群聊"><X size={18} /></button>
           </div>
         </header>
         <div className="ai-group-chat__participants" aria-live="polite">
@@ -390,7 +400,7 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
           })}
         </div>
         <div className="ai-group-chat__messages" ref={messageList} aria-live="polite">
-          {group.messages.length === 0 ? <div className="ai-group-chat__empty"><MessagesSquare size={23} /><strong>{bothMembersJoined ? '把问题同时交给两边' : '先把两个模式的聊天加入群聊'}</strong><span>{bothMembersJoined ? '它们会沿用各自原聊天的历史分别回答。你也可以让它们互相回应一轮。' : '关闭窗口，在侧边栏找到对应聊天并右键选择「加入群聊」。两边都加入后即可开始群聊。'}</span></div> : null}
+          {group.messages.length === 0 ? <div className="ai-group-chat__empty"><MessagesSquare size={23} /><strong>{bothMembersJoined ? '把问题同时交给两边' : '先把两个模式的聊天加入群聊'}</strong><span>{bothMembersJoined ? '它们会沿用各自原聊天的历史分别回答。你也可以让它们互相回应一轮。' : '在侧边栏找到已有聊天，右键选择「加入群聊」。两边都加入后即可开始群聊。'}</span></div> : null}
           {group.messages.map((message) => (
             message.role === 'system'
               ? <div className="ai-group-chat__system-message" key={message.id}>{message.text}</div>
@@ -415,7 +425,6 @@ export function AIGroupChatDialog({ token, group, onUnauthorized, onClose, onDel
           <button type="submit" disabled={!ready || busy || !draft.trim()} aria-label="同时发送给两个群成员" title="同时发送给两个群成员">{busy ? <LoaderCircle className="spin" size={17} /> : <Send size={17} />}</button>
         </form>
         {!ready ? <div className="ai-group-chat__footnote">{bothMembersJoined ? (codex.loadingHistory || claude.loadingHistory ? '正在读取原聊天记录…' : '正在连接两个原聊天…') : '群聊不创建新会话；请从侧边栏右键把已有聊天加入。'}</div> : <div className="ai-group-chat__footnote">群聊汇总保存在此浏览器；每条消息会进入成员各自的原聊天。</div>}
-      </section>
     </div>
   )
 }
