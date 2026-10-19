@@ -7,6 +7,7 @@ import {
   Bell,
   BellOff,
   BookOpen,
+  ChartNoAxesColumnIncreasing,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -61,9 +62,12 @@ import { canRequestSystemNotifications, requestSystemNotificationPermission, sen
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
+import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
+import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 
 interface Props {
   token: string
@@ -3873,6 +3877,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
+  const [usageStatsOpen, setUsageStatsOpen] = useState(false)
+  const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -3914,7 +3920,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
     }
     setWorkspacePreviewRequest(null)
+    setUsageStatsOpen(false)
     setSettingsOpen(true)
+    setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openUsageStatsPanel = useCallback(() => {
+    const currentState = window.history.state
+    if (!isSettingsHistoryEntry(currentState)) {
+      const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
+        ? currentState as Record<string, unknown>
+        : {}
+      window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
+    }
+    setWorkspacePreviewRequest(null)
+    setSettingsOpen(false)
+    setUsageStatsOpen(true)
     setSidebarOpen(false)
     setWorkspaceOpen(false)
   }, [])
@@ -3930,7 +3951,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
+    setUsageStatsOpen(false)
     if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+  }, [])
+  const closeUsageStatsPanel = useCallback(() => {
+    setUsageStatsOpen(false)
+    if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+  }, [])
+  const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
+    saveCPAUsageSettings(nextSettings)
+    setCpaUsageSettings(nextSettings)
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
@@ -4177,7 +4207,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const touch = event.touches[0]
     if (!touch) return
-    const globalOverlayOpen = settingsOpen
+    const globalOverlayOpen = settingsOpen || usageStatsOpen
       || Boolean(threadRenameTarget)
       || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
@@ -4311,6 +4341,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     event.preventDefault()
     if (action === 'close-global') {
       if (settingsOpen) closeSettingsPanel()
+      else if (usageStatsOpen) closeUsageStatsPanel()
       else if (threadRenameTarget) closeThreadRename()
       else if (threadDeleteTargets) closeThreadDelete()
       else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
@@ -4440,13 +4471,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     const syncSettingsFromHistory = (event: PopStateEvent) => {
       setSettingsOpen(isSettingsHistoryEntry(event.state))
+      setUsageStatsOpen(false)
     }
     window.addEventListener('popstate', syncSettingsFromHistory)
     return () => window.removeEventListener('popstate', syncSettingsFromHistory)
   }, [])
 
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!settingsOpen && !usageStatsOpen) return
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       if (isMobileLayout()) return
@@ -4456,7 +4488,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', closeOnDesktopEscape, true)
     return () => document.removeEventListener('keydown', closeOnDesktopEscape, true)
-  }, [closeSettingsPanel, settingsOpen])
+  }, [closeSettingsPanel, settingsOpen, usageStatsOpen])
 
   useEffect(() => {
     if (!threadContextMenu) return
@@ -4501,7 +4533,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useLayoutEffect(() => {
     const handleBack = () => {
-      if (settingsOpen) {
+      if (settingsOpen || usageStatsOpen) {
         closeSettingsPanel()
         return true
       }
@@ -4536,7 +4568,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -4874,7 +4906,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function openSystemNotificationThread(threadId: string) {
     if (!threadId) return
-    if (settingsOpen) closeSettingsPanel()
+    if (settingsOpen || usageStatsOpen) closeSettingsPanel()
     setWorkspaceOpen(false)
     const thread = remote0.threads.find((item) => item.id === threadId)
       ?? remotes.find((remote) => remote.activeThread?.id === threadId)?.activeThread
@@ -5147,7 +5179,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         ? -1
         : matchesSidebarChatShortcut(event, sidebarChatShortcuts.next) ? 1 : 0
       if (direction === 0) return
-      if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen
+      if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen || usageStatsOpen
         || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
 
       const target = event.target instanceof HTMLElement ? event.target : null
@@ -5169,7 +5201,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
     document.addEventListener('keydown', switchSidebarThread)
     return () => document.removeEventListener('keydown', switchSidebarThread)
-  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, usageStatsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
 
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
@@ -5301,6 +5333,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
         <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
@@ -5355,7 +5388,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} />
+      ) : usageStatsOpen ? (
+        <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -5520,13 +5555,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
   token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
   onClose: () => void
   chatShortcuts: SidebarChatShortcuts
   onChatShortcutsChange: (next: SidebarChatShortcuts) => void
+  cpaUsageSettings: CPAUsageSettings
+  onCPAUsageSettingsChange: (next: CPAUsageSettings) => void
 }) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
@@ -5859,6 +5896,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
             </label>
           </div>
         </section>
+
+        <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading">
