@@ -982,13 +982,6 @@ class MainActivity : Activity() {
     private lateinit var modelButton: TextView
     private lateinit var effortButton: TextView
     private lateinit var permissionButton: TextView
-    private var voiceButton: ImageView? = null
-    private var offlineVoiceInput: OfflineVoiceInput? = null
-    private var voiceInputState = OfflineVoiceInput.State.IDLE
-    private var voiceBaseText = ""
-    private var voiceApplyingText = false
-    private var voiceDiscardResults = false
-    private var pendingVoiceStart = false
     private lateinit var drawer: LinearLayout
     private lateinit var drawerSearch: EditText
     private lateinit var drawerThreads: LinearLayout
@@ -1144,7 +1137,6 @@ class MainActivity : Activity() {
         webPreviewView?.onPause()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
-        stopVoiceInput()
         persistCurrentDraft()
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
@@ -1169,9 +1161,6 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        offlineVoiceInput?.release()
-        offlineVoiceInput = null
-        voiceButton = null
         closeWebPreview()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
@@ -1206,7 +1195,6 @@ class MainActivity : Activity() {
             terminalOverlay != null -> closeTerminal()
             workspaceVisible -> handleWorkspaceBack()
             sidebarVisible -> setSidebarVisible(false)
-            voiceInputState != OfflineVoiceInput.State.IDLE -> stopVoiceInput()
             queueEditItem != null -> finishQueueEdit(false)
             else -> moveTaskToBack(true)
         }
@@ -1889,7 +1877,6 @@ class MainActivity : Activity() {
     }
 
     private fun buildComposer() {
-        if (voiceInputState != OfflineVoiceInput.State.IDLE) stopVoiceInput(discardResults = true)
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
         composerGlowRunning = false
@@ -1953,7 +1940,7 @@ class MainActivity : Activity() {
                 } else false
             }
             addTextChangedListener(SimpleTextWatcher { value ->
-                if (!voiceApplyingText && queueEditItem == null) prefs.edit().putString(draftStorageKey(), value).apply()
+                if (queueEditItem == null) prefs.edit().putString(draftStorageKey(), value).apply()
                 updateSendButton()
             })
         }
@@ -2007,19 +1994,6 @@ class MainActivity : Activity() {
             rightMargin = dp(4)
             gravity = Gravity.CENTER_VERTICAL
         })
-        val micButton = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(dp(6), dp(6), dp(6), dp(6))
-            setDefaultFocusHighlightEnabled(false)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { toggleVoiceInput() }
-        }
-        voiceButton = micButton
-        footer.addView(micButton, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
-            rightMargin = dp(4)
-            gravity = Gravity.CENTER_VERTICAL
-        })
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -2052,8 +2026,6 @@ class MainActivity : Activity() {
         renderAttachmentStrip()
         updateComposerPreferences()
         updateSendButton()
-        updateVoiceButton()
-        ensureOfflineVoiceInput().preload()
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
     }
@@ -3163,7 +3135,6 @@ class MainActivity : Activity() {
 
     private fun selectThread(thread: JSONObject, eagerDiskCache: Boolean = false) {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
-        if (voiceInputState != OfflineVoiceInput.State.IDLE) stopVoiceInput(discardResults = true)
         val id = thread.optString("id")
         if (id.isBlank()) return
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
@@ -6356,7 +6327,6 @@ class MainActivity : Activity() {
     private fun sendCurrentMessage() {
         if (queueEditPending || sendBusy) return
         if (queueEditItem != null) { finishQueueEdit(true); return }
-        if (voiceInputState != OfflineVoiceInput.State.IDLE) stopVoiceInput(discardResults = true)
         android.view.inputmethod.BaseInputConnection.removeComposingSpans(composerInput.text)
         val text = composerInput.text.toString().trim()
         if (text.isBlank() && selectedFiles.isEmpty()) return
@@ -6530,126 +6500,6 @@ class MainActivity : Activity() {
         sendButton.imageTintList = retroIconTint(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
         sendButton.background = if (retroTheme) lollipopFabBackground(LOLLIPOP_PRIMARY)
             else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
-    }
-
-    private fun toggleVoiceInput() {
-        when (voiceInputState) {
-            OfflineVoiceInput.State.LOADING -> {
-                showToast("正在加载离线语音模型…")
-                return
-            }
-            OfflineVoiceInput.State.LISTENING -> {
-                stopVoiceInput()
-                return
-            }
-            OfflineVoiceInput.State.FINISHING -> return
-            OfflineVoiceInput.State.IDLE -> Unit
-        }
-        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-            pendingVoiceStart = true
-            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_RECORD_AUDIO)
-            return
-        }
-        startVoiceInput()
-    }
-
-    private fun startVoiceInput() {
-        if (!::composerInput.isInitialized || !composerInput.isAttachedToWindow) return
-        // A previous discard can only still be pending while the model was
-        // loading; no audio from that attempt exists, so a fresh start is safe.
-        voiceDiscardResults = false
-        voiceBaseText = composerInput.text.toString()
-        ensureOfflineVoiceInput().start()
-    }
-
-    private fun stopVoiceInput(discardResults: Boolean = false) {
-        if (discardResults) voiceDiscardResults = true
-        offlineVoiceInput?.stop()
-        if (voiceInputState == OfflineVoiceInput.State.LOADING) {
-            voiceInputState = OfflineVoiceInput.State.IDLE
-            updateVoiceButton()
-        }
-    }
-
-    private fun ensureOfflineVoiceInput(): OfflineVoiceInput = offlineVoiceInput ?: OfflineVoiceInput(
-        this,
-        onState = ::handleVoiceState,
-        onPartial = ::handleVoicePartial,
-        onFinal = ::handleVoiceFinal,
-        onError = { message -> if (!isFinishing && !isDestroyed) showToast(message) },
-    ).also { offlineVoiceInput = it }
-
-    private fun handleVoiceState(state: OfflineVoiceInput.State) {
-        voiceInputState = state
-        if (state == OfflineVoiceInput.State.IDLE) {
-            voiceDiscardResults = false
-            if (queueEditItem == null && ::composerInput.isInitialized) {
-                prefs.edit().putString(draftStorageKey(), composerInput.text.toString()).apply()
-            }
-        }
-        updateVoiceButton()
-    }
-
-    private fun handleVoicePartial(text: String) {
-        if (voiceDiscardResults) return
-        applyVoiceComposerText(voiceMerge(voiceBaseText, text))
-    }
-
-    private fun handleVoiceFinal(text: String) {
-        if (voiceDiscardResults || text.isBlank()) return
-        voiceBaseText = voiceMerge(voiceBaseText, text)
-        applyVoiceComposerText(voiceBaseText)
-        if (queueEditItem == null) prefs.edit().putString(draftStorageKey(), voiceBaseText).apply()
-    }
-
-    private fun applyVoiceComposerText(text: String) {
-        if (!::composerInput.isInitialized) return
-        val editable = composerInput.text
-        if (editable.toString() == text) return
-        // Replace only the changed suffix so partial results do not rebuild the
-        // entire Editable and re-layout the whole composer on every update.
-        var prefix = 0
-        val limit = minOf(editable.length, text.length)
-        while (prefix < limit && editable[prefix] == text[prefix]) prefix++
-        voiceApplyingText = true
-        try {
-            editable.replace(prefix, editable.length, text.substring(prefix))
-            composerInput.setSelection(text.length)
-        } finally {
-            voiceApplyingText = false
-        }
-        updateSendButton()
-    }
-
-    private fun voiceMerge(base: String, addition: String): String {
-        if (addition.isBlank()) return base
-        if (base.isBlank()) return addition
-        val last = base.last()
-        val first = addition.first()
-        val separate = last.code < 128 && first.code < 128 && last.isLetterOrDigit() && first.isLetterOrDigit()
-        return if (separate) "$base $addition" else base + addition
-    }
-
-    private fun updateVoiceButton() {
-        val button = voiceButton ?: return
-        val listening = voiceInputState == OfflineVoiceInput.State.LISTENING
-        val loading = voiceInputState == OfflineVoiceInput.State.LOADING
-        val finishing = voiceInputState == OfflineVoiceInput.State.FINISHING
-        val busy = loading || finishing
-        button.setPixelAwareImageResource(iconResource(if (listening) "stop" else "mic"))
-        button.imageTintList = when {
-            retroTheme && !pixelTheme -> null
-            listening -> ColorStateList.valueOf(if (pixelTheme) PIXEL_RED else ERROR)
-            else -> ColorStateList.valueOf(iconTint("mic"))
-        }
-        button.alpha = if (busy) 0.55f else 1f
-        button.isEnabled = !busy
-        button.contentDescription = tr(when {
-            listening -> "停止语音输入"
-            finishing -> "正在结束语音输入"
-            else -> "语音输入"
-        })
-        button.background = if (retroTheme) android1SegmentButtonBackground() else ColorDrawable(Color.TRANSPARENT)
     }
 
     private fun interruptTurn() {
@@ -9856,16 +9706,6 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_RECORD_AUDIO) {
-            val pending = pendingVoiceStart
-            pendingVoiceStart = false
-            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-                if (pending) startVoiceInput()
-            } else {
-                showToast("未获得麦克风权限，无法使用语音输入")
-            }
-            return
-        }
         if (requestCode == REQUEST_WEB_DOWNLOAD_STORAGE) {
             val pending = pendingWebDownload
             pendingWebDownload = null
@@ -10304,7 +10144,7 @@ class MainActivity : Activity() {
         icon == "codex" -> codexBrandAccent()
         icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
         pixelTheme -> when (icon) {
-            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "link", "notifications", "mic" -> PIXEL_BLUE
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "link", "notifications" -> PIXEL_BLUE
             "delete", "stop" -> PIXEL_RED
             "folder", "folder_add", "pin", "file", "file_add", "copy", "paste", "open", "display", "language" -> Color.rgb(116, 180, 230)
             "image", "palette" -> Color.rgb(201, 168, 255)
@@ -10312,7 +10152,7 @@ class MainActivity : Activity() {
             else -> PIXEL_TEXT
         }
         retroTheme -> when (icon) {
-            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "mic" -> LOLLIPOP_PRIMARY
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(164, 76, 65)
             "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
             "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
@@ -10534,7 +10374,6 @@ class MainActivity : Activity() {
             "unchecked" -> R.drawable.ic_android1_unchecked
             "alert" -> R.drawable.ic_android1_alert
             "stop" -> R.drawable.ic_android1_stop
-            "mic" -> R.drawable.ic_mic
             "pause" -> R.drawable.ic_android1_pause
             "play" -> R.drawable.ic_android1_play
             else -> R.drawable.ic_android1_add
@@ -10569,7 +10408,6 @@ class MainActivity : Activity() {
         "chevron_down" -> R.drawable.ic_chevron_down
         "chevron_up" -> R.drawable.ic_chevron_up
         "chevron_right" -> R.drawable.ic_chevron_right
-        "mic" -> R.drawable.ic_mic
         "stop" -> R.drawable.ic_stop
         "back" -> R.drawable.ic_back
         else -> R.drawable.ic_add
@@ -10854,7 +10692,6 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 4102
         private const val REQUEST_THEME_BACKGROUND = 4103
         private const val REQUEST_WEB_DOWNLOAD_STORAGE = 4104
-        private const val REQUEST_RECORD_AUDIO = 4105
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val EXTRA_CONNECTION_ID = "notification_connection_id"

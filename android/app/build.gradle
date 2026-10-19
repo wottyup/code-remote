@@ -11,15 +11,11 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 312
-        versionName '0.52.1-dev.2'
+        versionCode 313
+        versionName '0.55.0-dev.2'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
-    }
-
-    androidResources {
-        noCompress += ['onnx']
     }
 
     buildFeatures {
@@ -52,7 +48,6 @@ dependencies {
     implementation 'io.noties.markwon:core:4.6.2'
     implementation 'io.noties.markwon:linkify:4.6.2'
     implementation 'io.noties.markwon:ext-tables:4.6.2'
-    implementation 'com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.5'
 }
 
 android.applicationVariants.all { variant ->
