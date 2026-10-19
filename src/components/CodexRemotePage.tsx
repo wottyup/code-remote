@@ -48,6 +48,7 @@ import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, t
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
+import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
@@ -5916,55 +5917,10 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
-function safeMessageLinkHref(value: string) {
-  const candidate = /^www\./i.test(value) ? `https://${value}` : value
-  try {
-    const parsed = new URL(candidate)
-    return ['http:', 'https:', 'mailto:'].includes(parsed.protocol) ? parsed.href : null
-  } catch {
-    return null
-  }
-}
-
-function trimMessageLinkPunctuation(value: string) {
-  let result = value.replace(/[.,!?;:，。！？；：、]+$/u, '')
-  for (const [opening, closing] of [['(', ')'], ['[', ']']] as const) {
-    while (result.endsWith(closing)
-      && [...result].filter((character) => character === closing).length > [...result].filter((character) => character === opening).length) {
-      result = result.slice(0, -1)
-    }
-  }
-  return result
-}
-
 function renderMessageInlineLinks(value: string, keyPrefix: string): ReactNode {
-  const linkPattern = /\[([^\]\n]+)\]\(((?:https?:\/\/|mailto:|www\.)[^\s)]+)\)|((?:https?:\/\/|mailto:|www\.)[^\s<]+)/gi
-  const nodes: ReactNode[] = []
-  let cursor = 0
-  let linkIndex = 0
-  let match: RegExpExecArray | null
-  while ((match = linkPattern.exec(value)) !== null) {
-    const markdownLabel = match[1]
-    const isMarkdownLink = markdownLabel !== undefined
-    const rawUrl = isMarkdownLink ? match[2] : match[3]
-    if (!rawUrl) continue
-
-    const visibleUrl = isMarkdownLink ? rawUrl : trimMessageLinkPunctuation(rawUrl)
-    const href = safeMessageLinkHref(visibleUrl)
-    if (!href || !visibleUrl) continue
-
-    const linkStart = match.index
-    const linkEnd = isMarkdownLink ? match.index + match[0].length : match.index + visibleUrl.length
-    if (linkStart > cursor) nodes.push(value.slice(cursor, linkStart))
-    nodes.push(
-      <a key={`${keyPrefix}-link-${linkIndex++}`} href={href} target="_blank" rel="noopener noreferrer">
-        {markdownLabel ?? visibleUrl}
-      </a>,
-    )
-    cursor = linkEnd
-  }
-  if (cursor < value.length) nodes.push(value.slice(cursor))
-  return nodes.length > 0 ? nodes : value
+  return splitMessageInlineLinks(value).map((part, index) => part.type === 'link'
+    ? <a key={`${keyPrefix}-link-${index}`} href={part.href} target="_blank" rel="noopener noreferrer">{part.value}</a>
+    : part.value)
 }
 
 function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
