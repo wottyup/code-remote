@@ -118,7 +118,7 @@ export function analyticsRangeBounds(range: CPAUsageRange, now = new Date()) {
 }
 
 function requestError(status: number) {
-  if (status === 401 || status === 403) return 'Manager 密钥无效，或没有读取用量统计的权限。'
+  if (status === 401 || status === 403) return 'Manager 管理密钥无效，或没有读取用量统计的权限。'
   if (status === 404) return '没有找到用量分析接口。请确认填写的是 CPA-Manager-Plus Full Mode 的服务地址和反向代理路径。'
   if (status === 502 || status === 503 || status === 504) return `Manager Server 暂时不可用（HTTP ${status}）。`
   return `Manager Server 请求失败（HTTP ${status}）。`
@@ -132,7 +132,7 @@ export async function fetchCPAUsageAnalytics(
   const baseUrl = normalizeCPAUsageBaseUrl(settings.baseUrl)
   const managementKey = settings.managementKey.trim()
   if (!baseUrl) throw new Error('请先在设置中填写 Manager Server 地址。')
-  if (!managementKey) throw new Error('请先在设置中填写 Manager 密钥。')
+  if (!managementKey) throw new Error('请先在设置中填写 Manager 管理密钥。')
 
   const { fromMs, toMs } = analyticsRangeBounds(range)
   const timeout = new AbortController()

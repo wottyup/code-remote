@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.46.0-dev.2] - 明确 CPA Manager Server 接入设置与管理密钥用途
+
 ## [0.46.0-dev.1] - 新增 CPA-Manager-Plus Token 用量统计
 
 ## [0.45.6-dev.5] - 修复用户消息链接后的中文也带下划线

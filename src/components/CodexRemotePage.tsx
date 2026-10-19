@@ -5750,6 +5750,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       </header>
 
       <div className="theme-settings-panel__content">
+        <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
           <div className="theme-options" role="radiogroup" aria-label="界面主题">
@@ -5896,8 +5898,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
             </label>
           </div>
         </section>
-
-        <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading">
