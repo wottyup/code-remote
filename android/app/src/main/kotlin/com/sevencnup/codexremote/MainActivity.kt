@@ -910,6 +910,7 @@ class MainActivity : Activity() {
     private var systemInsetTop = 0
     private var systemInsetRight = 0
     private var systemInsetBottom = 0
+    private var chatContentBottomInset = 0
     private var imeInsetVisible = false
     private var imeFollowMessageBottom = false
     private var imeFollowScrollQueued = false
@@ -1502,13 +1503,15 @@ class MainActivity : Activity() {
                 systemInsetTop = systemBars.top
                 systemInsetRight = systemBars.right
                 systemInsetBottom = systemBars.bottom
+                chatContentBottomInset = bottom
                 if (view.paddingLeft != 0 || view.paddingTop != 0 ||
                     view.paddingRight != 0 || view.paddingBottom != 0
                 ) view.setPadding(0, 0, 0, 0)
+                val contentBottom = bottom + if (keyboardVisible && queueEditItem != null) dp(8) else 0
                 if (content.paddingLeft != 0 || content.paddingTop != 0 ||
-                    content.paddingRight != 0 || content.paddingBottom != bottom
+                    content.paddingRight != 0 || content.paddingBottom != contentBottom
                 ) {
-                    content.setPadding(0, 0, 0, bottom)
+                    content.setPadding(0, 0, 0, contentBottom)
                 }
                 if (systemInsetsChanged) {
                     updateInsetAwareOverlays()
@@ -1559,6 +1562,15 @@ class MainActivity : Activity() {
             }
         })
         view.requestApplyInsets()
+    }
+
+    private fun updateQueueEditImeSpacing() {
+        if (!::page.isInitialized) return
+        val extraGap = if (imeInsetVisible && queueEditItem != null) dp(8) else 0
+        val bottom = chatContentBottomInset + extraGap
+        if (page.paddingLeft != 0 || page.paddingTop != 0 || page.paddingRight != 0 || page.paddingBottom != bottom) {
+            page.setPadding(0, 0, 0, bottom)
+        }
     }
 
     private fun isMessageListNearBottom(): Boolean {
@@ -6778,6 +6790,7 @@ class MainActivity : Activity() {
                     }
                     composerInput.hint = tr("编辑排队消息…")
                     queueEditBar.visibility = View.VISIBLE
+                    updateQueueEditImeSpacing()
                     renderAttachmentStrip()
                     updateComposerPreferences()
                     setSendBusy(false)
@@ -6830,6 +6843,7 @@ class MainActivity : Activity() {
                     queueEditThreadId = null
                     queueEditOwnerId = null
                     queueEditPreferences.clear()
+                    updateQueueEditImeSpacing()
                     composerInput.setText(queueEditDraft)
                     selectedFiles = queueEditDraftFiles
                     queueEditDraftFiles = mutableListOf()
@@ -7623,7 +7637,7 @@ class MainActivity : Activity() {
             }
         }, widthWrap())
         val about = section("关于", "项目介绍、源代码与更新。")
-        about.addView(label("Code Agent Remote", 13, TEXT, true), widthWrap())
+        about.addView(label("Code Remote", 13, TEXT, true), widthWrap())
         about.addView(label("在手机上连接本机的代码助手，查看对话、文件和终端。", 11, MUTED).apply {
             setPadding(0, dp(4), 0, dp(5))
         }, widthWrap())
