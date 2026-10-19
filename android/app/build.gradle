@@ -11,8 +11,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 248
-        versionName '0.28.4-dev.3'
+        versionCode 299
+        versionName '0.48.1-dev.4'
     }
 
     buildFeatures {
@@ -43,6 +43,7 @@ android {
 dependencies {
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
     implementation 'io.noties.markwon:core:4.6.2'
+    implementation 'io.noties.markwon:linkify:4.6.2'
     implementation 'io.noties.markwon:ext-tables:4.6.2'
 }
 

@@ -5,7 +5,9 @@ internal object UiEnglish {
     private val strings = mapOf(
         "设置" to "Settings", "偏好保存在本机" to "Preferences are saved on this device",
         "主题" to "Theme", "选择工作区色彩；自定义主题支持背景图片与颜色。" to "Choose workspace colors. Custom themes support images and colors.",
-        "白色" to "Light", "黑色" to "Dark", "暖色" to "Warm", "自定义主题" to "Custom theme",
+        "白色" to "Light", "黑色" to "Dark", "暖色" to "Warm", "旧经典" to "Old Classic",
+        "像素风" to "Pixel Art", "深蓝像素面板与独立像素图标" to "Deep navy pixel panels and custom pixel icons",
+        "自定义主题" to "Custom theme",
         "清爽明亮" to "Bright and clean", "低光阅读" to "Comfortable in low light", "柔和纸感" to "Soft paper tones",
         "颜色、图片与透明度" to "Colors, image and opacity", "背景颜色" to "Background color", "字体颜色" to "Text color",
         "背景图片" to "Background image", "选择图片" to "Choose image", "更换或清除当前图片" to "Replace or remove image",
@@ -82,7 +84,8 @@ internal object UiEnglish {
         "文件还在加载" to "File is still loading", "重新加载" to "Reload",
         "新建文件" to "New file", "新建文件夹" to "New folder", "新建文件或文件夹" to "New file or folder",
         "输入服务端目录路径" to "Enter server directory path", "请输入目录路径" to "Enter a directory path",
-        "复制" to "Copy", "剪切" to "Cut", "粘贴" to "Paste", "粘贴到此处" to "Paste here",
+        "复制" to "Copy", "复制消息" to "Copy message", "复制代码" to "Copy code", "代码" to "Code",
+        "剪切" to "Cut", "粘贴" to "Paste", "粘贴到此处" to "Paste here", "聊天消息" to "Chat message",
         "重命名" to "Rename", "删除" to "Delete", "打开" to "Open", "新建" to "New",
         "创建" to "Create", "保存" to "Save", "取消" to "Cancel", "确定" to "OK",
         "关闭" to "Close", "返回聊天" to "Back to chat", "应用" to "Apply",
@@ -162,7 +165,7 @@ internal object UiEnglish {
         "连接成功，正在恢复终端会话…" to "Connected. Restoring terminal session…",
         "处理任务" to "Process task", "整理计划" to "Organize plan", "计划" to "Plan",
         "计划模式" to "Plan mode", "生成图片" to "Generate image", "标记文件" to "Mark files",
-        "调用工具" to "Call tool", "运行子任务" to "Run subtask",
+        "调用工具" to "Call tool", "运行子任务" to "Run subtask", "读取技能" to "Read skill",
         "填写地址和匹配码" to "Enter address and pairing code",
         "请输入电脑终端显示的匹配码。" to "Enter the pairing code shown on the computer.",
         "配对已失效，请重新输入匹配码。" to "Pairing expired. Enter the code again.",
@@ -171,9 +174,31 @@ internal object UiEnglish {
         "打开文件" to "Open file", "排队图片" to "Queued image",
     )
 
+    private val activityLabels = mapOf(
+        "正在思考" to "Thinking",
+        "正在整理执行计划" to "Preparing an execution plan",
+        "正在生成回复" to "Writing a response",
+        "正在回复" to "Replying",
+        "正在读取" to "Reading",
+        "正在运行" to "Running",
+        "正在搜索文件" to "Searching files",
+        "正在搜索资料" to "Searching content",
+        "正在修改文件" to "Editing files",
+        "正在查看图片" to "Viewing image",
+        "正在生成图片" to "Generating image",
+        "正在运行子任务" to "Running subtask",
+        "正在协调子任务" to "Coordinating subtask",
+        "正在调用 MCP 工具" to "Calling MCP tool",
+        "正在调用工具" to "Calling tool",
+        "正在处理" to "Working",
+    )
+
     fun translate(value: String): String {
         strings[value]?.let { return it }
         extra[value]?.let { return it }
+        activityLabels.entries.firstOrNull { (source, _) -> value == source || value.startsWith("$source ") }?.let { (source, translated) ->
+            return translated + value.removePrefix(source)
+        }
         return when {
             value.startsWith("排队消息 · ") -> value.replaceFirst("排队消息 · ", "Queued messages · ")
             value.startsWith("最近编辑文件 · ") -> value.replaceFirst("最近编辑文件 · ", "Recently edited files · ")

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from fastapi.middleware.gzip import GZipMiddleware
 
-from codex_remote.app import create_app
+from codex_remote.app import create_app, enrich_thread_images
 from codex_remote.browser_payload import browser_event, browser_item, browser_thread, browser_thread_summary
 
 
@@ -95,16 +95,13 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_and_list_endpoints_project_payload_and_capture_revision_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            images = workspace / "images"
-            images.mkdir()
-            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(workspace / "auth.json")}), \
-                 patch("codex_remote.app.tempfile.mkdtemp", return_value=str(images)):
+            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(workspace / "auth.json")}):
                 app = create_app(workspace)
             try:
                 server = app.state.codex
                 revision = ["before"]
                 server.thread_history_revision = lambda _thread_id: revision[0]
-                image_path = images / "message.png"
+                image_path = app.state.message_image_directory / "message.png"
                 image_path.write_bytes(b"history-image")
                 original = {"id": "thread", "preview": "p" * 1_000, "turns": [
                     {"id": "turn", "items": [
@@ -141,3 +138,34 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 app.state.shared_state.close()
                 await app.state.claude_code.close()
+
+    async def test_chat_images_survive_recreating_the_server_app(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            state_root = Path(directory).resolve()
+            auth_path = state_root / "trusted-devices.json"
+            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(auth_path)}):
+                first_app = create_app(state_root)
+
+            image_path = first_app.state.message_image_directory / "persistent.png"
+            image_path.write_bytes(b"\x89PNG\r\n\x1a\npersisted-image")
+            first_image_directory = first_app.state.message_image_directory
+            first_app.state.shared_state.close()
+            await first_app.state.claude_code.close()
+
+            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(auth_path)}):
+                second_app = create_app(state_root)
+            try:
+                self.assertEqual(first_image_directory, second_app.state.message_image_directory)
+                history = {"turns": [{"items": [{"type": "userMessage", "content": [
+                    {"type": "localImage", "path": str(image_path), "mediaType": "image/png"},
+                ]}]}]}
+                enrich_thread_images(history, second_app.state.message_image_directory)
+                response = await next(
+                    route.endpoint for route in second_app.routes
+                    if getattr(route, "path", None) == "/api/v1/codex/workspace/image"
+                )(cwd=str(state_root), path=str(image_path))
+                self.assertEqual("iVBORw0KGgpwZXJzaXN0ZWQtaW1hZ2U=", response["data"])
+                self.assertEqual(response["data"], history["turns"][0]["items"][0]["content"][0]["data"])
+            finally:
+                second_app.state.shared_state.close()
+                await second_app.state.claude_code.close()

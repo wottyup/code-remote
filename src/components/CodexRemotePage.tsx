@@ -7,6 +7,7 @@ import {
   Bell,
   BellOff,
   BookOpen,
+  ChartNoAxesColumnIncreasing,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -36,7 +37,6 @@ import {
   RotateCcw,
   Search,
   Scissors,
-  Send,
   Settings2,
   ShieldCheck,
   Square,
@@ -49,19 +49,26 @@ import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, t
 import { copyTextToClipboard } from '../lib/clipboard'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
+import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
+import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
+import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
-import { isCompactThemeBackgroundImage, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
+import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
+import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
+import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 
 interface Props {
   token: string
@@ -90,9 +97,17 @@ const connectionLabel = {
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
 type ChatEngine = 'codex' | 'claude-code'
+type ComposerHeightMemory = Partial<Record<ChatEngine, { height: number; manuallyResized: boolean }>>
 
 function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: number }) {
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
+}
+
+type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification'
+
+function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
+  if (theme !== 'pixel') return null
+  return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
 }
 
 function WelcomeTypingTitle({ text }: { text: string }) {
@@ -151,7 +166,7 @@ function WelcomeTypingTitle({ text }: { text: string }) {
 }
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
-  if (preferences.theme === 'light' || preferences.theme === 'warm') return true
+  if (preferences.theme === 'light' || preferences.theme === 'warm' || preferences.theme === 'retro') return true
   if (preferences.theme === 'dark') return false
 
   const hex = preferences.customBackgroundColor.slice(1)
@@ -204,6 +219,7 @@ function formatTurnDuration(durationMs: number) {
 }
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const paneLayoutStorageKey = 'codex-remote.pane-layout'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
@@ -211,9 +227,12 @@ const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
 const workspaceChatMinWidth = 240
+const retroSidePanelMinWidth = 144
+const retroSidePanelDefaultWidth = 174.4
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
+const defaultClaudeComposerHeight = 52
 const compactLandscapeComposerHeight = 50
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
@@ -293,8 +312,27 @@ function readPinnedThreadIds() {
   }
 }
 
-function isSettingsHistoryEntry(state: unknown): boolean {
-  return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
+type PanelHistoryEntry = 'settings' | 'usage-stats'
+
+function getPanelHistoryEntry(state: unknown): PanelHistoryEntry | null {
+  if (!state || typeof state !== 'object') return null
+  const panel = (state as Record<string, unknown>)[settingsHistoryStateKey]
+  if (panel === 'settings' || panel === 'usage-stats') return panel
+  // Older builds stored `true` for both panels. Keep its original settings meaning.
+  return panel === true ? 'settings' : null
+}
+
+function openPanelHistoryEntry(panel: PanelHistoryEntry) {
+  const currentState = window.history.state
+  const currentPanel = getPanelHistoryEntry(currentState)
+  if (currentPanel === panel) return
+
+  const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
+    ? currentState as Record<string, unknown>
+    : {}
+  const nextState = { ...previousState, [settingsHistoryStateKey]: panel }
+  if (currentPanel) window.history.replaceState(nextState, '')
+  else window.history.pushState(nextState, '')
 }
 
 interface ComposerPreferences {
@@ -331,6 +369,29 @@ function workspaceExplorerWidthLimit() {
 
 function clampWorkspaceExplorerWidth(value: number) {
   return Math.round(Math.max(workspaceExplorerMinimumWidth(), Math.min(workspaceExplorerWidthLimit(), value)))
+}
+
+function retroSidePanelWidthLimit() {
+  const viewportWidth = typeof window === 'undefined' ? 1_400 : window.innerWidth
+  return Math.max(retroSidePanelMinWidth, Math.min(viewportWidth * 0.4, (viewportWidth - 248) / 2))
+}
+
+function clampRetroSidePanelWidth(value: number) {
+  return Math.round(Math.max(retroSidePanelMinWidth, Math.min(retroSidePanelWidthLimit(), value)))
+}
+
+function defaultRetroSidePanelWidth() {
+  return clampRetroSidePanelWidth(retroSidePanelDefaultWidth)
+}
+
+function readRetroSidePanelWidth(): number | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const stored = Number(window.localStorage.getItem(retroSidePanelWidthStorageKey))
+    return Number.isFinite(stored) && stored > 0 ? clampRetroSidePanelWidth(stored) : null
+  } catch {
+    return null
+  }
 }
 
 function readWorkspaceExplorerWidth() {
@@ -908,9 +969,10 @@ interface ComposerHandle {
 }
 
 interface MessageComposerProps {
+  token: string
   draftScope: string
   onDraftChange: (draft: string) => void
-  composerHeightMemory: RefObject<{ height: number; manuallyResized: boolean } | null>
+  composerHeightMemory: RefObject<ComposerHeightMemory | null>
   connection: RemoteConnection
   isRunning: boolean
   isReplying: boolean
@@ -956,6 +1018,7 @@ interface MessageComposerProps {
 }
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  token,
   draftScope,
   onDraftChange,
   composerHeightMemory,
@@ -1002,6 +1065,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   continuationPending,
   onRefresh,
 }, ref) {
+  const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
+  const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
@@ -1017,9 +1082,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   ))
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
-    if (composerHeightMemory.current?.manuallyResized) return composerHeightMemory.current.height
-    if (typeof window === 'undefined') return defaultComposerHeight
-    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
+    if (savedComposerHeight?.manuallyResized) return savedComposerHeight.height
+    if (typeof window === 'undefined') return composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
@@ -1036,10 +1101,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   attachedDocumentsRef.current = attachedDocuments
   const editingQueuedMessageIdRef = useRef<string | null>(null)
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
+  const composerEngineRef = useRef(composerEngine)
   const draftSaveTimer = useRef<number | undefined>(undefined)
   const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
-  const composerHeightWasResized = useRef(composerHeightMemory.current?.manuallyResized ?? false)
+  const composerHeightWasResized = useRef(savedComposerHeight?.manuallyResized ?? false)
   const inputIsComposing = useRef(false)
   const keyboardFallbackTimer = useRef<number | undefined>(undefined)
   const requestComposerKeyboard = useCallback(() => {
@@ -1068,8 +1134,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   } | null>(null)
 
   useLayoutEffect(() => {
-    composerHeightMemory.current = { height: composerHeight, manuallyResized: composerHeightWasResized.current }
-  }, [composerHeight, composerHeightMemory])
+    if (composerEngineRef.current !== composerEngine) return
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: composerHeightWasResized.current },
+    }
+  }, [composerEngine, composerHeight, composerHeightMemory])
+
+  useLayoutEffect(() => {
+    if (composerEngineRef.current === composerEngine) return
+    composerEngineRef.current = composerEngine
+    const savedHeight = composerHeightMemory.current?.[composerEngine]
+    composerHeightWasResized.current = savedHeight?.manuallyResized ?? false
+    setComposerHeight(savedHeight?.height ?? (compactLandscape
+      ? compactLandscapeComposerHeight
+      : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight))
+  }, [composerEngine, composerHeightMemory, compactLandscape])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(pointer: coarse)')
@@ -1077,7 +1157,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const landscape = isCompactLandscape()
       setCompactLandscape(landscape)
       if (composerHeightWasResized.current) return
-      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight)
     }
     syncComposerHeight()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
@@ -1088,7 +1168,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', syncComposerHeight)
       else mediaQuery.removeListener(syncComposerHeight)
     }
-  }, [])
+  }, [composerEngine])
 
   useEffect(() => {
     const mediaQuery = window.matchMedia(mobileLayoutMediaQuery)
@@ -1106,9 +1186,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }, [])
 
+  const submittingQueuedMessageId = queuedMessages.find((message) => message.deliveryState === 'submitting')?.id
+
   useEffect(() => {
     if (queuedMessages.length === 0) setQueuedMessagesExpanded(false)
   }, [queuedMessages.length])
+
+  useLayoutEffect(() => {
+    if (submittingQueuedMessageId) setQueuedMessagesExpanded(true)
+  }, [submittingQueuedMessageId])
 
   useLayoutEffect(() => {
     if (!compactLandscape || composerHeightWasResized.current) return
@@ -1822,7 +1908,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function startComposerResize(event: ReactPointerEvent<HTMLButtonElement>) {
     event.preventDefault()
     composerHeightWasResized.current = true
-    composerHeightMemory.current = { height: composerHeight, manuallyResized: true }
+    composerHeightMemory.current = {
+      ...(composerHeightMemory.current ?? {}),
+      [composerEngine]: { height: composerHeight, manuallyResized: true },
+    }
     resizeState.current = { startY: event.clientY, startHeight: composerHeight }
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
@@ -1932,23 +2021,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
-        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`已排队 ${queuedMessages.length} 条消息`}>
+        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条消息`}>
           <button
             className="composer-queue__heading"
             type="button"
             aria-expanded={queuedMessagesExpanded}
             aria-controls="composer-queue-list"
-            aria-label={`已排队 ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
+            aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
-            <span>已排队 {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
+            <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
             {queuedMessages.map((message, index) => {
               const sendingNow = sendingQueuedId === message.id
               const isEditing = editingQueuedMessageId === message.id
+              const isSubmitting = message.deliveryState === 'submitting'
               const deliveryUnverified = Boolean(message.sendAttempt)
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
               const queuedModel = showCodexPreferences ? message.model : message.claudeModel
@@ -1957,20 +2047,22 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
               const needsSeparateTurn = Boolean(message.model || message.effort || message.claudeModel || message.claudeEffort)
-              const summary = message.text || (message.documents?.length
-                ? `附件文档：${message.documents.length} 个文件`
-                : `${message.images.length} 张图片`)
+              const attachmentSummary = [
+                message.images.length > 0 ? `${message.images.length} 张图片` : '',
+                message.documents?.length ? `${message.documents.length} 个文档` : '',
+              ].filter(Boolean).join(' · ')
+              const summary = [message.text, attachmentSummary].filter(Boolean).join(' · ')
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点立即发送优先发送此条' : '等待自动发送')}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
-                  <button className="composer-queue__edit" type="button" disabled={queueLocked || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isSubmitting ? '正在确认送达' : isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || deliveryUnverified || message.editing || (needsSeparateTurn && isRunning)} onClick={() => void sendQueuedNow(message.id)} title={deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn && isRunning ? '当前回复结束后才能按这条消息保存的模型和思考等级开始新一轮' : needsSeparateTurn && index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中' : needsSeparateTurn ? '按消息保存的模型和思考等级开始新一轮' : `立即发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>立即发送</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || (needsSeparateTurn && isRunning)} onClick={() => void sendQueuedNow(message.id)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn && isRunning ? '当前回复结束后才能按这条消息保存的模型和思考等级开始新一轮' : needsSeparateTurn && index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中' : needsSeparateTurn ? '按消息保存的模型和思考等级开始新一轮' : `发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>发送</span>
                   </button>
-                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="移除排队消息" title="移除排队消息"><X size={13} /></button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
                 </div>
               )
             })}
@@ -2028,7 +2120,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
-              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}`}
+              className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}${!editingQueuedMessageId && !stopWithSendButton && !continueWithSendButton ? ' send-button--arrow' : ''}`}
               type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
@@ -2037,7 +2129,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
-                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>继续</span></> : <Send size={16} />}
+                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>继续</span></> : <ArrowUp size={16} />}
             </button>
           ) : null}
         </div>
@@ -2050,6 +2142,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 interface WorkspaceExplorerProps {
   token: string
   theme: AppTheme
+  engine: ChatEngine
   cwd?: string
   threadId?: string
   canBindThreadWorkspace: boolean
@@ -2059,6 +2152,7 @@ interface WorkspaceExplorerProps {
   onPreviewStateChange: (open: boolean, closePreview?: () => void) => void
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
+  onAddToTerminal: (path: string) => void
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   mobileDragging: boolean
@@ -2080,6 +2174,7 @@ interface WorkspacePreviewRequest {
   path: string
   diff?: string
   kind?: 'text' | 'image'
+  viewedByCodexThreadId?: string
 }
 
 interface WorkspaceSelectionContextMenu {
@@ -2103,6 +2198,13 @@ interface WorkspaceEntryContextMenu {
   x: number
   y: number
   root?: boolean
+  mobile?: boolean
+}
+
+interface WorkspaceTerminalRequest {
+  id: number
+  paneIndex: number
+  path: string
 }
 
 interface WorkspaceClipboard {
@@ -2198,7 +2300,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2208,6 +2310,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
+  const contextMenuElement = useRef<HTMLDivElement>(null)
   const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
   const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
   const [mutationSaving, setMutationSaving] = useState(false)
@@ -2215,6 +2318,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   const [error, setError] = useState<string | null>(null)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
+  const [previewViewedByCodexThreadId, setPreviewViewedByCodexThreadId] = useState<string | null>(null)
   const [previewDiff, setPreviewDiff] = useState<string | null>(null)
   const [previewKind, setPreviewKind] = useState<'text' | 'image'>('text')
   const [mobilePreviewDialog, setMobilePreviewDialog] = useState(false)
@@ -2260,6 +2364,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     previewRequestGeneration.current += 1
     setPreviewPath(null)
     setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
     setPreviewDiff(null)
     setPreviewKind('text')
     setMobilePreviewDialog(false)
@@ -2324,7 +2429,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     }
   }, [browsingRoot, token])
 
-  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text') => {
+  const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string) => {
     if (previewSaving) return
     if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
     if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
@@ -2340,6 +2445,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     onPreviewStateChange(true, closePreview)
     setPreviewPath(path)
     setPreviewCwd(requestedCwd)
+    setPreviewViewedByCodexThreadId(viewedByCodexThreadId ?? null)
     setPreviewDiff(kind === 'text' ? diff ?? null : null)
     setPreviewKind(kind)
     setMobilePreviewDialog(mobileDialog)
@@ -2351,7 +2457,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     setPreviewLoading(true)
     try {
       if (kind === 'image') {
-        const image = await codexRemoteClient.workspaceImage(token, requestedCwd, path)
+        const image = viewedByCodexThreadId
+          ? await codexRemoteClient.codexViewedImage(token, viewedByCodexThreadId, path)
+          : await codexRemoteClient.workspaceImage(token, requestedCwd, path)
         if (generation !== previewRequestGeneration.current) return
         setPreviewImage(image)
       } else {
@@ -2487,6 +2595,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     if (previewDirty) return
     setPreviewPath(null)
     setPreviewCwd(undefined)
+    setPreviewViewedByCodexThreadId(null)
     setPreviewDiff(null)
     setPreviewKind('text')
     setMobilePreviewDialog(false)
@@ -2518,7 +2627,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     if (!previewRequest || previewRequest.id === handledPreviewRequest.current) return
     if ((previewRequest.cwd ?? '') !== (cwd ?? '')) return
     handledPreviewRequest.current = previewRequest.id
-    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind)
+    void loadPreview(previewRequest.path, previewRequest.cwd, previewRequest.diff, previewRequest.kind, previewRequest.viewedByCodexThreadId)
   }, [cwd, loadPreview, previewRequest])
 
   useEffect(() => {
@@ -2583,6 +2692,25 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     })
   }, [selectionContextMenu])
 
+  useLayoutEffect(() => {
+    const current = contextMenu
+    const menu = contextMenuElement.current
+    if (!current || !menu) return
+
+    const keepMenuInViewport = () => {
+      const bounds = menu.getBoundingClientRect()
+      if (bounds.width <= 0 || bounds.height <= 0) return
+      const x = Math.max(8, Math.min(current.x, window.innerWidth - bounds.width - 8))
+      const y = Math.max(8, Math.min(current.y, window.innerHeight - bounds.height - 8))
+      if (Math.abs(current.x - x) < 1 && Math.abs(current.y - y) < 1) return
+      setContextMenu((latest) => latest === current ? { ...latest, x, y } : latest)
+    }
+
+    keepMenuInViewport()
+    window.addEventListener('resize', keepMenuInViewport)
+    return () => window.removeEventListener('resize', keepMenuInViewport)
+  }, [contextMenu])
+
   function toggleDirectory(path: string) {
     const nextExpanded = !expanded[path]
     setExpanded((current) => ({ ...current, [path]: nextExpanded }))
@@ -2592,26 +2720,31 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
-    const menuWidth = 244
-    const menuHeight = entry.kind === 'directory' ? 350 : 264
+    const mobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(entry.kind === 'directory' ? 480 : 320, Math.max(0, window.innerHeight - 16))
+      : entry.kind === 'directory' ? (mobile ? 350 : 390) : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
     setSelectedPaths(paths)
     setSelectionContextMenu(null)
-    setContextMenu({ entry, paths, x, y })
+    setContextMenu({ entry, paths, x, y, mobile })
   }
 
   function openRootContextMenu(clientX: number, clientY: number) {
     if (!browsingRoot) return
-    const menuWidth = 244
-    const menuHeight = 220
+    const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
+    const menuHeight = theme === 'retro'
+      ? Math.min(280, Math.max(0, window.innerHeight - 16))
+      : 220
     const x = Math.max(8, Math.min(clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(clientY, window.innerHeight - menuHeight - 8))
     const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
     setSelectedPaths([])
     setSelectionContextMenu(null)
-    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true, mobile: isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint) })
   }
 
   function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
@@ -2956,6 +3089,19 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
     return () => window.cancelAnimationFrame(frame)
   }, [previewPath])
   const previewPortalTarget = previewContainerRef.current
+  const contextMenuMissingDraftPaths = contextMenu
+    ? workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path)))
+    : []
+  const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && threadId)
+  const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.mobile && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
+  const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
+  const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuMissingDraftPaths.length > 0
+  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste
   return (
     <>
       <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
@@ -3052,7 +3198,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
                   </>
                 ) : null}
                 {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button> : null}
-                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind, previewViewedByCodexThreadId ?? undefined)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
               </div>
             </div>
             {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? '读取图片…' : '读取文件内容…'}</div> : null}
@@ -3103,17 +3249,27 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, cwd, t
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-context-menu workspace-file-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
-          {contextMenu.entry.kind === 'directory' && threadId ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
-          {workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).length > 0 ? <button type="button" role="menuitem" onClick={() => { const paths = workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path))).join('\n'); setContextMenu(null); onInsertPath(paths, !mobileOpen) }}><Link2 size={14} />加入输入框</button> : null}
-          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button> : null}
-          {contextMenu.entry.kind === 'directory' ? <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button> : null}
-          {!contextMenu.root && contextMenu.paths.length === 1 ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
-          {contextMenu.entry.kind === 'directory' && workspaceClipboard ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
-          {!contextMenu.root && contextMenu.paths.length > 0 ? <button className="thread-context-menu__danger" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+          {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
+            <span className="workspace-file-context-menu__group-label">快捷操作</span>
+            {contextMenuCanBind ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
+            {contextMenuCanOpenTerminal ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</button> : null}
+            {contextMenuMissingDraftPaths.length > 0 ? <button type="button" role="menuitem" onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</button> : null}
+          </div> : null}
+          {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
+            <span className="workspace-file-context-menu__group-label">新建</span>
+            <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</button>
+            <button type="button" role="menuitem" onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</button>
+          </div> : null}
+          {contextMenuHasFileActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--manage">
+            <span className="workspace-file-context-menu__group-label">文件操作</span>
+            {contextMenuCanRename ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
+            {contextMenuCanCopy ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+            {contextMenuCanCut ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+            {contextMenuCanPaste ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
+          </div> : null}
+          {contextMenuCanDelete ? <button className="thread-context-menu__danger workspace-file-context-menu__delete" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
         </div>,
         document.body,
       ) : null}
@@ -3211,8 +3367,12 @@ interface RemoteChatPaneProps {
   onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
+  onRefreshThreads: () => void
+  refreshThreadsDisabled: boolean
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
-  onOpenWorkspaceImage: (path: string, cwd?: string) => void
+  onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => void
+  directoryRequest: WorkspaceTerminalRequest | null
+  onDirectoryRequestHandled: (id: number) => void
   composerHandle: RefObject<ComposerHandle | null>
   copiedMessageId: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
@@ -3231,13 +3391,19 @@ function RemoteChatPane({
   onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
+  onRefreshThreads,
+  refreshThreadsDisabled,
   onOpenWorkspaceFile,
   onOpenWorkspaceImage,
+  directoryRequest,
+  onDirectoryRequestHandled,
   composerHandle,
   copiedMessageId,
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const handledDirectoryRequestId = useRef(0)
   const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
@@ -3249,6 +3415,15 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+
+  useEffect(() => {
+    if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
+    handledDirectoryRequestId.current = directoryRequest.id
+    onActivate()
+    setTerminalDirectoryRequest(directoryRequest)
+    setTerminalOpen(true)
+    onDirectoryRequestHandled(directoryRequest.id)
+  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled])
 
   const activeThreadId = remote.activeThread?.id
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
@@ -3275,8 +3450,8 @@ function RemoteChatPane({
   const openViewedImagePreview = useCallback((path: string) => {
     const cwd = remote.activeThread?.cwd || remote.runtime.workspace || undefined
     onActivate()
-    onOpenWorkspaceImage(workspaceRelativePath(cwd, path), cwd)
-  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.runtime.workspace])
+    onOpenWorkspaceImage(path, cwd, remote.activeThread?.id)
+  }, [onActivate, onOpenWorkspaceImage, remote.activeThread?.cwd, remote.activeThread?.id, remote.runtime.workspace])
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
@@ -3454,11 +3629,19 @@ function RemoteChatPane({
   }, [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
-      <header className="remote-chat__header">
+      <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
           <div className="remote-chat__title"><span className="remote-chat__eyebrow">{activeEngineLabel} · 当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
+        {active ? <button
+          className="icon-button chat-history-refresh-button"
+          type="button"
+          aria-label="刷新对话记录"
+          title="刷新对话记录"
+          disabled={refreshThreadsDisabled}
+          onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
+        ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
           <button
             className="icon-button engine-switch-button"
@@ -3502,7 +3685,7 @@ function RemoteChatPane({
       </header>
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
-        <div className="message-stream__content" ref={messageContent}>
+        <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
@@ -3592,32 +3775,36 @@ function RemoteChatPane({
         </div>
       ) : null}
       {terminalOpen ? (
-        <Suspense fallback={(
-          <ChatOverlayPanel
-            ariaLabel="本机终端"
-            backdropLabel="关闭本机终端"
-            className="terminal-dialog"
-            onClose={() => setTerminalOpen(false)}
-            showCloseButton={false}
-            header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
-          >
-            <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
-          </ChatOverlayPanel>
-        )}>
-          <TerminalDialog
-            token={token}
-            threadId={remote.activeThread?.id}
-            cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
-            onClose={() => setTerminalOpen(false)}
-            onInsertText={(value) => {
-              if (value.length >= longPasteThreshold) {
-                composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
-              } else {
-                composerHandle.current?.insertDraftAtCursor(value, true)
-              }
-            }}
-          />
-        </Suspense>
+        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
+          <Suspense fallback={(
+            <ChatOverlayPanel
+              ariaLabel="本机终端"
+              backdropLabel="关闭本机终端"
+              className="terminal-dialog"
+              onClose={() => setTerminalOpen(false)}
+              showCloseButton={false}
+              header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
+            >
+              <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
+            </ChatOverlayPanel>
+          )}>
+            <TerminalDialog
+              token={token}
+              threadId={remote.activeThread?.id}
+              cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+              directoryRequest={terminalDirectoryRequest}
+              onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
+              onClose={() => setTerminalOpen(false)}
+              onInsertText={(value) => {
+                if (value.length >= longPasteThreshold) {
+                  composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
+                } else {
+                  composerHandle.current?.insertDraftAtCursor(value, true)
+                }
+              }}
+            />
+          </Suspense>
+        </TerminalRecoveryBoundary>
       ) : null}
     </main>
   )
@@ -3627,7 +3814,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
-  const composerHeightMemory = useRef<{ height: number; manuallyResized: boolean } | null>(null)
+  const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const workspaceTerminalRequestSequence = useRef(0)
+  const composerHeightMemory = useRef<ComposerHeightMemory | null>(null)
   const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
   const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
@@ -3654,7 +3843,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const pauseCurrentReply = useCallback(() => {
     if (!activeRemote.isRunning || activeRemote.isInterrupting) return
     const threadId = activeRemote.activeThread?.id
-    if (window.CodexRemoteAndroid || !threadId) {
+    if (!threadId) {
       void activeRemote.interrupt()
       return
     }
@@ -3695,16 +3884,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
+  const [sidebarEngineFilter, setSidebarEngineFilter] = useState<ChatEngine | null>(null)
+  const [sidebarChatShortcuts, setSidebarChatShortcuts] = useState(readSidebarChatShortcuts)
+  useEffect(() => saveSidebarChatShortcuts(sidebarChatShortcuts), [sidebarChatShortcuts])
   const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
   const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
   const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
+  const [retroSidePanelWidth, setRetroSidePanelWidth] = useState(readRetroSidePanelWidth)
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
+  const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
+  const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
+  const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -3738,15 +3933,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => { current = false }
   }, [token])
   const openSettingsPanel = useCallback(() => {
-    const currentState = window.history.state
-    if (!isSettingsHistoryEntry(currentState)) {
-      const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
-        ? currentState as Record<string, unknown>
-        : {}
-      window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
-    }
+    openPanelHistoryEntry('settings')
     setWorkspacePreviewRequest(null)
+    setUsageStatsOpen(false)
     setSettingsOpen(true)
+    setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const openUsageStatsPanel = useCallback(() => {
+    openPanelHistoryEntry('usage-stats')
+    setWorkspacePreviewRequest(null)
+    setSettingsOpen(false)
+    setUsageStatsOpen(true)
     setSidebarOpen(false)
     setWorkspaceOpen(false)
   }, [])
@@ -3762,7 +3960,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
-    if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+    setUsageStatsOpen(false)
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
+  }, [])
+  const closeUsageStatsPanel = useCallback(() => {
+    setUsageStatsOpen(false)
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
+  }, [])
+  const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
+    saveCPAUsageSettings(nextSettings)
+    setCpaUsageSettings(nextSettings)
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
@@ -3786,7 +3993,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const sidebarPanel = useRef<HTMLElement>(null)
   const workspacePanel = useRef<HTMLElement>(null)
   const workspaceExplorerWidthRef = useRef(workspaceExplorerWidth)
-  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null)
+  const workspaceResizePointer = useRef<{ pointerId: number; startX: number; startWidth: number; currentWidth: number; retro: boolean } | null>(null)
   const workspacePreviewSequence = useRef(0)
   const workspacePreviewModeRef = useRef<'desktop' | 'mobile' | null>(null)
   const workspacePreviewCloseRef = useRef<(() => void) | null>(null)
@@ -4009,7 +4216,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const touch = event.touches[0]
     if (!touch) return
-    const globalOverlayOpen = settingsOpen
+    const globalOverlayOpen = settingsOpen || usageStatsOpen
       || Boolean(threadRenameTarget)
       || Boolean(threadDeleteTargets)
       || Boolean(threadContextMenu)
@@ -4143,6 +4350,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     event.preventDefault()
     if (action === 'close-global') {
       if (settingsOpen) closeSettingsPanel()
+      else if (usageStatsOpen) closeUsageStatsPanel()
       else if (threadRenameTarget) closeThreadRename()
       else if (threadDeleteTargets) closeThreadDelete()
       else if (workspacePreviewModeRef.current === 'mobile') workspacePreviewCloseRef.current?.()
@@ -4218,6 +4426,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const themeStyle = {
     ...themeRootStyle(themePreferences),
     '--workspace-explorer-width': `${workspaceExplorerWidth}px`,
+    '--retro-side-panel-width': retroSidePanelWidth === null
+      ? 'clamp(144px, 174.4px, min(40vw, calc(50vw - 124px)))'
+      : `clamp(144px, ${retroSidePanelWidth}px, min(40vw, calc(50vw - 124px)))`,
   } as CSSProperties
 
   useEffect(() => {
@@ -4268,14 +4479,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useEffect(() => {
     const syncSettingsFromHistory = (event: PopStateEvent) => {
-      setSettingsOpen(isSettingsHistoryEntry(event.state))
+      const panel = getPanelHistoryEntry(event.state)
+      setSettingsOpen(panel === 'settings')
+      setUsageStatsOpen(panel === 'usage-stats')
     }
     window.addEventListener('popstate', syncSettingsFromHistory)
     return () => window.removeEventListener('popstate', syncSettingsFromHistory)
   }, [])
 
   useEffect(() => {
-    if (!settingsOpen) return
+    if (!settingsOpen && !usageStatsOpen) return
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       if (isMobileLayout()) return
@@ -4285,7 +4498,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     document.addEventListener('keydown', closeOnDesktopEscape, true)
     return () => document.removeEventListener('keydown', closeOnDesktopEscape, true)
-  }, [closeSettingsPanel, settingsOpen])
+  }, [closeSettingsPanel, settingsOpen, usageStatsOpen])
 
   useEffect(() => {
     if (!threadContextMenu) return
@@ -4330,7 +4543,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useLayoutEffect(() => {
     const handleBack = () => {
-      if (settingsOpen) {
+      if (settingsOpen || usageStatsOpen) {
         closeSettingsPanel()
         return true
       }
@@ -4365,7 +4578,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -4703,7 +4916,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   function openSystemNotificationThread(threadId: string) {
     if (!threadId) return
-    if (settingsOpen) closeSettingsPanel()
+    if (settingsOpen || usageStatsOpen) closeSettingsPanel()
     setWorkspaceOpen(false)
     const thread = remote0.threads.find((item) => item.id === threadId)
       ?? remotes.find((remote) => remote.activeThread?.id === threadId)?.activeThread
@@ -4846,6 +5059,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return width
   }
 
+  function setRetroSidePanelWidthValue(value: number | null, persist = false) {
+    const width = value === null ? null : clampRetroSidePanelWidth(value)
+    setRetroSidePanelWidth(width)
+    if (!persist) return width
+    try {
+      if (width === null) window.localStorage.removeItem(retroSidePanelWidthStorageKey)
+      else window.localStorage.setItem(retroSidePanelWidthStorageKey, String(width))
+    } catch {
+      // The current tab still keeps the chosen width when storage is unavailable.
+    }
+    return width
+  }
+
   const handleWorkspacePreviewStateChange = useCallback((open: boolean, closePreview?: () => void) => {
     if (open) {
       setWorkspacePreviewRequest(null)
@@ -4860,10 +5086,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   function startWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     if (event.button !== 0) return
     event.preventDefault()
+    const retro = themePreferences.theme === 'retro'
+    const startWidth = retro
+      ? sidebarPanel.current?.getBoundingClientRect().width || retroSidePanelWidth || defaultRetroSidePanelWidth()
+      : workspaceExplorerWidthRef.current
     workspaceResizePointer.current = {
       pointerId: event.pointerId,
       startX: event.clientX,
-      startWidth: workspaceExplorerWidthRef.current,
+      startWidth,
+      currentWidth: startWidth,
+      retro,
     }
     event.currentTarget.setPointerCapture(event.pointerId)
     setWorkspaceResizing(true)
@@ -4873,14 +5105,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
     const requestedWidth = current.startWidth + current.startX - event.clientX
-    setWorkspaceExplorerWidthValue(requestedWidth)
+    current.currentWidth = requestedWidth
+    if (current.retro) {
+      const width = clampRetroSidePanelWidth(requestedWidth)
+      remoteShell.current?.style.setProperty('--retro-side-panel-width', `${width}px`)
+      setRetroSidePanelWidthValue(width)
+    } else {
+      setWorkspaceExplorerWidthValue(requestedWidth)
+    }
   }
 
   function finishWorkspaceResize(event: ReactPointerEvent<HTMLDivElement>) {
     const current = workspaceResizePointer.current
     if (!current || current.pointerId !== event.pointerId) return
     workspaceResizePointer.current = null
-    setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
+    if (current.retro) setRetroSidePanelWidthValue(current.currentWidth, true)
+    else setWorkspaceExplorerWidthValue(workspaceExplorerWidthRef.current, true)
     setWorkspaceResizing(false)
   }
 
@@ -4928,19 +5168,49 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     return byModel
   }, [availableModels])
-  const sidebarThreads = useMemo(() => remote0.threads
-    .filter((thread) => (thread.engine === 'claude-code') === isClaudeCodeThread)
+  const sidebarThreads = useMemo(() => [...remote0.threads]
     .sort((left, right) => {
       const leftPinned = pinnedThreadIds.has(left.id)
       const rightPinned = pinnedThreadIds.has(right.id)
       return Number(rightPinned) - Number(leftPinned)
-    }), [isClaudeCodeThread, pinnedThreadIds, remote0.threads])
+    }), [pinnedThreadIds, remote0.threads])
   const normalizedSidebarSearch = sidebarSearch.trim().toLocaleLowerCase()
-  const visibleSidebarThreads = useMemo(() => normalizedSidebarSearch
-    ? sidebarThreads.filter((thread) => [thread.name, thread.preview]
-      .some((value) => value?.toLocaleLowerCase().includes(normalizedSidebarSearch)))
-    : sidebarThreads, [normalizedSidebarSearch, sidebarThreads])
+  const visibleSidebarThreads = useMemo(() => filterSidebarThreads(sidebarThreads, sidebarEngineFilter, normalizedSidebarSearch), [normalizedSidebarSearch, sidebarEngineFilter, sidebarThreads])
+  const sidebarHasActiveFilter = Boolean(normalizedSidebarSearch || sidebarEngineFilter)
   const groupedSidebarThreads = useMemo(() => groupSidebarThreads(visibleSidebarThreads, pinnedThreadIds), [visibleSidebarThreads, pinnedThreadIds])
+  const sidebarShortcutHint = `${formatSidebarChatShortcut(sidebarChatShortcuts.previous)} / ${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`
+
+  useEffect(() => {
+    const switchSidebarThread = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      const direction = matchesSidebarChatShortcut(event, sidebarChatShortcuts.previous)
+        ? -1
+        : matchesSidebarChatShortcut(event, sidebarChatShortcuts.next) ? 1 : 0
+      if (direction === 0) return
+      if (sidebarSelectionMode || sidebarSelectionBusy || activeRemote.handedOff || settingsOpen || usageStatsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      if (target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return
+      if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return
+
+      const threads = groupedSidebarThreads.flatMap((section) => section.threads)
+      if (threads.length === 0) return
+
+      const currentIndex = threads.findIndex((thread) => thread.id === activeRemote.activeThread?.id)
+      const nextIndex = currentIndex < 0
+        ? direction > 0 ? 0 : threads.length - 1
+        : (currentIndex + direction + threads.length) % threads.length
+      const nextThread = threads[nextIndex]
+
+      event.preventDefault()
+      if (nextThread.id !== activeRemote.activeThread?.id) void selectThread(nextThread)
+    }
+
+    document.addEventListener('keydown', switchSidebarThread)
+    return () => document.removeEventListener('keydown', switchSidebarThread)
+  }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, usageStatsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
 
@@ -4950,6 +5220,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSelectedSidebarThreadIds(new Set())
     setThreadContextMenu(null)
     clearThreadLongPress()
+  }
+
+  function toggleSidebarEngineFilter(engine: ChatEngine) {
+    setSidebarEngineFilter((current) => current === engine ? null : engine)
   }
 
   function toggleSidebarThreadSelection(threadId: string) {
@@ -5001,7 +5275,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       onTouchCancelCapture={handleSidebarTouchCancel}
     >
       {completionToast ? (
-        <div className="thread-completion-toast" role="status" aria-live="polite">
+        <div className={`thread-completion-toast thread-completion-toast--${completionToast.engine}`} role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
             <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
             <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} · 点击查看这条对话</small></span>
@@ -5025,12 +5299,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
         <div className="new-thread-control">
           <button className="new-thread-button" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
+          <div className="sidebar-engine-filters" role="group" aria-label="按聊天模式筛选">
+            {(['codex', 'claude-code'] as const).map((engine) => {
+              const engineLabel = engine === 'claude-code' ? 'Claude' : 'Codex'
+              const active = sidebarEngineFilter === engine
+              return <button className={`sidebar-engine-filter sidebar-engine-filter--${engine}`} type="button" key={engine} onClick={() => toggleSidebarEngineFilter(engine)} aria-label={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`} aria-pressed={active} title={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`}><EngineBrandIcon engine={engine} size={17} /></button>
+            })}
+          </div>
         </div>
         <div className="thread-list-heading">
-          <span>{normalizedSidebarSearch ? '搜索结果' : '聊天记录'}</span>
+          <span>{normalizedSidebarSearch ? '搜索结果' : sidebarEngineFilter === 'codex' ? 'Codex 对话' : sidebarEngineFilter === 'claude-code' ? 'Claude 对话' : '聊天记录'}</span>
+          <small className="thread-list-heading__shortcut" title={`上一条：${formatSidebarChatShortcut(sidebarChatShortcuts.previous)}；下一条：${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`}>{sidebarShortcutHint}</small>
           <div className="thread-list-heading__actions">
             <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
-            <button className="icon-button" type="button" aria-label="刷新对话记录" title="刷新对话记录" onClick={() => void remote0.refreshThreads(true)} disabled={remote0.handedOff}><RefreshCw size={15} /></button>
           </div>
         </div>
         {sidebarSelectionMode ? <div className="sidebar-selection-bar">
@@ -5045,6 +5326,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
               const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
               const isPinned = pinnedThreadIds.has(thread.id)
+              const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
+              const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
                 <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
                   const pending = threadLongPress.current
@@ -5057,18 +5340,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
                   else void selectThread(thread)
                 }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
-                  <span className="thread-row__icon">{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={thread.engine === 'claude-code' ? 'claude-code' : 'codex'} size={15} />}</span>
-                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{thread.engine === 'claude-code' ? <small className="thread-row__engine">Claude</small> : null}{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
+                  <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                   {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
                 </button>
               )
             })}
           </Fragment>)}
-          {visibleSidebarThreads.length === 0 && (normalizedSidebarSearch || !remote0.loadingHistory) ? <p className="thread-list__empty">{normalizedSidebarSearch ? '没有找到匹配的对话' : isClaudeCodeThread ? '还没有 Claude Code 对话' : '还没有 Codex 对话'}</p> : null}
-          {!normalizedSidebarSearch && remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
+          {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
         <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
@@ -5123,7 +5407,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} />
+      ) : usageStatsOpen ? (
+        <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -5143,16 +5429,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
+                    onRefreshThreads={() => { void remote0.refreshThreads(true) }}
+                    refreshThreadsDisabled={remote0.handedOff}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
                       setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
                     }}
-                    onOpenWorkspaceImage={(path, cwd) => {
+                    onOpenWorkspaceImage={(path, cwd, viewedByCodexThreadId) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
-                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image' })
+                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image', viewedByCodexThreadId })
                     }}
+                    directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
+                    onDirectoryRequestHandled={(id) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current)}
                     composerHandle={composerHandle}
                     copiedMessageId={copiedMessageId}
                     onCopy={copyMessage}
@@ -5161,6 +5451,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ))}
             </div>
             <MessageComposer
+              token={token}
               key={composerDraftScope}
               ref={composerHandle}
               draftScope={composerDraftScope}
@@ -5213,37 +5504,44 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <div
             className="workspace-resize-handle"
             role="separator"
-            aria-label="调整右侧文件区宽度"
+            aria-label={themePreferences.theme === 'retro' ? '调整左右侧边栏宽度' : '调整右侧文件区宽度'}
             aria-orientation="vertical"
-            aria-valuemin={workspaceExplorerMinimumWidth()}
-            aria-valuemax={workspaceExplorerWidthLimit()}
-            aria-valuenow={workspaceExplorerWidth}
+            aria-valuemin={themePreferences.theme === 'retro' ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()}
+            aria-valuemax={themePreferences.theme === 'retro' ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()}
+            aria-valuenow={themePreferences.theme === 'retro' ? clampRetroSidePanelWidth(retroSidePanelWidth ?? defaultRetroSidePanelWidth()) : workspaceExplorerWidth}
             tabIndex={0}
             onPointerDown={startWorkspaceResize}
             onPointerMove={moveWorkspaceResize}
             onPointerUp={finishWorkspaceResize}
             onPointerCancel={finishWorkspaceResize}
             onLostPointerCapture={finishWorkspaceResize}
-            onDoubleClick={() => setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
+            onDoubleClick={() => themePreferences.theme === 'retro'
+              ? setRetroSidePanelWidthValue(null, true)
+              : setWorkspaceExplorerWidthValue(workspaceExplorerDefaultWidth, true)}
             onKeyDown={(event) => {
-              const limits = workspaceExplorerWidthLimit()
+              const retro = themePreferences.theme === 'retro'
+              const currentWidth = retro ? retroSidePanelWidth ?? defaultRetroSidePanelWidth() : workspaceExplorerWidthRef.current
+              const minimumWidth = retro ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()
+              const limits = retro ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()
               const nextWidth = event.key === 'ArrowLeft'
-                ? workspaceExplorerWidthRef.current + 24
+                ? currentWidth + 24
                 : event.key === 'ArrowRight'
-                  ? workspaceExplorerWidthRef.current - 24
+                  ? currentWidth - 24
                   : event.key === 'Home'
-                    ? workspaceExplorerMinimumWidth()
+                    ? minimumWidth
                     : event.key === 'End'
                       ? limits
                       : null
               if (nextWidth === null) return
               event.preventDefault()
-              setWorkspaceExplorerWidthValue(nextWidth, true)
+              if (retro) setRetroSidePanelWidthValue(nextWidth, true)
+              else setWorkspaceExplorerWidthValue(nextWidth, true)
             }}
           />
           <WorkspaceExplorer
             token={token}
             theme={themePreferences.theme}
+            engine={activeRemote.activeEngine}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
             canBindThreadWorkspace={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
@@ -5259,6 +5557,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onPreviewStateChange={handleWorkspacePreviewStateChange}
             draft={activeWorkspaceDraft}
             onInsertPath={insertWorkspacePath}
+            onAddToTerminal={(path) => {
+              workspaceTerminalRequestSequence.current += 1
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path })
+            }}
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
             mobileDragging={workspaceDragging}
@@ -5272,18 +5574,98 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: ThemePreferences; onChange: (next: ThemePreferences) => void; onClose: () => void }) {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
+  token: string
+  preferences: ThemePreferences
+  onChange: (next: ThemePreferences) => void
+  onClose: () => void
+  chatShortcuts: SidebarChatShortcuts
+  onChatShortcutsChange: (next: SidebarChatShortcuts) => void
+  cpaUsageSettings: CPAUsageSettings
+  onCPAUsageSettingsChange: (next: CPAUsageSettings) => void
+}) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
   const [notificationError, setNotificationError] = useState<string | null>(null)
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
+  const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
+  const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
+  const backgroundCropDrag = useRef<{
+    pointerId: number
+    clientX: number
+    clientY: number
+    width: number
+    height: number
+    positionX: number
+    positionY: number
+  } | null>(null)
   const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
+    { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
+    { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
+
+  useEffect(() => {
+    if (!recordingShortcut) return
+    const handleShortcutRecording = (event: globalThis.KeyboardEvent) => {
+      if (event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+
+      if (event.key === 'Escape') {
+        event.stopImmediatePropagation()
+        setRecordingShortcut(null)
+        setShortcutMessage('已取消录制。')
+        return
+      }
+      if (isSidebarChatShortcutModifierKey(event.key)) return
+      if (isReservedSidebarChatShortcut(event)) {
+        setShortcutMessage('这个组合键由浏览器保留，请换一个。')
+        return
+      }
+
+      const recordedShortcut = sidebarChatShortcutFromEvent(event)
+      if (!recordedShortcut) {
+        setShortcutMessage('请同时按住 Ctrl、Alt、Shift 或 ⌘，再按一个按键。')
+        return
+      }
+      const otherAction = recordingShortcut === 'previous' ? 'next' : 'previous'
+      if (sameSidebarChatShortcut(recordedShortcut, chatShortcuts[otherAction])) {
+        setShortcutMessage('这个快捷键已分配给另一个方向，请换一个。')
+        return
+      }
+
+      onChatShortcutsChange({ ...chatShortcuts, [recordingShortcut]: recordedShortcut })
+      setRecordingShortcut(null)
+      setShortcutMessage(`${recordingShortcut === 'previous' ? '上一条' : '下一条'}快捷键已更新为 ${formatSidebarChatShortcut(recordedShortcut)}。`)
+    }
+
+    window.addEventListener('keydown', handleShortcutRecording, true)
+    return () => window.removeEventListener('keydown', handleShortcutRecording, true)
+  }, [chatShortcuts, onChatShortcutsChange, recordingShortcut])
+
+  function toggleShortcutRecording(action: SidebarChatShortcutAction) {
+    if (recordingShortcut === action) {
+      setRecordingShortcut(null)
+      setShortcutMessage('已取消录制。')
+      return
+    }
+    setRecordingShortcut(action)
+    setShortcutMessage(`正在录制${action === 'previous' ? '上一条' : '下一条'}快捷键；按下组合键，Esc 取消。`)
+  }
+
+  function resetChatShortcuts() {
+    setRecordingShortcut(null)
+    onChatShortcutsChange({
+      previous: { ...defaultSidebarChatShortcuts.previous },
+      next: { ...defaultSidebarChatShortcuts.next },
+    })
+    setShortcutMessage('已恢复默认快捷键。')
+  }
 
   async function updateBackgroundImage(file: File | undefined) {
     setImageError(null)
@@ -5299,7 +5681,13 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     setImageProcessing(true)
     try {
       const customBackgroundImage = await optimizeThemeBackgroundImage(file)
-      onChange({ ...preferences, customBackgroundImage })
+      onChange({
+        ...preferences,
+        customBackgroundImage,
+        customBackgroundPositionX: 50,
+        customBackgroundPositionY: 50,
+        customBackgroundZoom: 100,
+      })
     } catch (reason) {
       setImageError(reason instanceof Error ? reason.message : '背景图片处理失败。')
     } finally {
@@ -5329,20 +5717,62 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
     }
   }
 
+  function updateBackgroundPosition(positionX: number, positionY: number) {
+    onChange({
+      ...preferences,
+      customBackgroundPositionX: normalizeBackgroundPosition(positionX),
+      customBackgroundPositionY: normalizeBackgroundPosition(positionY),
+    })
+  }
+
+  function handleBackgroundPreviewPointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (!preferences.customBackgroundImage) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    if (!bounds.width || !bounds.height) return
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    backgroundCropDrag.current = {
+      pointerId: event.pointerId,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      width: bounds.width,
+      height: bounds.height,
+      positionX: normalizeBackgroundPosition(preferences.customBackgroundPositionX),
+      positionY: normalizeBackgroundPosition(preferences.customBackgroundPositionY),
+    }
+  }
+
+  function handleBackgroundPreviewPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const drag = backgroundCropDrag.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    updateBackgroundPosition(
+      drag.positionX - ((event.clientX - drag.clientX) / drag.width) * 100,
+      drag.positionY - ((event.clientY - drag.clientY) / drag.height) * 100,
+    )
+  }
+
+  function endBackgroundPreviewPointer(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (backgroundCropDrag.current?.pointerId !== event.pointerId) return
+    backgroundCropDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
+
   return (
-    <main className="theme-settings-panel" aria-label="主题设置">
+    <main className="theme-settings-panel" aria-label="设置">
       <header className="theme-settings-panel__header">
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>界面和通知偏好保存在当前设备，不会影响 Codex 会话。</p>
+          <p>界面偏好保存在当前设备；百炼语音配置保存在服务端。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
 
       <div className="theme-settings-panel__content">
+        <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
           <div className="theme-options" role="radiogroup" aria-label="界面主题">
             {themeOptions.map((option) => (
               <button
@@ -5358,14 +5788,20 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                   style={option.value === 'custom' ? {
                     backgroundColor: preferences.customBackgroundColor,
                     opacity: (100 - preferences.customBackgroundTransparency) / 100,
-                    backgroundImage: preferences.customBackgroundImage
-                      ? `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`
-                      : 'none',
-                    backgroundPosition: 'center',
-                    backgroundSize: 'cover',
                   } : undefined}
                   aria-hidden="true"
-                />
+                >
+                  {option.value === 'custom' && preferences.customBackgroundImage ? (
+                    <span
+                      className="theme-option__preview-image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                    />
+                  ) : null}
+                </span>
                 <span><strong>{option.label}</strong><small>{option.description}</small></span>
               </button>
             ))}
@@ -5407,17 +5843,73 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
                         aria-label="上传背景图片"
                       />
                     </label>
-                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined }) }}><X size={13} />清除</button> : null}
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 }) }}><X size={13} />清除</button> : null}
                   </span>
                 </span>
               </div>
+              {preferences.customBackgroundImage ? (
+                <section className="theme-background-framing" aria-label="背景图片取景调整">
+                  <div className="theme-background-framing__heading">
+                    <span><strong>调整背景区域</strong><small>拖动图片调整位置，也可以用滑块微调。</small></span>
+                    <button
+                      className="theme-background-framing__reset"
+                      type="button"
+                      onClick={() => onChange({ ...preferences, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 })}
+                    >重置取景</button>
+                  </div>
+                  <button
+                    className="theme-background-framing__preview"
+                    type="button"
+                    aria-label="拖动图片调整背景位置"
+                    onPointerDown={handleBackgroundPreviewPointerDown}
+                    onPointerMove={handleBackgroundPreviewPointerMove}
+                    onPointerUp={endBackgroundPreviewPointer}
+                    onPointerCancel={endBackgroundPreviewPointer}
+                    onLostPointerCapture={() => { backgroundCropDrag.current = null }}
+                    onKeyDown={(event) => {
+                      const step = event.shiftKey ? 10 : 2
+                      if (event.key === 'ArrowLeft') updateBackgroundPosition(preferences.customBackgroundPositionX + step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowRight') updateBackgroundPosition(preferences.customBackgroundPositionX - step, preferences.customBackgroundPositionY)
+                      else if (event.key === 'ArrowUp') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY + step)
+                      else if (event.key === 'ArrowDown') updateBackgroundPosition(preferences.customBackgroundPositionX, preferences.customBackgroundPositionY - step)
+                      else return
+                      event.preventDefault()
+                    }}
+                  >
+                    <span
+                      className="theme-background-framing__image"
+                      style={{
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("${preferences.customBackgroundImage}")`,
+                        backgroundPosition: `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+                        transform: `scale(${normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100})`,
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span className="theme-background-framing__hint">拖动调整取景</span>
+                  </button>
+                  <div className="theme-background-framing__controls">
+                    <label className="theme-background-framing__control">
+                      <span><strong>水平位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionX)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionX)} onChange={(event) => updateBackgroundPosition(Number(event.target.value), preferences.customBackgroundPositionY)} aria-label="背景图片水平位置" />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>垂直位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionY)} onChange={(event) => updateBackgroundPosition(preferences.customBackgroundPositionX, Number(event.target.value))} aria-label="背景图片垂直位置" />
+                    </label>
+                    <label className="theme-background-framing__control">
+                      <span><strong>缩放</strong><output>{normalizeBackgroundZoom(preferences.customBackgroundZoom)}%</output></span>
+                      <input type="range" min="100" max="250" step="1" value={normalizeBackgroundZoom(preferences.customBackgroundZoom)} onChange={(event) => onChange({ ...preferences, customBackgroundZoom: normalizeBackgroundZoom(Number(event.target.value)) })} aria-label="背景图片缩放" />
+                    </label>
+                  </div>
+                </section>
+              ) : null}
               {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
         </section>
 
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
           <div className="theme-display-controls">
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
@@ -5427,7 +5919,34 @@ function ThemeSettingsPanel({ preferences, onChange, onClose }: { preferences: T
         </section>
 
         <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2>系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
+          <div className="theme-settings-card__heading">
+            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
+            <button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button>
+          </div>
+          <div className="theme-display-controls sidebar-chat-shortcut-controls">
+            {(['previous', 'next'] as const).map((action) => {
+              const label = action === 'previous' ? '上一条聊天' : '下一条聊天'
+              const isRecording = recordingShortcut === action
+              return (
+                <div className="theme-control-row sidebar-chat-shortcut-row" key={action}>
+                  <span><strong>{label}</strong><small>{action === 'previous' ? '切换到列表中的上一条聊天。' : '切换到列表中的下一条聊天。'}</small></span>
+                  <kbd className="sidebar-chat-shortcut-key">{formatSidebarChatShortcut(chatShortcuts[action])}</kbd>
+                  <button
+                    className={`theme-notification-toggle${isRecording ? ' theme-notification-toggle--enabled' : ''}`}
+                    type="button"
+                    aria-pressed={isRecording}
+                    onClick={() => toggleShortcutRecording(action)}
+                  >{isRecording ? '按下组合键…' : '录制'}</button>
+                </div>
+              )
+            })}
+          </div>
+          <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
+          {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
+        </section>
+
+        <section className="theme-settings-card">
+          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
           <div className="theme-display-controls">
             <div className="theme-control-row">
               <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
@@ -5456,6 +5975,12 @@ function stripStandaloneSeparators(text: string) {
   return text.replace(/^[\t ]*(?:[-_\u2500\u2501\u2550\u2014][\t ]*){3,}(?:\r?\n|$)/gm, '')
 }
 
+function renderMessageInlineLinks(value: string, keyPrefix: string): ReactNode {
+  return splitMessageInlineLinks(value).map((part, index) => part.type === 'link'
+    ? <a key={`${keyPrefix}-link-${index}`} href={part.href} target="_blank" rel="noopener noreferrer">{part.value}</a>
+    : part.value)
+}
+
 function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
   const lines = value.replace(/\r\n?/g, '\n').split('\n')
   const elements: ReactNode[] = []
@@ -5466,7 +5991,8 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
 
   const flushPlainText = () => {
     if (plainLines.length === 0) return
-    elements.push(<div className="chat-message__text" key={`${keyPrefix}-text-${plainIndex++}`}>{plainLines.join('\n')}</div>)
+    const textKey = `${keyPrefix}-text-${plainIndex++}`
+    elements.push(<div className="chat-message__text" key={textKey}>{renderMessageInlineLinks(plainLines.join('\n'), textKey)}</div>)
     plainLines = []
   }
 
@@ -5483,10 +6009,10 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
       <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
         <table className="chat-message__table">
           <thead>
-            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{cell}</th>)}</tr>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-header-${index}`)}</th>)}</tr>
           </thead>
           <tbody>
-            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{cell}</td>)}</tr>)}
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-row-${rowIndex}-cell-${index}`)}</td>)}</tr>)}
           </tbody>
         </table>
       </div>,

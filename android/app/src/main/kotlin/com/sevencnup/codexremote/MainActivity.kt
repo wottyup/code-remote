@@ -4,6 +4,7 @@ import android.animation.ValueAnimator
 import android.Manifest
 import android.app.Activity
 import android.app.Dialog
+import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,6 +12,7 @@ import android.app.PendingIntent
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.content.pm.PackageManager
@@ -19,35 +21,45 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.ColorFilter
 import android.graphics.Paint
+import android.graphics.PaintFlagsDrawFilter
 import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.LinearGradient
+import android.graphics.Matrix
 import android.graphics.Outline
+import android.graphics.Rect
 import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
 import android.graphics.BitmapFactory
 import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.LayerDrawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
+import android.text.Selection
+import android.text.Spannable
 import android.text.SpannableString
 import android.text.SpannableStringBuilder
 import android.text.Spanned
+import android.text.method.LinkMovementMethod
 import android.text.StaticLayout
 import android.text.TextDirectionHeuristics
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
+import android.text.style.URLSpan
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
@@ -76,9 +88,20 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import android.util.LruCache
+import android.util.Patterns
+import android.text.util.Linkify
+import android.webkit.SslErrorHandler
+import android.webkit.CookieManager
+import android.webkit.URLUtil
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import io.noties.markwon.Markwon
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.core.MarkwonTheme
+import io.noties.markwon.linkify.LinkifyPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -116,6 +139,139 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+
+private class PixelFrameNineSliceDrawable(
+    private val bitmap: Bitmap,
+    private val sourceCornerWidth: Int,
+    private val sourceCornerHeight: Int,
+    private val targetCornerSize: Int,
+) : Drawable() {
+    private val paint = Paint().apply {
+        isAntiAlias = false
+        isFilterBitmap = false
+    }
+    private val sourceRects = Array(9) { Rect() }
+    private val destinationRects = Array(9) { Rect() }
+    private val destinationX = IntArray(4)
+    private val destinationY = IntArray(4)
+    private var drawableAlpha = 255
+    private var drawableColorFilter: ColorFilter? = null
+    private val sourceX = intArrayOf(0, sourceCornerWidth.coerceIn(1, bitmap.width / 2), bitmap.width - sourceCornerWidth.coerceIn(1, bitmap.width / 2), bitmap.width)
+    private val sourceY = intArrayOf(0, sourceCornerHeight.coerceIn(1, bitmap.height / 2), bitmap.height - sourceCornerHeight.coerceIn(1, bitmap.height / 2), bitmap.height)
+
+    init {
+        var index = 0
+        for (row in 0..2) for (column in 0..2) {
+            sourceRects[index++].set(sourceX[column], sourceY[row], sourceX[column + 1], sourceY[row + 1])
+        }
+    }
+
+    override fun draw(canvas: Canvas) {
+        val area = bounds
+        if (area.isEmpty) return
+        val horizontalInset = min(targetCornerSize, area.width() / 2)
+        val verticalInset = min(targetCornerSize, area.height() / 2)
+        destinationX[0] = area.left
+        destinationX[1] = area.left + horizontalInset
+        destinationX[2] = area.right - horizontalInset
+        destinationX[3] = area.right
+        destinationY[0] = area.top
+        destinationY[1] = area.top + verticalInset
+        destinationY[2] = area.bottom - verticalInset
+        destinationY[3] = area.bottom
+        paint.alpha = drawableAlpha
+        paint.colorFilter = drawableColorFilter
+        var index = 0
+        for (row in 0..2) for (column in 0..2) {
+            val source = sourceRects[index]
+            val destination = destinationRects[index++]
+            destination.set(destinationX[column], destinationY[row], destinationX[column + 1], destinationY[row + 1])
+            if (!source.isEmpty && !destination.isEmpty) canvas.drawBitmap(bitmap, source, destination, paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        drawableColorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    override fun getConstantState(): Drawable.ConstantState = PixelFrameNineSliceConstantState(
+        bitmap,
+        sourceCornerWidth,
+        sourceCornerHeight,
+        targetCornerSize,
+    )
+
+    @Deprecated("Deprecated in Android graphics API")
+    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+}
+
+private class PixelFrameNineSliceConstantState(
+    private val bitmap: Bitmap,
+    private val sourceCornerWidth: Int,
+    private val sourceCornerHeight: Int,
+    private val targetCornerSize: Int,
+) : Drawable.ConstantState() {
+    override fun newDrawable(): Drawable = PixelFrameNineSliceDrawable(
+        bitmap,
+        sourceCornerWidth,
+        sourceCornerHeight,
+        targetCornerSize,
+    )
+
+    override fun getChangingConfigurations(): Int = 0
+}
+
+private class LollipopSystemBarsDrawable(
+    private val contentColor: Int,
+    private val statusBarColor: Int,
+    private val navigationBarColor: Int,
+    private val statusBarHeight: () -> Int,
+    private val navigationBarHeight: () -> Int,
+) : Drawable() {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var drawableAlpha = 255
+    private var drawableColorFilter: ColorFilter? = null
+
+    override fun draw(canvas: Canvas) {
+        val area = bounds
+        paint.colorFilter = drawableColorFilter
+        paint.color = contentColor
+        paint.alpha = Color.alpha(contentColor) * drawableAlpha / 255
+        canvas.drawRect(area, paint)
+
+        val top = statusBarHeight().coerceIn(0, area.height())
+        if (top > 0) {
+            paint.color = statusBarColor
+            paint.alpha = Color.alpha(statusBarColor) * drawableAlpha / 255
+            canvas.drawRect(area.left.toFloat(), area.top.toFloat(), area.right.toFloat(), area.top + top.toFloat(), paint)
+        }
+        val bottom = navigationBarHeight().coerceIn(0, (area.height() - top).coerceAtLeast(0))
+        if (bottom > 0) {
+            paint.color = navigationBarColor
+            paint.alpha = Color.alpha(navigationBarColor) * drawableAlpha / 255
+            canvas.drawRect(area.left.toFloat(), area.bottom - bottom.toFloat(), area.right.toFloat(), area.bottom.toFloat(), paint)
+        }
+    }
+
+    override fun setAlpha(alpha: Int) {
+        drawableAlpha = alpha.coerceIn(0, 255)
+        invalidateSelf()
+    }
+
+    override fun setColorFilter(colorFilter: ColorFilter?) {
+        drawableColorFilter = colorFilter
+        invalidateSelf()
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun getOpacity(): Int = PixelFormat.OPAQUE
+}
 
 private class ThemeWallpaperDrawable(
     private val bitmap: Bitmap,
@@ -344,21 +500,104 @@ private class ComposerGlowDrawable(
 }
 
 class MainActivity : Activity() {
+    // The legacy-theme key remains "lollipop" for preference compatibility, but
+    // its appearance now follows Android 2.3 Gingerbread rather than Material.
+    private val PIXEL_BACKGROUND = Color.rgb(7, 15, 28)
+    private val PIXEL_PANEL = Color.rgb(15, 27, 43)
+    private val PIXEL_PANEL_INSET = Color.rgb(34, 50, 70)
+    private val PIXEL_BORDER = Color.rgb(102, 121, 146)
+    private val PIXEL_BORDER_LIGHT = Color.rgb(224, 222, 207)
+    private val PIXEL_BORDER_SHADOW = Color.rgb(53, 68, 88)
+    private val PIXEL_TEXT = Color.rgb(244, 240, 225)
+    private val PIXEL_CREAM = Color.rgb(244, 232, 203)
+    private val PIXEL_INK = Color.rgb(20, 30, 43)
+    private val PIXEL_BLUE = Color.rgb(29, 136, 238)
+    private val PIXEL_GREEN = Color.rgb(74, 203, 111)
+    private val PIXEL_RED = Color.rgb(236, 91, 91)
+    private val pixelFrameBitmapCache = mutableMapOf<Int, Bitmap>()
+    private val pixelIconResourceIds = setOf(
+        R.drawable.pixel_about, R.drawable.pixel_chat, R.drawable.pixel_check,
+        R.drawable.pixel_connection, R.drawable.pixel_delete, R.drawable.pixel_display,
+        R.drawable.pixel_edit, R.drawable.pixel_file_add, R.drawable.pixel_folder,
+        R.drawable.pixel_language, R.drawable.pixel_match, R.drawable.pixel_notifications,
+        R.drawable.pixel_pause, R.drawable.pixel_refresh, R.drawable.pixel_search,
+        R.drawable.pixel_send, R.drawable.pixel_settings, R.drawable.pixel_terminal,
+        R.drawable.pixel_theme,
+    )
+    private val pixelTypeface: Typeface by lazy(LazyThreadSafetyMode.NONE) {
+        runCatching {
+            val assetPath = "fonts/FusionPixel12pxProportionalZhHans.ttf"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val pixelFont = android.graphics.fonts.Font.Builder(assets, assetPath)
+                    .setWeight(android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL)
+                    .build()
+                val pixelFamily = android.graphics.fonts.FontFamily.Builder(pixelFont).build()
+                Typeface.CustomFallbackBuilder(pixelFamily)
+                    .setSystemFallback("sans-serif")
+                    .setStyle(android.graphics.fonts.FontStyle(
+                        android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL,
+                        android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT,
+                    ))
+                    .build()
+            } else Typeface.createFromAsset(assets, assetPath)
+        }.getOrElse { Typeface.create("sans-serif", Typeface.NORMAL) }
+    }
+    private val pixelTheme get() = themeName == "pixel"
+    private val retroTheme get() = themeName == "lollipop" || pixelTheme
+    private val LOLLIPOP_PRIMARY: Int get() = if (pixelTheme) PIXEL_BLUE else Color.rgb(160, 171, 174)
+    private val LOLLIPOP_PRIMARY_DARK: Int get() = if (pixelTheme) PIXEL_BACKGROUND else Color.rgb(185, 185, 185)
+    private val LOLLIPOP_PRIMARY_LIGHT: Int get() = if (pixelTheme) PIXEL_PANEL_INSET else Color.rgb(48, 60, 68)
+    private val LOLLIPOP_TEXT_SECONDARY: Int get() = if (pixelTheme) Color.rgb(190, 201, 216) else Color.rgb(184, 190, 188)
+    private val ANDROID1_TITLE_TEXT: Int get() = if (pixelTheme) PIXEL_TEXT else Color.rgb(28, 28, 28)
+    private val ANDROID1_ADDED_COLOR: Int get() = if (pixelTheme) PIXEL_GREEN else Color.rgb(145, 151, 111)
+    private val ANDROID1_DELETED_COLOR: Int get() = if (pixelTheme) PIXEL_RED else Color.rgb(177, 99, 92)
+    private val android1Typeface: Typeface by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) runCatching {
+            val regular = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSans.ttf")
+                .setWeight(android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL)
+                .build()
+            val bold = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSans-Bold.ttf")
+                .setWeight(android.graphics.fonts.FontStyle.FONT_WEIGHT_BOLD)
+                .build()
+            val latin = android.graphics.fonts.FontFamily.Builder(regular).addFont(bold).build()
+            val cjkFont = android.graphics.fonts.Font.Builder(assets, "fonts/DroidSansFallback.ttf").build()
+            val cjk = android.graphics.fonts.FontFamily.Builder(cjkFont).build()
+            Typeface.CustomFallbackBuilder(latin)
+                .addCustomFallback(cjk)
+                .setSystemFallback("sans-serif")
+                .setStyle(android.graphics.fonts.FontStyle(
+                    android.graphics.fonts.FontStyle.FONT_WEIGHT_NORMAL,
+                    android.graphics.fonts.FontStyle.FONT_SLANT_UPRIGHT,
+                ))
+                .build()
+        }.getOrElse { Typeface.createFromAsset(assets, "fonts/DroidSans.ttf") }
+        else Typeface.createFromAsset(assets, "fonts/DroidSans.ttf")
+    }
+    private val android1BoldTypeface: Typeface by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) Typeface.create(android1Typeface, Typeface.BOLD)
+        else Typeface.createFromAsset(assets, "fonts/DroidSans-Bold.ttf")
+    }
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
-    private val themeName: String get() = prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark"
+    private val themeName: String get() = (prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark")
+        .let { if (it == "oreo" || it == "gingerbread" || it == "android23") "lollipop" else it }
     private val lightTheme get() = when (themeName) {
         "light", "warm" -> true
+        "pixel" -> false
         "custom" -> Color.luminance(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)) > .46f
         else -> false
     }
     private val DARK: Int get() = when (themeName) {
         "light" -> Color.rgb(247, 248, 250)
         "warm" -> Color.rgb(247, 240, 230)
+        "lollipop" -> Color.rgb(19, 22, 23)
+        "pixel" -> PIXEL_BACKGROUND
         "custom" -> parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
         else -> Color.rgb(16, 17, 20)
     }
     private val PANEL: Int get() = when (themeName) {
         "warm" -> Color.rgb(255, 250, 243)
+        "lollipop" -> Color.rgb(29, 33, 34)
+        "pixel" -> PIXEL_PANEL
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .9f)
         else -> if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(23, 25, 30)
     }
@@ -368,56 +607,89 @@ class MainActivity : Activity() {
     }
     private val PANEL_INSET: Int get() = when (themeName) {
         "warm" -> Color.rgb(241, 231, 216)
+        "lollipop" -> Color.rgb(39, 44, 45)
+        "pixel" -> PIXEL_PANEL_INSET
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .78f)
         else -> if (lightTheme) Color.rgb(241, 243, 246) else Color.rgb(30, 32, 38)
     }
     private val BORDER: Int get() = when (themeName) {
         "warm" -> Color.rgb(225, 211, 194)
+        "lollipop" -> Color.rgb(73, 79, 80)
+        "pixel" -> PIXEL_BORDER
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .3f)
         else -> if (lightTheme) Color.rgb(213, 217, 224) else Color.rgb(52, 55, 63)
     }
     private val USER_BUBBLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(240, 226, 208)
+        "lollipop" -> Color.rgb(39, 51, 59)
+        "pixel" -> Color.rgb(35, 55, 80)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND), .68f)
         else -> if (lightTheme) Color.rgb(232, 236, 244) else Color.rgb(29, 31, 37)
     }
     private val TEXT: Int get() = when (themeName) {
         "warm" -> Color.rgb(66, 53, 40)
+        "lollipop" -> Color.rgb(237, 239, 236)
+        "pixel" -> PIXEL_TEXT
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         else -> if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(239, 241, 246)
     }
     private val SUBTLE: Int get() = when (themeName) {
         "warm" -> Color.rgb(109, 91, 71)
+        "lollipop" -> Color.rgb(190, 195, 193)
+        "pixel" -> Color.rgb(199, 207, 220)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .84f)
         else -> if (lightTheme) Color.rgb(77, 83, 93) else Color.rgb(194, 198, 208)
     }
     private val MUTED: Int get() = when (themeName) {
         "warm" -> Color.rgb(139, 121, 100)
+        "lollipop" -> Color.rgb(142, 149, 147)
+        "pixel" -> Color.rgb(154, 169, 189)
         "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .64f)
         else -> if (lightTheme) Color.rgb(105, 112, 123) else Color.rgb(139, 145, 156)
     }
     private val ACCENT: Int get() = when {
         currentMode == "claude-code" -> if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
+        themeName == "lollipop" -> Color.rgb(111, 157, 197)
+        pixelTheme -> PIXEL_BLUE
         themeName == "warm" -> Color.rgb(146, 114, 83)
         themeName == "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
         lightTheme -> Color.rgb(75, 96, 157)
         else -> Color.rgb(170, 186, 255)
     }
-    private val CODEX_MODE_ACCENT: Int get() = if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
-    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    private val CODEX_MODE_ACCENT: Int get() = if (themeName == "lollipop") Color.rgb(111, 157, 197) else if (pixelTheme) PIXEL_BLUE else if (lightTheme) Color.rgb(57, 75, 132) else Color.rgb(199, 208, 255)
+    private val CODEX_MODE_ACCENT_FOREGROUND: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(28, 31, 33)
+        "pixel" -> Color.WHITE
+        else -> if (lightTheme) Color.WHITE else Color.rgb(24, 27, 37)
+    }
     private val ACCENT_WARM: Int get() = if (lightTheme) Color.rgb(205, 102, 67) else Color.rgb(240, 141, 108)
     private val CLAUDE_MODE_ACCENT = Color.rgb(238, 140, 109)
     private val DARK_THEME_CODEX_ACCENT = Color.rgb(170, 186, 255)
     private val DARK_THEME_CLAUDE_ACCENT = Color.rgb(240, 141, 108)
-    private val CODEX_USER_MESSAGE_FILL = Color.rgb(159, 166, 203)
+    private val CODEX_USER_MESSAGE_FILL: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(43, 56, 65)
+        "pixel" -> Color.rgb(37, 61, 89)
+        else -> Color.rgb(159, 166, 203)
+    }
     private val CLAUDE_USER_MESSAGE_FILL = Color.rgb(110, 69, 57)
-    private val CODEX_USER_MESSAGE_TEXT = Color.rgb(24, 27, 37)
+    private val CODEX_USER_MESSAGE_TEXT: Int get() = when (themeName) {
+        "lollipop" -> Color.rgb(230, 235, 238)
+        "pixel" -> PIXEL_TEXT
+        else -> Color.rgb(24, 27, 37)
+    }
     private val CLAUDE_USER_MESSAGE_TEXT = Color.WHITE
+    private val CLAUDE_USER_MESSAGE_SURFACE: Int get() = if (retroTheme) Color.rgb(75, 48, 39) else CLAUDE_USER_MESSAGE_FILL
+    private val CLAUDE_USER_MESSAGE_FOREGROUND: Int get() = if (retroTheme) Color.rgb(255, 224, 209) else CLAUDE_USER_MESSAGE_TEXT
     private val ASSISTANT_NAME_ACCENT: Int get() = when {
         themeName == "warm" || themeName == "custom" -> if (currentMode == "claude-code") DARK_THEME_CLAUDE_ACCENT else DARK_THEME_CODEX_ACCENT
         else -> ACCENT
     }
-    private val WARNING: Int get() = if (lightTheme) Color.rgb(135, 91, 28) else Color.rgb(232, 190, 112)
+    private val WARNING: Int get() = when {
+        pixelTheme -> Color.rgb(201, 208, 219)
+        themeName == "lollipop" -> Color.rgb(169, 178, 180)
+        lightTheme -> Color.rgb(135, 91, 28)
+        else -> Color.rgb(232, 190, 112)
+    }
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
     private val io: ExecutorService = Executors.newFixedThreadPool(3)
@@ -428,6 +700,77 @@ class MainActivity : Activity() {
         .build()
     private val messageImageCache = object : LruCache<String, Bitmap>(24 * 1024) {
         override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+    private val pixelTextBitmapCache = object : LruCache<String, Bitmap>(8 * 1024) {
+        override fun sizeOf(key: String, value: Bitmap): Int = (value.byteCount / 1024).coerceAtLeast(1)
+    }
+    private val pixelTextDrawFilter = PaintFlagsDrawFilter(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG, 0)
+    private var nextPixelTextViewId = 0L
+
+    @Suppress("DEPRECATION")
+    private inner class PixelRasterTextView(context: Context, private val cacheId: Long) : TextView(context) {
+        private var rasterRevision = 0L
+        private var activeCacheKey: String? = null
+        private val nearestNeighborPaint = Paint().apply {
+            isAntiAlias = false
+            isFilterBitmap = false
+            isDither = false
+        }
+        private val destination = Rect()
+
+        private fun invalidateRaster() {
+            activeCacheKey?.let(pixelTextBitmapCache::remove)
+            activeCacheKey = null
+            rasterRevision++
+        }
+
+        override fun invalidate() {
+            invalidateRaster()
+            super.invalidate()
+        }
+
+        override fun invalidate(dirty: Rect?) {
+            invalidateRaster()
+            super.invalidate(dirty)
+        }
+
+        override fun invalidate(left: Int, top: Int, right: Int, bottom: Int) {
+            invalidateRaster()
+            super.invalidate(left, top, right, bottom)
+        }
+
+        override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
+            invalidateRaster()
+            super.onSizeChanged(width, height, oldWidth, oldHeight)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            if (width <= 0 || height <= 0) {
+                super.onDraw(canvas)
+                return
+            }
+
+            val rasterWidth = ceil(width * PIXEL_TEXT_RASTER_SCALE).toInt().coerceAtLeast(1)
+            val rasterHeight = ceil(height * PIXEL_TEXT_RASTER_SCALE).toInt().coerceAtLeast(1)
+            val key = "$cacheId:$rasterRevision:${rasterWidth}x$rasterHeight:${text?.hashCode()}:${textSize}:${paint.color}:${typeface?.hashCode()}:${paint.shader?.hashCode()}:${gravity}:${maxLines}:${paddingLeft},${paddingTop},${paddingRight},${paddingBottom}"
+            val bitmap = pixelTextBitmapCache.get(key) ?: runCatching {
+                Bitmap.createBitmap(rasterWidth, rasterHeight, Bitmap.Config.ARGB_8888).also { raster ->
+                    val lowResolutionCanvas = Canvas(raster)
+                    lowResolutionCanvas.setDrawFilter(pixelTextDrawFilter)
+                    lowResolutionCanvas.scale(PIXEL_TEXT_RASTER_SCALE, PIXEL_TEXT_RASTER_SCALE)
+                    super.onDraw(lowResolutionCanvas)
+                    activeCacheKey = key
+                    pixelTextBitmapCache.put(key, raster)
+                }
+            }.getOrNull()
+
+            if (bitmap == null) {
+                super.onDraw(canvas)
+                return
+            }
+            destination.set(0, 0, width, height)
+            canvas.drawBitmap(bitmap, null, destination, nearestNeighborPaint)
+        }
     }
 
     private var endpoint = ""
@@ -483,6 +826,11 @@ class MainActivity : Activity() {
     private var settingsNotificationButton: TextView? = null
     private var notificationPermissionRequestedFromSettings = false
     private var preferencePopup: PopupWindow? = null
+    private var webPreviewPopup: PopupWindow? = null
+    private var webPreviewView: WebView? = null
+    private var webPreviewRelayout: (() -> Unit)? = null
+    private var webPreviewCleanup: (() -> Unit)? = null
+    private var pendingWebDownload: PendingWebDownload? = null
     private var sidebarHost: EdgeDrawerHost? = null
     private var sidebarLongPressActive = false
     private var sidebarTouchActive = false
@@ -548,6 +896,8 @@ class MainActivity : Activity() {
     private var imeFollowMessageBottom = false
     private var imeFollowScrollQueued = false
     private var messageNearBottomBeforeIme = false
+    private var messageTouchActive = false
+    private var followMessageBottom = true
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
     private var completionNoticeDismissRunnable: Runnable? = null
@@ -569,6 +919,7 @@ class MainActivity : Activity() {
     private lateinit var page: LinearLayout
     private lateinit var headerView: LinearLayout
     private lateinit var composerDock: LinearLayout
+    private lateinit var composerSurface: LinearLayout
     private lateinit var composerFileChanges: LinearLayout
     private var expandedComposerFileChangesTurnId: String? = null
     private lateinit var composerGlowDrawable: ComposerGlowDrawable
@@ -581,10 +932,12 @@ class MainActivity : Activity() {
     private lateinit var messageList: LinearLayout
     private var activeActivityText: TextView? = null
     private var activeActivityTimer: TextView? = null
+    private var activityShimmerAnimator: ValueAnimator? = null
     private var activeActivityStartedAt = 0L
     private var liveActivityItem: JSONObject? = null
     private var liveActivityItemCompleted = false
     private var liveActivityTurnId: String? = null
+    private var liveActivityLabel: String? = null
     private val activityTick = object : Runnable {
         override fun run() {
             if (!running || activeActivityTimer == null) return
@@ -676,23 +1029,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.setDecorFitsSystemWindows(false)
-            window.statusBarColor = Color.TRANSPARENT
-            window.navigationBarColor = Color.TRANSPARENT
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                window.isStatusBarContrastEnforced = false
-                window.isNavigationBarContrastEnforced = false
-            }
-        } else {
-            window.statusBarColor = DARK
-            window.navigationBarColor = DARK
-        }
-        window.decorView.setBackgroundColor(DARK)
-        window.decorView.systemUiVisibility = if (lightTheme) {
-            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        } else 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+        applySystemBarTheme()
 
         endpoint = prefs.getString(KEY_ENDPOINT, "").orEmpty()
         token = prefs.getString(KEY_TOKEN, "").orEmpty()
@@ -707,9 +1044,46 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun applySystemBarTheme() {
+        val lollipop = themeName == "lollipop"
+        val retro = retroTheme
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            window.attributes = window.attributes.apply {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+            window.statusBarColor = if (retro) LOLLIPOP_PRIMARY_DARK else Color.TRANSPARENT
+            window.navigationBarColor = when {
+                lollipop -> Color.BLACK
+                pixelTheme -> PIXEL_BACKGROUND
+                else -> Color.TRANSPARENT
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                window.isStatusBarContrastEnforced = false
+                window.isNavigationBarContrastEnforced = false
+            }
+        } else {
+            window.statusBarColor = if (retro) LOLLIPOP_PRIMARY_DARK else DARK
+            window.navigationBarColor = if (lollipop) Color.BLACK else DARK
+        }
+        window.decorView.setBackgroundColor(DARK)
+        window.decorView.systemUiVisibility = if (lollipop) View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR else if (lightTheme) {
+            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        } else 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) window.isNavigationBarContrastEnforced = false
+    }
+
     override fun onResume() {
         super.onResume()
+        webPreviewView?.onResume()
         foreground = true
+        activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
             val now = System.currentTimeMillis()
             val wasBackgrounded = backgroundedAt > 0L
@@ -742,6 +1116,9 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        webPreviewView?.onPause()
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         persistCurrentDraft()
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
@@ -766,6 +1143,9 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        closeWebPreview()
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
         stopQueueEditRenewal()
@@ -784,6 +1164,8 @@ class MainActivity : Activity() {
             settingsDialog?.isShowing == true -> settingsDialog?.dismiss()
             preferencePopup?.isShowing == true -> preferencePopup?.dismiss()
             settingsOverlay != null -> closeSettings(animated = true)
+            webPreviewPopup?.isShowing == true && webPreviewView?.canGoBack() == true -> webPreviewView?.goBack()
+            webPreviewPopup?.isShowing == true -> closeWebPreview()
             terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
                 val input = terminalDraftInput
@@ -895,6 +1277,7 @@ class MainActivity : Activity() {
     private fun activeThreadStorageKey(mode: String): String = connectionScopedKey("$KEY_ACTIVE_THREAD_PREFIX$mode")
 
     private fun showConnectionPage(message: String? = null) {
+        closeWebPreview()
         root = FrameLayout(this)
         installThemeBackground(root)
         val scroll = ScrollView(this).apply { isFillViewport = true; isVerticalScrollBarEnabled = false }
@@ -1097,10 +1480,10 @@ class MainActivity : Activity() {
                 if (view.paddingLeft != 0 || view.paddingTop != 0 ||
                     view.paddingRight != 0 || view.paddingBottom != 0
                 ) view.setPadding(0, 0, 0, 0)
-                if (content.paddingLeft != systemBars.left || content.paddingTop != 0 ||
-                    content.paddingRight != systemBars.right || content.paddingBottom != bottom
+                if (content.paddingLeft != 0 || content.paddingTop != 0 ||
+                    content.paddingRight != 0 || content.paddingBottom != bottom
                 ) {
-                    content.setPadding(systemBars.left, 0, systemBars.right, bottom)
+                    content.setPadding(0, 0, 0, bottom)
                 }
                 if (systemInsetsChanged) {
                     updateInsetAwareOverlays()
@@ -1172,7 +1555,7 @@ class MainActivity : Activity() {
 
     private fun updateInsetAwareOverlays() {
         if (::headerView.isInitialized) {
-            headerView.setPadding(dp(10), systemInsetTop + dp(2), dp(8), dp(2))
+            headerView.setPadding(dp(10) + systemInsetLeft, systemInsetTop + dp(2), dp(8) + systemInsetRight, dp(2))
             headerView.layoutParams?.let { params ->
                 val targetHeight = systemInsetTop + dp(44)
                 if (params.height != targetHeight) {
@@ -1181,6 +1564,31 @@ class MainActivity : Activity() {
                 }
             }
         }
+        if (::statusView.isInitialized) statusView.setPadding(dp(16) + systemInsetLeft, 0, dp(16) + systemInsetRight, dp(4))
+        if (::messageScroll.isInitialized) messageScroll.setPadding(dp(12) + systemInsetLeft, dp(8), dp(12) + systemInsetRight, dp(8))
+        if (::welcomeTitleView.isInitialized) welcomeTitleView.setPadding(dp(12) + systemInsetLeft, dp(24), dp(12) + systemInsetRight, dp(24))
+        if (::scrollToBottomButton.isInitialized) {
+            (scrollToBottomButton.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
+                params.rightMargin = dp(16) + systemInsetRight
+                scrollToBottomButton.layoutParams = params
+            }
+        }
+        if (::composerSurface.isInitialized) composerSurface.setPadding(
+            dp(11) + systemInsetLeft,
+            dp(8),
+            dp(11) + systemInsetRight,
+            dp(6),
+        )
+        if (::composerFileChanges.isInitialized) composerFileChanges.setPadding(systemInsetLeft, 0, systemInsetRight, 0)
+        fun applyNoticeInsets(view: View) {
+            (view.layoutParams as? LinearLayout.LayoutParams)?.let { params ->
+                params.leftMargin = dp(12) + systemInsetLeft
+                params.rightMargin = dp(12) + systemInsetRight
+                view.layoutParams = params
+            }
+        }
+        if (::completionNotice.isInitialized) applyNoticeInsets(completionNotice)
+        if (::modeSwitchNotice.isInitialized) applyNoticeInsets(modeSwitchNotice)
         applyEdgeDrawerInsets(sidebarHost)
         applyEdgeDrawerInsets(workspaceHost)
         (settingsOverlay?.findViewWithTag<View>(TAG_INSET_CONTENT))?.setPadding(
@@ -1190,19 +1598,25 @@ class MainActivity : Activity() {
             systemInsetBottom,
         )
         positionTerminalOverlay()
+        webPreviewRelayout?.invoke()
     }
 
     private fun renderHome() {
+        closeWebPreview()
         root = ChatRootLayout(this).apply { isFocusableInTouchMode = true }
         installThemeBackground(root)
         page = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(if (themeName == "custom") Color.TRANSPARENT else DARK)
+            background = when {
+                themeName == "custom" -> ColorDrawable(Color.TRANSPARENT)
+                retroTheme -> lollipopSystemBarsBackground(DARK)
+                else -> ColorDrawable(DARK)
+            }
         }
         root.addView(page, FrameLayout.LayoutParams(MATCH, MATCH))
         buildHeader()
         statusView = label("正在连接…", 11, MUTED).apply {
-            setPadding(dp(16), 0, dp(16), dp(4))
+            setPadding(dp(16) + systemInsetLeft, 0, dp(16) + systemInsetRight, dp(4))
             visibility = View.GONE
         }
         page.addView(statusView, widthWrap())
@@ -1211,7 +1625,7 @@ class MainActivity : Activity() {
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_NEVER
             clipToPadding = false
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(12) + systemInsetLeft, dp(8), dp(12) + systemInsetRight, dp(8))
         }
         messageList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         messageScroll.addView(messageList, FrameLayout.LayoutParams(MATCH, WRAP))
@@ -1225,31 +1639,40 @@ class MainActivity : Activity() {
             textAlignment = View.TEXT_ALIGNMENT_CENTER
             breakStrategy = Layout.BREAK_STRATEGY_BALANCED
             maxLines = 2
-            setPadding(dp(12), dp(24), dp(12), dp(24))
+            setPadding(dp(12) + systemInsetLeft, dp(24), dp(12) + systemInsetRight, dp(24))
             visibility = View.GONE
         }
         chatArea.addView(welcomeTitleView, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER))
         scrollToBottomButton = iconButton("chevron_down", "回到底部") {
+            followMessageBottom = true
             messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
         }.apply {
-            imageTintList = ColorStateList.valueOf(TEXT)
+            imageTintList = retroIconTint(TEXT)
             setPadding(dp(10), dp(10), dp(10), dp(10))
             background = rounded(PANEL, dp(21), BORDER, dp(1))
             elevation = dp(3).toFloat()
             visibility = View.GONE
         }
         chatArea.addView(scrollToBottomButton, FrameLayout.LayoutParams(dp(42), dp(42), Gravity.END or Gravity.BOTTOM).apply {
-            rightMargin = dp(16)
+            rightMargin = dp(16) + systemInsetRight
             bottomMargin = dp(12)
         })
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+            if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
             updateScrollToBottomButton()
         }
         messageScroll.setOnTouchListener { _, event ->
-            if (event.actionMasked == MotionEvent.ACTION_DOWN) {
-                if (imeInsetVisible) imeFollowMessageBottom = false
-                else messageNearBottomBeforeIme = isMessageListNearBottom()
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    messageTouchActive = true
+                    if (imeInsetVisible) imeFollowMessageBottom = false
+                    else messageNearBottomBeforeIme = isMessageListNearBottom()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    messageTouchActive = false
+                    messageScroll.post { if (isMessageListNearBottom()) followMessageBottom = true }
+                }
             }
             false
         }
@@ -1274,22 +1697,41 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(10), dp(2), dp(8), dp(2))
-            background = ColorDrawable(Color.TRANSPARENT)
+            background = if (retroTheme) lollipopActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
-        val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }
-        headerView.addView(menu, LinearLayout.LayoutParams(dp(40), dp(40)))
-        val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
-        titleView = label("Codex Remote", 14, TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        val menu = iconButton("menu", "打开对话列表") { setSidebarVisible(true) }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }
+        val actionSize = if (retroTheme) dp(42) else dp(40)
+        if (pixelTheme) menu.setPadding(dp(5), dp(5), dp(5), dp(5))
+        headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
+        val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
+        val titleBaseSize = if (retroTheme) 18 else 15
+        titleView = label("Codex Remote", titleBaseSize, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
-        val path = label("本机项目", 10, MUTED).apply { tag = "workspace_path"; maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }
-        titleColumn.addView(path, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
         modeButton = iconButton(if (targetMode == "claude-code") "claude" else "codex", modeSwitchDescription()) { switchMode() }
-        headerView.addView(modeButton, LinearLayout.LayoutParams(dp(40), dp(40)))
-        headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }, LinearLayout.LayoutParams(dp(40), dp(40)))
-        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(44)))
+        if (retroTheme) modeButton.background = android1SegmentButtonBackground()
+        headerView.addView(modeButton, LinearLayout.LayoutParams(actionSize, actionSize))
+        headerView.addView(iconButton("terminal", "打开终端") { showTerminal() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+            if (pixelTheme) setPadding(dp(5), dp(5), dp(5), dp(5))
+        }, LinearLayout.LayoutParams(actionSize, actionSize))
+        headerView.addView(iconButton("folder", "打开文件树") { showWorkspaceBrowser() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+            if (pixelTheme) setPadding(dp(5), dp(5), dp(5), dp(5))
+        }, LinearLayout.LayoutParams(actionSize, actionSize))
+        page.addView(headerView, LinearLayout.LayoutParams(MATCH, dp(if (pixelTheme) 48 else if (retroTheme) 42 else 44)))
     }
 
     private fun buildQueuePanel() {
@@ -1327,7 +1769,7 @@ class MainActivity : Activity() {
         completionNotice.removeAllViews()
         val brand = ImageView(this).apply {
             setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-            imageTintList = ColorStateList.valueOf(if (engine == "claude-code") ACCENT_WARM else codexBrandAccent())
+            imageTintList = ColorStateList.valueOf(brandIconTint(engine))
             contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
         }
         completionNotice.addView(brand, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
@@ -1339,7 +1781,7 @@ class MainActivity : Activity() {
         completionNotice.addView(ImageView(this).apply {
             val activeClaude = currentMode == "claude-code"
             setImageResource(if (activeClaude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-            imageTintList = ColorStateList.valueOf(if (activeClaude) ACCENT_WARM else codexBrandAccent())
+            imageTintList = ColorStateList.valueOf(brandIconTint(if (activeClaude) "claude-code" else "codex"))
             contentDescription = "当前${if (activeClaude) "Claude Code" else "Codex"}模式"
         }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(3) })
         completionNotice.addView(iconButton("close", "关闭完成提示") { dismissCompletionNotice() }, LinearLayout.LayoutParams(dp(30), dp(30)))
@@ -1384,10 +1826,16 @@ class MainActivity : Activity() {
             val claude = engine == "claude-code"
             modeSwitchNotice.addView(ImageView(this).apply {
                 setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-                imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
+                imageTintList = ColorStateList.valueOf(brandIconTint(if (claude) "claude-code" else "codex"))
                 contentDescription = if (claude) "Claude Code" else "Codex"
             }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { if (index == 0) rightMargin = dp(4) else leftMargin = dp(4) })
-            if (index == 0) modeSwitchNotice.addView(label("→", 13, MUTED, true), LinearLayout.LayoutParams(WRAP, WRAP))
+            if (index == 0) {
+                if (retroTheme) modeSwitchNotice.addView(ImageView(this).apply {
+                    setPixelAwareImageResource(iconResource("chevron_right"))
+                    imageTintList = null
+                }, LinearLayout.LayoutParams(dp(16), dp(16)))
+                else modeSwitchNotice.addView(label("→", 13, MUTED, true), LinearLayout.LayoutParams(WRAP, WRAP))
+            }
         }
         val modeLabel = if (newMode == "claude-code") "Claude Code" else "Codex"
         val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
@@ -1424,10 +1872,17 @@ class MainActivity : Activity() {
         composerDock.addView(composerFileChanges, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(3) })
         val composer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(11), dp(8), dp(11), dp(6))
-            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(18).toFloat(), composerGlowOpacity())
-            background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
+            setPadding(dp(11) + systemInsetLeft, dp(8), dp(11) + systemInsetRight, dp(6))
+            composerGlowDrawable = ComposerGlowDrawable(composerGlowColor(), dp(if (retroTheme) 10 else 18).toFloat(), composerGlowOpacity())
+            if (retroTheme) {
+                background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_strip, PANEL)
+                    else rounded(PANEL, dp(2), BORDER, dp(1))
+                elevation = 0f
+            } else {
+                background = LayerDrawable(arrayOf(composerGlassBackground(), composerGlowDrawable))
+            }
         }
+        composerSurface = composer
         composer.addView(queuePanel, LinearLayout.LayoutParams(MATCH, WRAP))
         composer.addView(queueContent, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(2) })
         queueEditBar = LinearLayout(this).apply {
@@ -1489,25 +1944,39 @@ class MainActivity : Activity() {
         })
         composer.addView(composerInput, LinearLayout.LayoutParams(MATCH, WRAP))
 
+        if (retroTheme) {
+            composer.addView(View(this).apply { setBackgroundColor(BORDER) }, LinearLayout.LayoutParams(MATCH, dp(1)).apply {
+                topMargin = dp(4)
+                bottomMargin = dp(3)
+            })
+        }
         val footer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }, LinearLayout.LayoutParams(dp(40), dp(40)))
         val preferenceScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER }
         val preferenceRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         modelButton = preferenceButton("模型") { showModelOptions() }
         effortButton = preferenceButton("思考") { showEffortOptions() }
         permissionButton = preferenceButton("权限") { showPermissionOptions() }
-        preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(40)))
-        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
-        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(40)).apply { leftMargin = dp(4) })
+        val footerHeight = if (retroTheme) 46 else 40
+        preferenceRow.addView(modelButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)))
+        preferenceRow.addView(effortButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
+        preferenceRow.addView(permissionButton, LinearLayout.LayoutParams(WRAP, dp(footerHeight)).apply { leftMargin = dp(4) })
         preferenceScroll.addView(preferenceRow)
-        footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(40), 1f))
+        footer.addView(preferenceScroll, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        val footerActionSize = if (retroTheme) dp(36) else dp(34)
+        footer.addView(iconButton("add", "添加图片或文件") { chooseAttachment() }.apply {
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }, LinearLayout.LayoutParams(footerActionSize, dp(34)).apply {
+            rightMargin = dp(4)
+            gravity = Gravity.CENTER_VERTICAL
+        })
         sendButton = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_INSIDE
             setPadding(dp(6), dp(6), dp(6), dp(6))
-            background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+            background = if (retroTheme) lollipopFabBackground(LOLLIPOP_PRIMARY)
+                else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
             isClickable = true
             isFocusable = true
             setOnClickListener {
@@ -1520,11 +1989,12 @@ class MainActivity : Activity() {
             }
             contentDescription = "发送消息"
         }
-        footer.addView(sendButton, LinearLayout.LayoutParams(dp(30), dp(30)).apply {
-            leftMargin = dp(6)
+        val sendSize = if (retroTheme) dp(32) else dp(28)
+        footer.addView(sendButton, LinearLayout.LayoutParams(sendSize, sendSize).apply {
+            leftMargin = dp(if (retroTheme) 2 else 6)
             gravity = Gravity.CENTER_VERTICAL
         })
-        composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(40)))
+        composer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(footerHeight)))
         composerDock.addView(composer, LinearLayout.LayoutParams(MATCH, WRAP))
         page.addView(composerDock, LinearLayout.LayoutParams(MATCH, WRAP))
         if (queueEditItem != null) {
@@ -1540,6 +2010,11 @@ class MainActivity : Activity() {
 
     private fun composerGlassBackground(): Drawable {
         val fills = when (themeName) {
+            "pixel" -> intArrayOf(PIXEL_PANEL_INSET, PIXEL_PANEL)
+            "lollipop" -> intArrayOf(
+                Color.rgb(40, 45, 46),
+                Color.rgb(28, 32, 33),
+            )
             "light" -> intArrayOf(
                 Color.rgb(250, 251, 253),
                 Color.rgb(245, 247, 250),
@@ -1561,20 +2036,31 @@ class MainActivity : Activity() {
             )
         }
         val highlight = when (themeName) {
+            "pixel" -> PIXEL_BORDER_LIGHT
+            "lollipop" -> Color.rgb(70, 78, 81)
             "warm" -> Color.rgb(255, 249, 238)
             "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
             else -> Color.rgb(229, 234, 249)
         }
         val border = when (themeName) {
+            "pixel" -> PIXEL_BORDER
+            "lollipop" -> Color.rgb(84, 98, 103)
             "custom" -> colorWithAlpha(parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT), .28f)
             "warm" -> Color.rgb(216, 202, 182)
             "light" -> Color.rgb(214, 216, 220)
             else -> Color.rgb(43, 46, 52)
         }
-        return ComposerGlassDrawable(fills, highlight, border, dp(18).toFloat())
+        val cornerRadius = when {
+            pixelTheme -> 0
+            retroTheme -> 10
+            else -> 18
+        }
+        return ComposerGlassDrawable(fills, highlight, border, dp(cornerRadius).toFloat())
     }
 
     private fun composerGlowColor(): Int = when (themeName) {
+        "pixel" -> PIXEL_BLUE
+        "lollipop" -> Color.rgb(111, 157, 197)
         "light" -> Color.rgb(65, 88, 135)
         "warm" -> Color.rgb(143, 113, 86)
         "custom" -> parseThemeColor(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
@@ -1582,6 +2068,8 @@ class MainActivity : Activity() {
     }
 
     private fun composerGlowOpacity(): Float = when (themeName) {
+        "pixel" -> 0f
+        "lollipop" -> 0f
         "light" -> .30f
         "warm", "custom" -> .29f
         else -> .38f
@@ -1592,6 +2080,10 @@ class MainActivity : Activity() {
         composerGlowRunning = isRunning
         composerGlowAnimator?.cancel()
         composerGlowAnimator = null
+        if (retroTheme) {
+            composerGlowDrawable.setIntensity(0f)
+            return
+        }
         if (!isRunning) {
             composerGlowAnimator = ValueAnimator.ofFloat(composerGlowDrawable.currentIntensity(), 0f).apply {
                 duration = 220L
@@ -1630,16 +2122,17 @@ class MainActivity : Activity() {
         sidebarBrandMark = ImageView(this).apply {
             setImageResource(R.drawable.codex_remote)
             imageTintList = null
-            background = rounded(PANEL_INSET, dp(10))
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+            background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
+                else rounded(PANEL_INSET, dp(10))
+            val markPadding = if (pixelTheme) dp(6) else dp(8)
+            setPadding(markPadding, markPadding, markPadding, markPadding)
             contentDescription = "Codex Remote"
         }
-        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(36), dp(36)).apply { rightMargin = dp(10) })
+        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 36), dp(if (retroTheme) 40 else 36)).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-        brandCopy.addView(label("Codex Remote", 15, TEXT, true), widthWrap())
-        brandCopy.addView(label("对话工作台", 10, MUTED), widthWrap())
+        brandCopy.addView(label("Codex Remote", if (retroTheme) 18 else 15, TEXT, true), widthWrap())
+        brandCopy.addView(label("对话工作台", if (retroTheme) 12 else 10, MUTED), widthWrap())
         brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        brand.addView(sidebarIconButton("close", "关闭对话列表") { setSidebarVisible(false) }, LinearLayout.LayoutParams(dp(38), dp(38)))
         drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
 
         val searchBox = LinearLayout(this).apply {
@@ -1649,8 +2142,8 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
         }
         val searchIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_sidebar_search)
-            imageTintList = ColorStateList.valueOf(MUTED)
+            setPixelAwareImageResource(sidebarIconResource("search"))
+            imageTintList = retroIconTint(MUTED)
             contentDescription = "搜索"
         }
         searchBox.addView(searchIcon, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(8) })
@@ -1659,6 +2152,7 @@ class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT
             setSingleLine(true)
             textSize = adjustedTextSize(13)
+            typeface = themedTypeface()
             setTag(R.id.base_text_size, 13f)
             setTextColor(TEXT)
             setHintTextColor(MUTED)
@@ -1676,7 +2170,7 @@ class MainActivity : Activity() {
         drawerSearch.addTextChangedListener(SimpleTextWatcher { value ->
             searchBox.findViewWithTag<View>("sidebar_search_clear")?.visibility = if (value.isBlank()) View.GONE else View.VISIBLE
         })
-        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(12) })
+        drawer.addView(searchBox, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 42)).apply { topMargin = dp(9) })
 
         sidebarNewThreadButton = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -1688,13 +2182,15 @@ class MainActivity : Activity() {
             setOnClickListener { createThread() }
         }
         sidebarNewThreadIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_sidebar_add)
-            setPadding(dp(4), dp(4), dp(4), dp(4))
+            setPixelAwareImageResource(sidebarIconResource("add"))
+            val iconInset = if (pixelTheme) 0 else dp(4)
+            setPadding(iconInset, iconInset, iconInset, iconInset)
         }
-        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(27), dp(27)).apply { rightMargin = dp(10) })
-        sidebarNewThreadLabel = label("新建对话", 13, TEXT, true)
+        val newThreadIconSize = if (pixelTheme) 30 else 27
+        sidebarNewThreadButton.addView(sidebarNewThreadIcon, LinearLayout.LayoutParams(dp(newThreadIconSize), dp(newThreadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 10) })
+        sidebarNewThreadLabel = label("新建对话", if (pixelTheme) 14 else 13, TEXT, true)
         sidebarNewThreadButton.addView(sidebarNewThreadLabel, widthWrap())
-        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(43)).apply { topMargin = dp(9) })
+        drawer.addView(sidebarNewThreadButton, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 44 else 43)).apply { topMargin = dp(7) })
         updateSidebarModeAccent()
 
         val recentHeading = LinearLayout(this).apply {
@@ -1702,8 +2198,13 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(3), 0, 0, 0)
         }
-        recentHeading.addView(label("聊天记录", 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
-        recentHeading.addView(label("选择", 11, SUBTLE, true).apply {
+        if (retroTheme) recentHeading.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("history"))
+            imageTintList = null
+            contentDescription = "聊天记录"
+        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
+        recentHeading.addView(label("聊天记录", if (pixelTheme) 12 else 11, MUTED, true), LinearLayout.LayoutParams(0, dp(34), 1f))
+        recentHeading.addView(label("选择", if (pixelTheme) 12 else 11, SUBTLE, true).apply {
             tag = "sidebar_selection_toggle"
             gravity = Gravity.CENTER
             isClickable = true
@@ -1716,7 +2217,7 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(dp(48), dp(34)))
         recentHeading.addView(sidebarIconButton("refresh", "刷新对话列表") { refreshThreads(true); refreshPins() }, LinearLayout.LayoutParams(dp(34), dp(34)))
-        drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(36)).apply { topMargin = dp(8) })
+        drawer.addView(recentHeading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 40 else 36)).apply { topMargin = dp(8) })
         sidebarSelectionBar = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             visibility = View.GONE
@@ -1733,10 +2234,11 @@ class MainActivity : Activity() {
         val footerDivider = View(this).apply { setBackgroundColor(BORDER) }
         drawer.addView(footerDivider, LinearLayout.LayoutParams(MATCH, dp(1)).apply { topMargin = dp(8); bottomMargin = dp(5) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(42), 1f))
-        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(42)))
+        val footerHeight = if (pixelTheme) 68 else 40
+        footer.addView(sidebarAction("设置", "settings") { showSettings() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        footer.addView(sidebarAction("切换配置", "link") { showConnectionPicker() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        footer.addView(sidebarAction("重连", "refresh") { reconnect() }, LinearLayout.LayoutParams(0, dp(footerHeight), 1f))
+        drawer.addView(footer, LinearLayout.LayoutParams(MATCH, dp(footerHeight)))
 
         sidebarHost = createEdgeDrawer(drawer, Gravity.START) { setSidebarVisible(false) }
         updateInsetAwareOverlays()
@@ -1759,14 +2261,18 @@ class MainActivity : Activity() {
         val panelWidth = min(dp(300), (availableWidth * .78f).toInt())
             .coerceAtLeast(dp(248))
             .coerceAtMost((availableWidth - dp(28)).coerceAtLeast(dp(220)))
-        val wallpaper = wallpaperBackground(
+        val wallpaper = if (retroTheme) null else wallpaperBackground(
             OPAQUE_PANEL,
             viewportWidthPx = availableWidth,
             viewportHeightPx = root.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels,
         ) as? ThemeWallpaperDrawable
         panel.apply {
-            background = wallpaper ?: ColorDrawable(OPAQUE_PANEL)
-            elevation = dp(5).toFloat()
+            background = when {
+                pixelTheme -> pixelFrameBackground(R.drawable.pixel_frame_panel, PANEL)
+                retroTheme -> ColorDrawable(PANEL)
+                else -> wallpaper ?: ColorDrawable(OPAQUE_PANEL)
+            }
+            elevation = dp(if (pixelTheme) 0 else if (retroTheme) 8 else 5).toFloat()
             setLayerType(View.LAYER_TYPE_HARDWARE, null)
         }
         overlay.addView(panel, FrameLayout.LayoutParams(panelWidth, MATCH, gravity))
@@ -1821,26 +2327,34 @@ class MainActivity : Activity() {
     }
 
     private fun sidebarAction(title: String, icon: String, action: () -> Unit): View = LinearLayout(this).apply {
-        val actionColor = SUBTLE
+        val actionColor = if (pixelTheme) PIXEL_TEXT else SUBTLE
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
         setPadding(dp(1), dp(2), dp(1), dp(2))
-        background = rounded(Color.TRANSPARENT, dp(8))
+        clipChildren = false
+        clipToPadding = false
+        background = if (retroTheme) android1SegmentButtonBackground() else rounded(Color.TRANSPARENT, dp(8))
         isClickable = true
         isFocusable = true
         contentDescription = tr(title)
         setOnClickListener { action() }
         val iconView = ImageView(this@MainActivity).apply {
-            setImageResource(sidebarIconResource(icon))
-            imageTintList = ColorStateList.valueOf(actionColor)
+            setPixelAwareImageResource(sidebarIconResource(icon))
+            imageTintList = retroIconTint(actionColor)
         }
-        val labelView = label(title, 11, actionColor, true).apply {
+        val labelView = label(title, if (pixelTheme) 12 else 11, actionColor, true, pixelize = false).apply {
             setSingleLine(true)
             ellipsize = android.text.TextUtils.TruncateAt.END
             gravity = Gravity.CENTER
+            if (pixelTheme) {
+                // Respect the active UI font scale so larger text cannot clip.
+                includeFontPadding = true
+                minHeight = dp(24)
+            }
         }
         sidebarActionAccentViews += iconView to labelView
-        addView(iconView, LinearLayout.LayoutParams(dp(17), dp(17)))
+        val iconSize = if (pixelTheme) 22 else 17
+        addView(iconView, LinearLayout.LayoutParams(dp(iconSize), dp(iconSize)))
         addView(labelView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
     }
 
@@ -1849,15 +2363,13 @@ class MainActivity : Activity() {
         val title = activeThread?.let { threadTitle(it) }
             ?: if (activeThreadId == null) "新对话" else "Codex Remote"
         titleView.text = title
+        titleView.setTextColor(if (retroTheme) ANDROID1_TITLE_TEXT else TEXT)
         if (::modeButton.isInitialized) {
             setBrandIcon(modeButton, modeSwitchTarget())
             modeButton.contentDescription = modeSwitchDescription()
         }
         updateSidebarBrand()
         updateSidebarModeAccent()
-        val path = page.findViewWithTag<TextView>("workspace_path")
-        path?.text = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" }
-            ?: runtime.optString("workspace", "本机项目")
         statusView.visibility = if (runtime.optBoolean("connected", false)) View.GONE else View.VISIBLE
         statusView.text = runtime.optString("error").takeIf { it.isNotBlank() && it != "null" }
             ?: tr(if (runtime.optBoolean("available", false)) "Codex 已连接" else "正在连接 Codex…")
@@ -1879,6 +2391,25 @@ class MainActivity : Activity() {
 
     private fun threadTitleKey(threadId: String) = "$activeConnectionId:$threadId"
 
+    private fun knownEmptyThreadsKey() = connectionScopedKey("known_empty_thread_ids")
+
+    private fun isKnownEmptyThread(threadId: String): Boolean =
+        prefs.getStringSet(knownEmptyThreadsKey(), emptySet())?.contains(threadId) == true
+
+    private fun markKnownEmptyThread(threadId: String) {
+        if (threadId.isBlank()) return
+        val key = knownEmptyThreadsKey()
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: mutableSetOf()
+        ids.add(threadId)
+        prefs.edit().putStringSet(key, ids).apply()
+    }
+
+    private fun clearKnownEmptyThread(threadId: String) {
+        val key = knownEmptyThreadsKey()
+        val ids = prefs.getStringSet(key, emptySet())?.toMutableSet() ?: return
+        if (ids.remove(threadId)) prefs.edit().putStringSet(key, ids).apply()
+    }
+
     private fun threadTitle(thread: JSONObject): String {
         val title = listOf(thread.optString("name"), thread.optString("preview"))
             .firstOrNull { it.isNotBlank() && it != "null" } ?: "新对话"
@@ -1895,16 +2426,28 @@ class MainActivity : Activity() {
         val claudeMode = currentMode == "claude-code"
         val fill = if (claudeMode) CLAUDE_MODE_ACCENT else CODEX_MODE_ACCENT
         val foreground = if (claudeMode) Color.rgb(24, 27, 37) else CODEX_MODE_ACCENT_FOREGROUND
-        sidebarNewThreadButton.background = rounded(fill, dp(10))
-        sidebarNewThreadIcon.imageTintList = ColorStateList.valueOf(foreground)
-        sidebarNewThreadIcon.background = rounded(
-            if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
-            dp(7),
+        val newThreadShape = rounded(fill, dp(if (retroTheme) 2 else 10))
+        sidebarNewThreadButton.background = when {
+            pixelTheme -> pixelSidebarNewThreadBackground()
+            retroTheme -> lollipopRipple(android1MetalButtonBackground())
+            else -> newThreadShape
+        }
+        sidebarNewThreadButton.elevation = if (retroTheme && !pixelTheme) dp(2).toFloat() else 0f
+        val newThreadForeground = when {
+            pixelTheme -> PIXEL_INK
+            retroTheme -> ANDROID1_TITLE_TEXT
+            else -> foreground
+        }
+        sidebarNewThreadIcon.imageTintList = retroIconTint(newThreadForeground)
+        sidebarNewThreadIcon.background = if (pixelTheme) ColorDrawable(Color.TRANSPARENT) else rounded(
+            if (retroTheme) Color.rgb(178, 181, 181)
+            else if (lightTheme) Color.argb(40, 255, 255, 255) else Color.argb(38, 24, 27, 37),
+            dp(if (retroTheme) 2 else 7),
         )
-        sidebarNewThreadLabel.setTextColor(foreground)
-        val actionColor = SUBTLE
+        sidebarNewThreadLabel.setTextColor(newThreadForeground)
+        val actionColor = if (pixelTheme) PIXEL_TEXT else SUBTLE
         sidebarActionAccentViews.forEach { (icon, label) ->
-            icon.imageTintList = ColorStateList.valueOf(actionColor)
+            icon.imageTintList = retroIconTint(actionColor)
             label.setTextColor(actionColor)
         }
     }
@@ -2019,6 +2562,7 @@ class MainActivity : Activity() {
                     selectedSidebarThreadIds.removeAll(removed)
                     pinnedThreadIds.removeAll(removed)
                     removed.forEach { id ->
+                        clearKnownEmptyThread(id)
                         syncRevisions.remove(id)
                         displayedThreadTitles.remove(threadTitleKey(id))
                         pausedThreadKeys.remove(threadTitleKey(id))
@@ -2097,8 +2641,8 @@ class MainActivity : Activity() {
         visibleThreads.forEach { thread -> sections.getValue(sidebarDateSection(thread)).add(thread) }
         sections.forEach { (section, entries) ->
             if (entries.isEmpty()) return@forEach
-            drawerThreads.addView(label(section, 11, MUTED, true).apply {
-                setPadding(dp(9), dp(11), 0, dp(5))
+            drawerThreads.addView(label(section, if (pixelTheme) 12 else 11, MUTED, true).apply {
+                setPadding(dp(9), dp(if (retroTheme) 13 else 11), 0, dp(5))
             }, LinearLayout.LayoutParams(MATCH, WRAP))
             entries.forEach { thread ->
             val id = thread.optString("id")
@@ -2106,28 +2650,46 @@ class MainActivity : Activity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(9), dp(8), dp(5), dp(8))
+                setPadding(if (pixelTheme) dp(8) else if (retroTheme) 0 else dp(9), if (retroTheme) dp(2) else dp(8), dp(5), if (retroTheme) dp(2) else dp(8))
+                minimumHeight = dp(if (pixelTheme) 48 else if (retroTheme) 44 else 0)
                 val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else ACCENT
-                background = if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
+                background = if (retroTheme) {
+                    if (pixelTheme && selected) pixelFrameBackground(R.drawable.pixel_frame_active, Color.rgb(25, 43, 64))
+                    else if (selected) ColorDrawable(if (currentMode == "claude-code") Color.rgb(70, 45, 37) else LOLLIPOP_PRIMARY_LIGHT) else lollipopRipple()
+                } else if (selected) rounded(PANEL_INSET, dp(9), colorWithAlpha(selectedAccent, if (lightTheme) .52f else .42f), dp(1)) else rounded(Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 contentDescription = threadTitle(thread)
             }
             val engine = thread.optString("engine", "codex")
+            if (retroTheme && !pixelTheme) {
+                val selectedAccent = if (currentMode == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent()
+                row.addView(View(this).apply {
+                    setBackgroundColor(if (selected) selectedAccent else Color.TRANSPARENT)
+                }, LinearLayout.LayoutParams(dp(3), MATCH).apply { rightMargin = dp(8) })
+            }
             val icon = ImageView(this).apply {
                 if (sidebarSelectionMode) {
-                    setImageResource(if (selected) R.drawable.ic_selection_checked else R.drawable.ic_selection_unchecked)
-                    imageTintList = ColorStateList.valueOf(if (selected) (if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT) else MUTED)
+                    setPixelAwareImageResource(if (retroTheme) iconResource(if (selected) "checked" else "unchecked") else if (selected) R.drawable.ic_selection_checked else R.drawable.ic_selection_unchecked)
+                    imageTintList = retroIconTint(if (selected) (if (engine == "claude-code") CLAUDE_MODE_ACCENT else ACCENT) else MUTED)
                     contentDescription = if (selected) "已勾选" else "未勾选"
+                } else if (retroTheme) {
+                    // A conversation row is a chat destination, not another copy of the model logo.
+                    // Branded marks remain in the mode switch and cross-mode completion notices.
+                    setPixelAwareImageResource(iconResource("chat"))
+                    imageTintList = null
+                    contentDescription = if (engine == "claude-code") "Claude Code 对话" else "Codex 对话"
                 } else {
                     setImageResource(if (engine == "claude-code") R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
                     setColorFilter(if (engine == "claude-code") CLAUDE_MODE_ACCENT else codexBrandAccent())
                     contentDescription = if (engine == "claude-code") "Claude Code" else "Codex"
                 }
             }
-            row.addView(icon, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(9) })
+            val threadIconSize = 22
+            if (pixelTheme) icon.setPadding(dp(2), dp(2), dp(2), dp(2))
+            row.addView(icon, LinearLayout.LayoutParams(dp(threadIconSize), dp(threadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 9) })
             val title = threadTitle(thread)
-            val titleView = label(title, 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
+            val titleView = label(title, if (pixelTheme) 14 else 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
@@ -2547,7 +3109,10 @@ class MainActivity : Activity() {
         workspaceLoadedPath = null
         workspaceLoadingPath = null
         val hasCachedHistory = activeThread?.optJSONArray("turns") != null
-        historyLoadingThreadId = if (hasCachedHistory) null else id
+        val hasLoadedTurns = (activeThread?.optJSONArray("turns")?.length() ?: 0) > 0
+        if (hasLoadedTurns) clearKnownEmptyThread(id)
+        val knownEmptyThread = !hasLoadedTurns && isKnownEmptyThread(id)
+        historyLoadingThreadId = if (hasCachedHistory || knownEmptyThread) null else id
         historyLoadError = null
         historySelectionGeneration += 1
         visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
@@ -2561,8 +3126,11 @@ class MainActivity : Activity() {
         renderSidebar(force = true)
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         restoreCurrentDraftFiles()
+        followMessageBottom = true
         renderMessages(true)
-        if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
+        if (!knownEmptyThread) {
+            if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
+        }
         refreshQueue(true)
         socket?.send(JSONObject().put("type", "thread.subscribe").put("thread_id", id).toString())
     }
@@ -2755,6 +3323,7 @@ class MainActivity : Activity() {
 
     private fun refreshActiveThread(showLoading: Boolean, fullHistory: Boolean = false) {
         val threadId = activeThreadId ?: return
+        if (isKnownEmptyThread(threadId) && (activeThread?.optJSONArray("turns")?.length() ?: 0) == 0) return
         val connection = connectionGeneration
         val profileId = activeConnectionId
         val api = RemoteApi(endpoint, token)
@@ -2820,7 +3389,7 @@ class MainActivity : Activity() {
                     historyLoadError = null
                     running = isThreadRunning(resolved)
                     renderHeader()
-                    if (historyChanged) renderMessages(!showLoading, incrementalTurnId)
+                    if (historyChanged) renderMessages(false, incrementalTurnId)
                     updateComposerFileChanges()
                 }
             } catch (error: Exception) {
@@ -3005,7 +3574,9 @@ class MainActivity : Activity() {
             if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
             return
         }
-        val wasNearEnd = messageScroll.scrollY + messageScroll.height >= messageList.height - dp(120)
+        val previousScrollY = messageScroll.scrollY
+        val wasNearEnd = followMessageBottom && isMessageListNearBottom()
+        if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
         val incrementalTurnIndex = incrementalTurnId?.let { requestedId ->
@@ -3212,8 +3783,8 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.VERTICAL
                 setPadding(if (role == "user") dp(11) else dp(3), dp(7), if (role == "user") dp(11) else dp(3), dp(7))
                 if (role == "user") {
-                    val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL
-                    background = rounded(bubbleColor, dp(12))
+                    val bubbleColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL
+                    background = rounded(bubbleColor, dp(if (retroTheme) 5 else 12))
                 }
             }
             if (role == "assistant") {
@@ -3242,27 +3813,26 @@ class MainActivity : Activity() {
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || !hasImage) {
-                val contentColor = if (role == "user") {
-                    if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT
-                } else TEXT
-                val content = label(if (role == "assistant") "" else text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
-                    setTextIsSelectable(true)
-                    setLineSpacing(dp(3).toFloat(), 1.3f)
-                    typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-                    setHorizontallyScrolling(false)
-                    breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                    hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                    maxWidth = (maxBubbleWidth - if (role == "user") dp(22) else dp(6)).coerceAtLeast(dp(120))
-                }
-                if (role == "assistant") assistantMarkdown.setMarkdown(content, text.ifBlank { tr("（附件消息）") })
-                val contentWidth = if (role == "user") {
+                if (role == "assistant") {
+                    addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+                } else {
+                    val contentColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
+                    val content = label(text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
+                        setTextIsSelectable(true)
+                        setLineSpacing(dp(3).toFloat(), 1.3f)
+                        typeface = themedTypeface()
+                        setHorizontallyScrolling(false)
+                        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                        maxWidth = (maxBubbleWidth - dp(22)).coerceAtLeast(dp(120))
+                    }
+                    Linkify.addLinks(content, Linkify.WEB_URLS)
+                    content.setLinkTextColor(ACCENT)
+                    enableChatLinkClicks(content)
                     val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
-                    naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
-                } else WRAP
-                // Specify the user's text width from Android's actual text layout.
-                // Nested WRAP_CONTENT measurement alone was collapsing to one glyph
-                // per line on some narrow devices even with maxWidth configured.
-                bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                    val contentWidth = naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
+                    bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                }
             }
             addMessageImages(bubble, item, maxBubbleWidth)
             if (role == "user") {
@@ -3283,9 +3853,20 @@ class MainActivity : Activity() {
                         setPadding(0, dp(3), dp(2), 0)
                     }, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
+                messageCopyAction(text)?.let { action ->
+                    messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
+                }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             } else {
-                row.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                val messageColumn = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.START
+                }
+                messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
+                messageCopyAction(text)?.let { action ->
+                    messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
+                }
+                row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             }
             val turnId = item.optString("_turnId")
             row.tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
@@ -3302,52 +3883,40 @@ class MainActivity : Activity() {
         }
         val approval = pendingApproval
         if (approval != null) renderApproval(approval)
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
         if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
-            val activityAccent = if (currentMode == "claude-code" && socketConnected) CLAUDE_MODE_ACCENT else ACCENT
+            val activityColor = if (lightTheme) Color.rgb(80, 80, 80) else Color.rgb(180, 180, 180)
             val activity = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(dp(12), dp(8), dp(12), dp(8))
-                tag = TAG_MESSAGE_DYNAMIC
-            }
-            val activityHeading = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                if (pixelTheme) background = pixelFrameBackground(R.drawable.pixel_frame_active, PANEL)
+                tag = TAG_MESSAGE_DYNAMIC
             }
-            activityHeading.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+            activity.addView(ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
                 isIndeterminate = true
-                indeterminateTintList = ColorStateList.valueOf(activityAccent)
-                contentDescription = activityLabel
+                indeterminateTintList = ColorStateList.valueOf(activityColor)
+                contentDescription = "正在思考"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
             val lastTurn = turns.optJSONObject(turns.length() - 1)
             activeActivityStartedAt = parseMessageInstant(firstJsonValue(lastTurn ?: JSONObject(), "startedAt", "started_at", "createdAt"))?.toEpochMilli()
                 ?: System.currentTimeMillis()
             val lastItems = lastTurn?.optJSONArray("items") ?: JSONArray()
-            val currentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
-                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") && normalizedOperationStatus(item) == "running" }
             val turnId = lastTurn?.optString("id").orEmpty()
-            val liveItem = liveActivityItem?.takeIf { liveActivityTurnId != null }
-            val historyIsCurrentTurn = liveActivityTurnId == null || liveActivityTurnId == turnId
-            val recentOperation = (lastItems.length() - 1 downTo 0).mapNotNull { lastItems.optJSONObject(it) }
-                .firstOrNull { item -> normalizedType(item.optString("type")) !in setOf("usermessage", "agentmessage", "reasoning", "plan") }
-            val activityText = when {
-                liveItem != null && !liveActivityItemCompleted -> operationActivityLabel(liveItem)
-                liveItem != null -> "$activityLabel · ${completedActivityLabel(liveItem)}"
-                historyIsCurrentTurn && currentOperation != null -> operationActivityLabel(currentOperation)
-                historyIsCurrentTurn && recentOperation != null -> "$activityLabel · ${completedActivityLabel(recentOperation)}"
-                else -> activityLabel
-            }
-            activeActivityText = label(activityText, 12, activityAccent).apply {
+            val activityText = activityLineText(turnId, lastItems)
+            activeActivityText = label(activityText, 12, activityColor).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
-            activityHeading.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
-            activity.addView(activityHeading, LinearLayout.LayoutParams(MATCH, WRAP))
-            activeActivityTimer = label("已用 0分0秒", 10, MUTED).apply {
-                setPadding(dp(23), dp(4), 0, 0)
-                contentDescription = "本轮已运行时间"
+            activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
+            activeActivityTimer = label("已用 0分0秒", 10, activityColor).apply {
+                setPadding(dp(8), 0, 0, 0)
+                contentDescription = "本轮思考时间"
             }
-            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(MATCH, WRAP))
+            activity.addView(activeActivityTimer, LinearLayout.LayoutParams(WRAP, WRAP))
             messageList.addView(activity, LinearLayout.LayoutParams(MATCH, WRAP))
+            activeActivityText?.let(::startActivityShimmer)
             handler.removeCallbacks(activityTick)
             handler.post(activityTick)
         } else {
@@ -3357,10 +3926,44 @@ class MainActivity : Activity() {
         }
         messageScroll.post {
             if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
+            else messageScroll.scrollTo(0, previousScrollY)
             updateScrollToBottomButton()
         }
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
+    }
+
+    private fun startActivityShimmer(view: TextView) {
+        activityShimmerAnimator?.cancel()
+        activityShimmerAnimator = null
+        if (!foreground) return
+        view.post {
+            if (!foreground || activeActivityText !== view || !view.isAttachedToWindow) return@post
+            activityShimmerAnimator?.cancel()
+            val base = if (lightTheme) Color.rgb(105, 105, 105) else Color.rgb(155, 155, 155)
+            val highlight = if (lightTheme) Color.BLACK else Color.WHITE
+            val sweepWidth = minOf(view.width.toFloat(), view.paint.measureText(view.text.toString()))
+                .coerceAtLeast(dp(48).toFloat())
+            val gradient = LinearGradient(
+                0f, 0f, sweepWidth, 0f,
+                intArrayOf(base, base, highlight, base, base),
+                floatArrayOf(0f, .35f, .5f, .65f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            val matrix = Matrix()
+            view.paint.shader = gradient
+            activityShimmerAnimator = ValueAnimator.ofFloat(-1f, 1f).apply {
+                duration = 2600L
+                repeatCount = ValueAnimator.INFINITE
+                interpolator = android.view.animation.LinearInterpolator()
+                addUpdateListener { animator ->
+                    matrix.setTranslate((animator.animatedValue as Float) * sweepWidth, 0f)
+                    gradient.setLocalMatrix(matrix)
+                    view.invalidate()
+                }
+                start()
+            }
+        }
     }
 
     private fun updateScrollToBottomButton() {
@@ -3418,7 +4021,7 @@ class MainActivity : Activity() {
         val bubble = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(11), dp(7), dp(11), dp(7))
-            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FILL else CODEX_USER_MESSAGE_FILL, dp(12))
+            background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL, dp(if (retroTheme) 5 else 12))
         }
         val text = messageText(item, "user")
         if (text.isNotBlank()) {
@@ -3440,6 +4043,7 @@ class MainActivity : Activity() {
         messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         row.animate().alpha(1f).translationY(0f).setDuration(170).start()
         item.put("_animate", false)
+        followMessageBottom = true
         messageScroll.post { messageScroll.smoothScrollTo(0, messageList.height) }
     }
 
@@ -3486,11 +4090,964 @@ class MainActivity : Activity() {
         if (draftStorageKey() == scope) renderMessages(false)
     }
 
-    private val activityLabel: String
-        get() = if (socketConnected) "正在思考…" else "正在等待连接…"
+    private fun runningActivityText(operation: JSONObject?): String {
+        if (operation == null) return "正在思考"
+        val type = normalizedType(operation.optString("type"))
+        val operationName = operationLabel(operation)
+        val statusLabel = when (operationName) {
+            "思考" -> "正在思考"
+            "整理计划" -> "正在整理执行计划"
+            "生成回复" -> "正在生成回复"
+            "查看文件" -> "正在读取"
+            "搜索文件" -> "正在搜索文件"
+            "执行命令" -> "正在运行"
+            "修改文件" -> "正在修改文件"
+            "搜索资料" -> "正在搜索文件"
+            "查看图片" -> "正在查看图片"
+            "生成图片" -> "正在生成图片"
+            "读取技能" -> when (type) {
+                "mcptoolcall" -> "正在调用 MCP 工具"
+                "collabagenttoolcall" -> "正在协调子任务"
+                else -> "正在调用工具"
+            }
+            "运行子任务" -> if (type == "collabagenttoolcall") "正在协调子任务" else "正在运行子任务"
+            "调用 MCP 工具" -> "正在调用 MCP 工具"
+            "调用工具" -> "正在调用工具"
+            else -> "正在处理"
+        }
+        val detail = when {
+            type == "filechange" -> operation.optJSONArray("changes")?.length()
+                ?.takeIf { it > 0 }?.let { "$it 个文件" }
+            type == "commandexecution" && operationName == "查看文件" -> operationDisplayPath(operation)
+            type == "mcptoolcall" -> listOf(operation.optString("server"), operation.optString("tool"))
+                .filter(String::isNotBlank).joinToString(" · ").takeIf(String::isNotBlank)
+            type == "dynamictoolcall" -> listOf(operation.optString("tool"), operation.optString("name"))
+                .firstOrNull(String::isNotBlank)
+            else -> operationDisplayPath(operation) ?: operationDetail(operation).takeIf(String::isNotBlank)
+        }
+        return detail?.let { "$statusLabel $it" } ?: statusLabel
+    }
+
+    private fun latestRunningActivityItem(items: JSONArray?, excludedItemId: String?, operationOnly: Boolean?): JSONObject? {
+        if (items == null) return null
+        for (index in items.length() - 1 downTo 0) {
+            val item = items.optJSONObject(index) ?: continue
+            if (normalizedType(item.optString("type")) == "usermessage") continue
+            if (!excludedItemId.isNullOrBlank() && item.optString("id") == excludedItemId) continue
+            if (operationOnly != null && isOperationActivityItem(item) != operationOnly) continue
+            if (normalizedOperationStatus(item) == "running") return item
+        }
+        return null
+    }
+
+    private fun isOperationActivityItem(item: JSONObject): Boolean = normalizedType(item.optString("type")) in setOf(
+        "commandexecution", "filechange", "mcptoolcall", "dynamictoolcall", "collabagenttoolcall",
+        "websearch", "imageview", "imagegeneration", "subagentactivity",
+    )
+
+    private fun activityLabelForItem(item: JSONObject?): String {
+        if (item == null) return "正在思考"
+        return when (normalizedType(item.optString("type"))) {
+            "reasoning" -> "正在思考"
+            "plan" -> "正在整理执行计划"
+            "agentmessage" -> "正在生成回复"
+            "commandexecution" -> "正在执行命令"
+            "filechange" -> "正在修改文件"
+            "mcptoolcall" -> "正在调用 MCP 工具"
+            "dynamictoolcall" -> "正在调用工具"
+            "websearch" -> "正在搜索资料"
+            "imageview" -> "正在查看图片"
+            "imagegeneration" -> "正在生成图片"
+            "collabagenttoolcall" -> "正在协调子任务"
+            "subagentactivity" -> "正在运行子任务"
+            else -> "正在处理"
+        }
+    }
+
+    private fun activityLineText(turnId: String, items: JSONArray?): String {
+        val liveMatchesTurn = liveActivityTurnId == turnId
+        val completedLiveItemId = liveActivityItem
+            ?.takeIf { liveMatchesTurn && liveActivityItemCompleted }
+            ?.optString("id")
+            ?.takeIf(String::isNotBlank)
+        val liveItem = liveActivityItem?.takeIf { liveMatchesTurn && !liveActivityItemCompleted }
+        val activeOperation = liveItem?.takeIf(::isOperationActivityItem)
+            ?: latestRunningActivityItem(items, completedLiveItemId, operationOnly = true)
+        if (activeOperation != null) return runningActivityText(activeOperation)
+        if (liveMatchesTurn && !liveActivityLabel.isNullOrBlank()) return liveActivityLabel.orEmpty()
+        if (liveItem != null) return activityLabelForItem(liveItem)
+        return activityLabelForItem(latestRunningActivityItem(items, null, operationOnly = false))
+    }
+
+    private fun updateActiveActivityText() {
+        val turns = activeThread?.optJSONArray("turns")
+        val turn = turns?.let { allTurns ->
+            if (!liveActivityTurnId.isNullOrBlank()) {
+                (0 until allTurns.length()).mapNotNull { allTurns.optJSONObject(it) }
+                    .lastOrNull { it.optString("id") == liveActivityTurnId }
+            } else allTurns.optJSONObject(allTurns.length() - 1)
+        }
+        val turnId = turn?.optString("id").orEmpty().ifBlank { liveActivityTurnId.orEmpty() }
+        activeActivityText?.let { textView ->
+            textView.text = tr(activityLineText(turnId, turn?.optJSONArray("items")))
+            startActivityShimmer(textView)
+        }
+    }
 
     private var assistantMarkdownAppearance = ""
     private var assistantMarkdownCache: Markwon? = null
+    private val localInstallerLink = Regex("""\[([^\]]+)]\(<?(/[^)>\n]+\.(?:apk|exe|msi|dmg))>?\)""", RegexOption.IGNORE_CASE)
+
+    private data class AssistantMarkdownPart(
+        val markdown: String? = null,
+        val code: String? = null,
+        val language: String = "",
+    )
+
+    private fun addAssistantMarkdown(container: LinearLayout, text: String, maximumWidth: Int) {
+        splitAssistantMarkdown(text).forEach { part ->
+            if (part.code != null) {
+                container.addView(
+                    assistantCodeBlockView(part.language, part.code, maximumWidth),
+                    LinearLayout.LayoutParams(maximumWidth, WRAP).apply { topMargin = dp(4); bottomMargin = dp(4) },
+                )
+                return@forEach
+            }
+            val markdown = part.markdown.orEmpty()
+            if (markdown.isBlank()) return@forEach
+            val content = label("", 14, TEXT, translateUi = false).apply {
+                setTextIsSelectable(true)
+                setLineSpacing(dp(3).toFloat(), 1.3f)
+                typeface = themedTypeface()
+                setHorizontallyScrolling(false)
+                breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
+                hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
+                maxWidth = maximumWidth
+            }
+            assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(markdown))
+            enableChatLinkClicks(content)
+            container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+        }
+    }
+
+    private fun splitAssistantMarkdown(text: String): List<AssistantMarkdownPart> {
+        val parts = mutableListOf<AssistantMarkdownPart>()
+        val markdown = StringBuilder()
+        var code: StringBuilder? = null
+        var fenceCharacter: Char? = null
+        var fenceLength = 0
+        var language = ""
+
+        fun flushMarkdown() {
+            if (markdown.isNotEmpty()) parts += AssistantMarkdownPart(markdown = markdown.toString())
+            markdown.setLength(0)
+        }
+
+        fun openingFence(line: String): Pair<String, String>? {
+            val indentation = line.takeWhile { it == ' ' }.length
+            if (indentation > 3) return null
+            val remainder = line.drop(indentation)
+            val character = remainder.firstOrNull()?.takeIf { it == '`' || it == '~' } ?: return null
+            val length = remainder.takeWhile { it == character }.length
+            if (length < 3) return null
+            val info = remainder.drop(length)
+            if (character == '`' && '`' in info) return null
+            val languageName = info.trim().split(Regex("\\s+")).firstOrNull().orEmpty()
+                .removePrefix("{.").removeSuffix("}")
+            return character.toString().repeat(length) to languageName
+        }
+
+        fun closesFence(line: String, character: Char, minimumLength: Int): Boolean {
+            val indentation = line.takeWhile { it == ' ' }.length
+            if (indentation > 3) return false
+            val remainder = line.drop(indentation)
+            val runLength = remainder.takeWhile { it == character }.length
+            return runLength >= minimumLength && remainder.drop(runLength).all { it == ' ' || it == '\t' }
+        }
+
+        val lines = text.split('\n')
+        lines.forEachIndexed { index, rawLine ->
+            val line = rawLine.removeSuffix("\r")
+            val lineEnding = if (index < lines.lastIndex) "\n" else ""
+            val currentCode = code
+            if (currentCode == null) {
+                val opening = openingFence(line)
+                if (opening == null) {
+                    markdown.append(line).append(lineEnding)
+                } else {
+                    flushMarkdown()
+                    fenceCharacter = opening.first.first()
+                    fenceLength = opening.first.length
+                    language = opening.second
+                    code = StringBuilder()
+                }
+            } else if (fenceCharacter?.let { closesFence(line, it, fenceLength) } == true) {
+                parts += AssistantMarkdownPart(code = currentCode.toString().removeSuffix("\n"), language = language)
+                code = null
+                fenceCharacter = null
+                fenceLength = 0
+                language = ""
+            } else {
+                currentCode.append(line).append(lineEnding)
+            }
+        }
+
+        val unfinishedCode = code
+        if (unfinishedCode != null) {
+            parts += AssistantMarkdownPart(code = unfinishedCode.toString(), language = language)
+        } else {
+            flushMarkdown()
+        }
+        return parts
+    }
+
+    private fun assistantCodeBlockView(language: String, code: String, maximumWidth: Int): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(9), dp(5), dp(9), dp(8))
+            background = rounded(PANEL_INSET, dp(if (retroTheme) 4 else 8), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(
+            label(language.ifBlank { "代码" }, 10, MUTED, translateUi = language.isNotBlank()).apply {
+                if (language.isNotBlank()) text = language
+            },
+            LinearLayout.LayoutParams(0, dp(30), 1f),
+        )
+        header.addView(copyActionButton("复制代码", "代码", code), LinearLayout.LayoutParams(WRAP, dp(30)))
+        card.addView(header, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        val codeText = label(code, 12, TEXT, translateUi = false, pixelize = false).apply {
+            typeface = Typeface.MONOSPACE
+            setTextIsSelectable(true)
+            setHorizontallyScrolling(true)
+            setLineSpacing(dp(1).toFloat(), 1.15f)
+        }
+        val horizontalScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = true
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
+            addView(codeText, FrameLayout.LayoutParams(WRAP, WRAP))
+        }
+        card.addView(horizontalScroll, LinearLayout.LayoutParams(MATCH, WRAP))
+        card.layoutParams = LinearLayout.LayoutParams(maximumWidth, WRAP)
+        return card
+    }
+
+    private fun messageCopyAction(text: String): View? =
+        text.takeIf { it.isNotBlank() }?.let { copyActionButton("复制消息", "聊天消息", it) }
+
+    private fun copyActionButton(actionLabel: String, clipboardLabel: String, text: String): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(5), 0, dp(7), 0)
+            minimumWidth = dp(40)
+            minimumHeight = dp(30)
+            background = lollipopRipple()
+            isClickable = true
+            isFocusable = true
+            contentDescription = tr(actionLabel)
+            tooltipText = tr(actionLabel)
+            setOnClickListener { copyChatText(clipboardLabel, text) }
+
+            addView(ImageView(this@MainActivity).apply {
+                setPixelAwareImageResource(iconResource("copy"))
+                imageTintList = if (retroTheme) null else ColorStateList.valueOf(iconTint("copy"))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }, LinearLayout.LayoutParams(dp(15), dp(15)))
+            addView(label(actionLabel, 10, MUTED), LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(4) })
+        }
+
+    private fun copyChatText(clipboardLabel: String, text: String) {
+        if (text.isBlank()) return
+        val clipboard = getSystemService(ClipboardManager::class.java) ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText(tr(clipboardLabel), text))
+        showToast("已复制")
+    }
+
+    private fun displayLocalInstallerPaths(text: String): String = localInstallerLink.replace(text) { match ->
+        "${match.groupValues[1]}：${match.groupValues[2]}"
+    }
+
+    private fun enableChatLinkClicks(textView: TextView) {
+        textView.linksClickable = true
+        textView.movementMethod = object : LinkMovementMethod() {
+            private var pressedUrl: URLSpan? = null
+            private var touchStartX = 0f
+            private var touchStartY = 0f
+
+            override fun onTouchEvent(widget: TextView, buffer: Spannable, event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        touchStartX = event.x
+                        touchStartY = event.y
+                        pressedUrl = urlSpanAt(widget, buffer, event)
+                    }
+                    MotionEvent.ACTION_UP -> {
+                        val candidate = urlSpanAt(widget, buffer, event)
+                        val stayedOnLink = pressedUrl != null && candidate?.url == pressedUrl?.url
+                        val touchSlop = ViewConfiguration.get(widget.context).scaledTouchSlop
+                        val stayedInPlace = kotlin.math.abs(event.x - touchStartX) <= touchSlop &&
+                            kotlin.math.abs(event.y - touchStartY) <= touchSlop
+                        if (stayedOnLink && stayedInPlace) {
+                            val webUrl = normalizeWebUrl(candidate?.url.orEmpty())
+                            if (webUrl != null) {
+                                pressedUrl = null
+                                Selection.removeSelection(buffer)
+                                openWebPreview(webUrl)
+                                return true
+                            }
+                        }
+                    }
+                }
+                val handled = try {
+                    super.onTouchEvent(widget, buffer, event)
+                } catch (_: ActivityNotFoundException) {
+                    Toast.makeText(this@MainActivity, "没有可用的应用打开此链接", Toast.LENGTH_SHORT).show()
+                    true
+                }
+                if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) pressedUrl = null
+                return handled
+            }
+        }
+    }
+
+    private fun urlSpanAt(textView: TextView, text: Spannable, event: MotionEvent): URLSpan? {
+        if (text.isEmpty()) return null
+        val layout = textView.layout ?: return null
+        val x = event.x - textView.totalPaddingLeft + textView.scrollX
+        val y = event.y - textView.totalPaddingTop + textView.scrollY
+        if (x < 0 || y < 0 || y > layout.height) return null
+        val line = layout.getLineForVertical(y.toInt())
+        val offset = layout.getOffsetForHorizontal(line, x).coerceIn(0, text.length - 1)
+        return text.getSpans(offset, offset + 1, URLSpan::class.java)
+            .firstOrNull { offset >= text.getSpanStart(it) && offset < text.getSpanEnd(it) }
+    }
+
+    private fun normalizeWebUrl(value: String): String? {
+        val address = value.trim()
+        if (address.isBlank()) return null
+        if (address.startsWith("//")) return "https:$address"
+        val scheme = runCatching { Uri.parse(address).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+        return when (scheme) {
+            "http", "https" -> address
+            null -> if (Patterns.WEB_URL.matcher(address).matches()) "https://$address" else null
+            else -> null
+        }
+    }
+
+    private data class PendingWebDownload(
+        val url: String,
+        val userAgent: String?,
+        val contentDisposition: String?,
+        val mimeType: String?,
+    )
+
+    private data class WebDownloadRateSample(val bytes: Long, val timestamp: Long)
+
+    private data class WebDownloadRowUi(
+        val container: LinearLayout,
+        val title: TextView,
+        val details: TextView,
+        val progress: ProgressBar,
+    )
+
+    private fun showWebAddressDialog(currentAddress: String, onLoad: (String) -> Unit) {
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(16), dp(14), dp(16), dp(10))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        layout.addView(label("输入网页地址", 15, TEXT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            bottomMargin = dp(12)
+        })
+        val addressInput = EditText(this).apply {
+            setTextColor(TEXT)
+            setHintTextColor(MUTED)
+            textSize = adjustedTextSize(14)
+            setTag(R.id.base_text_size, 14f)
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
+            imeOptions = EditorInfo.IME_ACTION_GO
+            setSingleLine(true)
+            setSelectAllOnFocus(true)
+            hint = "https://example.com"
+            setText(currentAddress)
+            background = rounded(PANEL_INSET, dp(8), BORDER, dp(1))
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        layout.addView(addressInput, LinearLayout.LayoutParams(MATCH, dp(44)))
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        val submit = {
+            val target = normalizeWebUrl(addressInput.text.toString())
+            if (target == null) {
+                addressInput.error = "请输入有效的网址"
+            } else {
+                onLoad(target)
+                dialog.dismiss()
+            }
+        }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(42)))
+        actions.addView(dialogTextButton("前往", ACCENT) { submit() }, LinearLayout.LayoutParams(WRAP, dp(42)))
+        layout.addView(actions, LinearLayout.LayoutParams(MATCH, dp(46)).apply { topMargin = dp(5) })
+        addressInput.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_GO) {
+                submit()
+                true
+            } else false
+        }
+        dialog.setContentView(layout)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout((resources.displayMetrics.widthPixels - dp(32)).coerceAtLeast(dp(260)), WRAP)
+            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE or WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
+        addressInput.requestFocus()
+        addressInput.post {
+            addressInput.selectAll()
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(addressInput, InputMethodManager.SHOW_IMPLICIT)
+        }
+    }
+
+    private fun beginWebDownload(url: String, userAgent: String?, contentDisposition: String?, mimeType: String?) {
+        val scheme = runCatching { Uri.parse(url).scheme?.lowercase(Locale.ROOT) }.getOrNull()
+        if (scheme !in setOf("http", "https")) {
+            showToast("此网页的下载链接暂不支持")
+            return
+        }
+        val download = PendingWebDownload(url, userAgent, contentDisposition, mimeType)
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingWebDownload = download
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), REQUEST_WEB_DOWNLOAD_STORAGE)
+            return
+        }
+        enqueueWebDownload(download)
+    }
+
+    private fun enqueueWebDownload(download: PendingWebDownload) {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val fileName = URLUtil.guessFileName(download.url, download.contentDisposition, download.mimeType)
+        val request = DownloadManager.Request(Uri.parse(download.url)).apply {
+            setTitle(fileName)
+            setDescription("网页文件下载")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, fileName)
+            download.mimeType?.takeIf { it.isNotBlank() }?.let { setMimeType(it) }
+            download.userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
+            CookieManager.getInstance().getCookie(download.url)?.takeIf { it.isNotBlank() }?.let {
+                addRequestHeader("Cookie", it)
+            }
+            webPreviewView?.url?.takeIf { it.isNotBlank() }?.let { addRequestHeader("Referer", it) }
+        }
+        runCatching { manager.enqueue(request) }
+            .onSuccess { showToast("已开始下载：$fileName") }
+            .onFailure { showToast("下载启动失败：${it.message ?: "请稍后重试"}") }
+    }
+
+    private fun showWebDownloadsDialog() {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(9), dp(14), dp(10))
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        header.addView(label("下载", 16, TEXT, true), LinearLayout.LayoutParams(0, dp(42), 1f))
+        header.addView(iconButton("close", "关闭下载列表") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(36), dp(36)))
+        content.addView(header, LinearLayout.LayoutParams(MATCH, dp(42)))
+        val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val emptyState = label("暂无下载。打开网页并点击下载链接后会显示在这里。", 13, MUTED).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(18), dp(34), dp(18), dp(34))
+        }
+        rows.addView(emptyState, LinearLayout.LayoutParams(MATCH, WRAP))
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(rows, ViewGroup.LayoutParams(MATCH, WRAP))
+        }
+        content.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+        dialog.setContentView(content)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout((resources.displayMetrics.widthPixels - dp(28)).coerceAtLeast(dp(270)),
+                (resources.displayMetrics.heightPixels * .72f).toInt())
+            setGravity(Gravity.CENTER)
+        }
+
+        val rowViews = mutableMapOf<Long, WebDownloadRowUi>()
+        val samples = mutableMapOf<Long, WebDownloadRateSample>()
+        val updateDownloads = object : Runnable {
+            override fun run() {
+                if (!dialog.isShowing) return
+                val cursor = runCatching { manager.query(DownloadManager.Query()) }.getOrNull()
+                if (cursor == null) {
+                    emptyState.text = "无法读取下载列表"
+                    emptyState.visibility = View.VISIBLE
+                    handler.postDelayed(this, 1000L)
+                    return
+                }
+                val now = SystemClock.elapsedRealtime()
+                val visibleIds = mutableSetOf<Long>()
+                cursor.use { result ->
+                    val idColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_ID)
+                    val titleColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_TITLE)
+                    val statusColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)
+                    val reasonColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_REASON)
+                    val bytesColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                    val totalColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                    val mimeColumn = result.getColumnIndexOrThrow(DownloadManager.COLUMN_MEDIA_TYPE)
+                    while (result.moveToNext()) {
+                        val id = result.getLong(idColumn)
+                        visibleIds += id
+                        val title = result.getString(titleColumn)?.takeIf { it.isNotBlank() } ?: "网页文件下载"
+                        val status = result.getInt(statusColumn)
+                        val reason = result.getInt(reasonColumn)
+                        val bytes = result.getLong(bytesColumn).coerceAtLeast(0L)
+                        val total = result.getLong(totalColumn)
+                        val mimeType = result.getString(mimeColumn).orEmpty()
+                        val previous = samples[id]
+                        val elapsed = previous?.let { (now - it.timestamp).coerceAtLeast(1L) } ?: 1L
+                        val rate = if (status == DownloadManager.STATUS_RUNNING && previous != null) {
+                            ((bytes - previous.bytes).coerceAtLeast(0L) * 1000L / elapsed)
+                        } else 0L
+                        samples[id] = WebDownloadRateSample(bytes, now)
+
+                        val row = rowViews.getOrPut(id) {
+                            val titleView = label(title, 13, TEXT, true, translateUi = false).apply {
+                                maxLines = 1
+                                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                            }
+                            val detailsView = label("", 11, MUTED, translateUi = false)
+                            val progressView = ProgressBar(this@MainActivity, null, android.R.attr.progressBarStyleHorizontal).apply {
+                                max = 100
+                                progressTintList = ColorStateList.valueOf(ACCENT)
+                                progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+                            }
+                            val rowContent = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.VERTICAL
+                                setPadding(dp(3), dp(10), dp(3), dp(10))
+                                addView(titleView, LinearLayout.LayoutParams(MATCH, WRAP))
+                                addView(detailsView, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
+                                addView(progressView, LinearLayout.LayoutParams(MATCH, dp(3)).apply { topMargin = dp(7) })
+                            }
+                            rows.addView(rowContent, LinearLayout.LayoutParams(MATCH, WRAP))
+                            rows.addView(View(this@MainActivity).apply { setBackgroundColor(BORDER) }, LinearLayout.LayoutParams(MATCH, dp(1)))
+                            WebDownloadRowUi(rowContent, titleView, detailsView, progressView)
+                        }
+                        row.title.text = title
+                        val statusText = when (status) {
+                            DownloadManager.STATUS_PENDING -> "等待下载"
+                            DownloadManager.STATUS_RUNNING -> "正在下载"
+                            DownloadManager.STATUS_PAUSED -> when (reason) {
+                                DownloadManager.PAUSED_WAITING_TO_RETRY -> "网络波动，稍后重试"
+                                DownloadManager.PAUSED_WAITING_FOR_NETWORK -> "等待网络"
+                                DownloadManager.PAUSED_QUEUED_FOR_WIFI -> "等待 Wi-Fi"
+                                else -> "已暂停"
+                            }
+                            DownloadManager.STATUS_SUCCESSFUL -> "下载完成 · 点击打开"
+                            DownloadManager.STATUS_FAILED -> "下载失败（$reason）"
+                            else -> "状态未知"
+                        }
+                        val totalText = if (total > 0L) formatDownloadSize(total) else "大小未知"
+                        val speedText = if (status == DownloadManager.STATUS_RUNNING) {
+                            if (previous != null) " · ${formatDownloadRate(rate)}" else " · 计算速度中…"
+                        } else ""
+                        row.details.text = "$statusText · ${formatDownloadSize(bytes)} / $totalText$speedText"
+                        row.progress.isIndeterminate = total <= 0L && status in setOf(DownloadManager.STATUS_PENDING, DownloadManager.STATUS_RUNNING)
+                        row.progress.progress = if (total > 0L) ((bytes * 100L / total).toInt()).coerceIn(0, 100) else 0
+                        row.container.contentDescription = if (status == DownloadManager.STATUS_SUCCESSFUL) "打开下载文件：$title" else title
+                        row.container.setOnClickListener(if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            View.OnClickListener { openDownloadedWebFile(manager, id, mimeType) }
+                        } else null)
+                    }
+                }
+                emptyState.visibility = if (visibleIds.isEmpty()) View.VISIBLE else View.GONE
+                (rowViews.keys - visibleIds).forEach { id ->
+                    rowViews.remove(id)?.let { row -> rows.removeView(row.container) }
+                    samples.remove(id)
+                }
+                handler.postDelayed(this, 1000L)
+            }
+        }
+        dialog.setOnDismissListener { handler.removeCallbacks(updateDownloads) }
+        handler.post(updateDownloads)
+    }
+
+    private fun formatDownloadSize(bytes: Long): String {
+        if (bytes < 1024L) return "$bytes B"
+        val units = arrayOf("KB", "MB", "GB", "TB")
+        var value = bytes.toDouble()
+        var unit = -1
+        do {
+            value /= 1024.0
+            unit++
+        } while (value >= 1024.0 && unit < units.lastIndex)
+        return String.format(Locale.getDefault(), "%.1f %s", value, units[unit])
+    }
+
+    private fun formatDownloadRate(bytesPerSecond: Long): String = "${formatDownloadSize(bytesPerSecond)}/s"
+
+    private fun openDownloadedWebFile(manager: DownloadManager, id: Long, mimeType: String) {
+        val uri = manager.getUriForDownloadedFile(id)
+        if (uri == null) {
+            showToast("找不到已下载的文件")
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mimeType.ifBlank { "*/*" })
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { showToast("没有可用的应用打开此文件") }
+    }
+
+    private data class WebPreviewFrame(
+        val x: Int,
+        val y: Int,
+        val width: Int,
+        val height: Int,
+        val availableWidth: Int,
+        val availableHeight: Int,
+    )
+
+    private fun webPreviewFrame(): WebPreviewFrame {
+        val left = systemInsetLeft + dp(6)
+        val right = (root.width - systemInsetRight - dp(6)).coerceAtLeast(left + dp(160))
+        val availableWidth = (right - left).coerceAtLeast(dp(160))
+        val rootLocation = IntArray(2)
+        val composerLocation = IntArray(2)
+        root.getLocationOnScreen(rootLocation)
+        composerDock.getLocationOnScreen(composerLocation)
+        val composerTop = composerLocation[1] - rootLocation[1]
+        val top = systemInsetTop + dp(8)
+        val bottom = (composerTop - dp(8)).coerceAtLeast(top + dp(160))
+        val availableHeight = (bottom - top).coerceAtLeast(dp(160))
+        val widthRatio = prefs.getFloat(KEY_WEB_PREVIEW_WIDTH_RATIO, .94f).coerceIn(.45f, 1f)
+        val heightRatio = prefs.getFloat(KEY_WEB_PREVIEW_HEIGHT_RATIO, .76f).coerceIn(.4f, 1f)
+        val width = (availableWidth * widthRatio).roundToInt().coerceIn(dp(240).coerceAtMost(availableWidth), availableWidth)
+        val height = (availableHeight * heightRatio).roundToInt().coerceIn(dp(220).coerceAtMost(availableHeight), availableHeight)
+        val x = left + (availableWidth - width) / 2
+        val y = top + (availableHeight - height) / 2
+        return WebPreviewFrame(x, y, width, height, availableWidth, availableHeight)
+    }
+
+    private fun openWebPreview(rawUrl: String) {
+        val url = normalizeWebUrl(rawUrl) ?: return openExternalChatLink(rawUrl)
+        if (webPreviewPopup?.isShowing == true) {
+            webPreviewView?.loadUrl(url)
+            return
+        }
+        if (!::root.isInitialized || !::composerDock.isInitialized || root.width <= 0) {
+            openExternalChatLink(url)
+            return
+        }
+
+        val focused = window.currentFocus
+        if (focused is EditText) {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.hideSoftInputFromWindow(focused.windowToken, 0)
+        }
+        parkActivityInputFocus()
+
+        val webView = WebView(this).apply {
+            setBackgroundColor(Color.WHITE)
+            scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
+            settings.apply {
+                javaScriptEnabled = true
+                domStorageEnabled = true
+                allowFileAccess = false
+                allowContentAccess = false
+                javaScriptCanOpenWindowsAutomatically = false
+                setSupportMultipleWindows(false)
+                mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            }
+        }
+        webPreviewView = webView
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+            clipToOutline = true
+        }
+        val toolbar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), dp(2), dp(5), dp(2))
+            background = if (retroTheme) lollipopActionBarBackground() else ColorDrawable(PANEL)
+        }
+        val addressView = label(url, 10, MUTED, translateUi = false).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            setPadding(dp(9), 0, dp(9), 0)
+            isClickable = true
+            contentDescription = "输入网页地址"
+        }
+        val progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progress = 0
+            progressTintList = ColorStateList.valueOf(ACCENT)
+            progressBackgroundTintList = ColorStateList.valueOf(BORDER)
+            visibility = View.GONE
+        }
+        val backButton = iconButton("back", "网页后退") { if (webView.canGoBack()) webView.goBack() }
+        val forwardButton = iconButton("chevron_right", "网页前进") { if (webView.canGoForward()) webView.goForward() }
+        val refreshButton = iconButton("refresh", "刷新网页") { webView.reload() }
+        val downloadButton = iconButton("download", "查看下载") { showWebDownloadsDialog() }
+        val externalButton = iconButton("open", "用浏览器打开") {
+            openExternalChatLink(webView.url ?: url)
+        }
+        val closeButton = iconButton("close", "关闭网页预览") { closeWebPreview() }
+        listOf(backButton, forwardButton, refreshButton, downloadButton, externalButton, closeButton).forEach { button ->
+            button.minimumWidth = dp(34)
+            button.minimumHeight = dp(36)
+            toolbar.addView(button, LinearLayout.LayoutParams(dp(36), dp(38)))
+        }
+        toolbar.addView(addressView, LinearLayout.LayoutParams(0, dp(36), 1f))
+        addressView.setOnClickListener {
+            showWebAddressDialog(webView.url ?: url) { target -> webView.loadUrl(target) }
+        }
+
+        val resizeHeader = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(38), dp(4), Gravity.CENTER))
+        }
+        panel.addView(resizeHeader, LinearLayout.LayoutParams(MATCH, dp(18)))
+        panel.addView(toolbar, LinearLayout.LayoutParams(MATCH, dp(42)))
+        panel.addView(progress, LinearLayout.LayoutParams(MATCH, dp(2)))
+        panel.addView(webView, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        val resizeFooter = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(38), dp(4), Gravity.CENTER))
+        }
+        panel.addView(resizeFooter, LinearLayout.LayoutParams(MATCH, dp(26)))
+        val popupContent = FrameLayout(this).apply {
+            addView(panel, FrameLayout.LayoutParams(MATCH, MATCH))
+        }
+        val widthResizeHandle = FrameLayout(this).apply {
+            isClickable = true
+            setOnClickListener { }
+            addView(View(this@MainActivity).apply {
+                background = rounded(MUTED, dp(3))
+                alpha = .72f
+            }, FrameLayout.LayoutParams(dp(4), dp(38), Gravity.CENTER))
+        }
+        popupContent.addView(widthResizeHandle, FrameLayout.LayoutParams(dp(24), dp(76), Gravity.END or Gravity.CENTER_VERTICAL))
+
+        val initialFrame = webPreviewFrame()
+        val popup = PopupWindow(popupContent, initialFrame.width, initialFrame.height, false).apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            elevation = dp(12).toFloat()
+            isTouchable = true
+            isFocusable = false
+            isOutsideTouchable = false
+            isClippingEnabled = true
+            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+        }
+        webPreviewPopup = popup
+
+        val updateHistoryButtons = {
+            backButton.isEnabled = webView.canGoBack()
+            backButton.alpha = if (backButton.isEnabled) 1f else .45f
+            forwardButton.isEnabled = webView.canGoForward()
+            forwardButton.alpha = if (forwardButton.isEnabled) 1f else .45f
+        }
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView, newProgress: Int) {
+                progress.progress = newProgress
+                progress.visibility = if (newProgress >= 100) View.GONE else View.VISIBLE
+            }
+        }
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                routeWebPreviewNavigation(request.url)
+
+            override fun onPageStarted(view: WebView, address: String?, favicon: Bitmap?) {
+                address?.let { addressView.text = it }
+                progress.progress = 0
+                progress.visibility = View.VISIBLE
+                updateHistoryButtons()
+            }
+
+            override fun onPageFinished(view: WebView, address: String?) {
+                addressView.text = view.url ?: address.orEmpty()
+                updateHistoryButtons()
+            }
+
+            override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, error: android.net.http.SslError) {
+                handler.cancel()
+                showToast("网页证书验证失败，已停止加载")
+            }
+        }
+        webView.setDownloadListener { downloadUrl, userAgent, contentDisposition, mimeType, _ ->
+            beginWebDownload(downloadUrl, userAgent, contentDisposition, mimeType)
+        }
+
+        var popupX = initialFrame.x
+        var popupY = initialFrame.y
+        fun applySavedFrame(anchorX: Int? = null, anchorY: Int? = null) {
+            if (!popup.isShowing) return
+            val frame = webPreviewFrame()
+            val rootLocation = IntArray(2)
+            val composerLocation = IntArray(2)
+            root.getLocationOnScreen(rootLocation)
+            composerDock.getLocationOnScreen(composerLocation)
+            val composerTop = composerLocation[1] - rootLocation[1]
+            val minX = systemInsetLeft + dp(6)
+            val maxX = (root.width - systemInsetRight - dp(6) - frame.width).coerceAtLeast(minX)
+            val minY = systemInsetTop + dp(8)
+            val maxY = (composerTop - dp(8) - frame.height).coerceAtLeast(minY)
+            popupX = (anchorX ?: popupX).coerceIn(minX, maxX)
+            popupY = (anchorY ?: popupY).coerceIn(minY, maxY)
+            popup.update(popupX, popupY, frame.width, frame.height)
+        }
+        webPreviewRelayout = { applySavedFrame() }
+
+        fun resizeHandler(
+            resizeWidth: Boolean,
+            resizeHeight: Boolean,
+            anchorBottom: Boolean = false,
+        ): View.OnTouchListener {
+            var startX = 0f
+            var startY = 0f
+            var startWidth = 0
+            var startHeight = 0
+            var startPopupX = 0
+            var startPopupY = 0
+            return View.OnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.rawX
+                        startY = event.rawY
+                        startWidth = popup.width
+                        startHeight = popup.height
+                        startPopupX = popupX
+                        startPopupY = popupY
+                        true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val available = webPreviewFrame()
+                        val width = if (resizeWidth) {
+                            (startWidth + (event.rawX - startX).roundToInt())
+                                .coerceIn(dp(240).coerceAtMost(available.availableWidth), available.availableWidth)
+                        } else startWidth
+                        val height = if (resizeHeight) {
+                            val deltaY = (event.rawY - startY).roundToInt()
+                            (startHeight + (if (anchorBottom) -deltaY else deltaY))
+                                .coerceIn(dp(220).coerceAtMost(available.availableHeight), available.availableHeight)
+                        } else startHeight
+                        val editor = prefs.edit()
+                        if (resizeWidth) editor.putFloat(KEY_WEB_PREVIEW_WIDTH_RATIO, width.toFloat() / available.availableWidth)
+                        if (resizeHeight) editor.putFloat(KEY_WEB_PREVIEW_HEIGHT_RATIO, height.toFloat() / available.availableHeight)
+                        editor.apply()
+                        applySavedFrame(
+                            anchorX = if (resizeWidth) startPopupX else popupX,
+                            anchorY = if (resizeHeight && anchorBottom) {
+                                startPopupY + startHeight - height
+                            } else if (resizeHeight) startPopupY else popupY,
+                        )
+                        true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        view.performClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
+        }
+        widthResizeHandle.setOnTouchListener(resizeHandler(resizeWidth = true, resizeHeight = false))
+        resizeFooter.setOnTouchListener(resizeHandler(resizeWidth = false, resizeHeight = true))
+        resizeHeader.setOnTouchListener(resizeHandler(resizeWidth = false, resizeHeight = true, anchorBottom = true))
+
+        var cleanedUp = false
+        val rootLayoutListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applySavedFrame() }
+        root.addOnLayoutChangeListener(rootLayoutListener)
+        val cleanup = {
+            if (!cleanedUp) {
+                cleanedUp = true
+                root.removeOnLayoutChangeListener(rootLayoutListener)
+                webView.stopLoading()
+                webView.loadUrl("about:blank")
+                webView.removeAllViews()
+                webView.destroy()
+                if (webPreviewView === webView) webPreviewView = null
+                if (webPreviewPopup === popup) webPreviewPopup = null
+                webPreviewRelayout = null
+                webPreviewCleanup = null
+            }
+        }
+        webPreviewCleanup = cleanup
+        popup.setOnDismissListener { cleanup() }
+
+        popup.showAtLocation(root, Gravity.TOP or Gravity.START, initialFrame.x, initialFrame.y)
+        backButton.isEnabled = false
+        backButton.alpha = .45f
+        forwardButton.isEnabled = false
+        forwardButton.alpha = .45f
+        webView.loadUrl(url)
+    }
+
+    private fun routeWebPreviewNavigation(uri: Uri): Boolean {
+        return when (uri.scheme?.lowercase(Locale.ROOT)) {
+            "http", "https" -> false
+            "javascript", "file", "content", "data", "blob", "about" -> true
+            else -> {
+                openExternalChatLink(uri.toString())
+                true
+            }
+        }
+    }
+
+    private fun openExternalChatLink(value: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(value)))
+        } catch (_: ActivityNotFoundException) {
+            showToast("没有可用的应用打开此链接")
+        }
+    }
+
+    private fun closeWebPreview() {
+        val popup = webPreviewPopup
+        if (popup?.isShowing == true) popup.dismiss() else webPreviewCleanup?.invoke()
+    }
+
     private val assistantMarkdown: Markwon
         get() {
             val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT"
@@ -3518,6 +5075,7 @@ class MainActivity : Activity() {
                         .tableOddRowBackgroundColor(PANEL)
                         .tableEvenRowBackgroundColor(PANEL_INSET)
                 })
+                .usePlugin(LinkifyPlugin.create(Linkify.WEB_URLS))
                 .build().also { assistantMarkdownCache = it; assistantMarkdownAppearance = appearance }
         }
 
@@ -3539,17 +5097,7 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank()) continue
-                    val content = label("", 14, TEXT, translateUi = false).apply {
-                        setTextIsSelectable(true)
-                        setLineSpacing(dp(3).toFloat(), 1.3f)
-                        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-                        setHorizontallyScrolling(false)
-                        breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                        hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                        maxWidth = maximumWidth
-                    }
-                    assistantMarkdown.setMarkdown(content, text)
-                    container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+                    addAssistantMarkdown(container, text, maximumWidth)
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
                     pendingOperations.add(operation)
@@ -3567,28 +5115,6 @@ class MainActivity : Activity() {
         }, widthWrap())
     }
 
-    private fun operationActivityLabel(operation: JSONObject): String {
-        val path = operationDisplayPath(operation)
-        return when (operationLabel(operation)) {
-            "查看文件" -> "正在查看 ${path ?: "文件"}"
-            "修改文件" -> "正在编辑 ${path ?: "文件"}"
-            "搜索文件" -> "正在搜索文件"
-            "执行命令" -> "正在执行命令"
-            else -> operationLabel(operation)
-        }
-    }
-
-    private fun completedActivityLabel(operation: JSONObject): String {
-        val path = operationDisplayPath(operation)
-        return when (operationLabel(operation)) {
-            "查看文件" -> if (path != null) "已查看 $path" else "已查看文件"
-            "修改文件" -> if (path != null) "已编辑 $path" else "已修改文件"
-            "搜索文件" -> "已搜索文件"
-            "执行命令" -> "已执行命令"
-            else -> "已${operationLabel(operation)}"
-        }
-    }
-
     private fun operationDisplayPath(operation: JSONObject): String? {
         val path = operationPaths(operation).firstOrNull() ?: run {
             val command = operation.optString("command")
@@ -3603,6 +5129,7 @@ class MainActivity : Activity() {
         liveActivityItem = null
         liveActivityItemCompleted = false
         liveActivityTurnId = null
+        liveActivityLabel = null
     }
 
     private fun inlineFileChangeView(entry: FileChangeEntry, compact: Boolean = false): LinearLayout {
@@ -3614,15 +5141,15 @@ class MainActivity : Activity() {
             contentDescription = "查看更改 ${entry.path}"
         }
         line.addView(ImageView(this).apply {
-            setImageResource(fileIconResource(entry.path))
-            imageTintList = null
+            setImageResource(fileDisplayIconResource(entry.path))
+            if (retroTheme) imageTintList = null
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
         line.addView(label("${if (compact) "" else "已更改 "}${entry.path.substringAfterLast('/')}", 11, ACCENT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (entry.additions > 0) line.addView(label("+${entry.additions}", 10, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (entry.deletions > 0) line.addView(label("-${entry.deletions}", 10, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         return line
     }
 
@@ -3649,9 +5176,14 @@ class MainActivity : Activity() {
             setPadding(dp(2), dp(2), dp(2), dp(2))
         }
         val chevron = ImageView(this).apply {
-            imageTintList = ColorStateList.valueOf(MUTED)
+            imageTintList = retroIconTint(MUTED)
         }
         header.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(6) })
+        header.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("history"))
+            imageTintList = retroIconTint(ACCENT)
+            contentDescription = "操作记录"
+        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
         header.addView(label("操作记录", 12, SUBTLE, true), LinearLayout.LayoutParams(WRAP, dp(25)))
         header.addView(label(statusText, 11, if (failed > 0) ERROR else MUTED).apply { gravity = Gravity.END or Gravity.CENTER_VERTICAL }, LinearLayout.LayoutParams(0, dp(25), 1f))
         container.addView(header, LinearLayout.LayoutParams(maximumWidth, WRAP))
@@ -3659,7 +5191,7 @@ class MainActivity : Activity() {
         lateinit var refreshDetails: () -> Unit
         refreshDetails = {
             val expanded = logId in expandedOperationIds
-            chevron.setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            chevron.setPixelAwareImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
             if (container.childCount > 1) container.removeViews(1, container.childCount - 1)
             if (expanded) {
                 container.addView(
@@ -3694,20 +5226,33 @@ class MainActivity : Activity() {
                 gravity = Gravity.TOP
                 setPadding(0, dp(3), 0, dp(3))
             }
-            row.addView(ImageView(this).apply {
-                setImageResource(when (status) {
-                    "failed" -> R.drawable.ic_alert
-                    "running" -> R.drawable.ic_progress
-                    "stopped" -> R.drawable.ic_stop
-                    else -> R.drawable.ic_check
-                })
-                imageTintList = ColorStateList.valueOf(when (status) {
-                    "failed" -> ERROR
-                    "running" -> ACCENT
-                    "stopped" -> WARNING
-                    else -> if (lightTheme) Color.rgb(52, 132, 75) else Color.rgb(119, 174, 132)
-                })
-            }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { topMargin = dp(3); rightMargin = dp(7) })
+            val statusTint = when (status) {
+                "failed" -> ERROR
+                "running" -> if (retroTheme) codexBrandAccent() else ACCENT
+                "stopped" -> WARNING
+                else -> when {
+                    retroTheme -> ANDROID1_ADDED_COLOR
+                    lightTheme -> Color.rgb(52, 132, 75)
+                    else -> Color.rgb(119, 174, 132)
+                }
+            }
+            val statusIcon: View = if (retroTheme && status == "running") {
+                ProgressBar(this, null, android.R.attr.progressBarStyleSmall).apply {
+                    isIndeterminate = true
+                    indeterminateTintList = ColorStateList.valueOf(statusTint)
+                }
+            } else {
+                ImageView(this).apply {
+                    setPixelAwareImageResource(when (status) {
+                        "failed" -> iconResource("alert")
+                        "running" -> R.drawable.ic_progress
+                        "stopped" -> iconResource("stop")
+                        else -> iconResource("check")
+                    })
+                    imageTintList = retroIconTint(statusTint)
+                }
+            }
+            row.addView(statusIcon, LinearLayout.LayoutParams(dp(14), dp(14)).apply { topMargin = dp(3); rightMargin = dp(7) })
             val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             copy.addView(label(operationLabel(operation), 12, TEXT, true), widthWrap())
             val paths = operationPaths(operation)
@@ -3767,15 +5312,28 @@ class MainActivity : Activity() {
                 else -> "执行命令"
             }
         }
+        if (type in setOf("mcptoolcall", "dynamictoolcall", "collabagenttoolcall")) {
+            val toolType = listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"))
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+            return when {
+                SEARCH_TOOL_PATTERN.containsMatchIn(toolType) -> "搜索文件"
+                FILE_TOOL_PATTERN.containsMatchIn(toolType) && !SKILL_TOOL_PATTERN.containsMatchIn(toolType) -> "查看文件"
+                SKILL_TOOL_PATTERN.containsMatchIn(toolType) -> "读取技能"
+                type == "collabagenttoolcall" -> "运行子任务"
+                type == "mcptoolcall" -> "调用 MCP 工具"
+                else -> "调用工具"
+            }
+        }
         return when (type) {
             "filechange" -> "修改文件"
-            "mcptoolcall", "dynamictoolcall" -> "调用工具"
-            "collabagenttoolcall", "subagentactivity" -> "运行子任务"
+            "subagentactivity" -> "运行子任务"
             "websearch" -> "搜索资料"
             "imageview" -> "查看图片"
             "imagegeneration" -> "生成图片"
             "reasoning" -> "思考"
             "plan" -> "整理计划"
+            "agentmessage" -> "生成回复"
             else -> operation.optString("description").ifBlank { "处理任务" }
         }
     }
@@ -4085,12 +5643,17 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(3), dp(5), dp(3), dp(5))
         }
+        if (retroTheme) heading.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("file"))
+            imageTintList = null
+            contentDescription = "正在编辑的文件"
+        }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(6) })
         heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
-        if (additions > 0) heading.addView(label("+$additions", 10, if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
-        if (deletions > 0) heading.addView(label("-$deletions", 10, if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
+        if (additions > 0) heading.addView(label("+$additions", 10, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))
+        if (deletions > 0) heading.addView(label("-$deletions", 10, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(190, 48, 57) else Color.rgb(239, 102, 113), true).apply { setPadding(dp(7), 0, 0, 0) })
         val chevron = ImageView(this).apply {
-            imageTintList = ColorStateList.valueOf(MUTED)
-            setImageResource(if (expandedComposerFileChangesTurnId == turnId) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            imageTintList = retroIconTint(MUTED)
+            setPixelAwareImageResource(iconResource(if (expandedComposerFileChangesTurnId == turnId) "chevron_up" else "chevron_down"))
         }
         heading.addView(chevron, LinearLayout.LayoutParams(dp(15), dp(15)).apply { leftMargin = dp(7) })
         composerFileChanges.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -4108,7 +5671,7 @@ class MainActivity : Activity() {
         heading.setOnClickListener {
             expandedComposerFileChangesTurnId = if (expandedComposerFileChangesTurnId == turnId) null else turnId
             detailsScroll.visibility = if (expandedComposerFileChangesTurnId == turnId) View.VISIBLE else View.GONE
-            chevron.setImageResource(if (detailsScroll.visibility == View.VISIBLE) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+            chevron.setPixelAwareImageResource(iconResource(if (detailsScroll.visibility == View.VISIBLE) "chevron_up" else "chevron_down"))
         }
     }
 
@@ -4122,14 +5685,15 @@ class MainActivity : Activity() {
         val controlSurface = if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(56, 56, 59)
         val controlBorder = if (lightTheme) Color.rgb(226, 226, 229) else Color.rgb(75, 75, 80)
         val copyColor = if (lightTheme) Color.rgb(88, 88, 94) else Color.rgb(199, 199, 203)
-        val addedColor = if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
-        val deletedColor = if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
+        val addedColor = if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(51, 139, 67) else Color.rgb(121, 201, 141)
+        val deletedColor = if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(211, 79, 73) else Color.rgb(239, 119, 111)
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(1), dp(1), dp(1), dp(1))
             background = rounded(PANEL, dp(11), cardBorder, dp(1))
             clipToOutline = true
             tag = "$TAG_MESSAGE_TURN_PREFIX$turnId"
+            if (retroTheme) elevation = dp(2).toFloat()
         }
         val heading = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -4138,11 +5702,11 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(10), dp(12), dp(10))
         }
         val iconFrame = FrameLayout(this).apply {
-            background = rounded(if (lightTheme) Color.rgb(247, 247, 248) else Color.rgb(39, 39, 41), dp(10), cardBorder, dp(1))
+            background = rounded(if (retroTheme) LOLLIPOP_PRIMARY_LIGHT else if (lightTheme) Color.rgb(247, 247, 248) else Color.rgb(39, 39, 41), dp(10), cardBorder, dp(1))
         }
         iconFrame.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_file)
-            imageTintList = ColorStateList.valueOf(if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
+            setPixelAwareImageResource(iconResource("file"))
+            imageTintList = retroIconTint(if (lightTheme) Color.rgb(105, 105, 111) else Color.rgb(189, 189, 193))
         }, FrameLayout.LayoutParams(dp(18), dp(18), Gravity.CENTER))
         heading.addView(iconFrame, LinearLayout.LayoutParams(dp(38), dp(38)).apply { rightMargin = dp(10) })
         val summary = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -4232,13 +5796,14 @@ class MainActivity : Activity() {
                     contentDescription = "插入 ${entry.path} 到对话"
                 }
                 insert.addView(ImageView(this).apply {
-                    setImageResource(R.drawable.ic_insert_conversation)
-                    imageTintList = ColorStateList.valueOf(copyColor)
+                    setPixelAwareImageResource(if (retroTheme) iconResource("add") else R.drawable.ic_insert_conversation)
+                    imageTintList = retroIconTint(copyColor)
                 }, LinearLayout.LayoutParams(dp(13), dp(13)).apply { rightMargin = dp(3) })
                 insert.addView(label("插入对话", 10, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
                 row.addView(insert, LinearLayout.LayoutParams(WRAP, dp(28)).apply { leftMargin = dp(8) })
                 details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
-                if (reviewing) details.addView(label(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" }, 10, MUTED, translateUi = false).apply {
+                if (reviewing) details.addView(label("", 10, MUTED, translateUi = false, pixelize = false).apply {
+                    text = highlightedReviewDiff(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" })
                     typeface = Typeface.MONOSPACE
                     maxLines = 10
                     setPadding(dp(12), dp(7), dp(12), dp(7))
@@ -4263,8 +5828,8 @@ class MainActivity : Activity() {
                 }
                 more.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
                 more.addView(ImageView(this).apply {
-                    setImageResource(if (expanded || reviewing) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
-                    imageTintList = ColorStateList.valueOf(copyColor)
+                    setPixelAwareImageResource(iconResource(if (expanded || reviewing) "chevron_up" else "chevron_down"))
+                    imageTintList = retroIconTint(copyColor)
                 }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { leftMargin = dp(5) })
                 footer.addView(more, LinearLayout.LayoutParams(MATCH, WRAP))
             }
@@ -4279,11 +5844,42 @@ class MainActivity : Activity() {
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
     }
 
+    private fun highlightedReviewDiff(diff: String): SpannableStringBuilder {
+        val result = SpannableStringBuilder()
+        diff.lineSequence().forEachIndexed { index, line ->
+            if (index > 0) result.append('\n')
+            val start = result.length
+            result.append(line)
+            val kind = when {
+                line.startsWith("+") && !line.startsWith("+++") -> "added"
+                line.startsWith("-") && !line.startsWith("---") -> "deleted"
+                line.startsWith("@@") -> "hunk"
+                else -> "context"
+            }
+            val colors = when (kind) {
+                "added" -> Pair(if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), if (lightTheme) Color.rgb(223, 246, 228) else Color.rgb(24, 58, 36))
+                "deleted" -> Pair(if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), if (lightTheme) Color.rgb(252, 226, 229) else Color.rgb(67, 31, 38))
+                "hunk" -> Pair(ACCENT, if (lightTheme) Color.rgb(231, 236, 250) else Color.rgb(36, 43, 63))
+                else -> null
+            }
+            if (colors != null && result.length > start) {
+                result.setSpan(ForegroundColorSpan(colors.first), start, result.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                result.setSpan(BackgroundColorSpan(colors.second), start, result.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            }
+        }
+        return result
+    }
+
     private fun renderApproval(approval: JSONObject) {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(10), dp(12), dp(9))
-            background = rounded(if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27), dp(12), if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44), dp(1))
+            background = rounded(
+                if (retroTheme) PANEL_INSET else if (lightTheme) Color.rgb(250, 245, 232) else Color.rgb(43, 37, 27),
+                dp(12),
+                if (retroTheme) BORDER else if (lightTheme) Color.rgb(224, 205, 163) else Color.rgb(98, 77, 44),
+                dp(1),
+            )
             tag = TAG_MESSAGE_DYNAMIC
         }
         box.addView(label("需要批准", 13, WARNING, true), widthWrap())
@@ -4292,8 +5888,8 @@ class MainActivity : Activity() {
             setPadding(0, dp(5), 0, dp(7)); setTextIsSelectable(true)
         }, widthWrap())
         val actions = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
-        actions.addView(smallButton("拒绝") { respondApproval("decline") }, LinearLayout.LayoutParams(WRAP, dp(30)).apply { rightMargin = dp(6) })
-        actions.addView(smallButton("允许一次") { respondApproval("accept") }, LinearLayout.LayoutParams(WRAP, dp(30)))
+        actions.addView(textIconAction("拒绝", "close", "拒绝") { respondApproval("decline") }, LinearLayout.LayoutParams(WRAP, dp(34)).apply { rightMargin = dp(6) })
+        actions.addView(textIconAction("允许一次", "check", "允许一次") { respondApproval("accept") }, LinearLayout.LayoutParams(WRAP, dp(34)))
         box.addView(actions, widthWrap())
         messageList.addView(box, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(7); bottomMargin = dp(7) })
     }
@@ -4319,6 +5915,11 @@ class MainActivity : Activity() {
         }
         queuePanel.visibility = View.VISIBLE
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        if (retroTheme) header.addView(ImageView(this).apply {
+            setPixelAwareImageResource(iconResource("send"))
+            imageTintList = null
+            contentDescription = "排队消息"
+        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(6) })
         header.addView(label("排队消息 · $count", 12, SUBTLE, true), LinearLayout.LayoutParams(0, dp(24), 1f))
         header.addView(iconButton(if (queueExpanded) "chevron_up" else "chevron_down", if (queueExpanded) "收起排队消息" else "展开排队消息") {
             queueExpanded = !queueExpanded
@@ -4332,10 +5933,15 @@ class MainActivity : Activity() {
             val item = visibleQueue[index]
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(4), dp(5), dp(4), dp(5))
+                setPadding(dp(if (retroTheme) 10 else 4), dp(if (retroTheme) 8 else 5), dp(if (retroTheme) 10 else 4), dp(if (retroTheme) 8 else 5))
+                if (retroTheme) {
+                    background = rounded(Color.WHITE, dp(2), BORDER, dp(1))
+                    elevation = dp(1).toFloat()
+                }
             }
             val text = item.optString("text").ifBlank { item.optString("requestText") }
-            card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, TEXT, translateUi = false).apply {
+            val queueMessageTextColor = if (pixelTheme) PIXEL_INK else TEXT
+            card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, queueMessageTextColor, translateUi = false).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val images = item.optJSONArray("images")
@@ -4361,7 +5967,7 @@ class MainActivity : Activity() {
                 index == 0 && running -> "当前回复结束后自动发送；可点箭头尝试立即发送"
                 else -> null
             }
-            if (queueNotice != null) card.addView(label(queueNotice, 10, WARNING), LinearLayout.LayoutParams(MATCH, WRAP))
+            if (queueNotice != null) card.addView(label(queueNotice, 10, if (pixelTheme) Color.rgb(126, 91, 36) else WARNING), LinearLayout.LayoutParams(MATCH, WRAP))
             val claudeQueueItem = item.has("claudeModel") || item.has("claudeEffort") || currentMode == "claude-code"
             val rawModel = item.optString(if (claudeQueueItem) "claudeModel" else "model")
             val rawEffort = item.optString(if (claudeQueueItem) "claudeEffort" else "effort")
@@ -4373,24 +5979,25 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
             }
-            details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, MUTED).apply {
+            details.addView(label("模型：$queuedModel  ·  思考：$queuedEffort", 10, if (pixelTheme) Color.rgb(74, 88, 106) else MUTED).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, dp(44), 1f))
             val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
             controls.addView(iconButton("edit", "修改排队消息") { editQueuedMessage(item) }.apply {
-                setImageResource(R.drawable.ic_queue_edit)
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setPixelAwareImageResource(if (retroTheme) iconResource("edit") else R.drawable.ic_queue_edit)
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("check", "立即发送") { sendQueuedNow(item) }.apply {
-                setImageResource(R.drawable.ic_queue_send)
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setPixelAwareImageResource(if (retroTheme) iconResource("send") else R.drawable.ic_queue_send)
+                imageTintList = retroIconTint(iconTint("send"))
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)).apply { rightMargin = dp(8) })
             controls.addView(iconButton("delete", "删除排队消息") { removeQueuedMessage(item) }.apply {
-                setImageResource(R.drawable.ic_queue_delete)
-                setPadding(dp(12), dp(12), dp(12), dp(12))
+                setPixelAwareImageResource(if (retroTheme) iconResource("delete") else R.drawable.ic_queue_delete)
+                setPadding(dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12), dp(if (retroTheme) 10 else 12))
                 installQueueActionTouchGuard(this)
             }, LinearLayout.LayoutParams(dp(44), dp(44)))
             details.addView(controls, LinearLayout.LayoutParams(WRAP, dp(44)))
@@ -4428,8 +6035,8 @@ class MainActivity : Activity() {
         val image = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             background = rounded(PANEL, dp(8), BORDER, dp(1))
-            setImageResource(android.R.drawable.ic_menu_gallery)
-            imageTintList = ColorStateList.valueOf(MUTED)
+            setPixelAwareImageResource(if (retroTheme) iconResource("image") else android.R.drawable.ic_menu_gallery)
+            imageTintList = retroIconTint(MUTED)
             clipToOutline = true
             contentDescription = file.optString("name").ifBlank { "排队图片" }
             tag = cacheKey
@@ -4486,6 +6093,7 @@ class MainActivity : Activity() {
                         val createdScope = outgoingScope.removeSuffix("_new") + "_${created.optString("id")}"
                         pendingUserMessages.remove(outgoingScope)?.let { pendingUserMessages[createdScope] = it }
                         if (sendConnection == connectionGeneration) {
+                            markKnownEmptyThread(created.optString("id"))
                             threads = JSONArray().put(created).also { old ->
                                 for (index in 0 until threads.length()) if (threads.optJSONObject(index)?.optString("id") != created.optString("id")) old.put(threads.optJSONObject(index))
                             }
@@ -4564,7 +6172,9 @@ class MainActivity : Activity() {
                     if (!response.optBoolean("sent", false)) removePendingUserMessage(outgoingScope, payload.optString("id"))
                     else markPendingUserMessageAccepted(outgoingScope, payload.optString("id"))
                     if (sendConnection != connectionGeneration) return@post
-                    if (response.optBoolean("sent", false)) deliveredQueueIds += payload.optString("id")
+                    if (response.optBoolean("sent", false)) {
+                        deliveredQueueIds += payload.optString("id")
+                    }
                     if (activeThreadId == threadId) {
                         running = response.optBoolean("sent", false) || running
                         renderHeader()
@@ -4601,7 +6211,13 @@ class MainActivity : Activity() {
         val hasDraft = ::composerInput.isInitialized && (composerInput.text.isNotBlank() || selectedFiles.isNotEmpty())
         val canContinue = activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true
         sendButton.isEnabled = !sendBusy
-        sendButton.setImageResource(when {
+        sendButton.setPixelAwareImageResource(if (retroTheme) iconResource(when {
+            sendBusy -> "refresh"
+            editingQueue -> "check"
+            running -> "pause"
+            canContinue -> "play"
+            else -> "send"
+        }) else when {
             sendBusy -> R.drawable.ic_composer_wait
             editingQueue -> R.drawable.ic_composer_confirm
             running -> R.drawable.ic_composer_pause
@@ -4616,8 +6232,9 @@ class MainActivity : Activity() {
             hasDraft -> "发送消息"
             else -> "发送消息"
         })
-        sendButton.imageTintList = ColorStateList.valueOf(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
-        sendButton.background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
+        sendButton.imageTintList = retroIconTint(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
+        sendButton.background = if (retroTheme) lollipopFabBackground(LOLLIPOP_PRIMARY)
+            else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(228, 230, 235), dp(17))
     }
 
     private fun interruptTurn() {
@@ -4893,7 +6510,11 @@ class MainActivity : Activity() {
                 handler.post {
                     if (actionConnection != connectionGeneration || activeThreadId != threadId) return@post
                     queuedMessages = result.optJSONArray("queue") ?: JSONArray()
+                    if (action == "send-now" && result.optBoolean("sent", false)) {
+                        pausedThreadKeys.remove(threadTitleKey(threadId))
+                    }
                     renderQueue()
+                    updateSendButton()
                     if (result.optBoolean("sent", false)) refreshActiveThread(false)
                     if (action == "send-now" && !result.optBoolean("sent", false)) {
                         val first = queuedMessages.optJSONObject(0)
@@ -4919,7 +6540,12 @@ class MainActivity : Activity() {
         io.execute {
             try {
                 val thread = RemoteApi(endpoint, token).post("/api/v1/codex/threads", body)
-                handler.post { refreshThreads(false); selectThread(thread); setSidebarVisible(false) }
+                handler.post {
+                    markKnownEmptyThread(thread.optString("id"))
+                    refreshThreads(false)
+                    selectThread(thread)
+                    setSidebarVisible(false)
+                }
             } catch (error: Exception) { handler.post { showStatus(error.message ?: "新建对话失败") } }
         }
     }
@@ -5024,6 +6650,7 @@ class MainActivity : Activity() {
                     renderHeader()
                 }
                 syncRevisions.remove(id)
+                clearKnownEmptyThread(id)
                 draftFilesByScope.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 pendingUserMessages.remove(connectionScopedKey("draft_${thread.optString("engine", currentMode)}_$id"))
                 displayedThreadTitles.remove(threadTitleKey(id))
@@ -5106,10 +6733,10 @@ class MainActivity : Activity() {
             if (efforts != null && efforts.length() > 0) (0 until efforts.length()).mapNotNull { index ->
                 val effort = efforts.optJSONObject(index)?.optString("reasoningEffort") ?: return@mapNotNull null
                 effort to effortLabel(effort)
-            } else listOf("minimal" to "最小", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高")
-        } else listOf("default" to "本机默认", "low" to "低", "medium" to "中", "high" to "高", "xhigh" to "极高", "max" to "最大")
+            } else listOf("minimal" to "Minimal", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High")
+        } else listOf("default" to "Default", "low" to "Low", "medium" to "Medium", "high" to "High", "xhigh" to "Extra High", "max" to "Max")
         val key = if (currentMode == "codex") "effort" else "claudeEffort"
-        showChoicePopup(effortButton, "思考等级", listOf("default" to "默认") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
+        showChoicePopup(effortButton, "Reasoning Effort", listOf("default" to "Default") + choices, preference(key) ?: "default") { savePreference(key, it.takeIf { value -> value != "default" }) }
     }
 
     private fun showPermissionOptions() {
@@ -5165,8 +6792,8 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }, LinearLayout.LayoutParams(0, WRAP, 1f))
             if (isSelected) row.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_check)
-                imageTintList = ColorStateList.valueOf(ACCENT)
+                setPixelAwareImageResource(iconResource("check"))
+                imageTintList = retroIconTint(ACCENT)
                 contentDescription = "已选择"
             }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { leftMargin = dp(6) })
             options.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
@@ -5219,7 +6846,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(9), 0, dp(9), 0)
-                background = ColorDrawable(Color.TRANSPARENT)
+                background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
                 isClickable = true
                 isFocusable = false
                 contentDescription = action.title
@@ -5229,8 +6856,8 @@ class MainActivity : Activity() {
                 }
             }
             row.addView(ImageView(this).apply {
-                setImageResource(iconResource(action.icon))
-                imageTintList = ColorStateList.valueOf(if (action.destructive) ERROR else SUBTLE)
+                setPixelAwareImageResource(iconResource(action.icon))
+                imageTintList = retroIconTint(if (action.destructive) ERROR else SUBTLE)
             }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(9) })
             row.addView(label(action.title, 12, if (action.destructive) ERROR else TEXT), LinearLayout.LayoutParams(0, WRAP, 1f))
             menu.addView(row, LinearLayout.LayoutParams(MATCH, dp(38)))
@@ -5329,7 +6956,7 @@ class MainActivity : Activity() {
         if (sidebarVisible) setSidebarVisible(false)
 
         val overlay = FrameLayout(this).apply {
-            background = wallpaperBackground(DARK)
+            background = if (retroTheme) lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
             elevation = dp(16).toFloat()
         }
         val layout = LinearLayout(this).apply {
@@ -5341,13 +6968,19 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(14), dp(4), dp(14), dp(4))
+            background = if (retroTheme) android1SettingsActionBarBackground() else ColorDrawable(Color.TRANSPARENT)
         }
-        header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(iconButton("back", "返回聊天") { closeSettings(animated = true) }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
         val titleCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(8), 0, 0, 0) }
-        titleCopy.addView(label("设置", 17, TEXT, true), widthWrap())
-        titleCopy.addView(label("偏好保存在本机", 10, MUTED), widthWrap())
+            titleCopy.addView(label("设置", if (retroTheme) 20 else 17, if (pixelTheme) PIXEL_TEXT else if (retroTheme) Color.WHITE else TEXT, true), widthWrap())
+        titleCopy.addView(label("偏好保存在本机", if (retroTheme) 12 else 10, if (retroTheme) Color.rgb(205, 211, 209) else MUTED), widthWrap())
         header.addView(titleCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
-        layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(56)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 56)))
 
         val scroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
@@ -5364,12 +6997,13 @@ class MainActivity : Activity() {
         settingsOverlay = overlay
         updateInsetAwareOverlays()
 
-        val settingsAccent = ASSISTANT_NAME_ACCENT
+        val settingsAccent = if (retroTheme) LOLLIPOP_PRIMARY else ASSISTANT_NAME_ACCENT
         fun section(title: String, description: String): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                setPadding(dp(12), dp(4), dp(12), dp(4))
-                background = rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
+                setPadding(dp(12), dp(5), dp(12), dp(5))
+                background = if (retroTheme) rounded(PANEL, dp(2), BORDER, dp(1)).also { elevation = 0f }
+                else rounded(if (themeName == "custom") colorWithAlpha(OPAQUE_PANEL, .72f) else PANEL, dp(18))
             }
             val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             val expanded = title in expandedSettingsSections
@@ -5380,26 +7014,33 @@ class MainActivity : Activity() {
                 isFocusable = true
                 contentDescription = "$title，${if (expanded) "收起" else "展开"}"
             }
+            if (retroTheme) {
+                heading.addView(ImageView(this).apply {
+                    setPixelAwareImageResource(iconResource(settingsSectionIcon(title)))
+                    imageTintList = null
+                    contentDescription = "$title 设置"
+                }, LinearLayout.LayoutParams(dp(22), dp(22)).apply { rightMargin = dp(12) })
+            }
             heading.addView(label(title, 14, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
             val arrow = ImageView(this).apply {
-                setImageResource(if (expanded) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
-                imageTintList = ColorStateList.valueOf(MUTED)
+                setPixelAwareImageResource(iconResource(if (expanded) "chevron_up" else "chevron_down"))
+                imageTintList = retroIconTint(MUTED)
             }
             heading.addView(arrow, LinearLayout.LayoutParams(dp(18), dp(18)))
             heading.setOnClickListener {
                 val open = body.visibility != View.VISIBLE
                 body.visibility = if (open) View.VISIBLE else View.GONE
-                arrow.setImageResource(if (open) R.drawable.ic_chevron_up else R.drawable.ic_chevron_down)
+                arrow.setPixelAwareImageResource(iconResource(if (open) "chevron_up" else "chevron_down"))
                 heading.contentDescription = "$title，${if (open) "收起" else "展开"}"
                 if (open) expandedSettingsSections += title else expandedSettingsSections -= title
             }
-            card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(44)))
+            card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 44)))
             body.addView(label(description, 11, MUTED).apply {
-                setPadding(0, 0, 0, dp(7))
+                setPadding(if (retroTheme) dp(34) else 0, 0, 0, dp(7))
             }, widthWrap())
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             card.addView(body, widthWrap())
-            content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(7) })
+            content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) })
             return body
         }
 
@@ -5408,6 +7049,8 @@ class MainActivity : Activity() {
             Triple("light", "白色", "清爽明亮"),
             Triple("dark", "黑色", "低光阅读"),
             Triple("warm", "暖色", "柔和纸感"),
+            Triple("lollipop", "旧经典", "银灰金属与早期 Droid 经典样式"),
+            Triple("pixel", "像素风", "深蓝像素面板与独立像素图标"),
             Triple("custom", "自定义主题", "颜色、图片与透明度"),
         ).forEach { (theme, title, description) ->
             val selected = themeName == theme
@@ -5415,7 +7058,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(11), dp(8), dp(11), dp(8))
-                background = if (selected) {
+                background = if (retroTheme) lollipopSelectableRow(selected) else if (selected) {
                     rounded(colorWithAlpha(settingsAccent, if (lightTheme) .12f else .18f), dp(10))
                 } else rounded(Color.TRANSPARENT, dp(10))
                 isClickable = true
@@ -5427,8 +7070,8 @@ class MainActivity : Activity() {
             copy.addView(label(description, 10, MUTED), widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
             row.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_check)
-                imageTintList = ColorStateList.valueOf(settingsAccent)
+                setPixelAwareImageResource(iconResource("check"))
+                imageTintList = retroIconTint(settingsAccent)
                 visibility = if (selected) View.VISIBLE else View.INVISIBLE
                 contentDescription = if (selected) "已选择" else null
             }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(8); rightMargin = dp(4) })
@@ -5529,7 +7172,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(12), 0, dp(12), 0)
-                background = rounded(if (selected) colorWithAlpha(settingsAccent, .12f) else Color.TRANSPARENT, dp(9))
+                background = if (retroTheme) lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(settingsAccent, .12f) else Color.TRANSPARENT, dp(9))
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
@@ -5541,8 +7184,8 @@ class MainActivity : Activity() {
             }
             row.addView(label(title, 13, TEXT, selected), LinearLayout.LayoutParams(0, WRAP, 1f))
             if (selected) row.addView(ImageView(this).apply {
-                setImageResource(R.drawable.ic_check)
-                imageTintList = ColorStateList.valueOf(settingsAccent)
+                setPixelAwareImageResource(iconResource("check"))
+                imageTintList = retroIconTint(settingsAccent)
                 contentDescription = tr("已选择")
             }, LinearLayout.LayoutParams(dp(18), dp(18)))
             languageSection.addView(row, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(5) })
@@ -5575,7 +7218,7 @@ class MainActivity : Activity() {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
                 setPadding(dp(7), dp(5), dp(2), dp(5))
-                background = rounded(if (selected) colorWithAlpha(ACCENT, .12f) else Color.TRANSPARENT, dp(10))
+                background = if (retroTheme) lollipopSelectableRow(selected) else rounded(if (selected) colorWithAlpha(ACCENT, .12f) else Color.TRANSPARENT, dp(10))
             }
             val copy = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
@@ -5705,6 +7348,7 @@ class MainActivity : Activity() {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
         setPadding(dp(2), dp(7), dp(2), dp(7))
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         isClickable = true
         isFocusable = false
         setOnClickListener { action() }
@@ -5713,8 +7357,8 @@ class MainActivity : Activity() {
         copy.addView(label(description, 10, MUTED), widthWrap())
         addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
         addView(ImageView(this@MainActivity).apply {
-            setImageResource(R.drawable.ic_chevron_right)
-            imageTintList = ColorStateList.valueOf(MUTED)
+            setPixelAwareImageResource(iconResource("chevron_right"))
+            imageTintList = retroIconTint(MUTED)
         }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(6) })
     }
 
@@ -5866,10 +7510,7 @@ class MainActivity : Activity() {
         workspaceLoadingPath = null
         workspaceGestureActive = false
         workspacePendingRender = null
-        window.decorView.setBackgroundColor(DARK)
-        window.decorView.systemUiVisibility = if (lightTheme) {
-            View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
-        } else 0
+        applySystemBarTheme()
         renderHome()
         composerInput.setText(draft)
         if (reopenSettings) showSettings(settingsScrollY)
@@ -6069,15 +7710,57 @@ class MainActivity : Activity() {
     }
 
     private fun reconnect() {
-        val codeInput = editField("输入电脑终端显示的匹配码", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { setSingleLine(true) }
-        showInputDialog("重新配对", codeInput, "连接") {
-            val code = codeInput.text.toString().trim()
-            if (code.isBlank()) return@showInputDialog false
-            runApi({ RemoteApi(endpoint).post("/api/v1/pair", JSONObject().put("code", code)).getString("token") }, { newToken ->
-                updateActiveConnectionToken(newToken)
-                openChatHome()
-            })
-            true
+        if (endpoint.isBlank() || token.isBlank()) {
+            showConnectionPage("当前连接没有有效的配对信息，请重新配对。")
+            return
+        }
+        val savedEndpoint = endpoint
+        val savedToken = token
+        val generation = connectionGeneration
+        socket?.cancel()
+        socket = null
+        socketConnected = false
+        outstandingSocketPing = null
+        handler.removeCallbacks(socketHeartbeatRunnable)
+        handler.removeCallbacks(refreshRunnable)
+        renderHeader()
+        showStatus("正在使用已保存的连接信息重新连接…")
+        io.execute {
+            try {
+                val refreshedRuntime = RemoteApi(savedEndpoint, savedToken).get("/api/v1/codex/status")
+                handler.post {
+                    if (generation != connectionGeneration || savedToken != token) return@post
+                    runtime = refreshedRuntime
+                    renderHeader()
+                    connectSocket()
+                    refreshThreads(true)
+                    refreshPins()
+                    refreshClaudeStatus()
+                    refreshModels()
+                    if (activeThreadId != null) {
+                        refreshActiveThread(false)
+                        refreshQueue(false)
+                    }
+                    handler.postDelayed(refreshRunnable, 15_000L)
+                }
+            } catch (error: Exception) {
+                handler.post {
+                    if (generation != connectionGeneration || savedToken != token) return@post
+                    if (error is RemoteApiException && error.statusCode == 401) {
+                        updateActiveConnectionToken("")
+                        showConnectionPage(error.message ?: "配对已失效，请重新输入匹配码。")
+                    } else {
+                        showStatus("电脑服务暂时无法连接，已保留配对信息，正在自动重试。")
+                        connectSocket()
+                        refreshThreads(false)
+                        if (activeThreadId != null) {
+                            refreshActiveThread(false)
+                            refreshQueue(false)
+                        }
+                        handler.postDelayed(refreshRunnable, 15_000L)
+                    }
+                }
+            }
         }
     }
 
@@ -6166,23 +7849,35 @@ class MainActivity : Activity() {
         val overlay = host.overlay
         val scrim = host.scrim
 
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        val pathTitle = label("文件", 14, TEXT, true).apply {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(6), 0, dp(4), 0)
+            if (retroTheme) background = lollipopActionBarBackground()
+        }
+        val pathTitle = label("文件", if (retroTheme) 18 else 14, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }
-        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(35), 1f))
+        header.addView(pathTitle, LinearLayout.LayoutParams(0, dp(if (retroTheme) 42 else 48), 1f))
         val refreshButton = sidebarIconButton("refresh", "刷新文件树") { workspaceRefresher?.invoke(workspaceCurrentPath) }
-        header.addView(refreshButton, LinearLayout.LayoutParams(dp(32), dp(32)))
+        if (retroTheme) {
+            refreshButton.imageTintList = null
+            refreshButton.background = android1SegmentButtonBackground()
+        }
+        header.addView(refreshButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
         val createButton = sidebarIconButton("add", "新建文件或文件夹") { }
         createButton.setOnClickListener {
             showCreateEntry(createButton, workspaceCurrentPath, browsingCwd()) {
                 workspaceRefresher?.invoke(workspaceCurrentPath)
             }
         }
-        header.addView(createButton, LinearLayout.LayoutParams(dp(32), dp(32)))
-        header.addView(sidebarIconButton("close", "关闭文件树") { setWorkspaceVisible(false) }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        panel.addView(header, widthWrap())
+        if (retroTheme) {
+            createButton.imageTintList = null
+            createButton.background = android1SegmentButtonBackground()
+        }
+        header.addView(createButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
+        panel.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(42) else WRAP))
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         rootInput = editField("输入服务端目录路径", manualRoot ?: currentCwd() ?: runtime.optString("workspace"), InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
@@ -6196,17 +7891,17 @@ class MainActivity : Activity() {
             }
         }
         pathNavigation.addView(rootInput, LinearLayout.LayoutParams(0, dp(34), 1f).apply { rightMargin = dp(4) })
-        pathNavigation.addView(smallButton("打开") {
+        pathNavigation.addView(textIconAction("打开", "open", "打开") {
             selectWorkspaceRoot(rootInput.text.toString())
         }, LinearLayout.LayoutParams(WRAP, dp(30)))
         panel.addView(pathNavigation, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(2) })
 
-        val parentButton = smallButton("↑ 上级") {
+        val parentButton = textIconAction("上级", "arrow_up", "↑ 上级") {
             val currentRoot = workspaceRootPath.ifBlank { browsingCwd().orEmpty() }
             val parent = parentDirectory(currentRoot)
             if (currentRoot.isNotBlank() && parent != currentRoot) selectWorkspaceRoot(parent)
         }
-        val followChatButton = smallButton("↻ 跟随聊天") { followChatWorkspaceRoot() }
+        val followChatButton = textIconAction("跟随聊天", "chat", "↻ 跟随聊天") { followChatWorkspaceRoot() }
         val rootActions = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -6225,8 +7920,13 @@ class MainActivity : Activity() {
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3); bottomMargin = dp(3) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
-        footer.addView(smallButton("粘贴") {
+        footer.addView(textIconAction("粘贴", "paste", "粘贴") {
             pasteWorkspaceEntries(workspaceCurrentPath, browsingCwd()) { workspaceRefresher?.invoke(workspaceCurrentPath) }
+        }.apply {
+            if (pixelTheme) {
+                minimumHeight = dp(38)
+                setPadding(dp(8), dp(5), dp(8), dp(5))
+            }
         })
         panel.addView(footer, widthWrap())
 
@@ -6251,20 +7951,21 @@ class MainActivity : Activity() {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                     setPadding(dp(3 + depth * 15), dp(4), dp(2), dp(4))
-                    background = rounded(Color.TRANSPARENT, dp(7))
+                    background = if (retroTheme) lollipopRipple() else rounded(Color.TRANSPARENT, dp(7))
                 }
                 if (isDirectory) {
                     row.addView(ImageView(this).apply {
-                        setImageResource(if (relativePath in expandedDirectories) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right)
-                        imageTintList = ColorStateList.valueOf(MUTED)
+                        setPixelAwareImageResource(iconResource(if (relativePath in expandedDirectories) "chevron_down" else "chevron_right"))
+                        imageTintList = retroIconTint(MUTED)
                         contentDescription = if (relativePath in expandedDirectories) "已展开" else "已收起"
                     }, LinearLayout.LayoutParams(dp(14), dp(14)).apply { rightMargin = dp(3) })
                 } else {
                     row.addView(View(this), LinearLayout.LayoutParams(dp(17), dp(1)))
                 }
                 row.addView(ImageView(this).apply {
-                    setImageResource(if (isDirectory) R.drawable.ic_folder else fileIconResource(entry.optString("name")))
-                    imageTintList = if (isDirectory) ColorStateList.valueOf(ACCENT) else null
+                    val fileIcon = fileDisplayIconResource(entry.optString("name"))
+                    setPixelAwareImageResource(if (isDirectory) iconResource("folder") else fileIcon)
+                    imageTintList = if (isDirectory && !retroTheme) ColorStateList.valueOf(ACCENT) else null
                     contentDescription = if (isDirectory) "文件夹" else fileGlyph(entry.optString("name"))
                 }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
                 row.addView(label(entry.optString("name"), 13, TEXT, translateUi = false).apply {
@@ -6681,7 +8382,7 @@ class MainActivity : Activity() {
             else -> "class|interface|struct|enum|function|fun|def|const|let|var|if|else|for|while|return|import|export|package|true|false|null|nil"
         }
         val keywordColor = if (lightTheme) Color.rgb(104, 73, 184) else Color.rgb(197, 154, 255)
-        val stringColor = if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
+        val stringColor = if (retroTheme) Color.rgb(139, 157, 125) else if (lightTheme) Color.rgb(20, 118, 91) else Color.rgb(126, 211, 176)
         val numberColor = if (lightTheme) Color.rgb(176, 83, 27) else Color.rgb(244, 176, 112)
         val commentColor = if (lightTheme) Color.rgb(103, 112, 124) else Color.rgb(132, 145, 153)
         Regex("\\b(?:$keywordSet)\\b").findAll(value).forEach { match ->
@@ -6718,23 +8419,35 @@ class MainActivity : Activity() {
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setPadding(if (retroTheme) 0 else dp(10), if (retroTheme) 0 else dp(8), if (retroTheme) 0 else dp(10), dp(8))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            if (retroTheme) {
+                setPadding(dp(12), 0, dp(4), 0)
+                background = lollipopActionBarBackground()
+            }
+        }
         header.addView(ImageView(this).apply {
-            setImageResource(fileIconResource(entry.path))
+            setImageResource(fileDisplayIconResource(entry.path))
             imageTintList = null
             contentDescription = fileGlyph(entry.path)
-        }, LinearLayout.LayoutParams(dp(19), dp(19)).apply { rightMargin = dp(7) })
-        header.addView(label(entry.path.substringAfterLast('/'), 13, TEXT, true, translateUi = false).apply {
+        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
+        header.addView(label(entry.path.substringAfterLast('/'), if (retroTheme) 17 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply {
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
         }, LinearLayout.LayoutParams(0, dp(34), 1f))
-        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
-        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
-        header.addView(iconButton("close", "关闭修改预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        layout.addView(header, widthWrap())
+        if (entry.additions > 0) header.addView(label("+${entry.additions}", 11, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(12, 119, 53) else Color.rgb(92, 218, 128), true))
+        if (entry.deletions > 0) header.addView(label("-${entry.deletions}", 11, if (retroTheme) ANDROID1_DELETED_COLOR else if (lightTheme) Color.rgb(184, 35, 47) else Color.rgb(255, 104, 116), true).apply { setPadding(dp(7), 0, dp(3), 0) })
+        header.addView(iconButton("close", "关闭修改预览") { dialog.dismiss() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
 
         val lines = numberDiffLines(entry.diff)
         if (lines.isEmpty()) {
@@ -6776,7 +8489,7 @@ class MainActivity : Activity() {
                 code.append("           │ 其余 ${lines.size - visibleLines.size} 行未显示")
                 code.setSpan(ForegroundColorSpan(WARNING), start, code.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-            val codeView = label("", 11, TEXT).apply {
+            val codeView = label("", 11, TEXT, pixelize = false).apply {
                 text = code
                 typeface = Typeface.MONOSPACE
                 includeFontPadding = false
@@ -6817,7 +8530,7 @@ class MainActivity : Activity() {
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             isFocusableInTouchMode = true
-            setPadding(dp(12), dp(9), dp(12), dp(10))
+            setPadding(if (retroTheme) 0 else dp(12), if (retroTheme) 0 else dp(9), if (retroTheme) 0 else dp(12), dp(10))
             background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
         }
         val previewInput = EditText(this).apply {
@@ -6833,19 +8546,36 @@ class MainActivity : Activity() {
             minimumHeight = dp(280)
             visibility = View.GONE
         }
-        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        header.addView(label(path.substringAfterLast('/'), 13, TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(34), 1f))
-        val saveButton = smallButton("保存") { savePreviewFile(requestPath, effectiveCwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }.apply {
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            if (retroTheme) {
+                setPadding(dp(12), 0, dp(4), 0)
+                background = lollipopActionBarBackground()
+            }
+        }
+        header.addView(ImageView(this).apply {
+            setImageResource(fileDisplayIconResource(path))
+            imageTintList = null
+            contentDescription = fileGlyph(path)
+        }, LinearLayout.LayoutParams(dp(20), dp(20)).apply { rightMargin = dp(8) })
+        header.addView(label(path.substringAfterLast('/'), if (retroTheme) 17 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true, translateUi = false).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        val saveButton = textIconAction("保存", "save", "保存") { savePreviewFile(requestPath, effectiveCwd, previewInput.text.toString(), previewInput.tag?.toString().orEmpty(), previewInput) }.apply {
             visibility = View.GONE
         }
         header.addView(saveButton)
-        header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }, LinearLayout.LayoutParams(dp(32), dp(32)))
-        layout.addView(header, widthWrap())
+        header.addView(iconButton("close", "关闭文件预览") { dialog.dismiss() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
+        layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
         val loadingStatus = label("正在加载文件…", 12, MUTED).apply {
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(80), dp(12), dp(18))
         }
-        val retryButton = smallButton("重新加载") { }.apply { visibility = View.GONE }
+        val retryButton = textIconAction("重新加载", "refresh", "重新加载") { }.apply { visibility = View.GONE }
         val state = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -6963,7 +8693,7 @@ class MainActivity : Activity() {
         terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(10), 0, dp(10), dp(8))
+            setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(8))
             background = wallpaperBackground(
                 if (themeName == "custom") OPAQUE_PANEL else if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17),
                 viewportWidthPx = root.width,
@@ -6975,21 +8705,27 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, systemInsetTop, 0, 0)
+            if (retroTheme) background = lollipopActionBarBackground()
         }
         header.addView(ImageView(this).apply {
-            setImageResource(R.drawable.ic_terminal)
-            imageTintList = ColorStateList.valueOf(SUBTLE)
+            setPixelAwareImageResource(iconResource("terminal"))
+            imageTintList = retroIconTint(SUBTLE)
             contentDescription = "本机终端"
-        }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { rightMargin = dp(7) })
-        header.addView(label("本机终端", 13, TEXT, true), LinearLayout.LayoutParams(0, dp(34), 1f))
-        header.addView(iconButton("close", "关闭终端") { closeTerminal() }, LinearLayout.LayoutParams(dp(40), dp(40)))
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 22 else 18), dp(if (retroTheme) 22 else 18)).apply { rightMargin = dp(7) })
+        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(iconButton("close", "关闭终端") { closeTerminal() }.apply {
+            if (retroTheme) {
+                imageTintList = null
+                background = android1SegmentButtonBackground()
+            }
+        }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
         header.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(1)))
-        shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(44)))
+        shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(if (retroTheme) 48 else 44)))
         terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
-        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226)).apply {
+        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226), pixelize = false).apply {
             typeface = Typeface.MONOSPACE
             setTextIsSelectable(true)
             setPadding(dp(9), dp(9), dp(9), dp(9))
@@ -7027,11 +8763,11 @@ class MainActivity : Activity() {
             }
         }
         inputRow.addView(terminalDraftInput, LinearLayout.LayoutParams(0, dp(42), 1f))
-        inputRow.addView(smallButton("发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
+        inputRow.addView(textIconAction("发送", "arrow_up", "发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
         shell.addView(inputRow, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(5) })
         val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
-        transferRow.addView(smallButton("复制到输入框") {
-            val output = terminalOutput ?: return@smallButton
+        transferRow.addView(textIconAction("复制到输入框", "paste", "复制到输入框") {
+            val output = terminalOutput ?: return@textIconAction
             val fullText = output.text.toString()
             val start = output.selectionStart
             val end = output.selectionEnd
@@ -7073,7 +8809,7 @@ class MainActivity : Activity() {
             }
         }
         (shell.getChildAt(0)?.layoutParams as? LinearLayout.LayoutParams)?.let { headerParams ->
-            val target = systemInsetTop + dp(44)
+            val target = systemInsetTop + dp(if (retroTheme) 48 else 44)
             if (headerParams.height != target) {
                 headerParams.height = target
                 shell.getChildAt(0).layoutParams = headerParams
@@ -7124,7 +8860,7 @@ class MainActivity : Activity() {
                     when (event.optString("type")) {
                         "ready" -> {
                             terminalReady = true
-                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
+                            updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
                         }
                         "error" -> {
                             terminalReady = false
@@ -7191,6 +8927,8 @@ class MainActivity : Activity() {
         if (!sent) terminalReady = false
         return sent
     }
+
+    private fun fileDisplayIconResource(path: String): Int = fileIconResource(path)
 
     private fun fileIconResource(path: String): Int {
         val name = path.substringAfterLast('/').substringAfterLast('\\').lowercase(Locale.ROOT)
@@ -7465,7 +9203,10 @@ class MainActivity : Activity() {
         when (method) {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
-                if (eventThread != null) handler.post { pausedThreadKeys.remove(threadTitleKey(eventThread)) }
+                if (eventThread != null) handler.post {
+                    pausedThreadKeys.remove(threadTitleKey(eventThread))
+                    clearKnownEmptyThread(eventThread)
+                }
                 if (eventThread == activeThreadId) {
                     running = true
                     clearLiveActivity()
@@ -7480,7 +9221,7 @@ class MainActivity : Activity() {
                 if (eventThread == activeThreadId) {
                     running = false
                     clearLiveActivity()
-                    if (foreground) handler.post { renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    if (foreground) handler.post { clearKnownEmptyThread(eventThread.orEmpty()); renderHeader(); refreshActiveThread(false); refreshQueue(false) }
                     else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
                     pendingCompletionNoticeThreadId = eventThread
@@ -7492,7 +9233,44 @@ class MainActivity : Activity() {
             "item/agentMessage/delta" -> {
                 val eventThread = eventThreadId(params)
                 if (eventThread == activeThreadId) {
-                    if (foreground) handler.post { scheduleActiveThreadRefresh() }
+                    if (foreground) handler.post {
+                        if (eventThread != activeThreadId) return@post
+                        val turnId = params.optString("turnId").ifBlank {
+                            activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                        }
+                        if (turnId.isNotBlank()) {
+                            val itemId = params.optString("itemId").ifBlank { "agent-message-live" }
+                            liveActivityItem = JSONObject().put("id", itemId).put("type", "agentMessage").put("status", "inProgress")
+                            liveActivityItemCompleted = false
+                            liveActivityTurnId = turnId
+                            liveActivityLabel = "正在回复"
+                            updateActiveActivityText()
+                        }
+                        scheduleActiveThreadRefresh()
+                    }
+                    else backgroundThreadDirty = true
+                }
+            }
+            "turn/plan/updated", "reasoning/summaryTextDelta" -> {
+                val eventThread = eventThreadId(params)
+                if (eventThread == activeThreadId) {
+                    if (foreground) handler.post {
+                        if (eventThread != activeThreadId) return@post
+                        val turnId = params.optString("turnId").ifBlank {
+                            liveActivityTurnId.orEmpty().ifBlank {
+                                activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                            }
+                        }
+                        if (turnId.isNotBlank()) {
+                            if (!liveActivityTurnId.isNullOrBlank() && liveActivityTurnId != turnId) {
+                                liveActivityItem = null
+                                liveActivityItemCompleted = false
+                            }
+                            liveActivityTurnId = turnId
+                            liveActivityLabel = if (method == "turn/plan/updated") "正在整理执行计划" else "正在思考"
+                            updateActiveActivityText()
+                        }
+                    }
                     else backgroundThreadDirty = true
                 }
             }
@@ -7504,16 +9282,40 @@ class MainActivity : Activity() {
                         if (method == "item/started" || method == "item/completed") {
                             val item = params.optJSONObject("item")
                             val type = normalizedType(item?.optString("type").orEmpty())
-                            if (item != null && type !in setOf("usermessage", "agentmessage", "reasoning", "plan")) {
+                            if (item != null && type != "usermessage") {
                                 val turnId = params.optString("turnId").ifBlank {
                                     activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
                                 }
                                 if (turnId.isNotBlank()) {
-                                    liveActivityItem = item
-                                    liveActivityItemCompleted = method == "item/completed"
-                                    liveActivityTurnId = turnId
-                                    activeActivityText?.text = if (liveActivityItemCompleted) "$activityLabel · ${completedActivityLabel(item)}" else operationActivityLabel(item)
+                                    if (method == "item/started") {
+                                        liveActivityItem = item
+                                        liveActivityItemCompleted = false
+                                        liveActivityTurnId = turnId
+                                        liveActivityLabel = activityLabelForItem(item)
+                                        updateActiveActivityText()
+                                    } else if (liveActivityTurnId == turnId && liveActivityItem?.optString("id") == item.optString("id")) {
+                                        liveActivityItem = item
+                                        liveActivityItemCompleted = true
+                                        if (type != "agentmessage") liveActivityLabel = "正在思考"
+                                        updateActiveActivityText()
+                                    }
                                 }
+                            }
+                        } else if (method == "item/fileChange/patchUpdated") {
+                            val turnId = params.optString("turnId").ifBlank {
+                                activeThread?.optJSONArray("turns")?.let { turns -> turns.optJSONObject(turns.length() - 1)?.optString("id") }.orEmpty()
+                            }
+                            if (turnId.isNotBlank()) {
+                                val itemId = params.optString("itemId").ifBlank { "file-change-live" }
+                                liveActivityItem = JSONObject()
+                                    .put("id", itemId)
+                                    .put("type", "fileChange")
+                                    .put("status", "inProgress")
+                                    .put("changes", params.optJSONArray("changes") ?: JSONArray())
+                                liveActivityItemCompleted = false
+                                liveActivityTurnId = turnId
+                                liveActivityLabel = "正在修改文件"
+                                updateActiveActivityText()
                             }
                         }
                         scheduleActiveThreadRefresh()
@@ -7594,6 +9396,16 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_WEB_DOWNLOAD_STORAGE) {
+            val pending = pendingWebDownload
+            pendingWebDownload = null
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED && pending != null) {
+                enqueueWebDownload(pending)
+            } else {
+                showToast("未获得存储权限，无法保存到下载目录")
+            }
+            return
+        }
         if (requestCode != REQUEST_NOTIFICATIONS || !notificationPermissionRequestedFromSettings) return
         notificationPermissionRequestedFromSettings = false
         val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
@@ -7833,13 +9645,13 @@ class MainActivity : Activity() {
     }
 
     private fun effortLabel(selected: String?): String = when (selected) {
-        "minimal" -> "最小"
-        "low" -> "低"
-        "medium" -> "中"
-        "high" -> "高"
-        "xhigh" -> "极高"
-        "max" -> "最大"
-        null, "default" -> "思考"
+        "minimal" -> "Minimal"
+        "low" -> "Low"
+        "medium" -> "Medium"
+        "high" -> "High"
+        "xhigh" -> "Extra High"
+        "max" -> "Max"
+        null, "default" -> "Effort"
         else -> selected
     }
 
@@ -7923,38 +9735,52 @@ class MainActivity : Activity() {
         hint = tr(hintText)
         setText(value)
         inputType = inputTypeValue
+        typeface = themedTypeface()
         setTextColor(TEXT)
         setHintTextColor(MUTED)
         textSize = adjustedTextSize(14)
         setTag(R.id.base_text_size, 14f)
         setPadding(dp(12), dp(7), dp(12), dp(7))
-        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(9), BORDER, dp(1))
+        background = rounded(if (lightTheme) Color.rgb(255, 255, 255) else Color.rgb(18, 20, 24), dp(if (retroTheme) 4 else 9), BORDER, dp(1))
     }
 
     private val appLanguage: String get() = prefs.getString(KEY_APP_LANGUAGE, "zh") ?: "zh"
 
     private fun tr(value: String): String = if (appLanguage == "en") UiEnglish.translate(value) else value
 
-    private fun label(value: String, size: Int, color: Int, bold: Boolean = false, translateUi: Boolean = true): TextView = TextView(this).apply {
+    private fun label(
+        value: String,
+        size: Int,
+        color: Int,
+        bold: Boolean = false,
+        translateUi: Boolean = true,
+        pixelize: Boolean = true,
+    ): TextView = (if (pixelTheme && pixelize) PixelRasterTextView(this, nextPixelTextViewId++) else TextView(this)).apply {
         text = if (translateUi) tr(value) else value
         textSize = adjustedTextSize(size)
         setTag(R.id.base_text_size, size.toFloat())
         setTextColor(color)
-        if (bold) setTypeface(typeface, Typeface.BOLD)
+        if (retroTheme) typeface = themedTypeface(bold) else if (bold) setTypeface(typeface, Typeface.BOLD)
         gravity = Gravity.CENTER_VERTICAL
     }
 
+    private fun themedTypeface(bold: Boolean = false): Typeface = when {
+        pixelTheme -> Typeface.create("monospace", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        !retroTheme -> Typeface.create("sans-serif", if (bold) Typeface.BOLD else Typeface.NORMAL)
+        bold -> android1BoldTypeface
+        else -> android1Typeface
+    }
+
     private fun iconButton(icon: String, description: String, action: () -> Unit): ImageButton = ImageButton(this).apply {
-        setImageResource(iconResource(icon))
-        imageTintList = ColorStateList.valueOf(when (icon) {
-            "codex" -> codexBrandAccent()
-            "claude" -> ACCENT_WARM
-            else -> SUBTLE
-        })
+        setPixelAwareImageResource(iconResource(icon))
+        val pixelArtIcon = pixelTheme && iconResource(icon) in pixelIconResourceIds
+        imageTintList = if (pixelArtIcon || retroTheme && !pixelTheme && icon != "codex" && icon != "claude") null
+            else ColorStateList.valueOf(iconTint(icon))
         scaleType = ImageView.ScaleType.FIT_CENTER
-        setPadding(dp(9), dp(9), dp(9), dp(9))
+        val iconPadding = if (retroTheme) dp(12) else dp(9)
+        setPadding(iconPadding, iconPadding, iconPadding, iconPadding)
         contentDescription = tr(description)
-        background = ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) android1SegmentButtonBackground() else ColorDrawable(Color.TRANSPARENT)
         foreground = null
         stateListAnimator = null
         setDefaultFocusHighlightEnabled(false)
@@ -7965,12 +9791,162 @@ class MainActivity : Activity() {
 
     private fun sidebarIconButton(icon: String, description: String, action: () -> Unit): ImageButton =
         iconButton(icon, description, action).apply {
-            setImageResource(sidebarIconResource(icon))
+            val resource = sidebarIconResource(icon)
+            setPixelAwareImageResource(resource)
+            imageTintList = if (pixelTheme && resource in pixelIconResourceIds) null
+                else if (retroTheme && !pixelTheme && icon != "codex" && icon != "claude") null
+                else ColorStateList.valueOf(iconTint(icon))
             setPadding(dp(6), dp(6), dp(6), dp(6))
             tooltipText = description
         }
 
-    private fun sidebarIconResource(icon: String): Int = when (icon) {
+    private fun iconTint(icon: String): Int = when {
+        icon == "codex" -> codexBrandAccent()
+        icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
+        pixelTheme -> when (icon) {
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "link", "notifications" -> PIXEL_BLUE
+            "delete", "stop" -> PIXEL_RED
+            "folder", "folder_add", "pin", "file", "file_add", "copy", "paste", "open", "display", "language" -> Color.rgb(116, 180, 230)
+            "image", "palette" -> Color.rgb(201, 168, 255)
+            "chat", "history" -> PIXEL_BLUE
+            else -> PIXEL_TEXT
+        }
+        retroTheme -> when (icon) {
+            "add", "arrow_up", "check", "download", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
+            "delete", "stop" -> Color.rgb(164, 76, 65)
+            "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
+            "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
+            "image", "palette" -> Color.rgb(159, 119, 144)
+            "chat" -> Color.rgb(111, 157, 197)
+            "history" -> Color.rgb(154, 171, 181)
+            "notifications" -> LOLLIPOP_PRIMARY
+            "lock" -> Color.rgb(154, 166, 169)
+            "terminal", "settings", "search", "more", "back", "close", "info" -> LOLLIPOP_TEXT_SECONDARY
+            "menu" -> Color.rgb(66, 66, 66)
+            else -> LOLLIPOP_TEXT_SECONDARY
+        }
+        else -> SUBTLE
+    }
+
+    private fun retroIconTint(color: Int): ColorStateList? =
+        if (retroTheme) null else ColorStateList.valueOf(color)
+
+    private fun ImageView.setPixelAwareImageResource(resourceId: Int) {
+        setImageResource(resourceId)
+        if (pixelTheme && resourceId in pixelIconResourceIds) {
+            (drawable as? BitmapDrawable)?.setFilterBitmap(false)
+        }
+    }
+
+    private fun pixelIconResource(icon: String): Int? = when (icon) {
+        "search" -> R.drawable.pixel_search
+        "refresh" -> R.drawable.pixel_refresh
+        "chat", "menu" -> R.drawable.pixel_chat
+        "settings" -> R.drawable.pixel_settings
+        "link", "connection" -> R.drawable.pixel_connection
+        "terminal" -> R.drawable.pixel_terminal
+        "folder" -> R.drawable.pixel_folder
+        "add", "file_add", "folder_add" -> R.drawable.pixel_file_add
+        "arrow_up", "send" -> R.drawable.pixel_send
+        "pause" -> R.drawable.pixel_pause
+        "edit" -> R.drawable.pixel_edit
+        "check", "checked" -> R.drawable.pixel_check
+        "delete" -> R.drawable.pixel_delete
+        "palette", "theme" -> R.drawable.pixel_theme
+        "display" -> R.drawable.pixel_display
+        "language" -> R.drawable.pixel_language
+        "notifications" -> R.drawable.pixel_notifications
+        "lock", "match" -> R.drawable.pixel_match
+        "info", "about" -> R.drawable.pixel_about
+        else -> null
+    }
+
+    private fun pixelBlockBackground(fillColor: Int): Drawable {
+        return pixelFrameBackground(R.drawable.pixel_frame_active, fillColor)
+    }
+
+    private fun pixelSidebarNewThreadBackground(): Drawable = android.graphics.drawable.StateListDrawable().apply {
+        addState(
+            intArrayOf(android.R.attr.state_pressed),
+            pixelFrameBackground(R.drawable.pixel_frame_active, Color.rgb(225, 213, 183)),
+        )
+        addState(
+            intArrayOf(android.R.attr.state_focused),
+            pixelFrameBackground(R.drawable.pixel_frame_square, Color.rgb(250, 240, 216)),
+        )
+        addState(
+            intArrayOf(),
+            pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_CREAM),
+        )
+    }
+
+    private fun pixelFrameBackground(frameResource: Int, fillColor: Int): Drawable {
+        val bitmap = pixelFrameBitmapCache[frameResource]
+            ?: BitmapFactory.decodeResource(resources, frameResource)?.also { decoded ->
+                decoded.density = Bitmap.DENSITY_NONE
+                pixelFrameBitmapCache[frameResource] = decoded
+            }
+            ?: return ColorDrawable(fillColor)
+        val sourceCorners = when (frameResource) {
+            R.drawable.pixel_frame_square -> 54 to 52
+            R.drawable.pixel_frame_strip -> 56 to 48
+            R.drawable.pixel_frame_active -> 56 to 56
+            else -> 54 to 52
+        }
+        val frame = PixelFrameNineSliceDrawable(
+            bitmap = bitmap,
+            sourceCornerWidth = sourceCorners.first,
+            sourceCornerHeight = sourceCorners.second,
+            targetCornerSize = dp(10),
+        )
+        return LayerDrawable(arrayOf(ColorDrawable(fillColor), frame)).apply {
+            // Leave the frame's stepped outer silhouette transparent while the
+            // frame itself covers the panel's inner edge.
+            setLayerInset(0, dp(3), dp(3), dp(3), dp(3))
+        }
+    }
+
+    private fun android1SegmentButtonBackground(): Drawable = android.graphics.drawable.StateListDrawable().apply {
+        if (pixelTheme) {
+            addState(intArrayOf(android.R.attr.state_pressed), pixelBlockBackground(PIXEL_BLUE))
+            addState(intArrayOf(android.R.attr.state_focused), pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_PANEL_INSET))
+            addState(intArrayOf(android.R.attr.state_selected), pixelBlockBackground(PIXEL_BLUE))
+            addState(intArrayOf(), pixelFrameBackground(R.drawable.pixel_frame_square, PIXEL_PANEL_INSET))
+        } else {
+            addState(intArrayOf(android.R.attr.state_pressed), android1MetalButtonBackground())
+            addState(intArrayOf(android.R.attr.state_focused), android1MetalButtonBackground())
+            addState(intArrayOf(android.R.attr.state_selected), android1MetalButtonBackground())
+            addState(intArrayOf(), gingerbreadButtonBackground())
+        }
+    }
+
+    private fun lollipopRipple(
+        content: Drawable = ColorDrawable(Color.TRANSPARENT),
+        rippleColor: Int = Color.argb(56, 111, 157, 197),
+    ): Drawable {
+        if (!retroTheme) return content
+        if (pixelTheme) return android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(android.R.attr.state_focused), pixelBlockBackground(PIXEL_PANEL_INSET))
+            addState(intArrayOf(), content)
+        }
+        val pressed = ColorDrawable(rippleColor)
+        return android.graphics.drawable.StateListDrawable().apply {
+            addState(intArrayOf(android.R.attr.state_pressed), android.graphics.drawable.LayerDrawable(arrayOf(content, pressed)))
+            addState(intArrayOf(android.R.attr.state_focused), android.graphics.drawable.LayerDrawable(arrayOf(content, pressed)))
+            addState(intArrayOf(), content)
+        }
+    }
+
+    private fun lollipopSelectableRow(selected: Boolean, selectedColor: Int = LOLLIPOP_PRIMARY_LIGHT): Drawable = when {
+        pixelTheme && selected -> pixelBlockBackground(selectedColor)
+        selected -> ColorDrawable(selectedColor)
+        else -> lollipopRipple()
+    }
+
+    private fun sidebarIconResource(icon: String): Int = when {
+        retroTheme -> iconResource(icon)
+        else -> when (icon) {
         "add" -> R.drawable.ic_sidebar_add
         "back" -> R.drawable.ic_sidebar_back
         "open" -> R.drawable.ic_sidebar_open
@@ -7978,17 +9954,91 @@ class MainActivity : Activity() {
         "search" -> R.drawable.ic_sidebar_search
         "settings" -> R.drawable.ic_sidebar_settings
         else -> iconResource(icon)
+        }
+    }
+
+    private fun brandIconTint(engine: String): Int = when {
+        engine != "claude-code" -> codexBrandAccent()
+        themeName == "lollipop" -> Color.rgb(177, 112, 83)
+        pixelTheme -> Color.rgb(238, 140, 109)
+        else -> ACCENT_WARM
     }
 
     private fun setBrandIcon(view: ImageView, engine: String) {
         val claude = engine == "claude-code"
         view.setImageResource(if (claude) R.drawable.ic_brand_claude else R.drawable.ic_brand_codex)
-        view.imageTintList = ColorStateList.valueOf(if (claude) ACCENT_WARM else codexBrandAccent())
+        view.imageTintList = ColorStateList.valueOf(brandIconTint(engine))
     }
 
-    private fun codexBrandAccent(): Int = if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
+    private fun codexBrandAccent(): Int = when (themeName) {
+        "lollipop" -> Color.rgb(111, 157, 197)
+        "pixel" -> PIXEL_BLUE
+        else -> if (lightTheme) Color.rgb(75, 96, 157) else Color.rgb(170, 186, 255)
+    }
 
-    private fun iconResource(icon: String): Int = when (icon) {
+    private fun settingsSectionIcon(title: String): String = when (title) {
+        "主题" -> "palette"
+        "显示" -> "display"
+        "语言" -> "language"
+        "系统通知" -> "notifications"
+        "连接" -> "link"
+        "本机配对" -> "lock"
+        "关于" -> "info"
+        else -> "settings"
+    }
+
+    private fun iconResource(icon: String): Int {
+        if (pixelTheme) pixelIconResource(icon)?.let { return it }
+        if (themeName == "lollipop") return when (icon) {
+            "codex" -> R.drawable.ic_brand_codex
+            "claude" -> R.drawable.ic_brand_claude
+            "chat" -> R.drawable.ic_android1_chat
+            "save" -> R.drawable.ic_android1_save
+            "menu" -> R.drawable.ic_android1_menu
+            "terminal" -> R.drawable.ic_android1_terminal
+            "folder" -> R.drawable.ic_android1_folder
+            "add" -> R.drawable.ic_android1_add
+            "close" -> R.drawable.ic_android1_close
+            "more" -> R.drawable.ic_android1_more
+            "search" -> R.drawable.ic_android1_search
+            "settings" -> R.drawable.ic_android1_settings
+            "refresh" -> R.drawable.ic_android1_refresh
+            "download" -> R.drawable.ic_android1_save
+            "arrow_up" -> R.drawable.ic_android1_arrow_up
+            "send" -> R.drawable.ic_android1_send
+            "file" -> R.drawable.ic_android1_file
+            "image" -> R.drawable.ic_android1_image
+            "file_add" -> R.drawable.ic_android1_file_add
+            "folder_add" -> R.drawable.ic_android1_folder_add
+            "paste" -> R.drawable.ic_android1_paste
+            "open" -> R.drawable.ic_android1_open
+            "edit" -> R.drawable.ic_android1_edit
+            "pin" -> R.drawable.ic_android1_pin
+            "copy" -> R.drawable.ic_android1_copy
+            "cut" -> R.drawable.ic_android1_cut
+            "delete" -> R.drawable.ic_android1_delete
+            "link" -> R.drawable.ic_android1_link
+            "check" -> R.drawable.ic_android1_check
+            "chevron_down" -> R.drawable.ic_android1_chevron_down
+            "chevron_up" -> R.drawable.ic_android1_chevron_up
+            "chevron_right" -> R.drawable.ic_android1_chevron_right
+            "back" -> R.drawable.ic_android1_back
+            "history" -> R.drawable.ic_android1_history
+            "notifications" -> R.drawable.ic_android1_notifications
+            "language" -> R.drawable.ic_android1_language
+            "info" -> R.drawable.ic_android1_info
+            "palette" -> R.drawable.ic_android1_palette
+            "display" -> R.drawable.ic_android1_display
+            "lock" -> R.drawable.ic_android1_lock
+            "checked" -> R.drawable.ic_android1_checked
+            "unchecked" -> R.drawable.ic_android1_unchecked
+            "alert" -> R.drawable.ic_android1_alert
+            "stop" -> R.drawable.ic_android1_stop
+            "pause" -> R.drawable.ic_android1_pause
+            "play" -> R.drawable.ic_android1_play
+            else -> R.drawable.ic_android1_add
+        }
+        return when (icon) {
         "codex" -> R.drawable.ic_brand_codex
         "claude" -> R.drawable.ic_brand_claude
         "menu" -> R.drawable.ic_menu
@@ -8000,7 +10050,9 @@ class MainActivity : Activity() {
         "search" -> R.drawable.ic_search
         "settings" -> R.drawable.ic_settings
         "refresh" -> R.drawable.ic_refresh
+        "download" -> R.drawable.ic_download
         "arrow_up" -> R.drawable.ic_arrow_up
+        "send" -> R.drawable.ic_arrow_up
         "file" -> R.drawable.ic_file
         "file_add" -> R.drawable.ic_file_add
         "folder_add" -> R.drawable.ic_folder_add
@@ -8015,16 +10067,18 @@ class MainActivity : Activity() {
         "check" -> R.drawable.ic_check
         "chevron_down" -> R.drawable.ic_chevron_down
         "chevron_up" -> R.drawable.ic_chevron_up
+        "chevron_right" -> R.drawable.ic_chevron_right
         "back" -> R.drawable.ic_back
         else -> R.drawable.ic_add
+        }
     }
 
     private fun preferenceButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
-        setPadding(dp(7), 0, dp(7), 0)
-        minWidth = dp(44)
+        setPadding(dp(4), 0, dp(4), 0)
+        minWidth = dp(36)
         minHeight = dp(40)
-        background = ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         foreground = null
         stateListAnimator = null
         setDefaultFocusHighlightEnabled(false)
@@ -8034,30 +10088,114 @@ class MainActivity : Activity() {
     private fun smallButton(value: String, action: () -> Unit): TextView = label(value, 12, SUBTLE, true).apply {
         gravity = Gravity.CENTER
         setPadding(dp(9), 0, dp(9), 0)
-        background = rounded(PANEL_INSET, dp(7))
+        background = if (retroTheme) android1SegmentButtonBackground() else rounded(PANEL_INSET, dp(7))
         setOnClickListener { action() }
+    }
+
+    private fun textIconAction(value: String, icon: String, fallbackLabel: String, action: () -> Unit): View {
+        if (!retroTheme) return smallButton(fallbackLabel, action)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            setPadding(dp(8), 0, dp(8), 0)
+            background = lollipopRipple(rounded(PANEL, dp(2)))
+            isClickable = true
+            isFocusable = false
+            contentDescription = tr(value)
+            setOnClickListener { action() }
+            addView(ImageView(this@MainActivity).apply {
+                val resource = iconResource(icon)
+                setPixelAwareImageResource(resource)
+                imageTintList = if (themeName == "lollipop" || pixelTheme && resource in pixelIconResourceIds) null
+                    else ColorStateList.valueOf(iconTint(icon))
+            }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { rightMargin = dp(5) })
+            addView(label(value, 11, SUBTLE, true), widthWrap())
+        }
     }
 
     private fun dialogTextButton(value: String, color: Int, action: () -> Unit): TextView = label(value, 12, color, true).apply {
         gravity = Gravity.CENTER
         setPadding(dp(10), 0, dp(10), 0)
-        background = ColorDrawable(Color.TRANSPARENT)
+        background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
         setOnClickListener { action() }
     }
 
     private fun actionButton(value: String): Button = Button(this).apply {
         text = tr(value)
+        if (retroTheme) typeface = themedTypeface(true)
         textSize = adjustedTextSize(13)
         setTag(R.id.base_text_size, 13f)
-        setTextColor(DARK)
+        setTextColor(if (pixelTheme) PIXEL_TEXT else if (retroTheme) Color.rgb(28, 31, 33) else DARK)
         isAllCaps = false
-        background = rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
+        background = if (retroTheme) gingerbreadButtonBackground()
+            else rounded(if (lightTheme) Color.rgb(35, 38, 43) else Color.rgb(224, 226, 231), dp(9))
     }
 
-    private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): GradientDrawable = GradientDrawable().apply {
-        setColor(color)
-        cornerRadius = radius.toFloat()
-        if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+    private fun rounded(color: Int, radius: Int, strokeColor: Int? = null, strokeWidth: Int = 0): Drawable {
+        if (pixelTheme) {
+            if (Color.alpha(color) == 0) return ColorDrawable(color)
+            val frameResource = if (radius >= dp(10)) R.drawable.pixel_frame_panel else R.drawable.pixel_frame_square
+            return pixelFrameBackground(frameResource, color)
+        }
+        return GradientDrawable().apply {
+            setColor(color)
+            cornerRadius = when {
+                retroTheme && radius < dp(20) -> dp(2).toFloat()
+                else -> radius.toFloat()
+            }
+            if (strokeColor != null && strokeWidth > 0) setStroke(strokeWidth, strokeColor)
+        }
+    }
+
+    private fun lollipopActionBarBackground(): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_strip, PIXEL_PANEL)
+        return GradientDrawable().apply {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(248, 248, 248), Color.rgb(220, 220, 220), Color.rgb(169, 169, 169)))
+            setStroke(dp(1), Color.rgb(107, 107, 107))
+            cornerRadius = 0f
+        }
+    }
+
+    private fun android1SettingsActionBarBackground(): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_strip, PIXEL_BACKGROUND)
+        return GradientDrawable().apply {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(86, 86, 86), Color.rgb(50, 50, 50), Color.rgb(24, 24, 24)))
+            setStroke(dp(1), Color.rgb(116, 116, 116))
+            cornerRadius = 0f
+        }
+    }
+
+    private fun gingerbreadButtonBackground(accent: Boolean = false): Drawable {
+        if (pixelTheme) return pixelFrameBackground(
+            R.drawable.pixel_frame_square,
+            if (accent) PIXEL_BLUE else PIXEL_PANEL_INSET,
+        )
+        return GradientDrawable().apply {
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(if (accent) intArrayOf(Color.rgb(213, 218, 219), Color.rgb(160, 171, 174), Color.rgb(111, 121, 124))
+                else intArrayOf(Color.rgb(91, 97, 97), Color.rgb(58, 64, 65), Color.rgb(39, 44, 45)))
+            setStroke(dp(1), if (accent) Color.rgb(225, 229, 230) else Color.rgb(112, 119, 119))
+            cornerRadius = dp(3).toFloat()
+        }
+    }
+
+    private fun android1MetalButtonBackground(): GradientDrawable = GradientDrawable().apply {
+        orientation = GradientDrawable.Orientation.TOP_BOTTOM
+        setColors(intArrayOf(Color.rgb(245, 245, 245), Color.rgb(205, 205, 205), Color.rgb(157, 157, 157)))
+        setStroke(dp(1), Color.rgb(248, 248, 248))
+        cornerRadius = dp(3).toFloat()
+    }
+
+    private fun lollipopFabBackground(color: Int): Drawable {
+        if (pixelTheme) return pixelFrameBackground(R.drawable.pixel_frame_square, color)
+        return GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            orientation = GradientDrawable.Orientation.TOP_BOTTOM
+            setColors(intArrayOf(Color.rgb(213, 218, 219), color, Color.rgb(111, 121, 124)))
+            setStroke(dp(1), Color.rgb(225, 229, 230))
+        }
     }
 
     private fun widthWrap() = LinearLayout.LayoutParams(MATCH, WRAP)
@@ -8158,8 +10296,16 @@ class MainActivity : Activity() {
     }
 
     private fun installThemeBackground(target: FrameLayout) {
-        target.background = wallpaperBackground(DARK)
+        target.background = if (retroTheme) lollipopSystemBarsBackground(DARK) else wallpaperBackground(DARK)
     }
+
+    private fun lollipopSystemBarsBackground(contentColor: Int): Drawable = LollipopSystemBarsDrawable(
+        contentColor = contentColor,
+        statusBarColor = LOLLIPOP_PRIMARY_DARK,
+        navigationBarColor = if (pixelTheme) PIXEL_BACKGROUND else Color.BLACK,
+        statusBarHeight = { systemInsetTop },
+        navigationBarHeight = { systemInsetBottom },
+    )
 
     private fun decodeThemeBackground(uri: Uri): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -8204,6 +10350,7 @@ class MainActivity : Activity() {
         private const val REQUEST_ATTACH = 4101
         private const val REQUEST_NOTIFICATIONS = 4102
         private const val REQUEST_THEME_BACKGROUND = 4103
+        private const val REQUEST_WEB_DOWNLOAD_STORAGE = 4104
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val EXTRA_CONNECTION_ID = "notification_connection_id"
@@ -8213,6 +10360,8 @@ class MainActivity : Activity() {
         private const val KEY_SYSTEM_NOTIFICATIONS_ENABLED = "native_system_notifications_enabled"
         private const val KEY_APP_LANGUAGE = "native_app_language"
         private const val KEY_WORKSPACE_EXPLORER_ROOT = "native_workspace_explorer_root"
+        private const val KEY_WEB_PREVIEW_WIDTH_RATIO = "native_web_preview_width_ratio"
+        private const val KEY_WEB_PREVIEW_HEIGHT_RATIO = "native_web_preview_height_ratio"
         private const val TAG_INSET_CONTENT = "inset_content"
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
@@ -8221,8 +10370,11 @@ class MainActivity : Activity() {
         private val OPERATION_PATH_KEYS = setOf(
             "path", "filepath", "file_path", "filename", "target_path", "source_path", "imagepath", "image_path",
         )
-        private val SEARCH_COMMAND_PATTERN = Regex("(?:^|\\s)(?:rg|grep|find|fd)(?:\\s|$)", RegexOption.IGNORE_CASE)
-        private val VIEW_COMMAND_PATTERN = Regex("(?:^|\\s)(?:cat|head|tail|sed|less|bat)(?:\\s|$)", RegexOption.IGNORE_CASE)
+        private val SEARCH_COMMAND_PATTERN = Regex("""(?:^|[\s"'|;&])(?:\S*/)?(?:rg|grep|find|fd|ag|ack)(?=$|[\s"';&|])""", RegexOption.IGNORE_CASE)
+        private val VIEW_COMMAND_PATTERN = Regex("""(?:^|[\s"'|;&])(?:\S*/)?(?:cat|less|more|head|tail|sed|awk|bat|xxd|file)(?=$|[\s"';&|])""", RegexOption.IGNORE_CASE)
+        private val SEARCH_TOOL_PATTERN = Regex("(?:search|find|grep|query)", RegexOption.IGNORE_CASE)
+        private val FILE_TOOL_PATTERN = Regex("(?:read|file|directory|folder|list)", RegexOption.IGNORE_CASE)
+        private val SKILL_TOOL_PATTERN = Regex("skill", RegexOption.IGNORE_CASE)
         private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
         private val WHITESPACE_PATTERN = Regex("\\s+")
         private const val MAX_CACHED_THREADS = 32
@@ -8232,6 +10384,7 @@ class MainActivity : Activity() {
         private const val MAX_HISTORY_CACHE_JSON_BYTES = 12 * 1024 * 1024
         private const val MAX_HISTORY_CACHE_STRING_CHARS = 3 * 1024 * 1024
         private const val MAX_HISTORY_CACHE_DEPTH = 64
+        private const val PIXEL_TEXT_RASTER_SCALE = 0.5f
         private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_DIFF_PREVIEW_LINES = 2500
@@ -8417,13 +10570,13 @@ private fun MainActivity.claudeModelLabel(selected: String?): String = when (sel
 }
 
 private fun MainActivity.effortLabel(selected: String?): String = when (selected) {
-    "minimal" -> "最小"
-    "low" -> "低"
-    "medium" -> "中"
-    "high" -> "高"
-    "xhigh" -> "极高"
-    "max" -> "最大"
-    null, "default" -> "思考"
+    "minimal" -> "Minimal"
+    "low" -> "Low"
+    "medium" -> "Medium"
+    "high" -> "High"
+    "xhigh" -> "Extra High"
+    "max" -> "Max"
+    null, "default" -> "Effort"
     else -> selected
 }
 

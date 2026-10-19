@@ -7,12 +7,14 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import os
 import re
 import secrets
 import shutil
 import stat
 import tempfile
+import threading
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable
@@ -51,6 +53,9 @@ from .shared_state import QueueConflictError, SharedQueueService, SharedStateSto
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
+
+PAIRING_MAX_FAILED_ATTEMPTS = 3
+PAIRING_LOCKOUT_SECONDS = 60
 
 
 def resolve_default_workspace(
@@ -119,6 +124,9 @@ IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EX
 MAX_IMAGES_PER_TURN = 4
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
+MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
+MESSAGE_IMAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60
+MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
@@ -842,9 +850,69 @@ def workspace_image_preview(base: Path, relative_path: str, managed_image_root: 
         if any(part in {"", ".", ".."} for part in normalized_parts):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效")
         candidate = workspace_path(base, relative_path)
+    return _image_preview_payload(base, candidate, managed_image_root)
+
+
+IMAGE_VIEW_PATH_KEYS = {
+    "path", "filepath", "file_path", "filename", "target_path", "source_path",
+    "imagepath", "image_path", "imagefile", "image_file",
+}
+
+
+def codex_image_view_paths(thread: dict[str, Any]) -> set[str]:
+    turns = thread.get("turns")
+    if not isinstance(turns, list):
+        return set()
+    paths: set[str] = set()
+    for turn in turns:
+        items = turn.get("items") if isinstance(turn, dict) else None
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_type = str(item.get("type", "")).replace("-", "").replace("_", "").lower()
+            if item_type != "imageview":
+                continue
+            stack: list[tuple[dict[str, Any], int]] = [(item, 0)]
+            while stack:
+                value, depth = stack.pop()
+                if depth > 4:
+                    continue
+                for key, entry in value.items():
+                    if key.lower() in IMAGE_VIEW_PATH_KEYS and isinstance(entry, str) and entry.strip():
+                        paths.add(entry.strip())
+                    elif isinstance(entry, dict):
+                        stack.append((entry, depth + 1))
+                    elif isinstance(entry, list):
+                        stack.extend((child, depth + 1) for child in entry if isinstance(child, dict))
+    return paths
+
+
+def codex_viewed_image_preview(
+    base: Path,
+    path: str,
+    thread: dict[str, Any],
+    managed_image_root: Path | None = None,
+) -> dict[str, str | int]:
+    if not path or len(path) > WORKSPACE_TREE_MAX_PATH_LENGTH:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效或过长")
+    if path.strip() not in codex_image_view_paths(thread):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="这张图片不在此 Codex 会话的查看记录中")
+    try:
+        is_absolute = path.startswith(("/", "\\")) or (len(path) > 1 and path[1] == ":")
+        candidate = Path(path).expanduser().resolve() if is_absolute else (base / path).resolve()
+    except (OSError, RuntimeError, ValueError) as error:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="图片路径无效") from error
+    return _image_preview_payload(base, candidate, managed_image_root)
+
+
+def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path | None) -> dict[str, str | int]:
     media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
     if media_type is None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
+    if managed_image_root is not None and is_expired_managed_message_image(candidate, managed_image_root):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片已过期")
     try:
         if not candidate.is_file():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片不存在")
@@ -926,10 +994,95 @@ def workspace_file_save(base: Path, relative_path: str, content: str, expected_r
     return workspace_file_preview(base, relative_path)
 
 
-def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Path]:
+def prepare_message_image_directory(state_directory: Path) -> Path:
+    image_directory = state_directory / "message-images"
+    try:
+        if image_directory.is_symlink():
+            raise OSError("聊天图片目录不能是符号链接")
+        image_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if os.name != "nt":
+            os.chmod(image_directory, 0o700)
+    except OSError as error:
+        raise RuntimeError(f"无法准备聊天图片目录：{image_directory}：{error}") from error
+    return image_directory.resolve()
+
+
+def cleanup_expired_message_images(image_directory: Path, *, now: float | None = None) -> int:
+    """Delete managed chat images whose creation time is more than 90 days old."""
+    cutoff = (time.time() if now is None else now) - MESSAGE_IMAGE_RETENTION_SECONDS
+    deleted = 0
+    try:
+        with os.scandir(image_directory) as entries:
+            for entry in entries:
+                if Path(entry.name).suffix.lower() not in IMAGE_MEDIA_TYPES:
+                    continue
+                try:
+                    metadata = entry.stat(follow_symlinks=False)
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_mtime >= cutoff:
+                        continue
+                    (image_directory / entry.name).unlink()
+                    deleted += 1
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    logger.warning("Could not remove expired chat image %s", entry.name, exc_info=True)
+    except OSError as error:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="无法清理过期聊天图片。",
+        ) from error
+    return deleted
+
+
+def is_expired_managed_message_image(
+    image_path: Path,
+    image_directory: Path,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Avoid serving expired images even before the periodic cleanup runs."""
+    try:
+        image_root = image_directory.resolve()
+        resolved_path = image_path.resolve()
+        if not resolved_path.is_relative_to(image_root):
+            return False
+        if resolved_path.suffix.lower() not in IMAGE_MEDIA_TYPES:
+            return False
+        cutoff = (time.time() if now is None else now) - MESSAGE_IMAGE_RETENTION_SECONDS
+        return resolved_path.stat().st_mtime < cutoff
+    except (OSError, RuntimeError, ValueError):
+        return True
+
+
+def stored_image_directory_size(image_directory: Path) -> int:
+    total = 0
+    try:
+        with os.scandir(image_directory) as entries:
+            for entry in entries:
+                if Path(entry.name).suffix.lower() not in IMAGE_MEDIA_TYPES:
+                    continue
+                if not entry.is_file(follow_symlinks=False):
+                    continue
+                total += entry.stat(follow_symlinks=False).st_size
+    except OSError as error:
+        raise HTTPException(
+            status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+            detail="无法检查聊天图片存储空间。",
+        ) from error
+    return total
+
+
+def save_turn_images(
+    images: list[TurnImage],
+    image_directory: Path,
+    *,
+    max_storage_bytes: int | None = None,
+    storage_lock: threading.Lock | None = None,
+) -> list[Path]:
     paths: list[Path] = []
     total_size = 0
     try:
+        decoded_images: list[tuple[TurnImage, bytes]] = []
         for image in images:
             try:
                 encoded = image.data.encode("ascii")
@@ -941,9 +1094,40 @@ def save_turn_images(images: list[TurnImage], image_directory: Path) -> list[Pat
             total_size += len(content)
             if total_size > MAX_TOTAL_IMAGE_BYTES:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="单条消息的图片总大小不能超过 24 MB")
-            path = image_directory / f"{secrets.token_hex(16)}{IMAGE_EXTENSIONS[image.media_type]}"
-            path.write_bytes(content)
-            paths.append(path)
+            decoded_images.append((image, content))
+
+        def write_images() -> None:
+            for image, content in decoded_images:
+                path = image_directory / f"{secrets.token_hex(16)}{IMAGE_EXTENSIONS[image.media_type]}"
+                descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                try:
+                    with os.fdopen(descriptor, "wb") as output:
+                        output.write(content)
+                except Exception:
+                    with suppress(FileNotFoundError):
+                        path.unlink()
+                    raise
+                paths.append(path)
+
+        if storage_lock is None:
+            if decoded_images:
+                cleanup_expired_message_images(image_directory)
+            if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
+                raise HTTPException(
+                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                    detail="聊天图片存储空间已满，请先清理服务器数据后再上传。",
+                )
+            write_images()
+        else:
+            with storage_lock:
+                if decoded_images:
+                    cleanup_expired_message_images(image_directory)
+                if decoded_images and max_storage_bytes is not None and stored_image_directory_size(image_directory) + total_size > max_storage_bytes:
+                    raise HTTPException(
+                        status_code=status.HTTP_507_INSUFFICIENT_STORAGE,
+                        detail="聊天图片存储空间已满，请先清理服务器数据后再上传。",
+                    )
+                write_images()
         return paths
     except Exception:
         for path in paths:
@@ -1037,7 +1221,7 @@ def prepare_claude_turn_files(
 
 
 def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[str, Any]:
-    """Embed images created by this process so a refreshed thread can render them."""
+    """Embed managed chat images so a refreshed thread can render them."""
     image_root = image_directory.resolve()
     system_temp_root = Path(tempfile.gettempdir()).resolve()
     turns = thread.get("turns")
@@ -1070,6 +1254,8 @@ def enrich_thread_images(thread: dict[str, Any], image_directory: Path) -> dict[
                         and image_path.suffix.lower() in IMAGE_MEDIA_TYPES
                     )
                     if not in_remote_image_directory and not is_codex_clipboard_image:
+                        continue
+                    if in_remote_image_directory and is_expired_managed_message_image(image_path, image_root):
                         continue
                     if not image_path.is_file():
                         continue
@@ -1234,9 +1420,9 @@ class PairingAuth:
             return None
         if not hmac.compare_digest(normalize_pairing_code(code), self.code):
             self.failed_attempts += 1
-            if self.failed_attempts >= 8:
+            if self.failed_attempts >= PAIRING_MAX_FAILED_ATTEMPTS:
                 self.failed_attempts = 0
-                self.blocked_until = time.monotonic() + 60
+                self.blocked_until = time.monotonic() + PAIRING_LOCKOUT_SECONDS
             return None
         self.failed_attempts = 0
         token = secrets.token_urlsafe(32)
@@ -1248,6 +1434,9 @@ class PairingAuth:
             self.token_hashes.discard(token_hash)
             raise
         return token
+
+    def retry_after_seconds(self) -> int:
+        return max(0, math.ceil(self.blocked_until - time.monotonic()))
 
     def accepts(self, token: str | None) -> bool:
         if not token:
@@ -1292,8 +1481,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         app_server._emit,
     )
     idempotent_requests = IdempotentRequestRegistry()
-    image_directory = Path(tempfile.mkdtemp(prefix="codex-remote-images-", dir=auth.state_path.parent))
-    pdf_attachments = PdfAttachmentStore(image_directory / "pdf-attachments")
+    image_directory = prepare_message_image_directory(auth.state_path.parent)
+    image_storage_lock = threading.Lock()
+    runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
+    pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
 
     async def reap_tmux_terminal_sessions() -> None:
@@ -1311,12 +1502,24 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 logger.exception("Could not clean idle tmux terminal sessions")
             await asyncio.sleep(TMUX_CLEANUP_INTERVAL_SECONDS)
 
+    async def reap_expired_message_images() -> None:
+        while True:
+            await asyncio.sleep(MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS)
+            try:
+                deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
+                if deleted:
+                    logger.info("Removed %d expired chat image(s)", deleted)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                logger.exception("Could not clean expired chat images")
+
     async def send_queued_turn(thread_id: str, payload: dict[str, Any], steer: bool) -> str | None:
         images = [TurnImage(name=image["name"], media_type=image["mediaType"], data=image["data"]) for image in payload["images"]]
         pdf_ids = [document["sourceFileId"] for document in payload.get("documents", []) if document.get("sourceFileId")]
         if is_claude_thread_id(thread_id):
             turn_directory, prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                payload["requestText"], images, pdf_ids, pdf_attachments, image_directory,
+                payload["requestText"], images, pdf_ids, pdf_attachments, runtime_directory,
             )
             try:
                 turn_id = await claude_code.start_turn(
@@ -1367,12 +1570,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
+        try:
+            deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
+            if deleted:
+                logger.info("Removed %d expired chat image(s) at startup", deleted)
+        except Exception:
+            logger.exception("Could not clean expired chat images at startup")
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        image_reaper = asyncio.create_task(reap_expired_message_images())
         terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
         shared_queue.start()
         try:
             yield
         finally:
+            image_reaper.cancel()
+            with suppress(asyncio.CancelledError):
+                await image_reaper
             terminal_reaper.cancel()
             with suppress(asyncio.CancelledError):
                 await terminal_reaper
@@ -1385,14 +1598,15 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 await history_watcher
             await app_server.close()
             shared_state.close()
-            shutil.rmtree(image_directory, ignore_errors=True)
+            shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.28.4-dev.3", lifespan=lifespan)
+    app = FastAPI(title="Codex Remote", version="0.43.0-dev.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
     app.state.idempotent_requests = idempotent_requests
     app.state.pdf_attachments = pdf_attachments
+    app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
     browser_history_sync = BrowserHistorySync()
@@ -1446,7 +1660,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except PairingStateError as error:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
         if token is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码无效或尝试次数过多")
+            retry_after = auth.retry_after_seconds()
+            if retry_after > 0:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="配对尝试次数已达上限，配对已暂停",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="配对码错误")
         return {"token": token}
 
     @app.post("/api/v1/unpair")
@@ -1483,6 +1704,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_image_preview(base, path, image_directory)
+
+    @app.get("/api/v1/codex/threads/{thread_id}/viewed-image")
+    async def codex_viewed_image(thread_id: str, path: str = "") -> dict[str, str | int]:
+        if is_claude_thread_id(thread_id):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="找不到 Codex 会话")
+        try:
+            thread = await app_server.read_thread(thread_id)
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
+        is_absolute = path.startswith(("/", "\\")) or (len(path) > 1 and path[1] == ":")
+        if is_absolute:
+            base = app_server.workspace
+        else:
+            cwd = shared_state.thread_workspace(thread_id) or thread.get("cwd")
+            base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return codex_viewed_image_preview(base, path, thread, image_directory)
 
     @app.post("/api/v1/codex/workspace/file")
     async def save_workspace_file(request: WorkspaceFileSaveRequest) -> dict[str, str | int | bool]:
@@ -1861,7 +2098,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         if is_claude_thread_id(thread_id):
             async def start_claude_turn() -> dict[str, Any]:
                 turn_directory, turn_prompt, image_paths, attachment_paths = prepare_claude_turn_files(
-                    prompt, body.images, body.pdf_attachments, pdf_attachments, image_directory,
+                    prompt, body.images, body.pdf_attachments, pdf_attachments, runtime_directory,
                 )
                 try:
                     turn_id = await claude_code.start_turn(
@@ -1895,7 +2132,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
         async def start() -> dict[str, Any]:
-            image_paths = save_turn_images(body.images, image_directory)
+            image_paths = save_turn_images(
+                body.images, image_directory,
+                max_storage_bytes=MAX_STORED_IMAGE_BYTES,
+                storage_lock=image_storage_lock,
+            )
             try:
                 turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
                 cwd = await thread_workspace_for_turn(thread_id)
@@ -1971,7 +2212,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="请填写消息或附加图片")
 
         async def steer() -> dict[str, Any]:
-            image_paths = save_turn_images(body.images, image_directory)
+            image_paths = save_turn_images(
+                body.images, image_directory,
+                max_storage_bytes=MAX_STORED_IMAGE_BYTES,
+                storage_lock=image_storage_lock,
+            )
             try:
                 turn_prompt = prompt_with_original_pdfs(prompt, body.pdf_attachments, pdf_attachments)
                 result = await app_server.steer_turn(thread_id, turn_prompt, image_paths)

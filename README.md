@@ -64,6 +64,14 @@ pnpm --filter codex-remote start
 
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `codex-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
 
+## 阿里云百炼语音输入（可选）
+
+首次使用时，在网页版左侧“设置”→“阿里云百炼语音”中填写 API Key、Workspace ID 和地域，保存后立即生效，无需重启。API Key 保存在服务端本机的配置文件中，不会返回给浏览器；Linux/macOS 下该文件仅允许服务用户读写。默认实时模型为 `qwen3.8-omni-flash-realtime`，默认转写模型为 `qwen3-asr-flash-realtime`；模型也可以在高级设置中调整。
+
+仍可通过 `DASHSCOPE_API_KEY`、`BAILIAN_WORKSPACE_ID`、`BAILIAN_REGION`、`BAILIAN_REALTIME_MODEL` 和 `BAILIAN_TRANSCRIPTION_MODEL` 环境变量配置。环境变量会作为项目设置的回退值；“恢复服务器环境变量”会清除项目内保存的配置。
+
+语音输入仅转写并插入输入框，不会自动发送。浏览器麦克风要求 HTTPS 安全连接；电脑本机的 `localhost` 可直接使用，但手机通过局域网 IP 访问 HTTP 页面时，浏览器会禁止麦克风，需要通过 HTTPS 访问。
+
 后端必须和要使用的 Codex 安装在同一台主机上；Linux 后端不能直接识别另一台 Windows 主机里的 Codex 进程。
 
 受信任设备的令牌摘要保存在用户数据目录中，原始令牌和配对码不会写入该文件。Windows 默认使用 `%LOCALAPPDATA%\CodexRemote`，避免把应用数据写入项目或受限的 Codex 运行目录；Linux/macOS 默认使用 `~/.codex/codex-remote`。网页中的“退出”会撤销当前设备；如果设备遗失，可停止服务后删除该目录中的授权文件，再启动服务使所有设备重新配对。可用 `CODEX_REMOTE_HOME` 或 `CODEX_REMOTE_AUTH_FILE` 设置位置。

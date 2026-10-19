@@ -1,12 +1,15 @@
 import type { CSSProperties } from 'react'
 
-export type AppTheme = 'light' | 'dark' | 'warm' | 'custom'
+export type AppTheme = 'light' | 'dark' | 'warm' | 'custom' | 'retro' | 'pixel'
 
 export interface ThemePreferences {
   theme: AppTheme
   customBackgroundColor: string
   customTextColor: string
   customBackgroundTransparency: number
+  customBackgroundPositionX: number
+  customBackgroundPositionY: number
+  customBackgroundZoom: number
   fontSizeAdjustment: number
   systemNotificationsEnabled: boolean
   customBackgroundImage?: string
@@ -20,6 +23,9 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundColor: '#4b5563',
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
+  customBackgroundPositionX: 50,
+  customBackgroundPositionY: 50,
+  customBackgroundZoom: 100,
   fontSizeAdjustment: 0,
   systemNotificationsEnabled: false,
 }
@@ -30,6 +36,16 @@ export function normalizeHexColor(value: unknown, fallback: string) {
 
 export function normalizeTransparency(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
+}
+
+export function normalizeBackgroundPosition(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(100, Math.max(0, value)) * 10) / 10
+    : 50
+}
+
+export function normalizeBackgroundZoom(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(250, Math.max(100, Math.round(value))) : 100
 }
 
 export function normalizeFontSizeAdjustment(value: unknown) {
@@ -51,7 +67,7 @@ export function readThemePreferences(): ThemePreferences {
     const value = window.localStorage.getItem(themePreferencesStorageKey)
     if (!value) return defaultThemePreferences
     const parsed = JSON.parse(value) as Record<string, unknown>
-    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom'
+    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' || parsed.theme === 'retro' || parsed.theme === 'pixel'
       ? parsed.theme
       : defaultThemePreferences.theme
     const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
@@ -60,6 +76,9 @@ export function readThemePreferences(): ThemePreferences {
       customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
       customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
       customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
+      customBackgroundPositionX: normalizeBackgroundPosition(parsed.customBackgroundPositionX),
+      customBackgroundPositionY: normalizeBackgroundPosition(parsed.customBackgroundPositionY),
+      customBackgroundZoom: normalizeBackgroundZoom(parsed.customBackgroundZoom),
       fontSizeAdjustment: normalizeFontSizeAdjustment(parsed.fontSizeAdjustment),
       systemNotificationsEnabled: parsed.systemNotificationsEnabled === true,
       ...(customBackgroundImage ? { customBackgroundImage } : {}),
@@ -90,6 +109,8 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
   return {
     '--custom-theme-background': preferences.customBackgroundColor,
     '--custom-theme-background-opacity': customBackgroundOpacity,
+    '--custom-theme-background-position': `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
+    '--custom-theme-background-zoom': normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100,
     '--custom-theme-background-image': preferences.customBackgroundImage
       ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + preferences.customBackgroundImage + '")'
       : 'none',

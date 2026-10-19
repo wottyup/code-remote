@@ -23,7 +23,7 @@ import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/t
 import { deleteThreadHistoryCache, readThreadHistoryCache, serializedCacheSizeBytes, threadHistoryCacheMaxBytes, threadHistoryCacheMaxEntries, writeThreadHistoryCache } from '../lib/threadHistoryStorage'
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
-import { visibleQueuedMessages } from '../lib/sharedQueueVisibility'
+import { mergePendingQueuedMessages, visibleQueuedMessages } from '../lib/sharedQueueVisibility'
 
 interface ApprovalRequest {
   requestId: string | number
@@ -1352,6 +1352,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [latestThreadCompletion, setLatestThreadCompletion] = useState<CodexThreadCompletion | null>(null)
   const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const [serverQueuedMessagesByThread, setServerQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
+  const [pendingSubmittedByThread, setPendingSubmittedByThread] = useState<QueuedMessagesByThread>({})
   const serverQueuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
   const serverQueueFetchVersion = useRef(new Map<string, number>())
   const pendingServerQueueRemovals = useRef(new Map<string, Set<string>>())
@@ -3941,6 +3942,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     requestId = queuedMessageId(),
     cwd?: string,
     engine: ChatEngine = activeEngine,
+    pendingPayload?: QueuedTurnPayload,
   ) => {
     if (handedOffRef.current) {
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
@@ -3951,44 +3953,50 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       cachedActiveThreadRefreshTimer.current = undefined
     }
     const previousThread = activeThread
+    const pendingMessage = pendingPayload ? localMessageFromQueuedPayload(pendingPayload) : null
+    const creationRequest = ++loadRequest.current
     cacheVisibleThread()
     historyRevision.current += 1
     setLoadingHistory(true)
+    if (pendingMessage) setMessages([pendingMessage])
     try {
       const thread = await codexRemoteClient.createThread(token, model, approvalPolicy, requestId, cwd, engine)
-      activeThreadId.current = thread.id
-      if (persistActiveThread) persistActiveThreadId(thread.id)
-      setQueueRecoveryReadyThreadId(null)
-      if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
-      resetStreamingAssistant()
-      setActiveTurnId(null)
-      interruptRequestedThreadId.current = null
-      interruptRequestedTurnId.current = null
-      interruptInFlightThreadId.current = null
-      resumedThreadId.current = thread.id
-      setActiveThread(thread)
-      setMessages([])
-      setIsRunning(false)
-      setIsInterrupting(false)
-      clearTurnTimer()
-      setActivity(null)
-      setFileChangesByTurn({})
-      operationsByTurnRef.current = {}
-      setOperationsByTurn({})
-      activityTimelineByTurnRef.current = {}
-      setActivityTimelineByTurn({})
-      writerConflictRef.current = false
-      setWriterConflict(false)
-      activityItemId.current = null
+      if (creationRequest === loadRequest.current) {
+        activeThreadId.current = thread.id
+        if (persistActiveThread) persistActiveThreadId(thread.id)
+        setQueueRecoveryReadyThreadId(null)
+        if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
+        resetStreamingAssistant()
+        setActiveTurnId(null)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        resumedThreadId.current = thread.id
+        setActiveThread(thread)
+        setMessages(pendingMessage ? [pendingMessage] : [])
+        setIsRunning(false)
+        setIsInterrupting(false)
+        clearTurnTimer()
+        setActivity(null)
+        setFileChangesByTurn({})
+        operationsByTurnRef.current = {}
+        setOperationsByTurn({})
+        activityTimelineByTurnRef.current = {}
+        setActivityTimelineByTurn({})
+        writerConflictRef.current = false
+        setWriterConflict(false)
+        activityItemId.current = null
+        setError(null)
+      }
       setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
-      setError(null)
       return thread
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
-      setError(reason instanceof Error ? reason.message : '创建对话失败')
+      if (pendingMessage) setMessages((current) => current.filter((message) => message.id !== pendingMessage.id))
+      if (creationRequest === loadRequest.current) setError(reason instanceof Error ? reason.message : '创建对话失败')
       return null
     } finally {
-      setLoadingHistory(false)
+      if (creationRequest === loadRequest.current) setLoadingHistory(false)
     }
   }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
 
@@ -4025,7 +4033,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
     if (!thread) {
-      thread = await createThread(input.model, input.approvalPolicy, payload.id)
+      thread = await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
@@ -4045,6 +4053,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         appendQueuedMessageToActiveThread(thread.id, payload)
         setIsRunning(true)
         setActivity({ label: '正在发送' })
+      } else {
+        setPendingSubmittedByThread((current) => ({
+          ...current,
+          [thread.id]: [...(current[thread.id] ?? []), { ...payload, deliveryState: 'submitting' }],
+        }))
       }
       const retractPendingMessage = () => {
         if (!optimistic) return
@@ -4093,6 +4106,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         void refreshServerQueue(thread.id)
         return false
       } finally {
+        if (!optimistic) {
+          setPendingSubmittedByThread((current) => {
+            const remaining = current[thread.id]?.filter((message) => message.id !== payload.id) ?? []
+            const next = { ...current }
+            if (remaining.length > 0) next[thread.id] = remaining
+            else delete next[thread.id]
+            return next
+          })
+        }
         pendingTurnDeliveries.current.delete(payload.id)
       }
     }
@@ -4346,7 +4368,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     activeThread,
     activeEngine,
     messages,
-    queuedMessages: activeThread ? serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages,
+    queuedMessages: activeThread ? mergePendingQueuedMessages(
+      serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages,
+      pendingSubmittedByThread[activeThread.id] ?? emptyQueuedMessages,
+    ) : emptyQueuedMessages,
     pinRevision,
     isRunning,
     runningTurnId,

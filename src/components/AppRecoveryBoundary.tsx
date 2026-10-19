@@ -22,7 +22,8 @@ export class AppRecoveryBoundary extends Component<AppRecoveryBoundaryProps, App
     return { hasError: true }
   }
 
-  componentDidCatch(_error: Error, _info: ErrorInfo) {
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[Codex Remote] 页面恢复边界捕获 React 异常', error, info.componentStack)
     const now = Date.now()
     // One retry is enough for a transient foreground/HMR render race. A
     // repeated error stays visible with clear recovery controls instead of

@@ -1,0 +1,20 @@
+Android 1.0-inspired theme icons
+
+The ic_android1_*.png resources include images from Android Open Source Project
+release android-2.0_r1, images adapted from those resources, and 19 icons cropped
+from the transparent icon sheet supplied by the user for this project. The
+user-supplied icons are search, refresh, chat, settings, link, terminal, folder,
+file_add, send, pause, edit, check, delete, palette, display, language,
+notifications, lock and info. The Apache notice below applies to the AOSP
+resources only; it does not claim ownership or license for the user image.
+
+Sources:
+https://android.googlesource.com/platform/frameworks/base/+/refs/tags/android-2.0_r1/core/res/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Settings/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Browser/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Launcher2/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+https://android.googlesource.com/platform/packages/apps/Mms/+/refs/tags/android-2.0_r1/res/drawable-hdpi/
+
+Copyright (C) 2005-2009 The Android Open Source Project
+Licensed under the Apache License, Version 2.0. The full license text is included
+in this application at assets/fonts/NOTICE.
