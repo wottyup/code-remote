@@ -3,6 +3,7 @@ import { Activity, ChartColumnIncreasing, Database, RefreshCw, Settings2, X } fr
 import {
   fetchCPAUsageAnalytics,
   type CPAUsageAccountStat,
+  type CPAUsageAnalyticsSummary,
   type CPAUsageAnalyticsResponse,
   type CPAUsageModelStat,
   type CPAUsageRange,
@@ -11,10 +12,19 @@ import {
 } from '../lib/cpaUsageStats'
 
 const numberFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
+const percentFormatter = new Intl.NumberFormat('zh-CN', { style: 'percent', maximumFractionDigits: 1 })
 const dateTimeFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
 
 function count(value: number | undefined) {
   return numberFormatter.format(Number.isFinite(value) ? Math.max(0, value ?? 0) : 0)
+}
+
+function cachedTokenTotal(summary: CPAUsageAnalyticsSummary | undefined) {
+  const cacheFields = [summary?.cached_tokens, summary?.cache_read_tokens, summary?.cache_creation_tokens]
+  return cacheFields.reduce<number>(
+    (total, value) => total + (typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : 0),
+    0,
+  )
 }
 
 function accountLabel(account: CPAUsageAccountStat) {
@@ -141,7 +151,15 @@ export function CPAUsageStatsPanel({
                   <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--primary"><span><Activity size={14} />总 Token</span><strong>{count(summary.total_tokens)}</strong><small>{count(summary.total_calls)} 次请求</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>输入</span><strong>{count(summary.input_tokens)}</strong><small>input tokens</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>输出</span><strong>{count(summary.output_tokens)}</strong><small>output tokens</small></article>
-                  <article className="theme-settings-card cpa-usage-summary-card"><span>缓存命中</span><strong>{count(summary.cached_tokens)}</strong><small>cached tokens</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card">
+                    <span>缓存</span>
+                    <strong>{count(cachedTokenTotal(summary))}</strong>
+                    <small>
+                      {typeof summary.cache_hit_rate === 'number' && Number.isFinite(summary.cache_hit_rate)
+                        ? `命中率 ${percentFormatter.format(Math.max(0, Math.min(1, summary.cache_hit_rate)))}`
+                        : '缓存 Token'}
+                    </small>
+                  </article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>推理</span><strong>{count(summary.reasoning_tokens)}</strong><small>reasoning tokens</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card"><span>失败请求</span><strong>{count(summary.failure_calls)}</strong><small>共 {count(summary.success_calls)} 次成功</small></article>
                 </section>
