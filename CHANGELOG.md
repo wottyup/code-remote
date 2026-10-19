@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.49.1-dev.8] - 修复安卓聊天中 Markdown 附件展开为全文
+
 ## [0.49.1-dev.7] - 修复大型 Codex 对话导致的 App Server 断连
 
 ## [0.49.1-dev.6] - 修复 Claude 对话引用中的助手名称

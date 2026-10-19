@@ -140,6 +140,16 @@ import kotlin.math.min
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
+private data class TextDocumentAttachmentPreview(
+    val name: String,
+    val characterCount: Int,
+)
+
+private data class ParsedUserMessageText(
+    val visibleText: String,
+    val documentAttachments: List<TextDocumentAttachmentPreview>,
+)
+
 private class PixelFrameNineSliceDrawable(
     private val bitmap: Bitmap,
     private val sourceCornerWidth: Int,
@@ -3833,7 +3843,10 @@ class MainActivity : Activity() {
                 }
                 bubble.addView(meta, LinearLayout.LayoutParams((maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), WRAP))
             }
-            val text = messageText(item, role)
+            val rawText = messageText(item, role)
+            val parsedUserText = if (role == "user") parseUserMessageText(rawText) else null
+            val text = parsedUserText?.visibleText ?: rawText
+            val documentAttachments = parsedUserText?.documentAttachments.orEmpty()
             val hasImage = item.optJSONArray("content")?.let { parts ->
                 (0 until parts.length()).any { index ->
                     normalizedType(parts.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
@@ -3841,12 +3854,18 @@ class MainActivity : Activity() {
             } == true
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
                 addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
-            } else if (text.isNotBlank() || !hasImage) {
+            } else if (text.isNotBlank() || documentAttachments.isNotEmpty() || !hasImage) {
                 if (role == "assistant") {
                     addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
                 } else {
+                    addTextDocumentAttachmentCards(bubble, documentAttachments, maxBubbleWidth)
                     val contentColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
-                    val content = label(text.ifBlank { tr("（附件消息）") }, 14, contentColor, translateUi = false).apply {
+                    val visibleContent = when {
+                        text.isNotBlank() -> text
+                        documentAttachments.isNotEmpty() || hasImage -> ""
+                        else -> tr("（附件消息）")
+                    }
+                    val content = label(visibleContent, 14, contentColor, translateUi = false).apply {
                         setTextIsSelectable(true)
                         setLineSpacing(dp(3).toFloat(), 1.3f)
                         typeface = themedTypeface()
@@ -3855,12 +3874,14 @@ class MainActivity : Activity() {
                         hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
                         maxWidth = (maxBubbleWidth - dp(22)).coerceAtLeast(dp(120))
                     }
-                    Linkify.addLinks(content, Linkify.WEB_URLS)
-                    content.setLinkTextColor(ACCENT)
-                    enableChatLinkClicks(content)
-                    val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
-                    val contentWidth = naturalTextBlockWidth(content, text.ifBlank { "（附件消息）" }, maxTextWidth)
-                    bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                    if (visibleContent.isNotBlank()) {
+                        Linkify.addLinks(content, Linkify.WEB_URLS)
+                        content.setLinkTextColor(ACCENT)
+                        enableChatLinkClicks(content)
+                        val maxTextWidth = (maxBubbleWidth - bubble.paddingLeft - bubble.paddingRight).coerceAtLeast(dp(80))
+                        val contentWidth = naturalTextBlockWidth(content, visibleContent, maxTextWidth)
+                        bubble.addView(content, LinearLayout.LayoutParams(contentWidth, WRAP))
+                    }
                 }
             }
             addMessageImages(bubble, item, maxBubbleWidth)
@@ -3882,7 +3903,7 @@ class MainActivity : Activity() {
                         setPadding(0, dp(3), dp(2), 0)
                     }, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
-                messageCopyAction(text)?.let { action ->
+                messageCopyAction(rawText)?.let { action ->
                     messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
@@ -4015,7 +4036,8 @@ class MainActivity : Activity() {
             }
         }
         val content = JSONArray()
-        payload.optString("text").takeIf { it.isNotBlank() }?.let { content.put(JSONObject().put("type", "text").put("text", it)) }
+        payload.optString("requestText").ifBlank { payload.optString("text") }
+            .takeIf { it.isNotBlank() }?.let { content.put(JSONObject().put("type", "text").put("text", it)) }
         files.filter { it.optString("kind") == "image" }.forEach { file ->
             content.put(JSONObject().put("type", "localImage")
                 .put("data", file.optString("thumbnail").ifBlank { file.optString("data") })
@@ -4052,7 +4074,10 @@ class MainActivity : Activity() {
             setPadding(dp(11), dp(7), dp(11), dp(7))
             background = rounded(if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_SURFACE else CODEX_USER_MESSAGE_FILL, dp(if (retroTheme) 5 else 12))
         }
-        val text = messageText(item, "user")
+        val rawText = messageText(item, "user")
+        val parsedText = parseUserMessageText(rawText)
+        val text = parsedText.visibleText
+        addTextDocumentAttachmentCards(bubble, parsedText.documentAttachments, maxBubbleWidth)
         if (text.isNotBlank()) {
             val content = label(text, 14, if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT, translateUi = false).apply {
                 setTextIsSelectable(true)
@@ -5398,6 +5423,68 @@ class MainActivity : Activity() {
             is JSONArray -> for (index in 0 until value.length()) operationPaths(value.opt(index), depth + 1, output)
         }
         return output.toList()
+    }
+
+    private fun parseUserMessageText(rawText: String): ParsedUserMessageText {
+        val attachments = mutableListOf<TextDocumentAttachmentPreview>()
+        val visibleText = USER_DOCUMENT_ATTACHMENT_PATTERN.replace(rawText) { match ->
+            attachments += TextDocumentAttachmentPreview(
+                name = match.groupValues[1].trim(),
+                characterCount = match.groupValues[2].length,
+            )
+            ""
+        }.replace(USER_MESSAGE_EXTRA_NEWLINES_PATTERN, "\n\n").trim()
+        return ParsedUserMessageText(visibleText, attachments)
+    }
+
+    private fun addTextDocumentAttachmentCards(
+        container: LinearLayout,
+        attachments: List<TextDocumentAttachmentPreview>,
+        maximumBubbleWidth: Int,
+    ) {
+        if (attachments.isEmpty()) return
+        val maximumCardWidth = (maximumBubbleWidth - container.paddingLeft - container.paddingRight).coerceAtLeast(dp(120))
+        attachments.forEach { attachment ->
+            val horizontalPadding = dp(if (pixelTheme) 8 else 10)
+            val iconSize = dp(23)
+            val iconGap = dp(8)
+            val infoMaxWidth = (maximumCardWidth - horizontalPadding * 2 - iconSize - iconGap).coerceAtLeast(dp(64))
+            val characterLabel = "${java.text.NumberFormat.getIntegerInstance(Locale.CHINA).format(attachment.characterCount)} 个字符"
+            val title = label(attachment.name, 12, TEXT, bold = true, translateUi = false).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                maxWidth = infoMaxWidth
+            }
+            val detail = label(characterLabel, 10, MUTED, translateUi = false).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                maxWidth = infoMaxWidth
+            }
+            val desiredInfoWidth = max(title.paint.measureText(attachment.name).toInt(), detail.paint.measureText(characterLabel).toInt())
+                .coerceAtMost(infoMaxWidth)
+            val cardWidth = (horizontalPadding * 2 + iconSize + iconGap + desiredInfoWidth).coerceAtMost(maximumCardWidth)
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(horizontalPadding, dp(7), horizontalPadding, dp(7))
+                background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
+                    else rounded(PANEL_INSET, dp(if (retroTheme) 4 else 8), BORDER, dp(1))
+            }
+            card.addView(ImageView(this).apply {
+                setPixelAwareImageResource(fileDisplayIconResource(attachment.name))
+                scaleType = ImageView.ScaleType.FIT_CENTER
+                if (!retroTheme) imageTintList = null
+            }, LinearLayout.LayoutParams(iconSize, iconSize).apply { rightMargin = iconGap })
+            card.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(title, LinearLayout.LayoutParams(desiredInfoWidth, WRAP))
+                addView(detail, LinearLayout.LayoutParams(desiredInfoWidth, WRAP).apply { topMargin = dp(1) })
+            }, LinearLayout.LayoutParams(desiredInfoWidth, WRAP))
+            container.addView(card, LinearLayout.LayoutParams(cardWidth, WRAP).apply {
+                topMargin = dp(5)
+            })
+        }
     }
 
     private fun addMessageImages(container: LinearLayout, item: JSONObject, maxBubbleWidth: Int) {
@@ -10541,6 +10628,8 @@ class MainActivity : Activity() {
         private val SKILL_TOOL_PATTERN = Regex("skill", RegexOption.IGNORE_CASE)
         private val CONTROL_CHARACTER_PATTERN = Regex("[\\u0000-\\u001f\\u007f]+")
         private val WHITESPACE_PATTERN = Regex("\\s+")
+        private val USER_DOCUMENT_ATTACHMENT_PATTERN = Regex("""\[附件文档：([^\r\n]+)\]\r?\n([\s\S]*?)\r?\n\[/附件文档\]""")
+        private val USER_MESSAGE_EXTRA_NEWLINES_PATTERN = Regex("\n{3,}")
         private const val MAX_CACHED_THREADS = 32
         private const val MAX_EAGER_HISTORY_CACHE_BYTES = 1024L * 1024L
         private const val MAX_SINGLE_HISTORY_CACHE_BYTES = 24L * 1024 * 1024
