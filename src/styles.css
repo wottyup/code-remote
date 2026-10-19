@@ -518,11 +518,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-range-tabs button { min-height: 30px; padding: 0 11px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #929aaa; cursor: pointer; font: inherit; }
 .cpa-usage-range-tabs button:hover { color: #e8ebf3; }
 .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: rgba(170, 186, 255, .18); background: rgba(115, 132, 187, .2); color: #e2e7ff; }
-.cpa-usage-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.cpa-usage-summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); gap: 12px; margin-bottom: 16px; }
 .cpa-usage-summary-grid .theme-settings-card + .theme-settings-card, .cpa-usage-breakdown-grid .theme-settings-card + .theme-settings-card { margin-top: 0; }
 .cpa-usage-summary-card { display: grid; min-width: 0; min-height: 120px; align-content: center; gap: 7px; padding: 16px 18px; }
 .cpa-usage-summary-card > span { display: flex; align-items: center; gap: 7px; color: #929aaa; font-size: calc(11px + var(--mobile-font-offset)); }
-.cpa-usage-summary-card > strong { overflow: hidden; color: #eceef4; font-size: clamp(21px, 3vw, 29px); font-variant-numeric: tabular-nums; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
+.cpa-usage-summary-card > strong { overflow: hidden; color: #eceef4; font-size: clamp(18px, 1.5vw, 23px); font-variant-numeric: tabular-nums; letter-spacing: -.035em; text-overflow: ellipsis; white-space: nowrap; }
 .cpa-usage-summary-card > small { color: #737b89; font-size: calc(10px + var(--mobile-font-offset)); }
 .cpa-usage-summary-card--primary { border-color: rgba(131, 151, 220, .32); background: linear-gradient(135deg, rgba(75, 91, 149, .24), rgba(21, 23, 29, .9)); }
 .cpa-usage-summary-card--primary > strong { color: #cbd4ff; }
@@ -586,9 +586,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .cpa-usage-toolbar__controls { width: 100%; gap: 7px; }
   .cpa-usage-key-filter { max-width: 100%; }
   .cpa-usage-key-filter select { max-width: min(42vw, 190px); }
-  .cpa-usage-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .cpa-usage-summary-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
   .cpa-usage-summary-card { min-height: 102px; padding: 12px; }
-  .cpa-usage-summary-card > strong { font-size: 21px; }
+  .cpa-usage-summary-card > strong { font-size: 18px; }
   .cpa-usage-section__body { padding: 12px 10px 16px; }
   .cpa-usage-timeline { min-height: 175px; grid-auto-columns: minmax(21px, 1fr); gap: 4px; }
   .cpa-usage-breakdown-grid { grid-template-columns: minmax(0, 1fr); gap: 12px; }
