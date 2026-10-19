@@ -312,8 +312,27 @@ function readPinnedThreadIds() {
   }
 }
 
-function isSettingsHistoryEntry(state: unknown): boolean {
-  return Boolean(state && typeof state === 'object' && (state as Record<string, unknown>)[settingsHistoryStateKey] === true)
+type PanelHistoryEntry = 'settings' | 'usage-stats'
+
+function getPanelHistoryEntry(state: unknown): PanelHistoryEntry | null {
+  if (!state || typeof state !== 'object') return null
+  const panel = (state as Record<string, unknown>)[settingsHistoryStateKey]
+  if (panel === 'settings' || panel === 'usage-stats') return panel
+  // Older builds stored `true` for both panels. Keep its original settings meaning.
+  return panel === true ? 'settings' : null
+}
+
+function openPanelHistoryEntry(panel: PanelHistoryEntry) {
+  const currentState = window.history.state
+  const currentPanel = getPanelHistoryEntry(currentState)
+  if (currentPanel === panel) return
+
+  const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
+    ? currentState as Record<string, unknown>
+    : {}
+  const nextState = { ...previousState, [settingsHistoryStateKey]: panel }
+  if (currentPanel) window.history.replaceState(nextState, '')
+  else window.history.pushState(nextState, '')
 }
 
 interface ComposerPreferences {
@@ -3878,8 +3897,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(() => isSettingsHistoryEntry(window.history.state))
-  const [usageStatsOpen, setUsageStatsOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
+  const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -3914,13 +3933,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => { current = false }
   }, [token])
   const openSettingsPanel = useCallback(() => {
-    const currentState = window.history.state
-    if (!isSettingsHistoryEntry(currentState)) {
-      const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
-        ? currentState as Record<string, unknown>
-        : {}
-      window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
-    }
+    openPanelHistoryEntry('settings')
     setWorkspacePreviewRequest(null)
     setUsageStatsOpen(false)
     setSettingsOpen(true)
@@ -3928,13 +3941,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setWorkspaceOpen(false)
   }, [])
   const openUsageStatsPanel = useCallback(() => {
-    const currentState = window.history.state
-    if (!isSettingsHistoryEntry(currentState)) {
-      const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
-        ? currentState as Record<string, unknown>
-        : {}
-      window.history.pushState({ ...previousState, [settingsHistoryStateKey]: true }, '')
-    }
+    openPanelHistoryEntry('usage-stats')
     setWorkspacePreviewRequest(null)
     setSettingsOpen(false)
     setUsageStatsOpen(true)
@@ -3954,11 +3961,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
-    if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
   }, [])
   const closeUsageStatsPanel = useCallback(() => {
     setUsageStatsOpen(false)
-    if (isSettingsHistoryEntry(window.history.state)) window.history.back()
+    if (getPanelHistoryEntry(window.history.state)) window.history.back()
   }, [])
   const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
     saveCPAUsageSettings(nextSettings)
@@ -4472,8 +4479,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useEffect(() => {
     const syncSettingsFromHistory = (event: PopStateEvent) => {
-      setSettingsOpen(isSettingsHistoryEntry(event.state))
-      setUsageStatsOpen(false)
+      const panel = getPanelHistoryEntry(event.state)
+      setSettingsOpen(panel === 'settings')
+      setUsageStatsOpen(panel === 'usage-stats')
     }
     window.addEventListener('popstate', syncSettingsFromHistory)
     return () => window.removeEventListener('popstate', syncSettingsFromHistory)
