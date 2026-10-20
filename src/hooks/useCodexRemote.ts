@@ -1468,6 +1468,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const isBackground = useCallback(() => appBackgroundRef.current || document.visibilityState === 'hidden', [])
   const restoringThreadId = useRef<string | null>(null)
   const deletedThreadIds = useRef(new Set<string>())
+  const threadListOverrides = useRef(new Map<string, CodexThread>())
   const threadHistoryCache = useRef(new Map<string, ThreadCacheEntry>())
   const pendingPersistentThreadCache = useRef(new Map<string, ThreadCacheEntry>())
   const persistentThreadCacheTimers = useRef(new Map<string, number>())
@@ -2094,6 +2095,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const removeDeletedThread = useCallback((threadId: string) => {
     if (!threadId) return
     deletedThreadIds.current.add(threadId)
+    threadListOverrides.current.delete(threadId)
     threadListRef.current = threadListRef.current.filter((thread) => thread.id !== threadId)
     setThreads((current) => current.filter((thread) => thread.id !== threadId))
     clearThreadCompletion(threadId)
@@ -2178,12 +2180,28 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     setLatestThreadCompletion({ threadId, completedAt: Date.now(), engine: engineOfThread(thread) })
   }, [isBackground])
 
+  const upsertThread = useCallback((thread: CodexThread) => {
+    if (deletedThreadIds.current.has(thread.id)) return
+    threadListOverrides.current.set(thread.id, thread)
+    const next = [thread, ...threadListRef.current.filter((candidate) => candidate.id !== thread.id)]
+    threadListRef.current = next
+    threadListLoadedRef.current = true
+    setThreads(next)
+  }, [])
+
   const refreshThreads = useCallback(async (force = false) => {
     if (handedOffRef.current || isBackground()) return null
     if (threadListRequest.current) return threadListRequest.current
     const request = (async () => {
       try {
         const next = (await codexRemoteClient.threads(token, force)).filter((thread) => !deletedThreadIds.current.has(thread.id))
+        for (const [threadId, thread] of threadListOverrides.current) {
+          if (next.some((candidate) => candidate.id === threadId)) {
+            threadListOverrides.current.delete(threadId)
+            continue
+          }
+          next.unshift(thread)
+        }
         threadListRef.current = next
         threadListLoadedRef.current = true
         threadListFetchedAtRef.current = Date.now()
@@ -4153,7 +4171,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         activityItemId.current = null
         setError(null)
       }
-      setThreads((current) => [thread, ...current.filter((item) => item.id !== thread.id)])
+      upsertThread(thread)
       return thread
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
@@ -4163,7 +4181,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       if (creationRequest === loadRequest.current) setLoadingHistory(false)
     }
-  }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token])
+  }, [activeEngine, activeThread, cacheVisibleThread, clearTurnTimer, onUnauthorized, persistActiveThread, prefetchThread, resetStreamingAssistant, setActiveTurnId, token, upsertThread])
 
   const sendMessage = useCallback(async (input: SendMessageInput) => {
     if (handedOffRef.current) {
@@ -4556,6 +4574,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     completedThreadIds,
     latestThreadCompletion,
     refreshThreads,
+    upsertThread,
     removeDeletedThread,
     renameThread,
     bindThreadWorkspace,

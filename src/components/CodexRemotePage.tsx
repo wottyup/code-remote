@@ -5163,7 +5163,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           claudeEffort: targetPreferences.claudeEffort ?? 'default',
           claudePermissionMode: targetPreferences.claudePermissionMode ?? 'default',
         })
-    if (paneIndex !== 0) await remote0.refreshThreads(true)
+    if (target !== remote0) remote0.upsertThread(thread)
     return thread
   }
 
