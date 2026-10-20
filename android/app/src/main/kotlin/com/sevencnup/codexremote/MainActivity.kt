@@ -903,6 +903,9 @@ class MainActivity : Activity() {
     @Volatile private var terminalReady = false
     private var terminalImeVisible = false
     private var terminalImeHiddenUntil = 0L
+    private var terminalScrollInteractionRevision = 0L
+    private var terminalScrollGestureActive = false
+    private var terminalOutputFollowBottom = true
     private var attachRequestActive = false
     private var attachmentPickerScope: String? = null
     private var restoreImeAfterAttachment = false
@@ -1531,6 +1534,7 @@ class MainActivity : Activity() {
                     else -> terminalImeHiddenUntil
                 }
                 terminalImeVisible = terminalKeyboardVisible
+                positionTerminalOverlay()
                 if (keyboardJustOpened && imeFollowMessageBottom) {
                     scheduleImeMessageBottomFollow()
                 } else if (!keyboardVisible) {
@@ -9393,7 +9397,7 @@ class MainActivity : Activity() {
         terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(8))
+            setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(4))
             background = wallpaperBackground(
                 if (themeName == "custom") OPAQUE_PANEL else if (lightTheme) Color.rgb(250, 250, 251) else Color.rgb(12, 14, 17),
                 viewportWidthPx = root.width,
@@ -9430,15 +9434,50 @@ class MainActivity : Activity() {
             setTextIsSelectable(true)
             setPadding(dp(9), dp(9), dp(9), dp(9))
             gravity = Gravity.TOP or Gravity.START
-            minHeight = dp(190)
             setOnClickListener { focusTerminalInput() }
+        }
+        val registerTerminalScrollTouch: (MotionEvent) -> Unit = { event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    terminalScrollInteractionRevision++
+                    terminalScrollGestureActive = true
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    terminalScrollInteractionRevision++
+                    terminalScrollGestureActive = false
+                }
+            }
+        }
+        terminalOutput?.setOnTouchListener { _, event ->
+            registerTerminalScrollTouch(event)
+            false
         }
         val outputScroll = ScrollView(this).apply {
             isFillViewport = true; isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
             background = rounded(if (lightTheme) Color.rgb(244, 246, 248) else Color.rgb(8, 10, 12), dp(8))
             addView(terminalOutput, FrameLayout.LayoutParams(MATCH, WRAP))
+            setOnTouchListener { _, event ->
+                registerTerminalScrollTouch(event)
+                false
+            }
         }
-        shell.addView(outputScroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(5); bottomMargin = dp(5) })
+        outputScroll.setOnScrollChangeListener { view, _, scrollY, _, _ ->
+            val scroll = view as ScrollView
+            val child = scroll.getChildAt(0) ?: return@setOnScrollChangeListener
+            val distanceToBottom = (child.bottom - (scrollY + scroll.height)).coerceAtLeast(0)
+            terminalOutputFollowBottom = distanceToBottom <= dp(24)
+        }
+        outputScroll.addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop && terminalOutputFollowBottom) {
+                view.post {
+                    if (!terminalOutputFollowBottom) return@post
+                    val scroll = view as? ScrollView ?: return@post
+                    val child = scroll.getChildAt(0) ?: return@post
+                    scroll.scrollTo(0, (child.height - scroll.height).coerceAtLeast(0))
+                }
+            }
+        }
+        shell.addView(outputScroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
         val arrows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("↑" to "\u001b[A", "↓" to "\u001b[B", "←" to "\u001b[D", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
             arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
@@ -9455,8 +9494,8 @@ class MainActivity : Activity() {
                 composerInput.append(value.takeLast(120_000))
                 closeTerminal()
             }
-        }, LinearLayout.LayoutParams(WRAP, dp(36)))
-        shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(38)))
+        }, LinearLayout.LayoutParams(WRAP, dp(32)))
+        shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(32)))
         terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
             alpha = 0f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -9464,6 +9503,9 @@ class MainActivity : Activity() {
         shell.addView(terminalInputSink, LinearLayout.LayoutParams(dp(1), dp(1)))
         terminalReady = false
         terminalImeVisible = false
+        terminalScrollInteractionRevision = 0L
+        terminalScrollGestureActive = false
+        terminalOutputFollowBottom = true
         terminalOverlay = shell
         root.addView(shell, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.TOP))
         terminalPositionListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionTerminalOverlay() }
@@ -9499,7 +9541,7 @@ class MainActivity : Activity() {
         composerDock.getLocationOnScreen(composerLocation)
         val composerTop = (composerLocation[1] - rootLocation[1]).coerceIn(0, root.height)
         (shell.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-            if (params.height != composerTop) {
+            if (params.height != composerTop || params.width != MATCH) {
                 params.width = MATCH
                 params.height = composerTop
                 params.gravity = Gravity.TOP
@@ -9605,9 +9647,17 @@ class MainActivity : Activity() {
 
     private fun appendTerminal(value: String) = handler.post {
         val output = terminalOutput ?: return@post
+        val scroll = output.parent as? ScrollView
+        val oldScrollY = scroll?.scrollY ?: 0
+        val shouldFollowOutput = scroll != null && terminalOutputFollowBottom
+        val interactionRevision = terminalScrollInteractionRevision
         output.text = terminalScreen.append(value)
-        (output.parent as? ScrollView)?.let { scroll ->
-            scroll.post { scroll.scrollTo(0, output.height) }
+        scroll?.post {
+            if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
+            val child = scroll.getChildAt(0) ?: return@post
+            val maxScrollY = (child.height - scroll.height).coerceAtLeast(0)
+            val targetScrollY = if (shouldFollowOutput) maxScrollY else oldScrollY.coerceAtMost(maxScrollY)
+            scroll.scrollTo(0, targetScrollY)
         }
     }
 
