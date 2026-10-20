@@ -504,7 +504,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-settings-actions { display: flex; flex-wrap: wrap; gap: 9px; padding: 12px 0 16px; }
 .cpa-usage-settings-message { margin: 0 0 8px; color: #91c99d; font-size: calc(12px + var(--mobile-font-offset)); }
 .cpa-usage-settings-message--error { color: #e59a9b; }
-.cpa-usage-settings-load-error { padding: 0 0 12px; }
 .cpa-usage-panel__header-actions { display: flex; flex: 0 0 auto; gap: 8px; }
 .cpa-usage-panel__content { width: 100%; }
 .cpa-usage-toolbar { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; color: #8e96a5; font-size: calc(11px + var(--mobile-font-offset)); }
