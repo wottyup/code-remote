@@ -913,7 +913,7 @@ export const codexRemoteClient = {
     }, { networkRetries: 3 })
   },
   interrupt(token: string, threadId: string, turnId?: string | null) {
-    return request<{ interrupted: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, {
+    return request<{ interrupted: boolean; stale?: boolean }>(token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/interrupt`, {
       method: 'POST',
       body: JSON.stringify({ turn_id: turnId }),
     })

@@ -178,6 +178,8 @@ def browser_event(event: dict[str, Any], *, thread_id: str | None = None, filter
     result = _pick(params, ("threadId", "turnId", "itemId"))
     if method in {"turn/started", "turn/completed"} and isinstance(turn, dict):
         result["turn"] = browser_turn(turn, include_items=False)
+        if method == "turn/completed" and params.get("stale") is True:
+            result["stale"] = True
     elif method in {"item/started", "item/completed"} and isinstance(params.get("item"), dict):
         result["item"] = browser_item(params["item"])
     elif method == "item/agentMessage/delta":

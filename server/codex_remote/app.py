@@ -1575,6 +1575,26 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
 
+    def paused_thread_view(thread_id: str, thread: dict[str, Any]) -> dict[str, Any]:
+        if is_claude_thread_id(thread_id) or not shared_state.is_paused(thread_id):
+            return thread
+        status = thread.get("status")
+        status_type = status.get("type") if isinstance(status, dict) else None
+        active_statuses = {"active", "inProgress", "running", "started"}
+        turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
+        latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
+        latest_status = latest.get("status") if isinstance(latest, dict) else None
+        if status_type not in active_statuses and latest_status not in active_statuses:
+            return thread
+        result = {**thread, "status": {"type": "interrupted"}}
+        if latest_status in active_statuses:
+            completed_at = latest.get("completedAt") or thread.get("updatedAt") or latest.get("startedAt")
+            updated_latest = {**latest, "status": "interrupted"}
+            if completed_at is not None:
+                updated_latest["completedAt"] = completed_at
+            result["turns"] = [*turns[:-1], updated_latest]
+        return result
+
     async def thread_workspace_for_turn(thread_id: str) -> Path:
         bound_cwd = shared_state.thread_workspace(thread_id)
         if bound_cwd:
@@ -1833,6 +1853,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             result = []
             for thread in threads:
                 thread_id = thread.get("id")
+                if isinstance(thread_id, str):
+                    thread = paused_thread_view(thread_id, thread)
                 summary = browser_thread_summary(thread)
                 if isinstance(thread_id, str):
                     revision = app_server.thread_history_revision(thread_id)
@@ -1913,7 +1935,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             # Capture before reading: a concurrent append must leave this
             # response stale, rather than claiming to contain the new data.
             revision = app_server.thread_history_revision(thread_id)
-            thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns, compact=True))
+            raw_thread = await app_server.read_thread(thread_id, tail_turns=tail_turns, compact=True)
+            thread = browser_thread(paused_thread_view(thread_id, raw_thread))
             if revision is not None:
                 thread.setdefault("historyRevision", revision)
             bound_cwd = shared_state.thread_workspace(thread_id)
@@ -2250,7 +2273,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/codex/threads/{thread_id}/interrupt")
     async def interrupt_turn(thread_id: str, body: InterruptRequest | None = None) -> dict[str, bool]:
         try:
-            return {"interrupted": await shared_queue.pause_thread(thread_id, body.turn_id if body else None)}
+            result = await shared_queue.pause_thread(thread_id, body.turn_id if body else None)
+            return {"interrupted": result.interrupted, "stale": result.stale}
         except ClaudeThreadNotFoundError as error:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
         except CodexRuntimeError as error:

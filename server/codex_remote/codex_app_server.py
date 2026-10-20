@@ -1004,6 +1004,28 @@ class CodexAppServer:
             raise CodexRuntimeError("Codex 当前没有可中断的任务")
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
 
+    async def mark_stale_turn_interrupted(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        completed_at: str | int | float | None = None,
+    ) -> None:
+        active_turn_id = self._active_turn_ids.get(thread_id)
+        if active_turn_id and active_turn_id != turn_id:
+            raise CodexRuntimeError("当前回复编号已变化，没有暂停新的回复；请刷新后重试。")
+        self._active_turn_ids.pop(thread_id, None)
+        self._last_completed_turn_ids[thread_id] = turn_id
+        turn: dict[str, Any] = {"id": turn_id, "status": "interrupted"}
+        if completed_at is not None:
+            turn["completedAt"] = completed_at
+        await self._emit({
+            "type": "notification",
+            "method": "turn/completed",
+            "params": {"threadId": thread_id, "turn": turn, "stale": True},
+        })
+        await self.notify_threads_changed()
+
     async def answer_server_request(self, request_id: str | int, decision: str) -> None:
         if decision not in {"accept", "decline", "cancel"}:
             raise CodexRuntimeError("不支持的审批操作")

@@ -10,6 +10,7 @@ import os
 import sqlite3
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,27 @@ def _now() -> str:
 
 class QueueConflictError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PauseThreadResult:
+    interrupted: bool
+    stale: bool = False
+
+    def __bool__(self) -> bool:
+        return self.interrupted
+
+
+def _thread_not_found(error: BaseException) -> bool:
+    detail = str(error).casefold()
+    return any(marker in detail for marker in ("thread not found", "unknown thread", "找不到对话"))
+
+
+def _no_active_turn(error: BaseException) -> bool:
+    detail = str(error).casefold()
+    return any(marker in detail for marker in (
+        "not active", "no active turn", "already completed", "no turn", "没有可中断", "没有正在运行",
+    ))
 
 
 class SharedStateStore:
@@ -410,14 +432,70 @@ class SharedQueueService:
         if self.store.set_block(thread_id, reason):
             await self.changed(thread_id)
 
-    async def pause_thread(self, thread_id: str, turn_id: str | None = None) -> bool:
+    async def pause_thread(self, thread_id: str, turn_id: str | None = None) -> PauseThreadResult:
         async with self._lock(thread_id):
             self.store.set_paused(thread_id, True)
+            stale = False
             try:
                 if is_claude_thread_id(thread_id) and self.claude is not None:
                     interrupted = await self.claude.interrupt(thread_id, turn_id)
                 else:
-                    await self.codex.interrupt(thread_id, turn_id)
+                    try:
+                        await self.codex.interrupt(thread_id, turn_id)
+                    except CodexRuntimeError as error:
+                        if not _thread_not_found(error):
+                            raise
+
+                        # A history entry can outlive the App Server's loaded
+                        # thread index. Reattach before deciding that the
+                        # visible inProgress state is stale.
+                        active_turn_id: str | None = None
+                        recovered_interrupted = False
+                        try:
+                            await self.codex.resume_thread(thread_id)
+                            active_turn_id = await self.codex.recover_active_turn_id(thread_id)
+                        except CodexRuntimeError as recovery_error:
+                            if not _thread_not_found(recovery_error):
+                                raise
+
+                        if active_turn_id:
+                            if turn_id and active_turn_id != turn_id:
+                                raise CodexRuntimeError("当前回复编号已变化，没有暂停新的回复；请刷新后重试。")
+                            try:
+                                await self.codex.interrupt(thread_id, active_turn_id)
+                                recovered_interrupted = True
+                            except CodexRuntimeError as retry_error:
+                                if not (_thread_not_found(retry_error) or _no_active_turn(retry_error)):
+                                    raise
+
+                        if not recovered_interrupted:
+                            # The App Server still cannot find an active turn.
+                            # Confirm that history exists and that a different
+                            # newer active turn is not being mistaken for this one.
+                            try:
+                                history = await self.codex.read_thread(thread_id)
+                            except CodexRuntimeError as history_error:
+                                raise error from history_error
+                            turns = history.get("turns") if isinstance(history.get("turns"), list) else []
+                            latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
+                            latest_turn_id = latest.get("id") if isinstance(latest, dict) else None
+                            latest_status = _turn_status(latest) if isinstance(latest, dict) else ""
+                            if turn_id and latest_turn_id and latest_turn_id != turn_id and latest_status in {
+                                "active", "inprogress", "running", "started",
+                            }:
+                                raise CodexRuntimeError("当前回复编号已变化，没有暂停新的回复；请刷新后重试。")
+                            stale_turn_id = turn_id or (latest_turn_id if isinstance(latest_turn_id, str) else None)
+                            if not stale_turn_id:
+                                raise error
+                            completed_at = history.get("updatedAt")
+                            if not isinstance(completed_at, (str, int, float)):
+                                completed_at = latest.get("startedAt") if isinstance(latest, dict) else None
+                            await self.codex.mark_stale_turn_interrupted(
+                                thread_id,
+                                stale_turn_id,
+                                completed_at=completed_at,
+                            )
+                            stale = True
                     interrupted = True
             except Exception:
                 self.store.set_paused(thread_id, False)
@@ -425,7 +503,7 @@ class SharedQueueService:
             if not interrupted:
                 self.store.set_paused(thread_id, False)
             await self.changed(thread_id)
-            return interrupted
+            return PauseThreadResult(interrupted, stale)
 
     async def continue_paused(self, thread_id: str, payload: dict[str, Any] | None = None) -> str:
         async with self._lock(thread_id):

@@ -1688,7 +1688,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     else startTransition(update)
   }, [])
 
-  const finalizeVisibleStreamingTurn = useCallback((turnId: string | null, completedAt = Date.now()) => {
+  const finalizeVisibleStreamingTurn = useCallback((turnId: string | null, completedAt = Date.now(), recordDuration = true) => {
     const streamTurnId = streamingAssistantTurnId.current
     const targetTurnId = turnId ?? streamTurnId
     if (!targetTurnId
@@ -1710,7 +1710,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           streaming: false,
           ...(startedAt !== undefined ? {
             replyStartedAt: message.replyStartedAt ?? new Date(startedAt).toISOString(),
-            replyDurationMs: Math.max(0, completedAt - startedAt),
+            ...(recordDuration ? { replyDurationMs: Math.max(0, completedAt - startedAt) } : {}),
           } : {}),
           ...(message.turnId || !targetTurnId ? {} : { turnId: targetTurnId }),
         }
@@ -2513,6 +2513,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     try {
       const result = await codexRemoteClient.interrupt(token, threadId, turnId)
       if (!result.interrupted) throw new Error('Codex 没有接受停止请求')
+      if (result.stale) {
+        if (activeTurnId.current === turnId) {
+          const startedAt = turnStartedAtById.current.get(turnId) ?? Date.now()
+          finalizeVisibleStreamingTurn(turnId, startedAt, false)
+          setActiveTurnId(null)
+          interruptRequestedThreadId.current = null
+          interruptRequestedTurnId.current = null
+          setIsInterrupting(false)
+          setIsRunning(false)
+          setActivity(null)
+          clearTurnTimer()
+          setError(null)
+        }
+        return true
+      }
       // The server has accepted the stop even though its completed
       // notification may arrive a little later. Close the old visible bubble
       // now, while keeping the running lock until that notification confirms
@@ -2531,7 +2546,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       if (interruptInFlightThreadId.current === threadId) interruptInFlightThreadId.current = null
     }
-  }, [finalizeVisibleStreamingTurn, onUnauthorized, token])
+  }, [clearTurnTimer, finalizeVisibleStreamingTurn, onUnauthorized, setActiveTurnId, token])
 
   const confirmedTurnDelivery = useCallback((requestId: string) => {
     const delivery = pendingTurnDeliveries.current.get(requestId)
@@ -3451,6 +3466,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         ? turn.id
         : typeof params.turnId === 'string' ? params.turnId : activeTurnId.current
       const completedAt = eventTimestamp(turn?.completedAt) ?? Date.now()
+      const staleCompletion = params.stale === true
       const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
       if (turnThreadId && completedTurnId) {
         liveTurnHistory.current.finish(turnThreadId, completedTurnId,
@@ -3463,7 +3479,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (completedTurnId && currentTurnId && completedTurnId !== currentTurnId) {
         // A delayed completion for the previous turn must not terminate a
         // newer turn that is already visible in this thread.
-        finalizeVisibleStreamingTurn(completedTurnId, completedAt)
+        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
         if (interruptRequestedTurnId.current === completedTurnId) {
           interruptRequestedThreadId.current = null
           interruptRequestedTurnId.current = null
@@ -3508,7 +3524,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setQueueRecoveryReadyThreadId(canReleaseQueue && !needsHistoryCheck ? queuedThreadId : null)
       // Commit the accumulated text before finalizing the turn. This avoids a
       // trailing timer/transition from recreating a stale streaming message.
-      finalizeVisibleStreamingTurn(completedTurnId, completedAt)
+      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
