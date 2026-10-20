@@ -103,8 +103,16 @@ def request_manager_analytics(
         with opener.open(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
             body = response.read(_MAX_RESPONSE_BYTES + 1)
     except HTTPError as error:
-        if error.code in {401, 403}:
-            raise CPAUsageError("Manager 管理密钥无效，或没有读取用量统计的权限。", status_code=502) from error
+        if error.code == 401:
+            raise CPAUsageError(
+                "Manager 返回 HTTP 401：管理密钥未通过认证，请确认使用的是 CLIProxyAPI 的管理密钥。",
+                status_code=502,
+            ) from error
+        if error.code == 403:
+            raise CPAUsageError(
+                "Manager 返回 HTTP 403：远程管理请求被拒绝。请检查 management.allow-remote 设置、来源 IP 限制或临时封禁。",
+                status_code=502,
+            ) from error
         if error.code == 404:
             raise CPAUsageError("没有找到用量分析接口。请确认是 CPA-Manager-Plus Full Mode 的服务地址和反向代理路径。", status_code=502) from error
         if error.code in {502, 503, 504}:
