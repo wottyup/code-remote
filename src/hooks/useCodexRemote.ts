@@ -791,6 +791,70 @@ function sameActivity(left: CodexActivity | null, right: CodexActivity | null) {
   return left?.label === right?.label && left?.detail === right?.detail
 }
 
+function unifiedDiffLineCounts(diff: string | undefined) {
+  if (typeof diff !== 'string') return null
+  let additions = 0
+  let deletions = 0
+  let oldRemaining = 0
+  let newRemaining = 0
+  let foundHunk = false
+
+  for (const line of diff.split(/\r?\n/)) {
+    const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/)
+    if (hunk) {
+      foundHunk = true
+      oldRemaining = hunk[2] === undefined ? 1 : Number(hunk[2])
+      newRemaining = hunk[4] === undefined ? 1 : Number(hunk[4])
+      continue
+    }
+    if (!foundHunk) continue
+    if (line.startsWith('+') && newRemaining > 0) {
+      additions += 1
+      newRemaining -= 1
+    } else if (line.startsWith('-') && oldRemaining > 0) {
+      deletions += 1
+      oldRemaining -= 1
+    } else if (line.startsWith(' ') && oldRemaining > 0 && newRemaining > 0) {
+      oldRemaining -= 1
+      newRemaining -= 1
+    }
+  }
+
+  return foundHunk ? { additions, deletions } : null
+}
+
+function isAddedFileKind(kind: string | undefined) {
+  const normalized = kind?.replace(/[^a-z]/gi, '').toLowerCase()
+  return ['add', 'added', 'addition', 'addedfile', 'create', 'created', 'creation', 'createdfile', 'new', 'newfile'].includes(normalized ?? '')
+}
+
+function addedFileDiff(path: string, content: string) {
+  const lines = content.length === 0 ? [] : content.split(/\r\n|\n|\r/)
+  if (lines.length > 0 && /(?:\r\n|\n|\r)$/.test(content)) lines.pop()
+  const safePath = path.replace(/[\r\n]/g, '')
+  const newRange = lines.length === 0 ? '0,0' : `1,${lines.length}`
+  return [
+    '--- /dev/null',
+    `+++ b/${safePath}`,
+    `@@ -0,0 +${newRange} @@`,
+    ...lines.map((line) => `+${line}`),
+  ].join('\n')
+}
+
+function normalizeFileChangeEntry(entry: CodexFileChangeEntry): CodexFileChangeEntry {
+  const diff = typeof entry.diff === 'string' ? entry.diff : undefined
+  const diffCounts = unifiedDiffLineCounts(diff)
+  if (diffCounts) return { ...entry, diff, ...diffCounts }
+  if (isAddedFileKind(entry.kind) && diff !== undefined) {
+    const addedDiff = addedFileDiff(entry.path, diff)
+    const addedCounts = unifiedDiffLineCounts(addedDiff)
+    return { ...entry, diff: addedDiff, additions: addedCounts?.additions ?? 0, deletions: addedCounts?.deletions ?? 0 }
+  }
+  return diff === undefined
+    ? { ...entry, diff: undefined }
+    : { ...entry, diff: undefined, additions: 0, deletions: 0 }
+}
+
 function fileChangeForItem(value: unknown): CodexFileChange | null {
   if (!value || typeof value !== 'object') return null
   const item = value as Record<string, unknown>
@@ -814,18 +878,14 @@ function fileChangeForItem(value: unknown): CodexFileChange | null {
     if (!path) return []
     const diff = [change.diff, change.patch, change.unified_diff, change.unifiedDiff]
       .find((part): part is string => typeof part === 'string')
-    const diffLines = diff?.split('\n') ?? []
-    const additions = explicitLineCount(change.additions)
-      ?? diffLines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length
-    const deletions = explicitLineCount(change.deletions)
-      ?? diffLines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length
-    return [{
+    const entry = normalizeFileChangeEntry({
       path,
       kind: typeof change.kind === 'string' ? change.kind : typeof change.type === 'string' ? change.type : undefined,
       diff,
-      additions,
-      deletions,
-    }]
+      additions: explicitLineCount(change.additions) ?? 0,
+      deletions: explicitLineCount(change.deletions) ?? 0,
+    })
+    return [entry]
   })
   if (entries.length === 0) return null
   const status = typeof item.status === 'string' ? item.status.toLowerCase() : ''
@@ -855,14 +915,18 @@ function mergeWorkspaceFileChange(current: CodexFileChange[], next: CodexFileCha
     const previousChange = mergedChanges[previousLocation]
     const previousEntries = previousChange.changes.map((entry) => {
       if (entry.path !== workspaceEntry.path) return entry
-      const nativeHasLineStats = Boolean(entry.diff) || entry.additions > 0 || entry.deletions > 0
-      return {
+      const nativeEntry = normalizeFileChangeEntry(entry)
+      const workspaceEntryNormalized = normalizeFileChangeEntry(workspaceEntry)
+      const nativeHasDiff = unifiedDiffLineCounts(nativeEntry.diff) !== null
+      const workspaceHasDiff = unifiedDiffLineCounts(workspaceEntryNormalized.diff) !== null
+      const selectedEntry = nativeHasDiff || !workspaceHasDiff ? nativeEntry : workspaceEntryNormalized
+      return normalizeFileChangeEntry({
         ...entry,
-        kind: entry.kind ?? workspaceEntry.kind,
-        diff: entry.diff || workspaceEntry.diff,
-        additions: nativeHasLineStats ? entry.additions : workspaceEntry.additions,
-        deletions: nativeHasLineStats ? entry.deletions : workspaceEntry.deletions,
-      }
+        kind: nativeEntry.kind ?? workspaceEntryNormalized.kind,
+        diff: selectedEntry.diff,
+        additions: selectedEntry.additions,
+        deletions: selectedEntry.deletions,
+      })
     })
     mergedChanges[previousLocation] = { ...previousChange, changes: previousEntries }
   }
@@ -879,7 +943,11 @@ function isWorkspaceFileChange(change: CodexFileChange) {
 function mergeTurnFileChanges(current: CodexFileChange[], incoming: CodexFileChange[]) {
   let nativeChanges: CodexFileChange[] = []
   const workspaceChanges: CodexFileChange[] = []
-  for (const change of [...current, ...incoming]) {
+  for (const rawChange of [...current, ...incoming]) {
+    const change = {
+      ...rawChange,
+      changes: rawChange.changes.map(normalizeFileChangeEntry),
+    }
     if (isWorkspaceFileChange(change)) workspaceChanges.push(change)
     else nativeChanges = upsertFileChange(nativeChanges, change)
   }
