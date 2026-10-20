@@ -3900,6 +3900,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadJoinGroupTarget, setThreadJoinGroupTarget] = useState<CodexThread | null>(null)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(emptyCPAUsageSettings)
   const [cpaUsageSettingsLoaded, setCpaUsageSettingsLoaded] = useState(false)
+  const [cpaUsageSettingsLoadError, setCpaUsageSettingsLoadError] = useState<string | null>(null)
+  const [cpaUsageSettingsReload, setCpaUsageSettingsReload] = useState(0)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
@@ -3923,6 +3925,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     let cancelled = false
     setCpaUsageSettingsLoaded(false)
+    setCpaUsageSettingsLoadError(null)
     const loadSharedCPAUsageSettings = async () => {
       try {
         let sharedSettings = await codexRemoteClient.cpaUsageSettings(token)
@@ -3942,15 +3945,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           clearLegacyCPAUsageCredentials()
         }
         if (!cancelled) setCpaUsageSettings(sharedSettings)
-      } catch {
-        if (!cancelled) setCpaUsageSettings(emptyCPAUsageSettings)
+      } catch (reason) {
+        if (!cancelled) {
+          setCpaUsageSettingsLoadError(reason instanceof Error ? reason.message : '读取服务端共享配置失败。')
+        }
       } finally {
         if (!cancelled) setCpaUsageSettingsLoaded(true)
       }
     }
     void loadSharedCPAUsageSettings()
     return () => { cancelled = true }
-  }, [token])
+  }, [token, cpaUsageSettingsReload])
 
   useEffect(() => {
     setSidebarSelectionMode(false)
@@ -4086,6 +4091,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     if (getPanelHistoryEntry(window.history.state)) window.history.back()
   }, [])
   const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
+    setCpaUsageSettingsLoadError(null)
     setCpaUsageSettings(nextSettings)
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
@@ -5683,7 +5689,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} cpaUsageSettingsLoaded={cpaUsageSettingsLoaded} onCPAUsageSettingsChange={updateCPAUsageSettings} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} cpaUsageSettingsLoaded={cpaUsageSettingsLoaded} cpaUsageSettingsLoadError={cpaUsageSettingsLoadError} onRetryCPAUsageSettings={() => setCpaUsageSettingsReload((current) => current + 1)} onCPAUsageSettingsChange={updateCPAUsageSettings} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel token={token} settings={cpaUsageSettings} settingsLoaded={cpaUsageSettingsLoaded} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
@@ -5894,7 +5900,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, cpaUsageSettingsLoaded, onCPAUsageSettingsChange }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, cpaUsageSettingsLoaded, cpaUsageSettingsLoadError, onRetryCPAUsageSettings, onCPAUsageSettingsChange }: {
   token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
@@ -5903,6 +5909,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   onChatShortcutsChange: (next: SidebarChatShortcuts) => void
   cpaUsageSettings: CPAUsageSettings
   cpaUsageSettingsLoaded: boolean
+  cpaUsageSettingsLoadError: string | null
+  onRetryCPAUsageSettings: () => void
   onCPAUsageSettingsChange: (next: CPAUsageSettings) => void
 }) {
   const [imageError, setImageError] = useState<string | null>(null)
@@ -6090,7 +6098,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       </header>
 
       <div className="theme-settings-panel__content">
-        <CPAUsageSettingsCard token={token} settings={cpaUsageSettings} loading={!cpaUsageSettingsLoaded} onChange={onCPAUsageSettingsChange} />
+        <CPAUsageSettingsCard token={token} settings={cpaUsageSettings} loading={!cpaUsageSettingsLoaded} loadError={cpaUsageSettingsLoadError} onRetry={onRetryCPAUsageSettings} onChange={onCPAUsageSettingsChange} />
 
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>

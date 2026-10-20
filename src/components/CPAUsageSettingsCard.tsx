@@ -11,11 +11,15 @@ export function CPAUsageSettingsCard({
   token,
   settings,
   loading,
+  loadError,
+  onRetry,
   onChange,
 }: {
   token: string
   settings: CPAUsageSettings
   loading: boolean
+  loadError: string | null
+  onRetry: () => void
   onChange: (settings: CPAUsageSettings) => void
 }) {
   const [baseUrl, setBaseUrl] = useState(settings.baseUrl)
@@ -124,6 +128,12 @@ export function CPAUsageSettingsCard({
             <Trash2 size={14} />清除
           </button>
         </div>
+        {loadError ? (
+          <div className="cpa-usage-settings-load-error" role="alert">
+            <p className="cpa-usage-settings-message cpa-usage-settings-message--error">暂时无法确认 Codex Remote 服务端的共享配置：{loadError} 请重试读取。</p>
+            <button className="theme-notification-toggle" type="button" disabled={loading || busy} onClick={onRetry}>重新读取</button>
+          </div>
+        ) : null}
         {message ? <p className={`cpa-usage-settings-message${message.error ? ' cpa-usage-settings-message--error' : ''}`} role={message.error ? 'alert' : 'status'}>{message.text}</p> : null}
       </div>
       <p className="theme-settings-hint">地址和管理密钥保存在 Codex Remote 服务端；统计请求由后端转发，管理密钥不会写入浏览器本地存储或由服务端回传。Full Mode 才提供持久化历史统计。</p>
