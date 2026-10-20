@@ -255,7 +255,8 @@ class ClaudeCodeServer:
     async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
         if not is_claude_thread_id(thread_id):
             raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
-        await self.refresh_native_threads()
+        # Known sessions are indexed by the thread list refresh. Avoid scanning
+        # every native project file again when opening one specific session.
         row = self._row(thread_id)
         result = self._summary(row)
         if not include_turns:

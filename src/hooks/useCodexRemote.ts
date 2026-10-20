@@ -4055,8 +4055,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (previousThread && previousThread.id !== thread.id) void prefetchThread(previousThread, true)
 
     if (loadThreads && (connectionRef.current !== 'connected' || Date.now() - threadListFetchedAtRef.current > threadMetadataFreshnessMs)) {
-      await refreshThreads()
-      if (requestId !== loadRequest.current || activeThreadId.current !== thread.id) return
+      const metadataRefresh = refreshThreads()
+      if (engineOfThread(thread) === 'claude-code') {
+        void metadataRefresh
+      } else {
+        await metadataRefresh
+        if (requestId !== loadRequest.current || activeThreadId.current !== thread.id) return
+      }
     }
 
     const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[thread.id]?.length)
