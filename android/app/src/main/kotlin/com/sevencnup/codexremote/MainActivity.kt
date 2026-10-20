@@ -8956,6 +8956,13 @@ class MainActivity : Activity() {
         val requestPath = workspaceRelativePath(effectiveCwd, path)
         val dialog = Dialog(this)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        var sourcePages: List<String> = emptyList()
+        val editedPages = mutableMapOf<Int, String>()
+        var currentPage = 0
+        var applyingPageContent = false
+        var pageRenderGeneration = 0
+        var loadFilePage: (Int, Boolean) -> Unit = { _, _ -> }
+        lateinit var previewScroll: ScrollView
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             isFocusableInTouchMode = true
@@ -8970,6 +8977,15 @@ class MainActivity : Activity() {
             minHeight = dp(280)
             visibility = View.GONE
         }
+        previewInput.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (!applyingPageContent && currentPage in sourcePages.indices) {
+                    editedPages[currentPage] = s?.toString().orEmpty()
+                }
+            }
+            override fun afterTextChanged(s: android.text.Editable?) = Unit
+        })
         val imagePreview = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             minimumHeight = dp(280)
@@ -9000,6 +9016,18 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 32), dp(if (retroTheme) 48 else 32)))
         layout.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(48) else WRAP))
+        val pageStatus = label("", 11, MUTED).apply { gravity = Gravity.CENTER }
+        val previousPageButton = smallButton("上一页") { loadFilePage(currentPage - 1, false) }
+        val nextPageButton = smallButton("下一页") { loadFilePage(currentPage + 1, false) }
+        val pageControls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = View.GONE
+            addView(previousPageButton, LinearLayout.LayoutParams(WRAP, dp(34)))
+            addView(pageStatus, LinearLayout.LayoutParams(0, dp(34), 1f))
+            addView(nextPageButton, LinearLayout.LayoutParams(WRAP, dp(34)))
+        }
+        layout.addView(pageControls, LinearLayout.LayoutParams(MATCH, dp(38)))
         val loadingStatus = label("正在加载文件…", 12, MUTED).apply {
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(80), dp(12), dp(18))
@@ -9011,7 +9039,64 @@ class MainActivity : Activity() {
             addView(loadingStatus, widthWrap())
             addView(retryButton, LinearLayout.LayoutParams(WRAP, dp(34)))
         }
-        val scroll = ScrollView(this).apply {
+        fun refreshPageControls(loadingPage: Boolean = false) {
+            val pageCount = sourcePages.size
+            pageControls.visibility = if (pageCount > 1) View.VISIBLE else View.GONE
+            pageStatus.text = if (appLanguage == "en") "Page ${currentPage + 1} of $pageCount" else "第 ${currentPage + 1} / $pageCount 页"
+            previousPageButton.isEnabled = !loadingPage && currentPage > 0
+            nextPageButton.isEnabled = !loadingPage && currentPage < pageCount - 1
+            saveButton.isEnabled = !loadingPage
+        }
+        fun assembleFileContent(): String {
+            if (currentPage in sourcePages.indices) editedPages[currentPage] = previewInput.text.toString()
+            return sourcePages.indices.joinToString(separator = "") { index -> editedPages[index] ?: sourcePages[index] }
+        }
+        fun pageAtOffset(pages: List<String>, offset: Int): Int {
+            var consumed = 0
+            pages.forEachIndexed { index, page ->
+                if (offset < consumed + page.length || index == pages.lastIndex) return index
+                consumed += page.length
+            }
+            return 0
+        }
+        loadFilePage = { requestedPage, forceReload ->
+            if (requestedPage in sourcePages.indices && (forceReload || requestedPage != currentPage)) {
+                if (currentPage in sourcePages.indices) editedPages[currentPage] = previewInput.text.toString()
+                currentPage = requestedPage
+                val pageContent = editedPages[currentPage] ?: sourcePages[currentPage]
+                val generation = ++pageRenderGeneration
+                previewInput.isEnabled = false
+                refreshPageControls(loadingPage = true)
+                io.execute {
+                    val highlightedPage = highlightedCode(requestPath, pageContent)
+                    handler.post {
+                        if (!dialog.isShowing || generation != pageRenderGeneration) return@post
+                        applyingPageContent = true
+                        previewInput.setText(highlightedPage)
+                        applyingPageContent = false
+                        previewInput.setSelection(previewInput.length())
+                        previewInput.isEnabled = true
+                        saveButton.isEnabled = true
+                        previewScroll.scrollTo(0, 0)
+                        refreshPageControls()
+                    }
+                }
+            }
+        }
+        saveButton.setOnClickListener {
+            val content = assembleFileContent()
+            val currentOffset = (0 until currentPage).sumOf { index ->
+                (editedPages[index] ?: sourcePages[index]).length
+            }
+            savePreviewFile(requestPath, effectiveCwd, content, previewInput.tag?.toString().orEmpty(), previewInput) {
+                sourcePages = splitFilePreviewPages(content)
+                editedPages.clear()
+                currentPage = pageAtOffset(sourcePages, currentOffset.coerceAtMost(content.length))
+                refreshPageControls()
+                if (dialog.isShowing) loadFilePage(currentPage, true)
+            }
+        }
+        previewScroll = ScrollView(this).apply {
             isVerticalScrollBarEnabled = false
             addView(LinearLayout(this@MainActivity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -9020,8 +9105,8 @@ class MainActivity : Activity() {
             }, FrameLayout.LayoutParams(MATCH, WRAP))
         }
         layout.addView(state, LinearLayout.LayoutParams(MATCH, 0, 1f))
-        layout.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(6) })
-        scroll.visibility = View.GONE
+        layout.addView(previewScroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(6) })
+        previewScroll.visibility = View.GONE
         dialog.setContentView(layout)
         layout.requestFocus()
         dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
@@ -9040,7 +9125,7 @@ class MainActivity : Activity() {
         lateinit var loadPreview: () -> Unit
         loadPreview = {
             state.visibility = View.VISIBLE
-            scroll.visibility = View.GONE
+            previewScroll.visibility = View.GONE
             loadingStatus.text = "正在加载文件…"
             loadingStatus.setTextColor(MUTED)
             retryButton.visibility = View.GONE
@@ -9059,19 +9144,26 @@ class MainActivity : Activity() {
                         decodeSampledBitmap(data, 1600) ?: throw IOException("图片内容无法解析")
                     } else null
                     val content = if (isImage) null else file.optString("content")
-                    val highlightedContent = content?.let { highlightedCode(requestPath, it) }
+                    val filePages = content?.let(::splitFilePreviewPages).orEmpty()
+                    val highlightedContent = filePages.firstOrNull()?.let { highlightedCode(requestPath, it) }
                     handler.post {
                         if (!dialog.isShowing) return@post
                         state.visibility = View.GONE
-                        scroll.visibility = View.VISIBLE
+                        previewScroll.visibility = View.VISIBLE
                         if (isImage) {
                             imagePreview.setImageBitmap(bitmap)
                             imagePreview.visibility = View.VISIBLE
                         } else {
+                            sourcePages = filePages.ifEmpty { listOf("") }
+                            editedPages.clear()
+                            currentPage = 0
                             previewInput.tag = file.optString("revision")
+                            applyingPageContent = true
                             previewInput.setText(highlightedContent)
+                            applyingPageContent = false
                             previewInput.visibility = View.VISIBLE
                             saveButton.visibility = View.VISIBLE
+                            refreshPageControls()
                         }
                     }
                 } catch (error: Exception) { showPreviewError(error) }
@@ -9080,6 +9172,39 @@ class MainActivity : Activity() {
         }
         retryButton.setOnClickListener { loadPreview() }
         loadPreview()
+    }
+
+    private fun splitFilePreviewPages(content: String): List<String> {
+        val lineCount = content.count { it == '\n' } + if (content.isNotEmpty() && !content.endsWith('\n')) 1 else 0
+        if (lineCount <= FILE_PREVIEW_SINGLE_PAGE_MAX_LINES && content.length <= FILE_PREVIEW_SINGLE_PAGE_MAX_CHARS) {
+            return listOf(content)
+        }
+        if (content.isEmpty()) return listOf("")
+
+        val pages = mutableListOf<String>()
+        var start = 0
+        while (start < content.length) {
+            val hardEnd = (start + FILE_PREVIEW_PAGE_MAX_CHARS).coerceAtMost(content.length)
+            var end = hardEnd
+            var scan = start
+            var lines = 0
+            while (scan < hardEnd && lines < FILE_PREVIEW_PAGE_MAX_LINES) {
+                if (content[scan] == '\n') lines += 1
+                scan += 1
+            }
+            if (lines >= FILE_PREVIEW_PAGE_MAX_LINES) {
+                end = scan
+            } else if (hardEnd < content.length) {
+                val lastLineBreak = content.lastIndexOf('\n', hardEnd - 1)
+                if (lastLineBreak >= start && lastLineBreak + 1 - start >= FILE_PREVIEW_PAGE_MAX_CHARS / 2) {
+                    end = lastLineBreak + 1
+                }
+            }
+            if (end <= start) end = hardEnd
+            pages += content.substring(start, end)
+            start = end
+        }
+        return pages
     }
 
     private fun workspaceRelativePath(cwd: String?, path: String): String {
@@ -9107,12 +9232,20 @@ class MainActivity : Activity() {
 
     private fun isWorkspaceImagePath(path: String): Boolean = path.substringAfterLast('.', "").lowercase(Locale.ROOT) in setOf("png", "jpg", "jpeg", "webp", "gif")
 
-    private fun savePreviewFile(path: String, cwd: String?, content: String, revision: String, editor: EditText) {
+    private fun savePreviewFile(
+        path: String,
+        cwd: String?,
+        content: String,
+        revision: String,
+        editor: EditText,
+        onSaved: (() -> Unit)? = null,
+    ) {
         if (revision.isBlank()) { showToast("文件还在加载"); return }
         runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/file", JSONObject()
             .put("path", path).put("content", content).put("revision", revision).putOpt("cwd", cwd)) }, { result ->
             showToast("已保存")
             if (result.has("revision")) editor.tag = result.optString("revision")
+            onSaved?.invoke()
         })
     }
 
@@ -10911,6 +11044,10 @@ class MainActivity : Activity() {
         private const val PIXEL_TEXT_RASTER_SCALE = 0.5f
         private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
+        private const val FILE_PREVIEW_SINGLE_PAGE_MAX_LINES = 600
+        private const val FILE_PREVIEW_SINGLE_PAGE_MAX_CHARS = 96 * 1024
+        private const val FILE_PREVIEW_PAGE_MAX_LINES = 300
+        private const val FILE_PREVIEW_PAGE_MAX_CHARS = 48 * 1024
         private const val MAX_DIFF_PREVIEW_LINES = 2500
     }
 }
