@@ -5556,7 +5556,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           </div> : null}
         </section>
         <div className="new-thread-control">
-          <button className="new-thread-button new-thread-button--sidebar" type="button" onClick={() => void createThread()} disabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)} title={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}><span className="new-thread-button__icon"><Plus size={16} /></span><span>新建对话</span></button>
           <div className="sidebar-engine-filters" role="group" aria-label="按聊天模式筛选">
             {(['codex', 'claude-code'] as const).map((engine) => {
               const engineLabel = engine === 'claude-code' ? 'Claude' : 'Codex'
