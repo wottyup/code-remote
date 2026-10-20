@@ -647,6 +647,12 @@ export const codexRemoteClient = {
   cpaUsageSettings(token: string) {
     return request<{ baseUrl: string; configured: boolean }>(token, '/api/v1/cpa-usage/settings')
   },
+  testCPAUsageSettings(token: string, settings: { baseUrl: string; managementKey: string }) {
+    return request<{ baseUrl: string; reachable: boolean }>(token, '/api/v1/cpa-usage/settings/test', {
+      method: 'POST',
+      body: JSON.stringify({ base_url: settings.baseUrl, management_key: settings.managementKey }),
+    }, { timeoutMs: 30_000 })
+  },
   saveCPAUsageSettings(token: string, settings: { baseUrl: string; managementKey: string }) {
     return request<{ baseUrl: string; configured: boolean }>(token, '/api/v1/cpa-usage/settings', {
       method: 'POST',

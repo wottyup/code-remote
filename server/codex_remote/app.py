@@ -1726,22 +1726,34 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         settings = cpa_usage_settings.get_credentials()
         return {"baseUrl": settings["base_url"], "configured": bool(settings["base_url"] and settings["management_key"])}
 
-    @app.post("/api/v1/cpa-usage/settings")
-    async def save_cpa_usage_settings(request: CPAUsageSettingsUpdateRequest) -> dict[str, Any]:
+    def resolve_cpa_usage_request_credentials(request: CPAUsageSettingsUpdateRequest) -> tuple[str, str]:
+        base_url = normalize_manager_base_url(request.base_url)
+        previous = cpa_usage_settings.get_credentials()
+        management_key = (request.management_key or "").strip()
+        if not management_key:
+            if previous["base_url"] != base_url or not previous["management_key"]:
+                raise CPAUsageError("请填写 Manager 管理密钥；修改服务器地址时需要重新输入密钥。", status_code=422)
+            management_key = previous["management_key"]
+        return base_url, management_key
+
+    @app.post("/api/v1/cpa-usage/settings/test")
+    async def test_cpa_usage_settings(request: CPAUsageSettingsUpdateRequest) -> dict[str, Any]:
         try:
-            base_url = normalize_manager_base_url(request.base_url)
-            previous = cpa_usage_settings.get_credentials()
-            management_key = (request.management_key or "").strip()
-            if not management_key:
-                if previous["base_url"] != base_url or not previous["management_key"]:
-                    raise CPAUsageError("请填写 Manager 管理密钥；修改服务器地址时需要重新输入密钥。", status_code=422)
-                management_key = previous["management_key"]
+            base_url, management_key = resolve_cpa_usage_request_credentials(request)
             await asyncio.to_thread(
                 request_manager_analytics,
                 base_url,
                 management_key,
                 connection_probe_payload(),
             )
+        except CPAUsageError as error:
+            raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+        return {"baseUrl": base_url, "reachable": True}
+
+    @app.post("/api/v1/cpa-usage/settings")
+    async def save_cpa_usage_settings(request: CPAUsageSettingsUpdateRequest) -> dict[str, Any]:
+        try:
+            base_url, management_key = resolve_cpa_usage_request_credentials(request)
             cpa_usage_settings.save(base_url, management_key)
         except CPAUsageError as error:
             raise HTTPException(status_code=error.status_code, detail=str(error)) from error
