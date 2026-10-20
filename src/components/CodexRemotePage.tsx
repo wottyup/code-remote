@@ -2211,7 +2211,6 @@ interface WorkspaceEntryContextMenu {
   x: number
   y: number
   root?: boolean
-  mobile?: boolean
 }
 
 interface WorkspaceTerminalRequest {
@@ -2716,17 +2715,16 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
-    const mobile = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
     const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
     const menuHeight = theme === 'retro'
       ? Math.min(entry.kind === 'directory' ? 480 : 320, Math.max(0, window.innerHeight - 16))
-      : entry.kind === 'directory' ? (mobile ? 350 : 390) : 264
+      : entry.kind === 'directory' ? 390 : 264
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
     setSelectedPaths(paths)
     setSelectionContextMenu(null)
-    setContextMenu({ entry, paths, x, y, mobile })
+    setContextMenu({ entry, paths, x, y })
   }
 
   function openRootContextMenu(clientX: number, clientY: number) {
@@ -2740,7 +2738,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     const name = browsingRoot.replace(/[\\/]+$/, '').split(/[\\/]/).at(-1) || browsingRoot
     setSelectedPaths([])
     setSelectionContextMenu(null)
-    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true, mobile: isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint) })
+    setContextMenu({ entry: { name, path: '', kind: 'directory' }, paths: [], x, y, root: true })
   }
 
   function handleRootContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
@@ -3089,7 +3087,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     ? workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path)))
     : []
   const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && threadId)
-  const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.mobile && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.root && contextMenu.paths.length === 1)
   const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
   const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
   const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
@@ -5989,6 +5987,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onAddToTerminal={(path) => {
               workspaceTerminalRequestSequence.current += 1
               setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path })
+              if (isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)) setWorkspaceOpen(false)
             }}
             onAddDocument={addWorkspaceDocument}
             mobileOpen={workspaceOpen}
