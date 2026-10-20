@@ -61,6 +61,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.text.style.URLSpan
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -72,6 +73,8 @@ import android.view.Window
 import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputConnection
+import android.view.inputmethod.InputConnectionWrapper
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
@@ -893,7 +896,7 @@ class MainActivity : Activity() {
     private var terminalSocket: WebSocket? = null
     private var terminalOutput: TextView? = null
     private var terminalStatusView: TextView? = null
-    private var terminalDraftInput: EditText? = null
+    private var terminalInputSink: TerminalInputSink? = null
     private var pendingTerminalDirectory: String? = null
     private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
@@ -1194,7 +1197,7 @@ class MainActivity : Activity() {
             webPreviewPopup?.isShowing == true -> closeWebPreview()
             terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
-                val input = terminalDraftInput
+                val input = terminalInputSink
                 if (input != null) {
                     (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
                         ?.hideSoftInputFromWindow(input.windowToken, 0)
@@ -1521,7 +1524,7 @@ class MainActivity : Activity() {
                     updateInsetAwareOverlays()
                     overlaysInitialized = true
                 }
-                val terminalKeyboardVisible = keyboardVisible && terminalDraftInput?.hasFocus() == true
+                val terminalKeyboardVisible = keyboardVisible && terminalInputSink?.hasFocus() == true
                 terminalImeHiddenUntil = when {
                     terminalKeyboardVisible -> 0L
                     terminalImeVisible -> System.currentTimeMillis() + 500L
@@ -8757,17 +8760,6 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun insertTerminalText(value: String) {
-        val input = terminalDraftInput ?: return
-        val length = input.text.length
-        val start = input.selectionStart.coerceIn(0, length)
-        val end = input.selectionEnd.coerceIn(0, length)
-        val from = minOf(start, end)
-        val to = maxOf(start, end)
-        input.text.replace(from, to, value)
-        input.setSelection(from + value.length)
-    }
-
     private fun addWorkspacePathToTerminal(path: String) {
         if (terminalOverlay == null) {
             pendingTerminalDirectory = path
@@ -8779,7 +8771,9 @@ class MainActivity : Activity() {
             pendingTerminalDirectory = path
             return
         }
-        insertTerminalText(terminalChangeDirectoryCommand(shellName, path))
+        val command = terminalChangeDirectoryCommand(shellName, path)
+        if (terminalReady && sendTerminalInput(command)) pendingTerminalDirectory = null
+        else pendingTerminalDirectory = path
     }
 
     private fun showCreateEntry(anchor: View, parentPath: String, cwd: String?, refresh: () -> Unit) {
@@ -9425,7 +9419,7 @@ class MainActivity : Activity() {
                 background = android1SegmentButtonBackground()
             }
         }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
-        header.addView(View(this), LinearLayout.LayoutParams(dp(40), dp(1)))
+        header.addView(smallButton("键盘") { focusTerminalInput() }, LinearLayout.LayoutParams(dp(50), dp(36)).apply { leftMargin = dp(2) })
         shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(if (retroTheme) 48 else 44)))
         terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
             setPadding(dp(3), 0, dp(3), dp(4))
@@ -9437,6 +9431,7 @@ class MainActivity : Activity() {
             setPadding(dp(9), dp(9), dp(9), dp(9))
             gravity = Gravity.TOP or Gravity.START
             minHeight = dp(190)
+            setOnClickListener { focusTerminalInput() }
         }
         val outputScroll = ScrollView(this).apply {
             isFillViewport = true; isVerticalScrollBarEnabled = false; overScrollMode = View.OVER_SCROLL_NEVER
@@ -9449,28 +9444,6 @@ class MainActivity : Activity() {
             arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
         }
         shell.addView(arrows, widthWrap())
-        val inputRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        terminalDraftInput = editField("终端命令", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS).apply {
-            typeface = Typeface.MONOSPACE
-            setSingleLine(true)
-            isFocusable = true
-            isFocusableInTouchMode = true
-            showSoftInputOnFocus = true
-            imeOptions = EditorInfo.IME_ACTION_SEND
-            setOnEditorActionListener { _, action, _ ->
-                if (action == EditorInfo.IME_ACTION_SEND || action == EditorInfo.IME_NULL) { sendTerminalLine(); true } else false
-            }
-            setOnClickListener {
-                requestFocus()
-                post {
-                    (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                        ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-                }
-            }
-        }
-        inputRow.addView(terminalDraftInput, LinearLayout.LayoutParams(0, dp(42), 1f))
-        inputRow.addView(textIconAction("发送", "arrow_up", "发送") { sendTerminalLine() }, LinearLayout.LayoutParams(WRAP, dp(38)).apply { leftMargin = dp(5) })
-        shell.addView(inputRow, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(5) })
         val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
         transferRow.addView(textIconAction("复制到输入框", "paste", "复制到输入框") {
             val output = terminalOutput ?: return@textIconAction
@@ -9484,6 +9457,11 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(WRAP, dp(36)))
         shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(38)))
+        terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
+            alpha = 0f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        shell.addView(terminalInputSink, LinearLayout.LayoutParams(dp(1), dp(1)))
         terminalReady = false
         terminalImeVisible = false
         terminalOverlay = shell
@@ -9496,6 +9474,20 @@ class MainActivity : Activity() {
         positionTerminalOverlay()
         shell.post { positionTerminalOverlay() }
         connectTerminal()
+    }
+
+    private fun focusTerminalInput() {
+        val input = terminalInputSink ?: return
+        if (!terminalReady) {
+            showToast("终端连接中，请稍等")
+            return
+        }
+        if (!input.hasFocus()) input.setText("")
+        input.requestFocus()
+        input.post {
+            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+        }
     }
 
     private fun positionTerminalOverlay() {
@@ -9532,7 +9524,7 @@ class MainActivity : Activity() {
         }
         terminalPositionListener = null
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-            ?.hideSoftInputFromWindow(terminalDraftInput?.windowToken, 0)
+            ?.hideSoftInputFromWindow(terminalInputSink?.windowToken, 0)
         if (::root.isInitialized && shell.parent === root) root.removeView(shell)
         terminalReady = false
         terminalShellName = null
@@ -9540,7 +9532,7 @@ class MainActivity : Activity() {
         terminalSocket?.close(1000, "closed")
         terminalSocket = null
         terminalOverlay = null
-        terminalDraftInput = null
+        terminalInputSink = null
         terminalOutput = null
         terminalStatusView = null
         terminalImeVisible = false
@@ -9572,8 +9564,8 @@ class MainActivity : Activity() {
                             handler.post {
                                 terminalShellName = shellName
                                 pendingTerminalDirectory?.let { path ->
-                                    pendingTerminalDirectory = null
-                                    insertTerminalText(terminalChangeDirectoryCommand(shellName, path))
+                                    val command = terminalChangeDirectoryCommand(shellName, path)
+                                    if (sendTerminalInput(command)) pendingTerminalDirectory = null
                                 }
                             }
                             updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
@@ -9624,17 +9616,6 @@ class MainActivity : Activity() {
             text = value
             setTextColor(color)
         }
-    }
-
-    private fun sendTerminalLine() {
-        val input = terminalDraftInput ?: return
-        val value = input.text.toString()
-        if (value.isBlank()) return
-        if (!terminalReady) {
-            showToast("终端还在连接，命令先留在输入框里")
-            return
-        }
-        if (sendTerminalInput(value + "\n")) input.setText("")
     }
 
     private fun sendTerminalInput(value: String): Boolean {
@@ -11204,6 +11185,130 @@ class MainActivity : Activity() {
         private const val FILE_PREVIEW_PAGE_MAX_LINES = 300
         private const val FILE_PREVIEW_PAGE_MAX_CHARS = 48 * 1024
         private const val MAX_DIFF_PREVIEW_LINES = 2500
+    }
+}
+
+private class TerminalInputSink(
+    context: Context,
+    private val sendInput: (String) -> Boolean,
+) : EditText(context) {
+    init {
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
+        isSingleLine = false
+        isFocusable = true
+        isFocusableInTouchMode = true
+        showSoftInputOnFocus = true
+        setTextColor(Color.TRANSPARENT)
+        setPadding(0, 0, 0, 0)
+        background = ColorDrawable(Color.TRANSPARENT)
+    }
+
+    override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection? {
+        val base = super.onCreateInputConnection(outAttrs) ?: return null
+        outAttrs.inputType = inputType
+        outAttrs.imeOptions = imeOptions
+        return object : InputConnectionWrapper(base, false) {
+            private var composingText = ""
+
+            override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                val handled = super.setComposingText(text, newCursorPosition)
+                composingText = text?.toString().orEmpty()
+                return handled
+            }
+
+            override fun commitText(text: CharSequence?, newCursorPosition: Int): Boolean {
+                val committed = text?.toString().orEmpty()
+                val handled = super.commitText(text, newCursorPosition)
+                if (committed.isNotEmpty()) {
+                    val terminalText = committed.replace("\r\n", "\n").replace('\n', '\r')
+                    sendInput(terminalText)
+                    super.deleteSurroundingText(committed.length, 0)
+                }
+                composingText = ""
+                return handled
+            }
+
+            override fun finishComposingText(): Boolean {
+                val pendingLength = composingText.length
+                val handled = super.finishComposingText()
+                if (pendingLength > 0) super.deleteSurroundingText(pendingLength, 0)
+                composingText = ""
+                return handled
+            }
+
+            override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
+                if (composingText.isNotEmpty()) {
+                    val handled = super.deleteSurroundingText(beforeLength, afterLength)
+                    composingText = super.getTextBeforeCursor(4096, 0)?.toString().orEmpty()
+                    return handled
+                }
+                if (beforeLength > 0) sendInput("\u007f".repeat(beforeLength.coerceAtMost(64)))
+                if (afterLength > 0) sendInput("\u001b[3~".repeat(afterLength.coerceAtMost(64)))
+                return true
+            }
+
+            override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int): Boolean {
+                if (composingText.isNotEmpty()) {
+                    val handled = super.deleteSurroundingTextInCodePoints(beforeLength, afterLength)
+                    composingText = super.getTextBeforeCursor(4096, 0)?.toString().orEmpty()
+                    return handled
+                }
+                if (beforeLength > 0) sendInput("\u007f".repeat(beforeLength.coerceAtMost(64)))
+                if (afterLength > 0) sendInput("\u001b[3~".repeat(afterLength.coerceAtMost(64)))
+                return true
+            }
+
+            override fun sendKeyEvent(event: KeyEvent): Boolean {
+                val sequence = terminalSequenceForKey(event) ?: return super.sendKeyEvent(event)
+                if (event.action == KeyEvent.ACTION_DOWN) sendInput(sequence)
+                return true
+            }
+
+            override fun performEditorAction(actionCode: Int): Boolean {
+                if (actionCode == EditorInfo.IME_ACTION_GO || actionCode == EditorInfo.IME_ACTION_SEND ||
+                    actionCode == EditorInfo.IME_ACTION_DONE
+                ) {
+                    sendInput("\r")
+                    return true
+                }
+                return super.performEditorAction(actionCode)
+            }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val sequence = terminalSequenceForKey(event) ?: return super.onKeyDown(keyCode, event)
+        sendInput(sequence)
+        return true
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        if (terminalSequenceForKey(event) != null) true else super.onKeyUp(keyCode, event)
+}
+
+private fun terminalSequenceForKey(event: KeyEvent): String? {
+    if (event.isCtrlPressed && event.keyCode in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z) {
+        return (event.keyCode - KeyEvent.KEYCODE_A + 1).toChar().toString()
+    }
+    return when (event.keyCode) {
+        KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> "\r"
+        KeyEvent.KEYCODE_DEL -> if (event.isCtrlPressed) "\u0017" else "\u007f"
+        KeyEvent.KEYCODE_FORWARD_DEL -> "\u001b[3~"
+        KeyEvent.KEYCODE_TAB -> "\t"
+        KeyEvent.KEYCODE_ESCAPE -> "\u001b"
+        KeyEvent.KEYCODE_DPAD_UP -> "\u001b[A"
+        KeyEvent.KEYCODE_DPAD_DOWN -> "\u001b[B"
+        KeyEvent.KEYCODE_DPAD_RIGHT -> "\u001b[C"
+        KeyEvent.KEYCODE_DPAD_LEFT -> "\u001b[D"
+        KeyEvent.KEYCODE_MOVE_HOME -> "\u001b[H"
+        KeyEvent.KEYCODE_MOVE_END -> "\u001b[F"
+        KeyEvent.KEYCODE_PAGE_UP -> "\u001b[5~"
+        KeyEvent.KEYCODE_PAGE_DOWN -> "\u001b[6~"
+        else -> {
+            val codePoint = event.unicodeChar
+            if (!Character.isValidCodePoint(codePoint) || codePoint == 0) null else String(Character.toChars(codePoint))
+        }
     }
 }
 
