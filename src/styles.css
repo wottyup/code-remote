@@ -86,6 +86,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .sidebar-search button:hover { background: rgba(146, 157, 184, .12); color: #e9ebef; }
 .new-thread-control { display: grid; flex: 0 0 auto; gap: 5px; width: 100%; }
 .new-thread-button { display: flex; flex: 0 0 44px; align-items: center; gap: 9px; width: 100%; height: 44px; padding: 0 11px; border: 1px solid #5369a2; border-radius: 10px; background: #3d528b; color: #fff; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 650; text-align: left; }
+.new-thread-button--sidebar { display: flex; }
 .new-thread-button__icon { display: grid; width: 25px; height: 25px; place-items: center; border-radius: 6px; background: rgba(255, 255, 255, .16); color: #fff; }
 .new-thread-button:hover:not(:disabled) { border-color: #8da5e0; background: #4b63a0; }
 .new-thread-button:disabled { cursor: not-allowed; opacity: .48; }
@@ -903,7 +904,28 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-edit-cancel:disabled { cursor: wait; opacity: .55; }
 .send-button--confirm { width: 29px; min-width: 29px; padding: 0; }
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
+.composer-footer-start { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; }
 .composer-preferences { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.composer-new-thread-button { display: none; }
+@media (min-width: 701px) {
+  .new-thread-button--sidebar { display: none; }
+  :where(:root[data-touch-landscape="true"]) .new-thread-button--sidebar { display: flex; }
+  .composer-new-thread-button { display: grid; width: 30px; height: 29px; flex: 0 0 30px; place-items: center; padding: 0; border: 1px solid rgba(146, 157, 184, .24); border-radius: 8px; background: rgba(27, 30, 37, .45); color: #aabaff; cursor: pointer; }
+  :where(:root[data-touch-landscape="true"]) .composer-new-thread-button { display: none; }
+  .composer-new-thread-button:hover:not(:disabled) { border-color: rgba(170, 186, 255, .55); background: rgba(83, 106, 166, .22); color: #dbe2ff; }
+  .composer-new-thread-button:focus-visible { outline: 2px solid #aabaff; outline-offset: 2px; }
+  .composer-new-thread-button:disabled { cursor: not-allowed; opacity: .48; }
+  .remote-shell--claude-mode .composer-new-thread-button { border-color: rgba(238, 140, 109, .42); color: #ee8c6d; }
+  .remote-shell--claude-mode .composer-new-thread-button:hover:not(:disabled) { border-color: #ee8c6d; background: rgba(238, 140, 109, .14); color: #ffc2ad; }
+  .remote-shell--theme-light .composer-new-thread-button { border-color: #d4d4d4; background: #f2f2f2; color: #40568e; }
+  .remote-shell--theme-light .composer-new-thread-button:hover:not(:disabled) { border-color: #9aabd0; background: #e8edf8; color: #2d467f; }
+  .remote-shell--theme-light.remote-shell--claude-mode .composer-new-thread-button { border-color: #c57a60; background: #ab5f49; color: #fffaf3; }
+  .remote-shell--theme-warm .composer-new-thread-button { border-color: #ddc9af; background: #fbf3e9; color: #8b6d51; }
+  .remote-shell--theme-warm.remote-shell--claude-mode .composer-new-thread-button { border-color: #b76950; background: #ab5f49; color: #fffaf3; }
+  .remote-shell--theme-custom .composer-new-thread-button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
+  .remote-shell--theme-retro .composer-new-thread-button { border: 2px outset #91a8bb; border-radius: 0; background: linear-gradient(180deg, #f7fbff, #cbdceb); color: #24577f; }
+  .remote-shell--theme-pixel .composer-new-thread-button { width: 36px; height: 36px; flex-basis: 36px; border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-green); }
+}
 .composer-menu { position: relative; min-width: 0; }
 .composer-menu--open { z-index: 21; }
 .composer-menu__trigger { display: flex; align-items: center; gap: 6px; max-width: 205px; height: 29px; padding: 0 7px; border: 0; border-radius: 9px; background: transparent; color: #d8dbe1; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); }
