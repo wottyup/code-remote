@@ -2390,23 +2390,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     clearPreview()
   }, [clearPreview, previewSaving])
 
-  useEffect(() => {
-    if (!previewPath) return
-    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
-      event.preventDefault()
-      event.stopPropagation()
-      if (contextMenu || selectionContextMenu) {
-        setContextMenu(null)
-        setSelectionContextMenu(null)
-        return
-      }
-      closePreview()
-    }
-    document.addEventListener('keydown', closeOnEscape, true)
-    return () => document.removeEventListener('keydown', closeOnEscape, true)
-  }, [closePreview, contextMenu, previewPath, selectionContextMenu])
-
   const loadDirectory = useCallback(async (path: string, offset = 0) => {
     if (!browsingRoot) return
     const generation = requestGeneration.current
@@ -3162,6 +3145,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
           className="workspace-file-preview-panel"
           closeButtonRef={previewCloseButton}
           onClose={closePreview}
+          onEscape={() => {
+            if (contextMenu || selectionContextMenu) {
+              setContextMenu(null)
+              setSelectionContextMenu(null)
+              return
+            }
+            closePreview()
+          }}
           onKeyDown={(event) => {
             if (!mobilePreviewDialog || event.key !== 'Tab') return
             const controls = event.currentTarget.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), [role="separator"][tabindex="0"]')

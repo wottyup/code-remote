@@ -11,12 +11,45 @@ interface ChatOverlayPanelProps {
   children: ReactNode
   footer?: ReactNode
   onClose: () => void
+  onEscape?: () => void
   showCloseButton?: boolean
   closeButtonRef?: RefObject<HTMLButtonElement | null>
   ariaModal?: boolean
   className?: string
   onKeyDown?: (event: ReactKeyboardEvent<HTMLElement>) => void
   onPanelPointerDown?: (event: ReactPointerEvent<HTMLElement>) => void
+}
+
+type OverlayEscapeEntry = { id: number; close: () => void }
+
+const overlayEscapeStack: OverlayEscapeEntry[] = []
+let nextOverlayEscapeId = 0
+let overlayEscapeListenerAttached = false
+
+function handleOverlayEscape(event: KeyboardEvent) {
+  if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+  const activeOverlay = overlayEscapeStack[overlayEscapeStack.length - 1]
+  if (!activeOverlay) return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  activeOverlay.close()
+}
+
+function registerOverlayEscape(close: () => void) {
+  const entry = { id: ++nextOverlayEscapeId, close }
+  overlayEscapeStack.push(entry)
+  if (!overlayEscapeListenerAttached) {
+    document.addEventListener('keydown', handleOverlayEscape, true)
+    overlayEscapeListenerAttached = true
+  }
+  return () => {
+    const index = overlayEscapeStack.findIndex((candidate) => candidate.id === entry.id)
+    if (index >= 0) overlayEscapeStack.splice(index, 1)
+    if (overlayEscapeStack.length === 0 && overlayEscapeListenerAttached) {
+      document.removeEventListener('keydown', handleOverlayEscape, true)
+      overlayEscapeListenerAttached = false
+    }
+  }
 }
 
 function readStoredHeight() {
@@ -40,6 +73,7 @@ export function ChatOverlayPanel({
   children,
   footer,
   onClose,
+  onEscape,
   showCloseButton = true,
   closeButtonRef,
   ariaModal,
@@ -49,10 +83,14 @@ export function ChatOverlayPanel({
 }: ChatOverlayPanelProps) {
   const backdrop = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLElement>(null)
+  const escapeHandler = useRef(onEscape ?? onClose)
   const resizeStart = useRef<{ pointerId: number; clientY: number; height: number } | null>(null)
   const [availableHeight, setAvailableHeight] = useState(0)
   const [height, setHeight] = useState<number | null>(readStoredHeight)
   const [resizing, setResizing] = useState(false)
+  escapeHandler.current = onEscape ?? onClose
+
+  useLayoutEffect(() => registerOverlayEscape(() => escapeHandler.current()), [])
 
   useLayoutEffect(() => {
     const host = backdrop.current?.parentElement
