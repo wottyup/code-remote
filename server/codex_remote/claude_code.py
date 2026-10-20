@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -66,6 +67,7 @@ class ClaudeCodeServer:
         self._lock = asyncio.Lock()
         self._native_refresh_lock = asyncio.Lock()
         self._next_native_scan_at = 0.0
+        self._native_refresh_task: asyncio.Task[None] | None = None
         self._native_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser().resolve()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
@@ -170,12 +172,18 @@ class ClaudeCodeServer:
         ).fetchall()
         return [self._summary(row) for row in rows]
 
+    def schedule_native_refresh(self) -> None:
+        """Refresh imported Claude sessions off the HTTP request path."""
+        if self._native_refresh_task is not None and not self._native_refresh_task.done():
+            return
+        self._native_refresh_task = asyncio.create_task(self.refresh_native_threads())
+
     async def refresh_native_threads(self) -> None:
         """Import local CLI sessions without changing Claude Code's own files."""
         async with self._native_refresh_lock:
             if time.monotonic() < self._next_native_scan_at:
                 return
-            self._next_native_scan_at = time.monotonic() + 5
+            self._next_native_scan_at = time.monotonic() + 1
             known = {
                 row["session_id"]: (row["native_source"], row["native_mtime_ns"])
                 for row in self._connection.execute(
@@ -202,19 +210,54 @@ class ClaudeCodeServer:
                         ).fetchone():
                             continue
                         row = self._connection.execute(
-                            "SELECT native_source, running_turn_id FROM claude_threads WHERE session_id = ?",
+                            "SELECT * FROM claude_threads WHERE session_id = ?",
                             (session["session_id"],),
                         ).fetchone()
                         if row is not None:
-                            if row["native_source"] is None or row["running_turn_id"]:
+                            if row["running_turn_id"]:
                                 continue
+                            try:
+                                current_messages = json.loads(row["messages_json"])
+                            except (TypeError, json.JSONDecodeError):
+                                current_messages = []
+                            if not isinstance(current_messages, list):
+                                current_messages = []
+                            imported_messages = json.loads(session["messages_json"])
+                            def message_key(item: dict[str, Any]) -> tuple[str, str, str]:
+                                return (
+                                    str(item.get("role", "")),
+                                    " ".join(str(item.get("text", "")).split()),
+                                    str(item.get("createdAt", "")),
+                                )
+
+                            existing_keys = collections.Counter(
+                                message_key(item) for item in current_messages if isinstance(item, dict)
+                            )
+                            additions: list[dict[str, Any]] = []
+                            for item in imported_messages:
+                                if not isinstance(item, dict):
+                                    continue
+                                key = message_key(item)
+                                if existing_keys[key]:
+                                    existing_keys[key] -= 1
+                                else:
+                                    additions.append(item)
+                            if not additions and row["native_mtime_ns"] == session["native_mtime_ns"]:
+                                continue
+                            merged_messages = sorted(
+                                [*current_messages, *additions],
+                                key=lambda item: item.get("createdAt") if isinstance(item.get("createdAt"), str) else "",
+                            )
+                            display_name = row["name"]
+                            last_message = merged_messages[-1] if merged_messages else {}
+                            preview = str(last_message.get("text", ""))[:400] or session["preview"]
                             self._connection.execute(
                                 """UPDATE claude_threads
-                                SET preview = ?, updated_at = ?, messages_json = ?,
+                                SET name = ?, preview = ?, updated_at = ?, messages_json = ?,
                                     native_source = ?, native_mtime_ns = ?
                                 WHERE session_id = ?""",
-                                (session["preview"], session["updated_at"],
-                                 session["messages_json"], session["native_source"],
+                                (display_name or "Claude Code 对话", preview, session["updated_at"],
+                                 json.dumps(merged_messages, ensure_ascii=False), session["native_source"],
                                  session["native_mtime_ns"], session["session_id"]),
                             )
                         else:
@@ -728,6 +771,9 @@ class ClaudeCodeServer:
                 await process.wait()
 
     async def close(self) -> None:
+        if self._native_refresh_task is not None and not self._native_refresh_task.done():
+            self._native_refresh_task.cancel()
+            await asyncio.gather(self._native_refresh_task, return_exceptions=True)
         for thread_id, process in tuple(self._processes.items()):
             self._interrupts.add(thread_id)
             if process.returncode is None:

@@ -100,6 +100,26 @@ async def watch_codex_history(app_server: CodexAppServer) -> None:
         logger.exception("Could not watch Codex session history")
 
 
+async def watch_claude_history(claude_code: ClaudeCodeServer) -> None:
+    """Import Claude Code session changes as soon as local JSONL files change."""
+    projects = claude_code._native_home / "projects"
+    if not projects.is_dir():
+        return
+
+    def is_session_change(_change: object, changed_path: str) -> bool:
+        path = Path(changed_path)
+        return path.suffix == ".jsonl" and path.parent.parent == projects
+
+    try:
+        async for changes in awatch(projects, watch_filter=is_session_change, debounce=150):
+            if changes:
+                claude_code.schedule_native_refresh()
+    except asyncio.CancelledError:
+        raise
+    except OSError:
+        logger.exception("Could not watch Claude Code session history")
+
+
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
 
@@ -1577,6 +1597,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except Exception:
             logger.exception("Could not clean expired chat images at startup")
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        claude_history_watcher = asyncio.create_task(watch_claude_history(claude_code))
+        claude_code.schedule_native_refresh()
         image_reaper = asyncio.create_task(reap_expired_message_images())
         terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
         shared_queue.start()
@@ -1596,6 +1618,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             history_watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await history_watcher
+            claude_history_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await claude_history_watcher
             await app_server.close()
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
@@ -1748,7 +1773,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
-        await claude_code.refresh_native_threads()
+        claude_code.schedule_native_refresh()
         claude_threads = claude_code.list_threads()
         try:
             threads = await app_server.list_threads()
@@ -1827,6 +1852,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     ) -> dict[str, Any]:
         if is_claude_thread_id(thread_id):
             try:
+                claude_code.schedule_native_refresh()
                 thread = await claude_code.read_thread(thread_id)
                 response = browser_history_sync.response(thread, since)
                 return tail_thread_history(response, tail_turns if since is None else None)
