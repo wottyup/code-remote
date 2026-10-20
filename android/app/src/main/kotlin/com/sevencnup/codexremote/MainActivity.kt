@@ -5824,13 +5824,17 @@ class MainActivity : Activity() {
                 val cacheKey = "${item.optString("id")}:$index:${data.length}:${data.take(48).hashCode()}"
                 val bitmap = messageImageCache.get(cacheKey) ?: run {
                     val bytes = android.util.Base64.decode(data, android.util.Base64.DEFAULT)
-                    decodeSampledBitmap(bytes, 720)?.also { messageImageCache.put(cacheKey, it) }
+                    decodeSampledBitmap(bytes, MESSAGE_IMAGE_THUMBNAIL_MAX_DIMENSION)?.also { messageImageCache.put(cacheKey, it) }
                 } ?: continue
                 val image = ImageView(this).apply {
                     setImageBitmap(bitmap)
                     scaleType = ImageView.ScaleType.CENTER_CROP
                     background = rounded(USER_BUBBLE, dp(8))
-                    setOnClickListener { showImageDialog(bitmap) }
+                    setOnClickListener {
+                        showImageDialogWhileLoading(bitmap) {
+                            decodeBase64Image(data, fullImagePreviewMaximumDimension())
+                        }
+                    }
                 }
                 container.addView(image, LinearLayout.LayoutParams(imageWidth, dp(190)).apply { topMargin = dp(5) })
             } catch (_: IllegalArgumentException) { }
@@ -5863,7 +5867,16 @@ class MainActivity : Activity() {
             image.setImageBitmap(bitmap)
             image.visibility = View.VISIBLE
             progress.visibility = View.GONE
-            image.setOnClickListener { showImageDialog(bitmap) }
+            image.setOnClickListener {
+                showImageDialogWhileLoading(bitmap) {
+                    val query = buildString {
+                        append("?path=${Uri.encode(requestPath)}")
+                        if (!cwd.isNullOrBlank()) append("&cwd=${Uri.encode(cwd)}")
+                    }
+                    val response = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/image$query")
+                    decodeBase64Image(response.optString("data"), fullImagePreviewMaximumDimension())
+                }
+            }
         }
 
         messageImageCache.get(cacheKey)?.let {
@@ -5884,7 +5897,7 @@ class MainActivity : Activity() {
                     val response = RemoteApi(endpoint, token).get("/api/v1/codex/workspace/image$query")
                     val encoded = response.optString("data")
                     if (encoded.isBlank() || encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片过大")
-                    val bitmap = decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), 720)
+                    val bitmap = decodeSampledBitmap(android.util.Base64.decode(encoded, android.util.Base64.DEFAULT), MESSAGE_IMAGE_THUMBNAIL_MAX_DIMENSION)
                         ?: throw IOException("图片内容无法解析")
                     messageImageCache.put(cacheKey, bitmap)
                     handler.post { if (holder.isAttachedToWindow) display(bitmap) }
@@ -5916,8 +5929,10 @@ class MainActivity : Activity() {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        val sourceMaximumDimension = maxOf(bounds.outWidth, bounds.outHeight)
+        val targetFloor = (maximumDimension * 0.8f).toInt().coerceAtLeast(1)
         var sampleSize = 1
-        while (bounds.outWidth / sampleSize > maximumDimension || bounds.outHeight / sampleSize > maximumDimension) {
+        while (sampleSize <= 512 && sourceMaximumDimension / (sampleSize * 2) >= targetFloor) {
             sampleSize *= 2
         }
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
@@ -5976,6 +5991,83 @@ class MainActivity : Activity() {
             setGravity(Gravity.CENTER)
         }
     }
+
+    private fun showImageDialogWhileLoading(placeholder: Bitmap?, loadBitmap: () -> Bitmap?) {
+        parkActivityInputFocus()
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val frame = FrameLayout(this).apply {
+            isFocusableInTouchMode = true
+            background = rounded(OPAQUE_PANEL, dp(14), BORDER, dp(1))
+        }
+        val image = ImageView(this).apply {
+            setImageBitmap(placeholder)
+            adjustViewBounds = true
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        frame.addView(image, FrameLayout.LayoutParams(MATCH, MATCH))
+        val progress = ProgressBar(this).apply {
+            isIndeterminate = true
+            indeterminateTintList = ColorStateList.valueOf(TEXT)
+        }
+        frame.addView(progress, FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER))
+        frame.addView(iconButton("close", "关闭图片") { dialog.dismiss() }.apply {
+            background = rounded(PANEL_INSET, dp(18))
+        }, FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(8)
+            rightMargin = dp(8)
+        })
+        dialog.setContentView(frame)
+        frame.requestFocus()
+        dialog.window?.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawableResource(android.R.color.transparent)
+            setLayout(MATCH, (resources.displayMetrics.heightPixels * .82f).toInt())
+            setGravity(Gravity.CENTER)
+        }
+
+        io.execute {
+            var loadedBitmap: Bitmap? = null
+            var failureMessage: String? = null
+            try {
+                loadedBitmap = loadBitmap()
+            } catch (error: Exception) {
+                failureMessage = "高清图片加载失败：${error.message ?: "图片无法解析"}"
+            } catch (_: OutOfMemoryError) {
+                messageImageCache.evictAll()
+                failureMessage = "图片分辨率过高，设备内存不足"
+            }
+            val result = loadedBitmap
+            val error = failureMessage
+            handler.post {
+                if (!dialog.isShowing) {
+                    if (result !== placeholder) result?.recycle()
+                    return@post
+                }
+                if (result != null) {
+                    image.setImageBitmap(result)
+                    progress.visibility = View.GONE
+                } else {
+                    progress.visibility = View.GONE
+                    if (error != null) showToast(error)
+                }
+            }
+        }
+    }
+
+    private fun decodeBase64Image(encodedData: String, maximumDimension: Int): Bitmap? {
+        val encoded = encodedData.substringAfter("base64,", encodedData)
+        if (encoded.isBlank() || encoded.length > MAX_FILE_PREVIEW_BASE64_CHARS) throw IOException("图片数据过大或为空")
+        val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+        return decodeSampledBitmap(bytes, maximumDimension) ?: throw IOException("图片内容无法解析")
+    }
+
+    private fun fullImagePreviewMaximumDimension(): Int =
+        maxOf(resources.displayMetrics.widthPixels, resources.displayMetrics.heightPixels)
+            .coerceAtLeast(MESSAGE_IMAGE_THUMBNAIL_MAX_DIMENSION)
+            .coerceAtMost(MAX_FULL_IMAGE_PREVIEW_DIMENSION)
 
     private data class FileChangeEntry(
         val path: String,
@@ -6471,7 +6563,11 @@ class MainActivity : Activity() {
         fun display(bitmap: Bitmap) {
             image.imageTintList = null
             image.setImageBitmap(bitmap)
-            image.setOnClickListener { showImageDialog(bitmap) }
+            image.setOnClickListener {
+                showImageDialogWhileLoading(bitmap) {
+                    decodeBase64Image(encoded, fullImagePreviewMaximumDimension())
+                }
+            }
         }
         messageImageCache.get(cacheKey)?.let { display(it); return image }
         io.execute {
@@ -10232,10 +10328,9 @@ class MainActivity : Activity() {
                     clipToOutline = true
                     isClickable = true
                     setOnClickListener {
-                        val full = runCatching {
-                            decodeSampledBitmap(android.util.Base64.decode(file.optString("data"), android.util.Base64.DEFAULT), 2048)
-                        }.getOrNull()
-                        if (full != null) showImageDialog(full)
+                        showImageDialogWhileLoading(bitmap) {
+                            decodeBase64Image(file.optString("data"), fullImagePreviewMaximumDimension())
+                        }
                     }
                 }
                 frame.addView(image, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.BOTTOM or Gravity.START))
@@ -11044,6 +11139,8 @@ class MainActivity : Activity() {
         private const val PIXEL_TEXT_RASTER_SCALE = 0.5f
         private const val MAX_INLINE_IMAGE_BASE64_CHARS = 12 * 1024 * 1024
         private const val MAX_FILE_PREVIEW_BASE64_CHARS = 12 * 1024 * 1024
+        private const val MESSAGE_IMAGE_THUMBNAIL_MAX_DIMENSION = 720
+        private const val MAX_FULL_IMAGE_PREVIEW_DIMENSION = 2400
         private const val FILE_PREVIEW_SINGLE_PAGE_MAX_LINES = 600
         private const val FILE_PREVIEW_SINGLE_PAGE_MAX_CHARS = 96 * 1024
         private const val FILE_PREVIEW_PAGE_MAX_LINES = 300
