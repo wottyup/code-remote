@@ -277,6 +277,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [relaying, setRelaying] = useState(false)
+  const [waitingForGroupReplies, setWaitingForGroupReplies] = useState(false)
   const [localError, setLocalError] = useState<string | null>(null)
   const [settingsEngine, setSettingsEngine] = useState<AIGroupEngine | null>(null)
   const [failedEngines, setFailedEngines] = useState<AIGroupEngine[]>([])
@@ -314,6 +315,11 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
       ...(message.role === 'user' ? { relayUsedForUserMessageId: null } : {}),
     }))
   }, [group.id, onGroupChange])
+
+  const updateGroupReplyWaitState = useCallback(() => {
+    const waiting = groupTurnPending.current.codex || groupTurnPending.current['claude-code']
+    setWaitingForGroupReplies((current) => current === waiting ? current : waiting)
+  }, [])
 
   useEffect(() => {
     const syncAssistantReplies = (engine: AIGroupEngine, remote: typeof codex, threadId: string | null) => {
@@ -364,12 +370,13 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
       ...syncAssistantReplies('codex', codex, group.codexThreadId),
       ...syncAssistantReplies('claude-code', claude, group.claudeThreadId),
     ]
+    updateGroupReplyWaitState()
     if (incoming.length === 0) return
     onGroupChange(group.id, (current) => {
       const messages = mergeAssistantMessages(current.messages, incoming)
       return messages === current.messages ? current : { ...current, updatedAt: new Date().toISOString(), messages }
     })
-  }, [claude, codex, group.claudeThreadId, group.id, onGroupChange])
+  }, [claude, codex, group.claudeThreadId, group.id, onGroupChange, updateGroupReplyWaitState])
 
   useEffect(() => {
     const list = messageList.current
@@ -417,8 +424,8 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
   }
 
   useEffect(() => {
-    onBusyChange(group.id, busy)
-  }, [busy, group.id, onBusyChange])
+    onBusyChange(group.id, busy || waitingForGroupReplies)
+  }, [busy, group.id, onBusyChange, waitingForGroupReplies])
 
   useEffect(() => {
     if (hidden) return
@@ -437,6 +444,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     groupTurnPending.current['claude-code'] = engines.includes('claude-code')
     groupTurnRunningObserved.current.codex = false
     groupTurnRunningObserved.current['claude-code'] = false
+    setWaitingForGroupReplies(engines.length > 0)
   }
 
   const sendToBoth = useCallback(async (event: FormEvent<HTMLFormElement>) => {
@@ -541,6 +549,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
         groupTurnPending.current[engine] = false
         groupTurnRunningObserved.current[engine] = false
       })
+      updateGroupReplyWaitState()
       if (failures.length > 0) {
         setLocalError(failures.length === 2
           ? '两个成员都没有接受这条消息。'
@@ -549,7 +558,7 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
     } finally {
       setSending(false)
     }
-  }, [appendMessage, busy, claude, claudeEffortOptions, claudeModelOptions, codex, codexModelOptions, codexReasoningOptionsByModel, draft, group, onPreferenceChange, ready, resolvePreferences])
+  }, [appendMessage, busy, claude, claudeEffortOptions, claudeModelOptions, codex, codexModelOptions, codexReasoningOptionsByModel, draft, group, onPreferenceChange, ready, resolvePreferences, updateGroupReplyWaitState])
 
   const relayOnce = useCallback(async () => {
     if (!lastUserMessage || !latestCodexReply || !latestClaudeReply || busy
@@ -599,10 +608,11 @@ export function AIGroupChatPane({ token, group, hidden, containerRef, onUnauthor
         groupTurnPending.current[engine] = false
         groupTurnRunningObserved.current[engine] = false
       })
+      updateGroupReplyWaitState()
     } finally {
       setRelaying(false)
     }
-  }, [busy, claude, codex, group, lastUserMessage, latestClaudeReply, latestCodexReply, onGroupChange, resolvePreferences])
+  }, [busy, claude, codex, group, lastUserMessage, latestClaudeReply, latestCodexReply, onGroupChange, resolvePreferences, updateGroupReplyWaitState])
 
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
