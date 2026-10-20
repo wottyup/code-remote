@@ -3918,6 +3918,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [completionToast, setCompletionToast] = useState<CodexThreadCompletion | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
+  const [groupContextMenu, setGroupContextMenu] = useState<{ groupId: string; x: number; y: number } | null>(null)
+  const [groupRenameTarget, setGroupRenameTarget] = useState<AIGroupChat | null>(null)
+  const [groupRenameDraft, setGroupRenameDraft] = useState('')
+  const [groupRenameError, setGroupRenameError] = useState<string | null>(null)
+  const [groupDissolveTarget, setGroupDissolveTarget] = useState<AIGroupChat | null>(null)
   const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
   const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
   const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
@@ -4032,6 +4037,46 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     })
     if (activeAIGroupChatId === groupId) setAiGroupChatOpen(false)
   }, [activeAIGroupChatId])
+  function startAIGroupRename(group: AIGroupChat) {
+    setGroupContextMenu(null)
+    setGroupRenameTarget(group)
+    setGroupRenameDraft(group.name)
+    setGroupRenameError(null)
+  }
+  function closeAIGroupRename() {
+    setGroupRenameTarget(null)
+    setGroupRenameError(null)
+  }
+  function submitAIGroupRename(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!groupRenameTarget) return
+    const name = groupRenameDraft.trim().replace(/\s+/g, ' ')
+    if (!name) {
+      setGroupRenameError('群聊名称不能为空。')
+      return
+    }
+    if (aiGroupChats.some((group) => group.id !== groupRenameTarget.id && group.name.toLocaleLowerCase() === name.toLocaleLowerCase())) {
+      setGroupRenameError('已有同名群聊，请换一个名称。')
+      return
+    }
+    updateAIGroupChat(groupRenameTarget.id, (current) => ({ ...current, name, updatedAt: new Date().toISOString() }))
+    closeAIGroupRename()
+  }
+  function startAIGroupDissolve(group: AIGroupChat) {
+    setGroupContextMenu(null)
+    setGroupDissolveTarget(group)
+  }
+  function confirmAIGroupDissolve() {
+    if (!groupDissolveTarget) return
+    if (busyAIGroupChatIds.has(groupDissolveTarget.id)) {
+      showPaneNotice('群聊仍在回复，等回复结束后再解散。')
+      return
+    }
+    const group = groupDissolveTarget
+    setGroupDissolveTarget(null)
+    deleteAIGroupChat(group.id)
+    showPaneNotice(`已解散「${group.name}」群聊，原聊天记录仍保留。`)
+  }
   const createAIGroupChat = useCallback(() => {
     if (aiGroupChats.length >= 24) {
       showPaneNotice('最多保存 24 个群聊，请先清理不用的群。')
@@ -4116,6 +4161,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     workspaceBackdropOpacity?: number
   } | null>(null)
   const threadLongPress = useRef<{ threadId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
+  const groupLongPress = useRef<{ groupId: string; x: number; y: number; timer: number; triggered: boolean } | null>(null)
   const copyResetTimer = useRef<number | undefined>(undefined)
   const paneNoticeTimer = useRef<number | undefined>(undefined)
   const notifiedSystemEvents = useRef(new Set<string>())
@@ -4147,10 +4193,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [themePreferences.systemNotificationsEnabled])
 
   function openThreadContextMenu(thread: CodexThread, x: number, y: number) {
+    setGroupContextMenu(null)
     setThreadContextMenu({
       thread,
       x: Math.max(8, Math.min(x, window.innerWidth - 174)),
       y: Math.max(8, Math.min(y, window.innerHeight - 290)),
+    })
+  }
+
+  function openAIGroupContextMenu(groupId: string, x: number, y: number) {
+    setThreadContextMenu(null)
+    setGroupContextMenu({
+      groupId,
+      x: Math.max(8, Math.min(x, window.innerWidth - 174)),
+      y: Math.max(8, Math.min(y, window.innerHeight - 130)),
     })
   }
 
@@ -4185,6 +4241,34 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const touch = event.touches[0]
     if (!pending || !touch || Math.abs(touch.clientX - pending.x) > 10 || Math.abs(touch.clientY - pending.y) > 10) {
       clearThreadLongPress()
+    }
+  }
+
+  function clearAIGroupLongPress() {
+    const pending = groupLongPress.current
+    if (pending) window.clearTimeout(pending.timer)
+    groupLongPress.current = null
+  }
+
+  function handleAIGroupTouchStart(event: ReactTouchEvent<HTMLButtonElement>, groupId: string) {
+    clearAIGroupLongPress()
+    if (!isMobileLayout() || event.touches.length !== 1) return
+    const touch = event.touches[0]
+    if (!touch) return
+    const pending = { groupId, x: touch.clientX, y: touch.clientY, timer: 0, triggered: false }
+    pending.timer = window.setTimeout(() => {
+      if (groupLongPress.current !== pending) return
+      pending.triggered = true
+      openAIGroupContextMenu(groupId, pending.x, pending.y)
+    }, 520)
+    groupLongPress.current = pending
+  }
+
+  function handleAIGroupTouchMove(event: ReactTouchEvent<HTMLButtonElement>) {
+    const pending = groupLongPress.current
+    const touch = event.touches[0]
+    if (!pending || !touch || Math.abs(touch.clientX - pending.x) > 10 || Math.abs(touch.clientY - pending.y) > 10) {
+      clearAIGroupLongPress()
     }
   }
 
@@ -4743,9 +4827,25 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }, [threadContextMenu])
 
+  useEffect(() => {
+    if (!groupContextMenu) return
+    const closeMenu = () => setGroupContextMenu(null)
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setGroupContextMenu(null)
+    }
+    document.addEventListener('pointerdown', closeMenu)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeMenu)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [groupContextMenu])
+
   useEffect(() => () => {
     const pending = threadLongPress.current
     if (pending) window.clearTimeout(pending.timer)
+    const groupPending = groupLongPress.current
+    if (groupPending) window.clearTimeout(groupPending.timer)
   }, [])
 
   useEffect(() => {
@@ -5505,6 +5605,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   const activeAIGroupChat = aiGroupChats.find((group) => group.id === activeAIGroupChatId) ?? null
+  const contextAIGroup = groupContextMenu ? aiGroupChats.find((group) => group.id === groupContextMenu.groupId) ?? null : null
   const visibleAIGroupChat = !settingsOpen && !usageStatsOpen && aiGroupChatOpen ? activeAIGroupChat : null
   const mountedAIGroupChats = aiGroupChats.filter((group) => group.id === activeAIGroupChatId || busyAIGroupChatIds.has(group.id))
   const contextMenuGroup = threadContextMenu ? groupForThread(threadContextMenu.thread) : undefined
@@ -5545,7 +5646,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <section className="sidebar-ai-groups" aria-label="AI 群聊">
           <div className="sidebar-ai-groups__heading"><span><MessagesSquare size={14} />群聊</span><button type="button" aria-label="创建群聊" title={aiGroupChats.length >= 24 ? '群聊数量已达上限' : '创建群聊'} disabled={aiGroupChats.length >= 24} onClick={createAIGroupChat}><Plus size={15} /></button></div>
           {aiGroupChats.length > 0 ? <div className="sidebar-ai-groups__list">
-            {aiGroupChats.map((group) => <button className={'sidebar-ai-group' + (aiGroupChatOpen && activeAIGroupChatId === group.id ? ' sidebar-ai-group--active' : '')} type="button" key={group.id} title={group.name} aria-label={`打开群聊：${group.name}`} aria-current={aiGroupChatOpen && activeAIGroupChatId === group.id ? 'page' : undefined} onClick={() => openAIGroupChat(group.id)}>
+            {aiGroupChats.map((group) => <button className={'sidebar-ai-group' + (aiGroupChatOpen && activeAIGroupChatId === group.id ? ' sidebar-ai-group--active' : '')} type="button" key={group.id} title={group.name} aria-label={`打开群聊：${group.name}`} aria-haspopup="menu" aria-expanded={groupContextMenu?.groupId === group.id} aria-current={aiGroupChatOpen && activeAIGroupChatId === group.id ? 'page' : undefined} onClick={() => {
+              const pending = groupLongPress.current
+              if (pending?.groupId === group.id && pending.triggered) {
+                clearAIGroupLongPress()
+                return
+              }
+              clearAIGroupLongPress()
+              openAIGroupChat(group.id)
+            }} onContextMenu={(event) => { event.preventDefault(); openAIGroupContextMenu(group.id, event.clientX, event.clientY) }} onTouchStart={(event) => handleAIGroupTouchStart(event, group.id)} onTouchMove={handleAIGroupTouchMove} onTouchEnd={() => { if (!groupLongPress.current?.triggered) clearAIGroupLongPress() }} onTouchCancel={clearAIGroupLongPress}>
               <MessagesSquare size={15} />
               <span className="sidebar-ai-group__name">{group.name}</span>
               <span className="sidebar-ai-group__members" aria-label={`${group.codexThreadId ? '有 Codex 成员' : '缺少 Codex 成员'}；${group.claudeThreadId ? '有 Claude 成员' : '缺少 Claude 成员'}`}>
@@ -5617,6 +5726,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
       {sidebarOpen || sidebarDragging ? <button className={'sidebar-backdrop' + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
+      {groupContextMenu && contextAIGroup ? (
+        <div className="thread-context-menu" style={{ left: groupContextMenu.x, top: groupContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+          <button type="button" role="menuitem" onClick={() => { setGroupContextMenu(null); openAIGroupChat(contextAIGroup.id) }}><MessagesSquare size={14} />打开群聊</button>
+          <button type="button" role="menuitem" onClick={() => startAIGroupRename(contextAIGroup)}><Pencil size={14} />重命名群聊</button>
+          <button className="thread-context-menu__danger" type="button" role="menuitem" disabled={busyAIGroupChatIds.has(contextAIGroup.id)} onClick={() => startAIGroupDissolve(contextAIGroup)}><Trash2 size={14} />{busyAIGroupChatIds.has(contextAIGroup.id) ? '回复中，暂不可解散' : '解散群聊'}</button>
+        </div>
+      ) : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <button type="button" role="menuitem" onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</button>
@@ -5657,6 +5773,40 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <div className="thread-rename-dialog__actions">
               <button type="button" onClick={() => setThreadJoinGroupTarget(null)}>取消</button>
               <button type="button" disabled={aiGroupChats.length >= 24} onClick={() => { const thread = threadJoinGroupTarget; setThreadJoinGroupTarget(null); createAIGroupWithThread(thread) }}>创建群并加入</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {groupRenameTarget ? (
+        <div className={`thread-rename-backdrop remote-shell--theme-${themePreferences.theme}`} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeAIGroupRename() }}>
+          <form className="thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-group-rename-title" onSubmit={submitAIGroupRename} onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <h2 id="ai-group-rename-title">重命名群聊</h2>
+              <p>这只会更改群聊显示名称，不会改变成员的名称、模型或权限。</p>
+            </div>
+            <label htmlFor="ai-group-rename-input">群聊名称</label>
+            <input id="ai-group-rename-input" type="text" value={groupRenameDraft} maxLength={48} autoComplete="off" autoFocus aria-describedby={groupRenameError ? 'ai-group-rename-error' : undefined} onChange={(event) => { setGroupRenameDraft(event.currentTarget.value); setGroupRenameError(null) }} />
+            {groupRenameError ? <p className="thread-rename-dialog__error" id="ai-group-rename-error" role="alert">{groupRenameError}</p> : null}
+            <div className="thread-rename-dialog__actions">
+              <button type="button" onClick={closeAIGroupRename}>取消</button>
+              <button type="submit" disabled={!groupRenameDraft.trim()}>确定</button>
+            </div>
+          </form>
+        </div>
+      ) : null}
+
+      {groupDissolveTarget ? (
+        <div className={`thread-rename-backdrop remote-shell--theme-${themePreferences.theme}`} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) setGroupDissolveTarget(null) }}>
+          <section className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="ai-group-dissolve-title" aria-describedby="ai-group-dissolve-description" onPointerDown={(event) => event.stopPropagation()}>
+            <div className="thread-rename-dialog__heading">
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="ai-group-dissolve-title">解散 AI 群聊</h2></div>
+              <p id="ai-group-dissolve-description">将删除群聊及群内保存的消息。已加入群聊的 Codex / Claude 原始聊天记录会保留，此操作无法撤销。</p>
+            </div>
+            <div className="thread-delete-dialog__thread" title={groupDissolveTarget.name}>{groupDissolveTarget.name}</div>
+            <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
+              <button type="button" onClick={() => setGroupDissolveTarget(null)}>取消</button>
+              <button type="button" disabled={busyAIGroupChatIds.has(groupDissolveTarget.id)} onClick={confirmAIGroupDissolve}><Trash2 size={14} />{busyAIGroupChatIds.has(groupDissolveTarget.id) ? '回复中' : '确认解散'}</button>
             </div>
           </section>
         </div>
