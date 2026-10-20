@@ -3,7 +3,7 @@ export interface CPAUsageSettings {
   managementKey: string
 }
 
-export type CPAUsageRange = 'today' | '7d' | '30d'
+export type CPAUsageRange = 'today' | 'yesterday' | '7d' | '30d'
 
 export interface CPAUsageAnalyticsSummary {
   total_calls: number
@@ -125,6 +125,13 @@ export function saveCPAUsageSettings(settings: CPAUsageSettings) {
 export function analyticsRangeBounds(range: CPAUsageRange, now = new Date()) {
   const from = new Date(now)
   from.setHours(0, 0, 0, 0)
+  if (range === 'yesterday') {
+    from.setDate(from.getDate() - 1)
+    const to = new Date(from)
+    to.setDate(to.getDate() + 1)
+    to.setTime(to.getTime() - 1)
+    return { fromMs: from.getTime(), toMs: to.getTime() }
+  }
   if (range === '7d') from.setDate(from.getDate() - 6)
   if (range === '30d') from.setDate(from.getDate() - 29)
   return { fromMs: from.getTime(), toMs: now.getTime() }

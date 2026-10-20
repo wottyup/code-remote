@@ -176,6 +176,7 @@ export function CPAUsageStatsPanel({
                 <div className="cpa-usage-range-tabs" role="group" aria-label="统计时间范围">
                   {([
                     ['today', '今天'],
+                    ['yesterday', '昨天'],
                     ['7d', '近 7 天'],
                     ['30d', '近 30 天'],
                   ] as const).map(([value, label]) => (
