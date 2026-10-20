@@ -577,7 +577,13 @@ class SharedQueueService:
             self.store.enqueue(thread_id, payload, submitting=True)
             try:
                 if self.store.is_paused(thread_id):
-                    return False
+                    is_claude = is_claude_thread_id(thread_id) and self.claude is not None
+                    if not is_claude or await self._active_turn_id(thread_id):
+                        return False
+                    # A stopped Claude turn is no longer active. Treat a new
+                    # user prompt as an explicit fresh-send intent instead of
+                    # leaving it stuck behind the previous pause marker.
+                    self.store.set_paused(thread_id, False)
                 if self.codex.handed_off and not (is_claude_thread_id(thread_id) and self.claude is not None):
                     return False
                 return await self._send_now(thread_id, payload["id"], allow_steer=False, require_head=True)

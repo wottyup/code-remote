@@ -440,6 +440,29 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.app.state.shared_queue.send.assert_awaited_once()
         self.assertFalse(self.app.state.shared_queue.send.await_args.args[2])
 
+    async def test_paused_idle_claude_new_submit_clears_pause_and_sends(self) -> None:
+        submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
+        claude = self.app.state.claude_code
+        claude._active_turn_id = AsyncMock(return_value=None)
+        claude.active_turn_id = AsyncMock(return_value=None)
+        claude.read_thread = AsyncMock(return_value={
+            "status": {"type": "idle"},
+            "turns": [{"id": "stopped-turn", "status": "stopped"}],
+        })
+        self.app.state.shared_state.set_paused("claude:12345678-1234-4234-8234-123456789abc", True)
+        self.app.state.shared_state.set_barrier("claude:12345678-1234-4234-8234-123456789abc", "stopped-turn")
+        self.app.state.shared_queue.send = AsyncMock(return_value="fresh-turn")
+
+        result = await submit(
+            "claude:12345678-1234-4234-8234-123456789abc",
+            QueuedMessageRequest(**message("claude-after-stop", "send now")),
+        )
+
+        self.assertTrue(result["sent"])
+        self.assertEqual(result["queue"], [])
+        self.assertFalse(self.app.state.shared_state.is_paused("claude:12345678-1234-4234-8234-123456789abc"))
+        self.app.state.shared_queue.send.assert_awaited_once()
+
     async def test_busy_submit_and_later_messages_preserve_fifo(self) -> None:
         submit = self.endpoint("/api/v1/codex/queue/{thread_id}/submit")
         codex = self.app.state.codex
