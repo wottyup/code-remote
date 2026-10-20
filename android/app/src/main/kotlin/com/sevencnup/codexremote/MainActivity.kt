@@ -962,8 +962,7 @@ class MainActivity : Activity() {
         override fun run() {
             if (!running || activeActivityTimer == null) return
             val elapsedMillis = (SystemClock.elapsedRealtime() - activeActivityStartedAt).coerceAtLeast(0L)
-            val elapsed = elapsedMillis / 1000L
-            activeActivityTimer?.text = "已用 ${elapsed / 60L}分${elapsed % 60L}秒"
+            activeActivityTimer?.text = "${tr("已用")} ${formatTurnDuration(elapsedMillis)}"
             val nextSecond = (1000L - elapsedMillis % 1000L).coerceAtLeast(16L)
             handler.postDelayed(this, nextSecond)
         }
@@ -4107,7 +4106,7 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
             }
             activity.addView(activeActivityText, LinearLayout.LayoutParams(0, WRAP, 1f))
-            activeActivityTimer = label("已用 0分0秒", 10, activityColor).apply {
+            activeActivityTimer = label("${tr("已用")} ${formatTurnDuration(0L)}", 10, activityColor, translateUi = false).apply {
                 setPadding(dp(8), 0, 0, 0)
                 contentDescription = "本轮思考时间"
             }
