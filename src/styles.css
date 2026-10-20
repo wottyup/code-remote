@@ -643,6 +643,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .sidebar-chat-shortcut-message { padding-top: 0; padding-bottom: 14px; color: #aabaff; }
 .message-stream { grid-column: 1; grid-row: 2; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: contain; padding: 0 25px 28px; }
 .message-stream__content { display: flex; min-width: 0; min-height: 100%; flex-direction: column; gap: 16px; padding-top: 32px; }
+.message-stream__content--loading { height: 100%; min-height: 100%; justify-content: center; padding-top: 0; }
+.message-stream__content--loading .loading-state { width: 100%; min-height: 0; text-align: center; }
 .message-stream__older { align-self: center; min-height: 30px; padding: 5px 12px; border: 1px solid var(--custom-theme-border, rgba(128, 128, 128, .38)); border-radius: 999px; background: var(--custom-theme-control, rgba(128, 128, 128, .16)); color: inherit; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); }
 .message-stream__older:hover { border-color: currentColor; }
 /* Browsers kept open across older hot updates can retain these removed nodes.
@@ -2951,6 +2953,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .remote-shell--theme-retro .message-stream__content--loading {
   display: flex;
+  height: 100%;
   min-height: 100%;
   flex-direction: column;
   justify-content: center;

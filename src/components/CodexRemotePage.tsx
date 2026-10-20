@@ -3754,7 +3754,7 @@ function RemoteChatPane({
               </div>
             </div>
           ) : null}
-          {remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant ? (
+          {!remote.loadingHistory && (remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant) ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
                 <OperationActivityLine className={`running-indicator__activity${remote.activeEngine === 'claude-code' && !currentRunningOperation && (!remote.activity || remote.activity.label === '正在思考') ? ' running-indicator__activity--claude-thinking' : ''}`} operation={currentRunningOperation} activity={remote.activity} iconSize={15} />
