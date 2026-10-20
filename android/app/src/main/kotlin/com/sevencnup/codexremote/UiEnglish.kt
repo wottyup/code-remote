@@ -199,6 +199,7 @@ internal object UiEnglish {
         "正在调用工具" to "Calling tool",
         "正在处理" to "Working",
         "已用" to "Elapsed",
+        "加入终端" to "Add to terminal",
     )
 
     fun translate(value: String): String {

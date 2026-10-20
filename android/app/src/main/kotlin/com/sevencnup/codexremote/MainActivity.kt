@@ -894,6 +894,8 @@ class MainActivity : Activity() {
     private var terminalOutput: TextView? = null
     private var terminalStatusView: TextView? = null
     private var terminalDraftInput: EditText? = null
+    private var pendingTerminalDirectory: String? = null
+    private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
     @Volatile private var terminalReady = false
     private var terminalImeVisible = false
@@ -7381,7 +7383,11 @@ class MainActivity : Activity() {
             }
             row.addView(ImageView(this).apply {
                 setPixelAwareImageResource(iconResource(action.icon))
-                imageTintList = retroIconTint(if (action.destructive) ERROR else SUBTLE)
+                imageTintList = when (action.icon) {
+                    "codex" -> ColorStateList.valueOf(brandIconTint("codex"))
+                    "claude" -> ColorStateList.valueOf(brandIconTint("claude-code"))
+                    else -> retroIconTint(if (action.destructive) ERROR else SUBTLE)
+                }
             }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { rightMargin = dp(9) })
             row.addView(label(action.title, 12, if (action.destructive) ERROR else TEXT), LinearLayout.LayoutParams(0, WRAP, 1f))
             menu.addView(row, LinearLayout.LayoutParams(MATCH, dp(38)))
@@ -8738,6 +8744,44 @@ class MainActivity : Activity() {
         showToast("已加入输入框")
     }
 
+    private fun terminalChangeDirectoryCommand(shellName: String, path: String): String {
+        val shell = shellName.trim().lowercase(Locale.ROOT)
+            .substringAfterLast('/').substringAfterLast('\\').removeSuffix(".exe")
+        return when (shell) {
+            "pwsh", "powershell" -> "Set-Location -LiteralPath '${path.replace("'", "''")}'"
+            "cmd" -> {
+                val escapedPath = path.replace("\"", "\"\"")
+                "cd /d \"$escapedPath\""
+            }
+            else -> "cd -- '${path.replace("'", "'\\''")}'"
+        }
+    }
+
+    private fun insertTerminalText(value: String) {
+        val input = terminalDraftInput ?: return
+        val length = input.text.length
+        val start = input.selectionStart.coerceIn(0, length)
+        val end = input.selectionEnd.coerceIn(0, length)
+        val from = minOf(start, end)
+        val to = maxOf(start, end)
+        input.text.replace(from, to, value)
+        input.setSelection(from + value.length)
+    }
+
+    private fun addWorkspacePathToTerminal(path: String) {
+        if (terminalOverlay == null) {
+            pendingTerminalDirectory = path
+            showTerminal()
+            return
+        }
+        val shellName = terminalShellName
+        if (shellName.isNullOrBlank()) {
+            pendingTerminalDirectory = path
+            return
+        }
+        insertTerminalText(terminalChangeDirectoryCommand(shellName, path))
+    }
+
     private fun showCreateEntry(anchor: View, parentPath: String, cwd: String?, refresh: () -> Unit) {
         showActionPopup(anchor, "新建", listOf(MenuAction("新建文件", "file_add"), MenuAction("新建文件夹", "folder_add"))) { index ->
             val kind = if (index == 0) "file" else "directory"
@@ -8764,7 +8808,10 @@ class MainActivity : Activity() {
         val absolutePath = listOf(workspaceRootPath.trimEnd('/'), path.trimStart('/')).filter { it.isNotBlank() }.joinToString("/")
         val actions = mutableListOf<MenuAction>()
         if (isDirectory && activeThreadId != null) actions += MenuAction("绑定当前聊天到此目录", "link")
-        if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) actions += MenuAction("加入输入框", "add")
+        if (isDirectory) actions += MenuAction("加入终端", "terminal")
+        if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
+            actions += MenuAction("加入输入框", if (currentMode == "claude-code") "claude" else "codex")
+        }
         if (isDirectory) actions += listOf(MenuAction("新建文件", "file_add"), MenuAction("新建文件夹", "folder_add"))
         actions += listOf(
             MenuAction("重命名", "edit"),
@@ -8785,6 +8832,7 @@ class MainActivity : Activity() {
                         showToast("已绑定当前聊天的工作路径")
                     })
                 }
+                "加入终端" -> addWorkspacePathToTerminal(absolutePath)
                 "加入输入框" -> insertWorkspacePathIntoComposer(absolutePath)
                 "新建文件" -> showCreateWorkspaceEntryDialog("file", path, cwd) { refreshed(path) }
                 "新建文件夹" -> showCreateWorkspaceEntryDialog("directory", path, cwd) { refreshed(path) }
@@ -9346,6 +9394,7 @@ class MainActivity : Activity() {
 
     private fun showTerminal() {
         if (terminalOverlay != null) return
+        terminalShellName = null
         preferencePopup?.dismiss()
         terminalScreen = TerminalScreenBuffer(88, 26)
         val shell = LinearLayout(this).apply {
@@ -9486,6 +9535,8 @@ class MainActivity : Activity() {
             ?.hideSoftInputFromWindow(terminalDraftInput?.windowToken, 0)
         if (::root.isInitialized && shell.parent === root) root.removeView(shell)
         terminalReady = false
+        terminalShellName = null
+        pendingTerminalDirectory = null
         terminalSocket?.close(1000, "closed")
         terminalSocket = null
         terminalOverlay = null
@@ -9517,6 +9568,14 @@ class MainActivity : Activity() {
                     when (event.optString("type")) {
                         "ready" -> {
                             terminalReady = true
+                            val shellName = event.optString("shell")
+                            handler.post {
+                                terminalShellName = shellName
+                                pendingTerminalDirectory?.let { path ->
+                                    pendingTerminalDirectory = null
+                                    insertTerminalText(terminalChangeDirectoryCommand(shellName, path))
+                                }
+                            }
                             updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
                         }
                         "error" -> {
