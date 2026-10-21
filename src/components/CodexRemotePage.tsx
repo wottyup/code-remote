@@ -3825,6 +3825,7 @@ function RemoteChatPane({
             <TerminalDialog
               key={terminalSessionId}
               token={token}
+              engine={remote.activeEngine}
               threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
               cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}

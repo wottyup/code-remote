@@ -1808,7 +1808,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .terminal-dialog__title > svg { color: #4c5f9a; }
 .remote-shell--theme-light .terminal-dialog__title > code { color: #666; }
 .remote-shell--theme-light .terminal-context-menu { border-color: #dedede; background: rgba(255, 255, 255, .99); box-shadow: 0 12px 30px rgba(0, 0, 0, .18); }
-.remote-shell--theme-light .terminal-context-menu button:hover { background: #ededed; }
+.remote-shell--theme-light .terminal-context-menu button:hover:not(:disabled) { background: #ededed; }
 .remote-shell--theme-light .terminal-open-button { border-color: #dedede; background: #f5f5f5; color: #4a4a4a; }
 .remote-shell--theme-light .terminal-open-button:hover { border-color: #c9c9c9; background: #ededed; color: #000; }
 .remote-shell--theme-warm .terminal-dialog { border-color: #e8ded2; }
@@ -2182,7 +2182,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro :is(.chat-overlay-panel__header, .chat-overlay-panel__footer) { border-color: #aab8c5; background: #edf2f6; color: #263744; }
 .remote-shell--theme-retro .chat-overlay-panel__resize-handle { border-color: #aab8c5; background: #e7edf2; }
 .remote-shell--theme-retro .chat-overlay-panel__resize-handle::before { background: #8194a4; }
-.remote-shell--theme-retro :is(.thread-context-menu button, .terminal-context-menu button):hover { background: #e7eef4; color: #1e3b54; }
+.remote-shell--theme-retro :is(.thread-context-menu button, .terminal-context-menu button):hover:not(:disabled) { background: #e7eef4; color: #1e3b54; }
 .remote-shell--theme-retro .thread-context-menu button.thread-context-menu__danger { border-color: #cdaaaa; color: #8b3838; }
 .remote-shell--theme-retro .thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: #f7e9e9; color: #772929; }
 .remote-shell--theme-retro .thread-rename-dialog__heading h2 { color: #263744; }
