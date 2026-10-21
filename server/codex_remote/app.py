@@ -2477,6 +2477,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            # Release the Windows PTY reader before awaiting the output task.
+            terminal_sessions.discard(terminal_session)
+            await terminal_session.close()
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -2484,8 +2487,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             for task in tasks:
                 with suppress(Exception, asyncio.CancelledError):
                     task.result()
-            terminal_sessions.discard(terminal_session)
-            await terminal_session.close()
             with suppress(Exception):
                 await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
 

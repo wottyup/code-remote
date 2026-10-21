@@ -260,6 +260,9 @@ class TerminalSession:
         except ImportError as error:
             raise RuntimeError("Windows 本机终端依赖 pywinpty，请重新安装 server/requirements.txt。") from error
 
+        # pywinpty's native blocking reader can hold the GIL when the
+        # terminal has no output, preventing unrelated API requests.
+        os.environ["PYWINPTY_BLOCK"] = "0"
         self._windows_process = await asyncio.to_thread(
             PtyProcess.spawn,
             self.argv,
@@ -327,7 +330,7 @@ class TerminalSession:
         if self._windows_process is not None:
             process = self._windows_process
             try:
-                if process.isalive():  # type: ignore[attr-defined]
+                if await asyncio.to_thread(process.isalive):  # type: ignore[attr-defined]
                     await asyncio.to_thread(process.terminate, force=True)  # type: ignore[attr-defined]
             except (OSError, RuntimeError, ValueError):
                 pass
