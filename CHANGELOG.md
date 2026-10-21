@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.64.0-dev.1] - 将项目目录与 GitHub 仓库统一更名为 code-remote
+## [0.64.0-dev.1] - 将项目目录与 GitHub、Gitea 仓库统一更名为 code-remote
 
 ## [0.62.0-dev.19] - 恢复 Android 终端关闭前的屏幕内容
 
