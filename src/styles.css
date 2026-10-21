@@ -1606,7 +1606,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .theme-settings-panel__close { border-color: var(--custom-theme-border); background: var(--custom-theme-control); }
 .remote-shell--theme-custom .theme-settings-panel__eyebrow { color: color-mix(in srgb, var(--custom-theme-text-color) 68%, transparent); }
 .remote-shell--theme-custom .workspace-explorer__chevron { color: color-mix(in srgb, var(--custom-theme-text-color) 72%, transparent) !important; }
-.remote-shell--theme-custom .thread-context-menu { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: 0 15px 38px rgba(0, 0, 0, .18); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .thread-context-menu,
+.thread-context-menu.remote-shell--theme-custom { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: 0 15px 38px rgba(0, 0, 0, .18); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.thread-context-menu.remote-shell--theme-custom button { color: var(--custom-theme-text-color); }
+.thread-context-menu.remote-shell--theme-custom button.thread-context-menu__danger { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d95c63); color: color-mix(in srgb, var(--custom-theme-text-color) 55%, #ff666d); }
+.thread-context-menu.remote-shell--theme-custom button.thread-context-menu__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--custom-theme-active) 65%, rgba(171, 45, 53, .35)); color: color-mix(in srgb, var(--custom-theme-text-color) 42%, #ff8a90); }
 .remote-shell--theme-custom .thread-context-menu button.thread-context-menu__danger { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d95c63); color: color-mix(in srgb, var(--custom-theme-text-color) 55%, #ff666d); }
 .remote-shell--theme-custom .thread-context-menu button.thread-context-menu__danger:hover:not(:disabled) { background: color-mix(in srgb, var(--custom-theme-active) 65%, rgba(171, 45, 53, .35)); color: color-mix(in srgb, var(--custom-theme-text-color) 42%, #ff8a90); }
 .remote-shell--theme-custom .thread-delete-dialog__thread { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d95c63); background: color-mix(in srgb, var(--custom-theme-surface) 72%, rgba(145, 40, 47, .3)); color: var(--custom-theme-text-color); }
@@ -3468,7 +3472,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-warm { --context-menu-hover-bg: #f2e5d5; --context-menu-hover-text: #4a392b; --context-menu-hover-border: #d8bfa4; }
 .remote-shell--theme-custom :is(.thread-context-menu, .terminal-context-menu),
-:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-custom { --context-menu-hover-bg: var(--custom-theme-active); --context-menu-hover-text: var(--custom-theme-text-color); --context-menu-hover-border: var(--custom-theme-border); }
+:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-custom { --context-menu-hover-bg: color-mix(in srgb, var(--custom-theme-text-color) 22%, var(--custom-theme-background)); --context-menu-hover-text: var(--custom-theme-text-color); --context-menu-hover-border: color-mix(in srgb, var(--custom-theme-text-color) 42%, transparent); }
 .remote-shell--theme-retro :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-retro,
 .workspace-file-context-menu--retro { --context-menu-hover-bg: #000080; --context-menu-hover-text: #fff; --context-menu-hover-border: #000080; }

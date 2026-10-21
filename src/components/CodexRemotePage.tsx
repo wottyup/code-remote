@@ -2154,6 +2154,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 interface WorkspaceExplorerProps {
   token: string
   theme: AppTheme
+  themePreferences: ThemePreferences
   engine: ChatEngine
   cwd?: string
   threadId?: string
@@ -2313,7 +2314,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -2356,6 +2357,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
   const viewStateCache = useRef(new Map<string, WorkspaceExplorerViewState>())
   const pendingScrollRestore = useRef<number | null>(null)
   const browsingRoot = manualRoot || cwd
+  const portalThemeStyle = theme === 'custom' ? themeRootStyle(themePreferences) : undefined
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
   const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
   const currentViewState = useRef({ directories, expanded, selectedPaths })
@@ -3263,7 +3265,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ ...portalThemeStyle, left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
             <span className="workspace-file-context-menu__group-label">快捷操作</span>
@@ -3346,7 +3348,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
         <div
           ref={selectionContextMenuElement}
           className={`thread-context-menu workspace-file-context-menu workspace-selection-context-menu remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`}
-          style={{ left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
+          style={{ ...portalThemeStyle, left: selectionContextMenu.x, top: selectionContextMenu.y, maxHeight: selectionContextMenu.mobile ? `${selectionContextMenu.maxHeight}px` : undefined }}
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
@@ -5621,6 +5623,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <WorkspaceExplorer
             token={token}
             theme={themePreferences.theme}
+            themePreferences={themePreferences}
             engine={activeRemote.activeEngine}
             cwd={activeWorkspaceCwd}
             threadId={activeRemote.activeThread?.id}
