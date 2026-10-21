@@ -3535,7 +3535,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .new-thread-button__icon { border-radius: 3px; background: rgba(245, 231, 200, .16); color: #f4e3bd; }
 .remote-shell--theme-chinese-retro .new-thread-button:hover:not(:disabled) { border-color: #c9a65a; background: #21666b; color: #fff5df; }
 .remote-shell--theme-chinese-retro .thread-row--active .engine-brand-icon { color: #286a6e; }
-.remote-shell--theme-chinese-retro .conversation-pane--active::before { border-color: #c4a455; box-shadow: inset 0 0 0 1px rgba(246, 232, 198, .55); }
+.remote-shell--theme-chinese-retro .conversation-pane--active::before { display: none; }
 .remote-shell--theme-chinese-retro .sidebar-selection-bar { border-color: #c9b782; background: #f4ead2; }
 .remote-shell--theme-chinese-retro .sidebar-selection-bar__actions button { border-color: #c0aa6d; background: #e7dfc8; color: #31565a; }
 .remote-shell--theme-chinese-retro .connection-label { border-color: #c9b782; border-radius: 4px; background: #f3ead4; color: #426064; }
@@ -3620,7 +3620,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
-.remote-shell--theme-chinese-retro :is(.remote-sidebar, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
+.remote-shell--theme-chinese-retro :is(.remote-sidebar, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
   border: 16px solid transparent;
   border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 16px / 0 stretch;
   border-radius: 0;
