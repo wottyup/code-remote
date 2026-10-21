@@ -3669,6 +3669,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
+.remote-shell--theme-chinese-retro .remote-sidebar,
+.remote-shell--theme-chinese-retro .theme-settings-panel {
+  border: 1px solid #c5b47e;
+  border-image: none;
+  border-radius: 0;
+  box-shadow: none;
+}
 .remote-shell--theme-chinese-retro .sidebar-search {
   border: 9px solid transparent;
   border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 9px / 0 stretch;
