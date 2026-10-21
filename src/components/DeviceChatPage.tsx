@@ -1,11 +1,12 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react'
-import { Copy, LoaderCircle, MessageSquare, Plus, Send, Users, X } from 'lucide-react'
+import { Copy, LoaderCircle, Menu, MessageSquare, Plus, Send, Users, X } from 'lucide-react'
 import { codexRemoteClient, type DeviceChatMessage, type DeviceChatState } from '../lib/codexRemoteClient'
-import './DeviceChatPanel.css'
+import './DeviceChatPage.css'
 
 interface Props {
   token: string
   onClose: () => void
+  onOpenSidebar: () => void
 }
 
 function defaultDeviceName() {
@@ -27,7 +28,7 @@ function messageOrder(left: DeviceChatMessage, right: DeviceChatMessage) {
   return left.sequence - right.sequence
 }
 
-export function DeviceChatPanel({ token, onClose }: Props) {
+export function DeviceChatPage({ token, onClose, onOpenSidebar }: Props) {
   const [state, setState] = useState<DeviceChatState | null>(null)
   const [deviceName, setDeviceName] = useState(defaultDeviceName)
   const [hostUrl, setHostUrl] = useState('')
@@ -69,15 +70,10 @@ export function DeviceChatPanel({ token, onClose }: Props) {
   useEffect(() => {
     void refresh(true)
     const timer = window.setInterval(() => void refresh(), 1200)
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    window.addEventListener('keydown', closeOnEscape)
     return () => {
       window.clearInterval(timer)
-      window.removeEventListener('keydown', closeOnEscape)
     }
-  }, [token, onClose])
+  }, [token])
 
   useLayoutEffect(() => {
     const container = messagesRef.current
@@ -196,16 +192,16 @@ export function DeviceChatPanel({ token, onClose }: Props) {
   const hostAddress = window.location.origin
 
   return (
-    <div className="device-chat-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <section className="device-chat-panel" role="dialog" aria-modal="true" aria-labelledby="device-chat-title">
-        <header className="device-chat-panel__header">
-          <div className="device-chat-panel__title-icon"><Users size={19} /></div>
-          <div className="device-chat-panel__title-copy">
+    <section className="device-chat-page" aria-labelledby="device-chat-title">
+        <header className="device-chat-page__header">
+          <button className="icon-button menu-button" type="button" aria-label="打开聊天侧栏" title="打开聊天侧栏" onClick={onOpenSidebar}><Menu size={18} /></button>
+          <div className="device-chat-page__title-icon"><Users size={19} /></div>
+          <div className="device-chat-page__title-copy">
             <h2 id="device-chat-title">设备群聊</h2>
             <p>{state?.room ? state.room.name : '把多台设备上的 Codex 放进同一个可见消息流'}</p>
           </div>
           {state?.room ? <span className={'device-chat-connection' + (state.connected ? ' device-chat-connection--online' : '')}><i />{state.role === 'host' ? '房间设备在线' : state.connected ? '已连接' : '重连中'}</span> : null}
-          <button className="device-chat-panel__close" type="button" aria-label="关闭设备群聊" onClick={onClose}><X size={19} /></button>
+          <button className="device-chat-page__close" type="button" aria-label="返回普通聊天" title="返回普通聊天" onClick={onClose}><X size={19} /></button>
         </header>
 
         {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
@@ -284,8 +280,7 @@ export function DeviceChatPanel({ token, onClose }: Props) {
             </div>
           </div>
         )}
-      </section>
-    </div>
+    </section>
   )
 }
 

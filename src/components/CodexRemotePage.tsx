@@ -69,7 +69,7 @@ import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberW
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
-import { DeviceChatPanel } from './DeviceChatPanel'
+import { DeviceChatPage } from './DeviceChatPage'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
@@ -3944,7 +3944,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
-  const [deviceChatOpen, setDeviceChatOpen] = useState(false)
+  const [deviceChatMode, setDeviceChatMode] = useState(false)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -4001,6 +4001,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [token])
   const openSettingsPanel = useCallback(() => {
     openPanelHistoryEntry('settings')
+    setDeviceChatMode(false)
     setWorkspacePreviewRequest(null)
     setUsageStatsOpen(false)
     setSettingsOpen(true)
@@ -4009,6 +4010,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const openUsageStatsPanel = useCallback(() => {
     openPanelHistoryEntry('usage-stats')
+    setDeviceChatMode(false)
     setWorkspacePreviewRequest(null)
     setSettingsOpen(false)
     setUsageStatsOpen(true)
@@ -4025,12 +4027,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(false)
     setWorkspaceOpen(true)
   }, [])
-  const openDeviceChatPanel = useCallback(() => {
-    setDeviceChatOpen(true)
+  const openDeviceChatMode = useCallback(() => {
+    setSettingsOpen(false)
+    setUsageStatsOpen(false)
+    setDeviceChatMode(true)
     setSidebarOpen(false)
     setWorkspaceOpen(false)
   }, [])
-  const closeDeviceChatPanel = useCallback(() => setDeviceChatOpen(false), [])
+  const closeDeviceChatMode = useCallback(() => setDeviceChatMode(false), [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
@@ -4645,13 +4649,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         setSidebarOpen(false)
         return true
       }
+      if (deviceChatMode) {
+        setDeviceChatMode(false)
+        return true
+      }
       return false
     }
     window.CodexRemoteHandleBack = handleBack
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, deviceChatMode, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -4953,6 +4961,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
     }
     const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
+    setDeviceChatMode(false)
     setSidebarOpen(false)
     if (targetThread) {
       const existingPane = paneIndexForThread(targetThread.id)
@@ -4969,11 +4978,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   async function createThread() {
+    setDeviceChatMode(false)
     setSidebarOpen(false)
     await createThreadForPane(selectedPaneIndex)
   }
 
   async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
+    setDeviceChatMode(false)
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
@@ -5349,7 +5360,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -5433,7 +5444,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (deviceChatOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设备群聊" title="设备群聊" onClick={openDeviceChatPanel}><Users size={16} /><span>设备群聊</span></button>
+          <button className={'sidebar-settings' + (deviceChatMode ? ' sidebar-settings--active' : '')} type="button" aria-label="设备群聊" title="设备群聊" onClick={openDeviceChatMode}><Users size={16} /><span>设备群聊</span></button>
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
@@ -5502,6 +5513,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
+      ) : deviceChatMode ? (
+        <DeviceChatPage token={token} onClose={closeDeviceChatMode} onOpenSidebar={openSidebarPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -5673,7 +5686,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
         </>
       )}
-      {deviceChatOpen ? <DeviceChatPanel token={token} onClose={closeDeviceChatPanel} /> : null}
     </div>
   )
 }
