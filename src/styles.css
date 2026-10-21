@@ -3654,9 +3654,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .remote-shell--theme-chinese-retro .message-composer {
   padding: 3px 5px 3px;
-  border: 24px solid transparent;
-  border-width: 30px 24px 24px;
-  border-image: url('/chinese-retro/composer-frame.png') 260 330 230 420 / 30px 24px 24px / 0 stretch;
+  border: 20px solid transparent;
+  border-width: 20px 16px 16px;
+  border-image: url('/chinese-retro/composer-frame.png') 260 330 230 420 / 20px 16px 16px / 0 stretch;
   border-radius: 0;
   background: #f2e1b7;
   box-shadow: none;
