@@ -16,6 +16,7 @@ from watchfiles import Change
 
 from codex_remote.codex_app_server import (
     CodexAppServer,
+    CodexExternalTurnError,
     CodexHandoffBusyError,
     CodexNoActiveTurnError,
     CodexRuntimeError,
@@ -872,6 +873,15 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
                 {"threadId": "thread-id", "turnId": "current-turn-id"},
             ),
         )
+
+    async def test_interrupt_reports_turn_owned_by_another_app_server(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(side_effect=CodexRuntimeError("thread not found: thread-id"))
+
+        with self.assertRaises(CodexExternalTurnError):
+            await app_server.interrupt("thread-id", "turn-id")
+
+        self.assertEqual(app_server._active_turn_ids.get("thread-id"), None)
 
     async def test_interrupt_waits_for_a_turn_that_is_still_starting(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

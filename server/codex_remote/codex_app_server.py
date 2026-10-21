@@ -37,6 +37,10 @@ class CodexNoActiveTurnError(CodexRuntimeError):
     """A request that requires an active turn arrived after it had finished."""
 
 
+class CodexExternalTurnError(CodexRuntimeError):
+    """A turn is running in a different Codex app-server process."""
+
+
 class CodexThreadBusyError(CodexRuntimeError):
     """A destructive thread operation was requested while its turn is active."""
 
@@ -341,6 +345,10 @@ class CodexAppServer:
     @property
     def handed_off(self) -> bool:
         return self._handed_off
+
+    def can_interrupt_thread(self, thread_id: str) -> bool:
+        """Only turns owned by this app-server process can be interrupted."""
+        return thread_id in self._active_turn_ids or thread_id in self._pending_turn_starts
 
     @property
     def has_active_turns(self) -> bool:
@@ -999,7 +1007,15 @@ class CodexAppServer:
         active_turn_id = await self._active_turn_id(thread_id) or turn_id
         if not active_turn_id:
             raise CodexRuntimeError("Codex 当前没有可中断的任务")
-        return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
+        try:
+            return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
+        except CodexRuntimeError as error:
+            if "thread not found" in str(error).casefold():
+                self._active_turn_ids.pop(thread_id, None)
+                raise CodexExternalTurnError(
+                    "此回复由 Codex Desktop 的另一个进程运行；请在 Codex 窗口中停止。"
+                ) from error
+            raise
 
     async def answer_server_request(self, request_id: str | int, decision: str) -> None:
         if decision not in {"accept", "decline", "cancel"}:

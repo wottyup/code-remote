@@ -44,6 +44,7 @@ from .codex_app_server import (
     ApprovalPolicy,
     CodexAppServer,
     CodexHandoffBusyError,
+    CodexExternalTurnError,
     CodexNoActiveTurnError,
     CodexRuntimeError,
     CodexThreadBusyError,
@@ -1783,6 +1784,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 thread_id = thread.get("id")
                 summary = browser_thread_summary(thread)
                 if isinstance(thread_id, str):
+                    summary["canInterrupt"] = app_server.can_interrupt_thread(thread_id)
                     revision = app_server.thread_history_revision(thread_id)
                     if revision is not None:
                         summary["historyRevision"] = revision
@@ -1863,6 +1865,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             # response stale, rather than claiming to contain the new data.
             revision = app_server.thread_history_revision(thread_id)
             thread = browser_thread(await app_server.read_thread(thread_id, tail_turns=tail_turns))
+            thread["canInterrupt"] = app_server.can_interrupt_thread(thread_id)
             if revision is not None:
                 thread["historyRevision"] = revision
             bound_cwd = shared_state.thread_workspace(thread_id)
@@ -2202,6 +2205,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return {"interrupted": await shared_queue.pause_thread(thread_id, body.turn_id if body else None)}
         except ClaudeThreadNotFoundError as error:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except CodexExternalTurnError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 

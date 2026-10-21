@@ -976,6 +976,7 @@ interface MessageComposerProps {
   connection: RemoteConnection
   isRunning: boolean
   isReplying: boolean
+  canInterrupt: boolean
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
@@ -1025,6 +1026,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   connection,
   isRunning,
   isReplying,
+  canInterrupt,
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
@@ -1467,7 +1469,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
-  const stopWithSendButton = isRunning && !writerConflict && !editingQueuedMessageId
+  const stopWithSendButton = isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
   const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
@@ -5460,6 +5462,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={activeRemote.isRunning}
               isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
+              canInterrupt={activeRemote.activeEngine === 'claude-code' || activeRemote.activeThread?.canInterrupt !== false}
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}

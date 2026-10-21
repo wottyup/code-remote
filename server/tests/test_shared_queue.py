@@ -6,9 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
+from fastapi import HTTPException
 
 from codex_remote.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
-from codex_remote.codex_app_server import CodexAppServer, CodexRuntimeError
+from codex_remote.codex_app_server import CodexAppServer, CodexExternalTurnError, CodexRuntimeError
 from codex_remote.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 
@@ -421,6 +422,18 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.app.state.shared_state.set_paused("thread", True)
 
         self.assertEqual(await stop("thread"), {"stopped": True})
+        self.assertFalse(self.app.state.shared_state.is_paused("thread"))
+
+    async def test_interrupt_external_turn_keeps_queue_unpaused(self) -> None:
+        interrupt = self.endpoint("/api/v1/codex/threads/{thread_id}/interrupt")
+        self.app.state.codex.interrupt = AsyncMock(
+            side_effect=CodexExternalTurnError("此回复由 Codex Desktop 的另一个进程运行；请在 Codex 窗口中停止。")
+        )
+
+        with self.assertRaises(HTTPException) as caught:
+            await interrupt("thread", None)
+
+        self.assertEqual(caught.exception.status_code, 409)
         self.assertFalse(self.app.state.shared_state.is_paused("thread"))
 
     async def test_idle_submit_starts_immediately_and_retry_does_not_send_twice(self) -> None:

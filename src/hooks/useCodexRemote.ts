@@ -299,6 +299,7 @@ function compactThread(thread: CodexThread): CodexThread {
     ...(thread.historyRevision !== undefined ? { historyRevision: thread.historyRevision } : {}),
     ...(thread.createdAt !== undefined ? { createdAt: thread.createdAt } : {}),
     ...(thread.status !== undefined ? { status: thread.status } : {}),
+    ...(thread.canInterrupt !== undefined ? { canInterrupt: thread.canInterrupt } : {}),
   }
 }
 
@@ -783,6 +784,7 @@ function sameActiveThread(left: CodexThread | null, right: CodexThread) {
     && left.historyRevision === right.historyRevision
     && left.createdAt === right.createdAt
     && left.status?.type === right.status?.type
+    && left.canInterrupt === right.canInterrupt
 }
 
 function sameActivity(left: CodexActivity | null, right: CodexActivity | null) {
