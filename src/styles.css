@@ -1983,6 +1983,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .remote-shell.remote-shell--theme-dark .message-composer__footer .send-button.send-button--arrow:not(:disabled) { background: #fff; color: #000; }
 .remote-shell.remote-shell--theme-light .message-composer__footer .send-button.send-button--arrow:not(:disabled) { background: #000; color: #fff; }
+.remote-shell.remote-shell--theme-dark .message-composer__footer .send-button.send-button--arrow:disabled { background: #6f737a; color: #fff; opacity: 1; }
+.remote-shell.remote-shell--theme-light .message-composer__footer .send-button.send-button--arrow:disabled { background: #8b8e95; color: #000; opacity: 1; }
 
 @media (max-width: 700px) {
   .theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
