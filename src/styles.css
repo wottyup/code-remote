@@ -3615,57 +3615,57 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 /* Reuse the landscape frame on the same individual panes and cards that receive
    visible borders in the pixel theme; keep the application viewport unframed. */
 .app-root--theme-chinese-retro .pair-card {
+  border: 20px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 20px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.remote-sidebar, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
+  border: 16px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 16px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.remote-chat__header, .workspace-explorer__header, .theme-settings-panel__header) {
   border: 14px solid transparent;
   border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
-.remote-shell--theme-chinese-retro :is(.remote-sidebar, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
-  border: 9px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 9px / 0 stretch;
-  border-radius: 0;
-  box-shadow: none;
-}
-.remote-shell--theme-chinese-retro :is(.remote-chat__header, .workspace-explorer__header, .theme-settings-panel__header) {
-  border: 8px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
-  border-radius: 0;
-  box-shadow: none;
-}
 .remote-shell--theme-chinese-retro :is(.sidebar-selection-bar, .message-composer, .composer-queue, .running-indicator, .approval-card, .theme-settings-card, .file-change-card) {
-  border: 8px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
+  border: 14px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body {
-  border: 8px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
+  border: 14px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .thread-rename-dialog,
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu),
 :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro {
-  border: 10px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
+  border: 16px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 16px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro :is(.thread-row--active, .workspace-explorer__entry--selected) {
-  border: 7px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 7px / 0 stretch;
+  border: 12px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 12px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .theme-option {
-  border: 6px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 6px / 0 stretch;
+  border: 10px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
   border-radius: 0;
 }
 .remote-shell--theme-chinese-retro .theme-option--active {
-  border: 7px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 7px / 0 stretch;
+  border: 12px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 12px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
