@@ -11,6 +11,7 @@ export interface CodexThread {
   historyRevision?: string
   createdAt?: number | string
   status?: { type?: string }
+  canInterrupt?: boolean
 }
 
 export interface CodexThreadDetails extends CodexThread {

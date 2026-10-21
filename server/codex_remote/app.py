@@ -44,6 +44,7 @@ from .codex_app_server import (
     ApprovalPolicy,
     CodexAppServer,
     CodexHandoffBusyError,
+    CodexExternalTurnError,
     CodexNoActiveTurnError,
     CodexRuntimeError,
     CodexThreadBusyError,
@@ -98,6 +99,26 @@ async def watch_codex_history(app_server: CodexAppServer) -> None:
         raise
     except OSError:
         logger.exception("Could not watch Codex session history")
+
+
+async def watch_claude_history(claude_code: ClaudeCodeServer) -> None:
+    """Import Claude Code session changes as soon as local JSONL files change."""
+    projects = claude_code._native_home / "projects"
+    if not projects.is_dir():
+        return
+
+    def is_session_change(_change: object, changed_path: str) -> bool:
+        path = Path(changed_path)
+        return path.suffix == ".jsonl" and path.parent.parent == projects
+
+    try:
+        async for changes in awatch(projects, watch_filter=is_session_change, debounce=150):
+            if changes:
+                claude_code.schedule_native_refresh()
+    except asyncio.CancelledError:
+        raise
+    except OSError:
+        logger.exception("Could not watch Claude Code session history")
 
 
 class PairRequest(BaseModel):
@@ -1597,6 +1618,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except Exception:
             logger.exception("Could not clean expired chat images at startup")
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
+        claude_history_watcher = asyncio.create_task(watch_claude_history(claude_code))
+        claude_code.schedule_native_refresh()
         image_reaper = asyncio.create_task(reap_expired_message_images())
         terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
         shared_queue.start()
@@ -1616,6 +1639,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             history_watcher.cancel()
             with suppress(asyncio.CancelledError):
                 await history_watcher
+            claude_history_watcher.cancel()
+            with suppress(asyncio.CancelledError):
+                await claude_history_watcher
             await app_server.close()
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
@@ -1768,7 +1794,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
-        await claude_code.refresh_native_threads()
+        claude_code.schedule_native_refresh()
         claude_threads = claude_code.list_threads()
         try:
             threads = await app_server.list_threads()
@@ -1780,6 +1806,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     thread = paused_thread_view(thread_id, thread)
                 summary = browser_thread_summary(thread)
                 if isinstance(thread_id, str):
+                    summary["canInterrupt"] = app_server.can_interrupt_thread(thread_id)
                     revision = app_server.thread_history_revision(thread_id)
                     if revision is not None:
                         summary["historyRevision"] = revision
@@ -1849,6 +1876,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     ) -> dict[str, Any]:
         if is_claude_thread_id(thread_id):
             try:
+                claude_code.schedule_native_refresh()
                 thread = await claude_code.read_thread(thread_id)
                 response = browser_history_sync.response(thread, since)
                 return tail_thread_history(response, tail_turns if since is None else None)
@@ -1860,6 +1888,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             revision = app_server.thread_history_revision(thread_id)
             raw_thread = await app_server.read_thread(thread_id, tail_turns=tail_turns, compact=True)
             thread = browser_thread(paused_thread_view(thread_id, raw_thread))
+            thread["canInterrupt"] = app_server.can_interrupt_thread(thread_id)
             if revision is not None:
                 thread.setdefault("historyRevision", revision)
             bound_cwd = shared_state.thread_workspace(thread_id)
@@ -2200,6 +2229,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return {"interrupted": result.interrupted, "stale": result.stale}
         except ClaudeThreadNotFoundError as error:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(error)) from error
+        except CodexExternalTurnError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -2484,6 +2515,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         try:
             await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            # Release the Windows PTY reader before awaiting the output task.
+            terminal_sessions.discard(terminal_session)
+            await terminal_session.close()
             for task in tasks:
                 if not task.done():
                     task.cancel()
@@ -2491,8 +2525,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             for task in tasks:
                 with suppress(Exception, asyncio.CancelledError):
                     task.result()
-            terminal_sessions.discard(terminal_session)
-            await terminal_session.close()
             with suppress(Exception):
                 await websocket.close(code=status.WS_1000_NORMAL_CLOSURE)
 

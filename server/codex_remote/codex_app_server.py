@@ -38,6 +38,10 @@ class CodexNoActiveTurnError(CodexRuntimeError):
     """A request that requires an active turn arrived after it had finished."""
 
 
+class CodexExternalTurnError(CodexRuntimeError):
+    """A turn is running in a different Codex app-server process."""
+
+
 class CodexThreadBusyError(CodexRuntimeError):
     """A destructive thread operation was requested while its turn is active."""
 
@@ -342,6 +346,10 @@ class CodexAppServer:
     @property
     def handed_off(self) -> bool:
         return self._handed_off
+
+    def can_interrupt_thread(self, thread_id: str) -> bool:
+        """Only turns owned by this app-server process can be interrupted."""
+        return thread_id in self._active_turn_ids or thread_id in self._pending_turn_starts
 
     @property
     def has_active_turns(self) -> bool:
@@ -1002,7 +1010,26 @@ class CodexAppServer:
         active_turn_id = await self._active_turn_id(thread_id) or turn_id
         if not active_turn_id:
             raise CodexRuntimeError("Codex 当前没有可中断的任务")
-        return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
+        try:
+            return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": active_turn_id})
+        except CodexRuntimeError as error:
+            if "thread not found" in str(error).casefold():
+                self._active_turn_ids.pop(thread_id, None)
+                # After a Remote restart, the shared history can contain a
+                # web-created thread that this app-server has not loaded yet.
+                # Resume it once before deciding that another process owns it.
+                try:
+                    await self.resume_thread(thread_id)
+                    return await self.request("turn/interrupt", {
+                        "threadId": thread_id, "turnId": active_turn_id,
+                    })
+                except CodexRuntimeError as retry_error:
+                    if "thread not found" in str(retry_error).casefold():
+                        raise CodexExternalTurnError(
+                            "当前 Codex 进程无法暂停此回复；请在实际运行该对话的窗口中停止。"
+                        ) from retry_error
+                    raise
+            raise
 
     async def mark_stale_turn_interrupted(
         self,

@@ -292,6 +292,9 @@ class TerminalSession:
         except ImportError as error:
             raise RuntimeError("Windows 本机终端依赖 pywinpty，请重新安装 server/requirements.txt。") from error
 
+        # pywinpty's native blocking reader can hold the GIL when the
+        # terminal has no output, preventing unrelated API requests.
+        os.environ["PYWINPTY_BLOCK"] = "0"
         self._windows_process = await asyncio.to_thread(
             PtyProcess.spawn,
             self.argv,
@@ -305,11 +308,22 @@ class TerminalSession:
             return b""
         if self._windows_process is not None:
             process = self._windows_process
-            try:
-                output = await asyncio.to_thread(process.read, size)  # type: ignore[attr-defined]
-            except (EOFError, OSError, ValueError):
-                return b""
-            return output.encode("utf-8", errors="replace") if isinstance(output, str) else bytes(output)
+            while not self._closed:
+                try:
+                    output = await asyncio.to_thread(process.read, size)  # type: ignore[attr-defined]
+                except (EOFError, OSError, ValueError):
+                    return b""
+                if isinstance(output, str):
+                    # pywinpty inserts this sentinel on each empty native read.
+                    output = output.replace("0011Ignore", "")
+                if output:
+                    return output.encode("utf-8", errors="replace") if isinstance(output, str) else bytes(output)
+                # Non-blocking pywinpty reads return an empty string while the
+                # shell is idle. That is not an end-of-session signal.
+                if not await asyncio.to_thread(process.isalive):  # type: ignore[attr-defined]
+                    return b""
+                await asyncio.sleep(0.05)
+            return b""
 
         if self._master_fd is None:
             return b""
@@ -365,7 +379,7 @@ class TerminalSession:
         if self._windows_process is not None:
             process = self._windows_process
             try:
-                if process.isalive():  # type: ignore[attr-defined]
+                if await asyncio.to_thread(process.isalive):  # type: ignore[attr-defined]
                     await asyncio.to_thread(process.terminate, force=True)  # type: ignore[attr-defined]
             except (OSError, RuntimeError, ValueError):
                 pass
