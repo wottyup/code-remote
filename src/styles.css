@@ -3632,7 +3632,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
-.remote-shell--theme-chinese-retro :is(.sidebar-selection-bar, .message-composer, .composer-queue, .running-indicator, .approval-card, .theme-settings-card, .file-change-card) {
+.remote-shell--theme-chinese-retro :is(.sidebar-selection-bar, .message-composer, .composer-queue, .approval-card, .theme-settings-card, .file-change-card) {
   border: 14px solid transparent;
   border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
