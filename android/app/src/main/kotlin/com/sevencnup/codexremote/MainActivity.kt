@@ -9451,7 +9451,6 @@ class MainActivity : Activity() {
                 background = android1SegmentButtonBackground()
             }
         }, LinearLayout.LayoutParams(dp(if (retroTheme) 48 else 40), dp(if (retroTheme) 48 else 40)))
-        header.addView(smallButton("键盘") { focusTerminalInput() }, LinearLayout.LayoutParams(dp(50), dp(36)).apply { leftMargin = dp(2) })
         shell.addView(header, LinearLayout.LayoutParams(MATCH, systemInsetTop + dp(if (retroTheme) 48 else 44)))
         terminalStatusView = label("正在连接终端…", 10, MUTED).apply {
             setPadding(dp(3), 0, dp(3), dp(4))
@@ -9511,7 +9510,7 @@ class MainActivity : Activity() {
             arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
         }
         shell.addView(arrows, widthWrap())
-        val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END or Gravity.CENTER_VERTICAL }
+        val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         transferRow.addView(textIconAction("复制到输入框", "paste", "复制到输入框") {
             val output = terminalOutput ?: return@textIconAction
             val fullText = output.text.toString()
@@ -9523,7 +9522,9 @@ class MainActivity : Activity() {
                 closeTerminal()
             }
         }, LinearLayout.LayoutParams(WRAP, dp(32)))
-        shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(32)))
+        transferRow.addView(View(this), LinearLayout.LayoutParams(0, MATCH, 1f))
+        transferRow.addView(smallButton("键盘") { focusTerminalInput() }, LinearLayout.LayoutParams(dp(50), dp(36)))
+        shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(36)))
         terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
