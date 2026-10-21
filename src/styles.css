@@ -3556,7 +3556,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .chat-message__actions button { border-color: #d0c19a; border-radius: 4px; background: #f3ead4; color: #426267; }
 .remote-shell--theme-chinese-retro .chat-message__table-scroll { --chat-message-table-border: #c9bd9b; --chat-message-table-header: #eee5cf; }
 .remote-shell--theme-chinese-retro :is(.chat-message__timing, .chat-message__sent-at, .running-indicator__elapsed) { color: #7b8072; }
-.remote-shell--theme-chinese-retro .message-composer { border-color: #bba264; border-radius: 5px; background: #f2e1b7; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
+.remote-shell--theme-chinese-retro .message-composer { border-color: #bba264; border-radius: 5px; background: transparent; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
 .remote-shell--theme-chinese-retro .message-composer:focus-within { border-color: #39777a; box-shadow: 0 0 0 2px rgba(51, 117, 119, .14); }
 .remote-shell--theme-chinese-retro .message-composer textarea { color: #293c39; }
 .remote-shell--theme-chinese-retro :is(.composer-hint, .composer-file-change-summary) { color: #718075; }
@@ -3658,7 +3658,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border-width: 20px 16px 16px;
   border-image: url('/chinese-retro/composer-frame.png') 260 330 230 420 / 20px 16px 16px / 0 stretch;
   border-radius: 0;
-  background: #f2e1b7;
+  background: transparent;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .message-composer:focus-within {
