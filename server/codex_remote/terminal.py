@@ -319,6 +319,12 @@ class TerminalSession:
             import termios
 
             fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, struct.pack("HHHH", self.rows, self.columns, 0, 0))
+            # The child has no controlling TTY, so TIOCSWINSZ alone does not
+            # notify tmux (or the shell) to redraw at the new dimensions.
+            process = self._process
+            if process is not None and process.returncode is None:
+                with suppress(OSError):
+                    process.send_signal(signal.SIGWINCH)
 
     async def close(self) -> None:
         if self._closed:

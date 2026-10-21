@@ -907,6 +907,7 @@ class MainActivity : Activity() {
     private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
     @Volatile private var terminalReady = false
+    private var terminalPersistent = false
     private var terminalImeVisible = false
     private var terminalLockedImeInset = 0
     private var terminalLockedContentBottom = 0
@@ -9528,6 +9529,7 @@ class MainActivity : Activity() {
         }
         terminalContent.addView(terminalInputSink, FrameLayout.LayoutParams(MATCH, dp(36), Gravity.BOTTOM))
         terminalReady = false
+        terminalPersistent = false
         terminalImeVisible = false
         terminalLockedImeInset = 0
         terminalLockedContentBottom = 0
@@ -9662,6 +9664,7 @@ class MainActivity : Activity() {
         root.requestFocus()
         composerDock.visibility = View.VISIBLE
         terminalReady = false
+        terminalPersistent = false
         terminalShellName = null
         pendingTerminalDirectory = null
         terminalSocket?.close(1000, "closed")
@@ -9702,7 +9705,9 @@ class MainActivity : Activity() {
                             val shellName = event.optString("shell")
                             handler.post {
                                 terminalShellName = shellName
+                                terminalPersistent = event.optBoolean("persistent")
                                 updateTerminalDimensions(forceSend = true)
+                                scheduleTerminalRender()
                                 if (terminalInputFocusPending) focusTerminalInput()
                                 pendingTerminalDirectory?.let { path ->
                                     val command = terminalChangeDirectoryCommand(shellName, path)
@@ -9758,7 +9763,7 @@ class MainActivity : Activity() {
             val scroll = output.parent as? ScrollView
             val oldScrollY = scroll?.scrollY ?: 0
             val interactionRevision = terminalScrollInteractionRevision
-            output.text = terminalScreen.render()
+            output.text = terminalScreen.render(hideStatusLine = terminalPersistent)
             if (terminalInputSink?.hasFocus() == true) output.scrollTo(0, 0)
             scroll?.post {
                 if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
@@ -11497,9 +11502,9 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
         return render()
     }
 
-    fun render(): String =
+    fun render(hideStatusLine: Boolean = false): String =
         if (!receivedOutput && screen.all { line -> line.all { it == ' ' } }) "等待终端输出…"
-        else screen.joinToString("\n") { String(it).trimEnd() }
+        else screen.take(if (hideStatusLine) rows - 1 else rows).joinToString("\n") { String(it).trimEnd() }
 
     fun resize(newColumns: Int, newRows: Int) {
         if (newColumns == columns && newRows == rows) return
