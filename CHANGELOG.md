@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.48.1-dev.6] - 修复 Windows 终端空闲时误判为会话结束
+
 ## [v0.48.1-dev.5] - 修复 Windows 终端关闭后后端无响应
 
 ## [0.21.7-dev.19] - 修复 Windows 后台任务空闲时停止 Codex Remote
