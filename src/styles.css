@@ -3559,9 +3559,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro :is(.chat-message__timing, .chat-message__sent-at, .running-indicator__elapsed) { color: #7b8072; }
 .remote-shell--theme-chinese-retro .message-composer { border-color: #77b0bb; border-radius: 5px; background: #f1f9fb; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
 .remote-shell--theme-chinese-retro .message-composer:focus-within { border-color: #39777a; box-shadow: 0 0 0 2px rgba(51, 117, 119, .14); }
-.remote-shell--theme-chinese-retro .message-composer textarea { color: #293c39; -webkit-text-fill-color: #293c39; caret-color: #15464e; }
+.remote-shell--theme-chinese-retro .message-composer textarea { border: 0; border-radius: 0; outline: none; background: transparent; box-shadow: none; color: #293c39; -webkit-text-fill-color: #293c39; caret-color: #15464e; }
 .remote-shell--theme-chinese-retro .message-composer textarea::placeholder { color: #657975; opacity: 1; }
 .remote-shell--theme-chinese-retro .message-composer textarea:disabled { color: #526b70; -webkit-text-fill-color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro .message-composer textarea:focus-visible { outline: none; box-shadow: none; }
 .remote-shell--theme-chinese-retro :is(.composer-hint, .composer-file-change-summary) { color: #718075; }
 .remote-shell--theme-chinese-retro .composer-queue { border-color: #91bec7; background: #e9f4f6; }
 .remote-shell--theme-chinese-retro .composer-queue__heading { color: #294f54; }
