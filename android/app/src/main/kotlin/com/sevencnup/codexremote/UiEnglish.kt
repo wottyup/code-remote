@@ -200,7 +200,9 @@ internal object UiEnglish {
         "正在调用工具" to "Calling tool",
         "正在处理" to "Working",
         "已用" to "Elapsed",
-        "加入终端" to "Add to terminal",
+        "加入终端" to "Add to terminal", "终端运行" to "Run in terminal",
+        "当前终端不支持此脚本类型或路径" to "This terminal cannot run this script type or path",
+        "脚本命令发送失败" to "Could not send script command",
     )
 
     fun translate(value: String): String {

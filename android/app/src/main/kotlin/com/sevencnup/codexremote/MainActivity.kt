@@ -904,6 +904,8 @@ class MainActivity : Activity() {
     @Volatile private var terminalColumns = 88
     @Volatile private var terminalRows = 26
     private var pendingTerminalDirectory: String? = null
+    private var pendingTerminalRun: String? = null
+    private var terminalRunCwd: String? = null
     private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
     private val terminalScreenCache = linkedMapOf<String, Pair<TerminalScreenBuffer, Boolean>>()
@@ -8846,6 +8848,52 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun isRunnableScriptPath(path: String): Boolean {
+        val extension = path.substringAfterLast('.', "").lowercase(Locale.ROOT)
+        return extension in setOf("py", "js", "mjs", "cjs", "sh", "ps1", "bat", "cmd") &&
+            path.none { it.code < 32 || it.code == 127 }
+    }
+
+    private fun terminalRunScriptCommand(shellName: String, path: String): String? {
+        if (!isRunnableScriptPath(path)) return null
+        val shell = shellName.trim().lowercase(Locale.ROOT)
+            .substringAfterLast('/').substringAfterLast('\\').removeSuffix(".exe")
+        val powershell = shell == "pwsh" || shell == "powershell"
+        val cmd = shell == "cmd"
+        if (cmd && path.any { it in "%!\"^" }) return null
+        val quotedPath = when {
+            powershell -> "'${path.replace("'", "''")}'"
+            cmd -> "\"$path\""
+            else -> "'${path.replace("'", "'\\''")}'"
+        }
+        return when (path.substringAfterLast('.', "").lowercase(Locale.ROOT)) {
+            "py" -> "${if (cmd || powershell) "python" else "python3"} $quotedPath"
+            "js", "mjs", "cjs" -> "node $quotedPath"
+            "sh" -> "bash $quotedPath"
+            "ps1" -> if (powershell) "& $quotedPath" else "${if (cmd) "powershell" else "pwsh"} -NoProfile -File $quotedPath"
+            "bat", "cmd" -> when {
+                cmd -> "call $quotedPath"
+                powershell -> "& $quotedPath"
+                else -> null
+            }
+            else -> null
+        }
+    }
+
+    private fun runWorkspaceScriptInTerminal(path: String) {
+        if (!isRunnableScriptPath(path)) return
+        if (terminalOverlay != null) closeTerminal()
+        val separator = maxOf(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+        terminalRunCwd = when {
+            separator < 0 -> null
+            separator == 0 -> path.take(1)
+            separator == 2 && path.getOrNull(1) == ':' -> path.take(3)
+            else -> path.take(separator)
+        }
+        pendingTerminalRun = path
+        showTerminal(isolated = true)
+    }
+
     private fun addWorkspacePathToTerminal(path: String) {
         if (terminalOverlay == null) {
             pendingTerminalDirectory = path
@@ -8889,6 +8937,7 @@ class MainActivity : Activity() {
         val actions = mutableListOf<MenuAction>()
         if (isDirectory && activeThreadId != null) actions += MenuAction("绑定当前聊天到此目录", "link")
         if (isDirectory) actions += MenuAction("加入终端", "terminal")
+        if (!isDirectory && isRunnableScriptPath(path)) actions += MenuAction("终端运行", "play")
         if (absolutePath.isNotBlank() && !composerInput.text.toString().contains(absolutePath)) {
             actions += MenuAction("加入输入框", if (currentMode == "claude-code") "claude" else "codex")
         }
@@ -8913,6 +8962,7 @@ class MainActivity : Activity() {
                     })
                 }
                 "加入终端" -> addWorkspacePathToTerminal(absolutePath)
+                "终端运行" -> runWorkspaceScriptInTerminal(absolutePath)
                 "加入输入框" -> insertWorkspacePathIntoComposer(absolutePath)
                 "新建文件" -> showCreateWorkspaceEntryDialog("file", path, cwd) { refreshed(path) }
                 "新建文件夹" -> showCreateWorkspaceEntryDialog("directory", path, cwd) { refreshed(path) }
@@ -9472,7 +9522,7 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun showTerminal() {
+    private fun showTerminal(isolated: Boolean = false) {
         if (terminalOverlay != null) return
         terminalShellName = null
         preferencePopup?.dismiss()
@@ -9481,7 +9531,7 @@ class MainActivity : Activity() {
         composerInput.clearFocus()
         composerDock.visibility = View.GONE
         root.requestFocus()
-        terminalThreadId = activeThreadId
+        terminalThreadId = if (isolated) null else activeThreadId
         terminalScreenKey = terminalThreadId?.let { "$endpoint\u0000$token\u0000$it" }
         val cachedTerminal = terminalScreenKey?.let(terminalScreenCache::remove)
         terminalScreen = cachedTerminal?.first ?: TerminalScreenBuffer(88, 26)
@@ -9743,6 +9793,8 @@ class MainActivity : Activity() {
         terminalPersistent = false
         terminalShellName = null
         pendingTerminalDirectory = null
+        pendingTerminalRun = null
+        terminalRunCwd = null
         terminalSocket?.close(1000, "closed")
         terminalSocket = null
         terminalOverlay = null
@@ -9762,7 +9814,7 @@ class MainActivity : Activity() {
         val url = endpoint.replaceFirst(Regex("^http"), "ws") + "/api/v1/codex/terminal"
         val request = Request.Builder().url(url).build()
         val thread = terminalThreadId
-        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
+        val cwd = terminalRunCwd ?: activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
         terminalSocket = socketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 if (terminalSocket !== webSocket) return
@@ -9792,6 +9844,12 @@ class MainActivity : Activity() {
                                 pendingTerminalDirectory?.let { path ->
                                     val command = terminalChangeDirectoryCommand(shellName, path)
                                     if (sendTerminalInput(command)) pendingTerminalDirectory = null
+                                }
+                                pendingTerminalRun?.let { path ->
+                                    pendingTerminalRun = null
+                                    val command = terminalRunScriptCommand(shellName, path)
+                                    if (command == null) showToast("当前终端不支持此脚本类型或路径")
+                                    else if (!sendTerminalInput("$command\r")) showToast("脚本命令发送失败")
                                 }
                             }
                             updateTerminalStatus("${event.optString("shell")} · ${event.optString("cwd")}", if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(44, 126, 70) else Color.rgb(119, 174, 132))
