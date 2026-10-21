@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.67.0-dev.1] - 新增中国复古风主题
+
 ## [0.66.1-dev.6] - 同步 Windows、Claude 与 Codex 稳定性修复
 
 ## [0.66.1-dev.2] - 补齐 Android 文件树的脚本终端运行入口
