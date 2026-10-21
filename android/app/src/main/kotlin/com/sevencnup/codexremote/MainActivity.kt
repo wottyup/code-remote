@@ -9506,7 +9506,7 @@ class MainActivity : Activity() {
         }
         shell.addView(terminalContent, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
         val arrows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
-        listOf("↑" to "\u001b[A", "↓" to "\u001b[B", "←" to "\u001b[D", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
+        listOf("←" to "\u001b[D", "↑" to "\u001b[A", "↓" to "\u001b[B", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
             arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
         }
         shell.addView(arrows, widthWrap())
@@ -9765,7 +9765,8 @@ class MainActivity : Activity() {
             val scroll = output.parent as? ScrollView
             val oldScrollY = scroll?.scrollY ?: 0
             val interactionRevision = terminalScrollInteractionRevision
-            output.text = terminalScreen.render(hideStatusLine = terminalPersistent)
+            val rendered = terminalScreen.render(hideStatusLine = terminalPersistent)
+            if (output.text.toString() != rendered) output.text = rendered
             if (terminalInputSink?.hasFocus() == true) output.scrollTo(0, 0)
             scroll?.post {
                 if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
@@ -9775,7 +9776,7 @@ class MainActivity : Activity() {
             }
         }
         terminalRenderRunnable = pending
-        handler.postDelayed(pending, 32L)
+        handler.postDelayed(pending, 16L)
     }
 
     private fun updateTerminalStatus(value: String, color: Int) = handler.post {
@@ -11363,11 +11364,13 @@ private class TerminalInputSink(
         private set
 
     init {
-        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
-        imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
-        isSingleLine = false
+        inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or
+            EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING or EditorInfo.IME_ACTION_GO
+        isSingleLine = true
         isFocusable = true
         isFocusableInTouchMode = true
+        importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
         showSoftInputOnFocus = true
         isCursorVisible = false
         setTextColor(Color.TRANSPARENT)
@@ -11403,9 +11406,12 @@ private class TerminalInputSink(
             }
 
             override fun finishComposingText(): Boolean {
-                val pendingLength = composingText.length
+                val pending = composingText
                 val handled = super.finishComposingText()
-                if (pendingLength > 0) super.deleteSurroundingText(pendingLength, 0)
+                if (pending.isNotEmpty()) {
+                    sendInput(pending.replace("\r\n", "\n").replace('\n', '\r'))
+                    super.deleteSurroundingText(pending.length, 0)
+                }
                 composingText = ""
                 hasActiveComposition = false
                 return handled
@@ -11498,10 +11504,9 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
     private var receivedOutput = false
     private val sequence = StringBuilder()
 
-    fun append(value: String): String {
+    fun append(value: String) {
         if (value.isNotEmpty()) receivedOutput = true
         value.forEach(::consume)
-        return render()
     }
 
     fun render(hideStatusLine: Boolean = false): String =
