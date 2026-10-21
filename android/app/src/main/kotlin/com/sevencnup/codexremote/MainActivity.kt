@@ -893,7 +893,7 @@ class MainActivity : Activity() {
     private var pendingApproval: JSONObject? = null
     private var terminalOverlay: LinearLayout? = null
     private var terminalPositionListener: View.OnLayoutChangeListener? = null
-    private var terminalSocket: WebSocket? = null
+    @Volatile private var terminalSocket: WebSocket? = null
     private var terminalOutput: TerminalOutputView? = null
     private var terminalOutputScroll: ScrollView? = null
     private var terminalStatusView: TextView? = null
@@ -906,6 +906,9 @@ class MainActivity : Activity() {
     private var pendingTerminalDirectory: String? = null
     private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
+    private val terminalScreenCache = linkedMapOf<String, Pair<TerminalScreenBuffer, Boolean>>()
+    private var terminalScreenKey: String? = null
+    private var terminalThreadId: String? = null
     @Volatile private var terminalReady = false
     private var terminalPersistent = false
     private var terminalImeVisible = false
@@ -9420,9 +9423,14 @@ class MainActivity : Activity() {
         composerInput.clearFocus()
         composerDock.visibility = View.GONE
         root.requestFocus()
-        terminalColumns = 88
-        terminalRows = 26
-        terminalScreen = TerminalScreenBuffer(terminalColumns, terminalRows)
+        terminalThreadId = activeThreadId
+        terminalScreenKey = terminalThreadId?.let { "$endpoint\u0000$token\u0000$it" }
+        val cachedTerminal = terminalScreenKey?.let(terminalScreenCache::remove)
+        terminalScreen = cachedTerminal?.first ?: TerminalScreenBuffer(88, 26)
+        terminalPersistent = cachedTerminal?.second ?: false
+        terminalScreen.prepareForReconnect()
+        terminalColumns = terminalScreen.columnCount
+        terminalRows = terminalScreen.rowCount
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(4))
@@ -9533,7 +9541,6 @@ class MainActivity : Activity() {
         }
         terminalContent.addView(terminalInputSink, FrameLayout.LayoutParams(MATCH, dp(36), Gravity.BOTTOM))
         terminalReady = false
-        terminalPersistent = false
         terminalImeVisible = false
         terminalLockedImeInset = 0
         terminalLockedContentBottom = 0
@@ -9551,6 +9558,7 @@ class MainActivity : Activity() {
         shell.post {
             positionTerminalOverlay()
             updateTerminalDimensions()
+            scheduleTerminalRender()
         }
         connectTerminal()
     }
@@ -9653,6 +9661,12 @@ class MainActivity : Activity() {
 
     private fun closeTerminal() {
         val shell = terminalOverlay ?: return
+        terminalScreenKey?.let { key ->
+            terminalScreenCache[key] = terminalScreen to terminalPersistent
+            while (terminalScreenCache.size > 8) terminalScreenCache.remove(terminalScreenCache.keys.first())
+        }
+        terminalScreenKey = null
+        terminalThreadId = null
         terminalPositionListener?.let { listener ->
             if (::root.isInitialized) root.removeOnLayoutChangeListener(listener)
             if (::page.isInitialized) page.removeOnLayoutChangeListener(listener)
@@ -9689,11 +9703,12 @@ class MainActivity : Activity() {
         updateTerminalStatus("正在连接电脑终端…", MUTED)
         val url = endpoint.replaceFirst(Regex("^http"), "ws") + "/api/v1/codex/terminal"
         val request = Request.Builder().url(url).build()
+        val thread = terminalThreadId
+        val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
         terminalSocket = socketClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (terminalSocket !== webSocket) return
                 updateTerminalStatus("连接成功，正在恢复终端会话…", MUTED)
-                val thread = activeThreadId
-                val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
                 val sent = webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
                     .putOpt("threadId", thread).putOpt("cwd", cwd.takeIf { it.isNotBlank() })
                     .put("compactPrompt", true)
@@ -9702,6 +9717,7 @@ class MainActivity : Activity() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (terminalSocket !== webSocket) return
                 try {
                     val event = JSONObject(text)
                     when (event.optString("type")) {
@@ -9709,6 +9725,7 @@ class MainActivity : Activity() {
                             terminalReady = true
                             val shellName = event.optString("shell")
                             handler.post {
+                                if (terminalSocket !== webSocket) return@post
                                 terminalShellName = shellName
                                 terminalPersistent = event.optBoolean("persistent")
                                 updateTerminalDimensions(forceSend = true)
@@ -9725,37 +9742,39 @@ class MainActivity : Activity() {
                             terminalReady = false
                             val message = event.optString("message", "终端连接失败")
                             updateTerminalStatus(message, ERROR)
-                            appendTerminal("$message\n")
+                            appendTerminal("$message\n", webSocket)
                         }
                         "exit" -> {
                             terminalReady = false
                             updateTerminalStatus("终端会话已结束", WARNING)
-                            appendTerminal("\n[终端已退出]\n")
+                            appendTerminal("\n[终端已退出]\n", webSocket)
                         }
                     }
                 } catch (_: JSONException) { }
             }
 
-            override fun onMessage(webSocket: WebSocket, bytes: ByteString) { appendTerminal(bytes.utf8()) }
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) { appendTerminal(bytes.utf8(), webSocket) }
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (terminalSocket !== webSocket) return
                 terminalReady = false
                 val message = "终端连接失败：${t.message ?: "未知错误"}"
                 updateTerminalStatus(message, ERROR)
-                appendTerminal("\n$message\n")
+                appendTerminal("\n$message\n", webSocket)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (terminalSocket !== webSocket) return
                 terminalReady = false
                 if (terminalOverlay != null) {
                     updateTerminalStatus("连接已关闭（$code）", WARNING)
-                    appendTerminal("\n终端连接已关闭：${reason.ifBlank { "无原因说明" }}\n")
+                    appendTerminal("\n终端连接已关闭：${reason.ifBlank { "无原因说明" }}\n", webSocket)
                 }
             }
         })
     }
 
-    private fun appendTerminal(value: String) = handler.post {
-        if (terminalOutput == null) return@post
+    private fun appendTerminal(value: String, source: WebSocket) = handler.post {
+        if (terminalSocket !== source || terminalOutput == null) return@post
         terminalScreen.append(value)
         scheduleTerminalRender()
     }
@@ -11555,6 +11574,8 @@ private fun terminalSequenceForKey(event: KeyEvent): String? {
 }
 
 private class TerminalScreenBuffer(private var columns: Int, private var rows: Int) {
+    val columnCount: Int get() = columns
+    val rowCount: Int get() = rows
     private var screen = MutableList(rows) { CharArray(columns) { ' ' } }
     private var cursorRow = 0
     private var cursorColumn = 0
@@ -11574,21 +11595,31 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
 
     fun render(hideStatusLine: Boolean = false): String =
         if (!receivedOutput && screen.all { line -> line.all { it == ' ' } }) "等待终端输出…"
-        else screen.take(if (hideStatusLine) rows - 1 else rows).joinToString("\n") { String(it).trimEnd() }
+        else screen.take(if (hideStatusLine) rows - 1 else rows).joinToString("\n") { line ->
+            val text = String(line).trimEnd()
+            if (hideStatusLine && text.startsWith("[codex-rem")) "" else text
+        }
 
     fun cursorPosition(hideStatusLine: Boolean = false): Pair<Int, Int>? =
         if (!receivedOutput || !cursorVisible || hideStatusLine && cursorRow >= rows - 1) null
         else cursorRow to cursorColumn.coerceIn(0, columns - 1)
 
+    fun prepareForReconnect() {
+        state = 0
+        sequence.setLength(0)
+    }
+
     fun resize(newColumns: Int, newRows: Int) {
         if (newColumns == columns && newRows == rows) return
         val next = MutableList(newRows) { CharArray(newColumns) { ' ' } }
-        val topRows = minOf(rows - 1, newRows - 1)
+        val contentRows = minOf(rows - 1, newRows - 1)
+        val maxSourceStart = (rows - 1 - contentRows).coerceAtLeast(0)
+        val sourceStart = (cursorRow.coerceAtMost(rows - 2) - contentRows + 1).coerceIn(0, maxSourceStart)
         val copyColumns = minOf(columns, newColumns)
-        for (row in 0 until topRows) screen[row].copyInto(next[row], endIndex = copyColumns)
+        for (row in 0 until contentRows) screen[sourceStart + row].copyInto(next[row], endIndex = copyColumns)
         screen[rows - 1].copyInto(next[newRows - 1], endIndex = copyColumns)
-        cursorRow = if (cursorRow == rows - 1) newRows - 1 else cursorRow.coerceAtMost(newRows - 1)
-        savedRow = if (savedRow == rows - 1) newRows - 1 else savedRow.coerceAtMost(newRows - 1)
+        cursorRow = if (cursorRow == rows - 1) newRows - 1 else (cursorRow - sourceStart).coerceIn(0, newRows - 2)
+        savedRow = if (savedRow == rows - 1) newRows - 1 else (savedRow - sourceStart).coerceIn(0, newRows - 2)
         cursorColumn = cursorColumn.coerceAtMost(newColumns - 1)
         savedColumn = savedColumn.coerceAtMost(newColumns - 1)
         columns = newColumns
