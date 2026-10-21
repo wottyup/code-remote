@@ -622,7 +622,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .cpa-usage-toolbar__controls { width: 100%; gap: 7px; }
   .cpa-usage-key-filter { max-width: 100%; }
   .cpa-usage-key-filter select { max-width: min(42vw, 190px); }
-  .cpa-usage-summary-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 150px), 1fr)); gap: 8px; }
+  .cpa-usage-summary-grid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .cpa-usage-summary-card { min-height: 102px; padding: 12px; }
   .cpa-usage-summary-card > strong { font-size: 18px; }
   .cpa-usage-section__body { padding: 12px 10px 16px; }
