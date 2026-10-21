@@ -3669,6 +3669,28 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   border-radius: 0;
   box-shadow: none;
 }
+.remote-shell--theme-chinese-retro .sidebar-search {
+  border: 9px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 9px / 0 stretch;
+  border-radius: 0;
+  background: #fbf4e2;
+}
+.remote-shell--theme-chinese-retro .sidebar-search:focus-within {
+  border-image-source: url('/chinese-retro/frame.png');
+  background: #fff9e9;
+  box-shadow: 0 0 0 2px rgba(159, 129, 67, .24);
+}
+.remote-shell--theme-chinese-retro .workspace-explorer__root-form input {
+  height: 42px;
+  border: 10px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
+  border-radius: 0;
+  background: #fff8e8;
+}
+.remote-shell--theme-chinese-retro .workspace-explorer__root-form input:focus {
+  border-image-source: url('/chinese-retro/frame.png');
+  box-shadow: 0 0 0 2px rgba(159, 129, 67, .24);
+}
 
 .remote-shell--theme-chinese-retro :is(svg.lucide-search) { background-image: url('/chinese-retro/icons/search.png'); }
 .remote-shell--theme-chinese-retro :is(svg.lucide-refresh-cw, svg.lucide-rotate-cw) { background-image: url('/chinese-retro/icons/refresh.png'); }
