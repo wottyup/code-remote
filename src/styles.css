@@ -3606,6 +3606,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .workspace-explorer__entry:hover,
 .remote-shell--theme-chinese-retro .workspace-explorer__entry--selected { border-color: #c0a66a; background: #e3e5d4; color: #264b4f; }
 .remote-shell--theme-chinese-retro .terminal-dialog__screen { background: #102f35; color: #f2e5c8; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error { color: #354640; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error p { color: #53675e; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button { border-color: #bda465; background: #eee4ce; color: #34595c; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child { border-color: #1a5961; background: #1a5961; color: #fff0cf; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child:hover:not(:disabled) { background: #276d70; color: #fff6df; }
 .remote-shell--theme-chinese-retro .terminal-dialog__reconnect,
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button { border-color: #bda465; background: #eee4ce; color: #34595c; }
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #fff0cf; }
