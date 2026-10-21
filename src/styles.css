@@ -3611,6 +3611,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #fff0cf; }
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #bda363; }
+.workspace-file-context-menu.remote-shell--theme-chinese-retro .workspace-file-context-menu__name { color: #6b776e; }
+.workspace-file-context-menu.remote-shell--theme-chinese-retro button { color: #31565a; }
+.workspace-file-context-menu.remote-shell--theme-chinese-retro button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
+.workspace-file-context-menu.remote-shell--theme-chinese-retro button:disabled { color: #788476; opacity: .72; }
 
 /* Reuse the landscape frame on the same individual panes and cards that receive
    visible borders in the pixel theme; keep the application viewport unframed. */
