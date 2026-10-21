@@ -110,7 +110,7 @@ type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification'
 
 function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
   if (theme === 'pixel') return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
-  if (theme === 'chinese-retro') return <img className="chinese-retro-theme-icon" src={`/chinese-retro/icons/${name}.png`} alt="" aria-hidden="true" />
+  if (theme === 'chinese-retro') return <img className="chinese-retro-theme-icon" src={`/chinese-retro/icons/${name}-cool.png`} alt="" aria-hidden="true" />
   return null
 }
 
@@ -5340,7 +5340,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (themePreferences.theme === 'chinese-retro' ? ' remote-shell--theme-warm' : '') + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -5697,7 +5697,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
-    { value: 'chinese-retro', label: '中国复古', description: '青黛山水与米金纹样', previewClass: 'theme-option__preview--chinese-retro' },
+    { value: 'chinese-retro', label: '中国复古', description: '青黛山水与冷白灰青纹样', previewClass: 'theme-option__preview--chinese-retro' },
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },

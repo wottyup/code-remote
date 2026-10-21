@@ -3484,143 +3484,143 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   box-shadow: inset 0 0 0 1px var(--context-menu-hover-border);
 }
 
-/* Chinese retro theme: parchment surfaces, blue-green lacquer and the supplied landscape frame. */
+/* Chinese retro theme: cool white surfaces, blue-green lacquer and the supplied landscape frame. */
 .app-root--theme-chinese-retro {
-  background: #e7dcc1;
+  background: #d6e4e7;
 }
-.app-root--theme-chinese-retro > .pair-page { background: #e7dcc1; color: #263c3a; }
-.app-root--theme-chinese-retro .pair-card { border: 1px solid #c3aa6e; border-radius: 5px; background: #f7efd9; color: #263c3a; box-shadow: 0 14px 38px rgba(45, 56, 42, .14); }
-.app-root--theme-chinese-retro .pair-card__mark { border-color: #b3924f; border-radius: 4px; background: linear-gradient(145deg, #1d5960, #103b43); color: #f5e7c8; }
+.app-root--theme-chinese-retro > .pair-page { background: #d6e4e7; color: #263c3a; }
+.app-root--theme-chinese-retro .pair-card { border: 1px solid #81b8c3; border-radius: 5px; background: #eaf5f7; color: #263c3a; box-shadow: 0 14px 38px rgba(45, 56, 42, .14); }
+.app-root--theme-chinese-retro .pair-card__mark { border-color: #65a6b3; border-radius: 4px; background: linear-gradient(145deg, #1d5960, #103b43); color: #e1f2f5; }
 .app-root--theme-chinese-retro .pair-card h1 { color: #243b39; letter-spacing: 0; }
 .app-root--theme-chinese-retro :is(.pair-eyebrow, .pair-description, .pair-card label, .pair-security, .pair-security svg) { color: #65766d; }
-.app-root--theme-chinese-retro .pair-input-wrap { border-color: #c3aa6e; border-radius: 4px; background: #fff9e9; color: #263c3a; }
+.app-root--theme-chinese-retro .pair-input-wrap { border-color: #81b8c3; border-radius: 4px; background: #f5fdff; color: #263c3a; }
 .app-root--theme-chinese-retro .pair-input-wrap input { color: #263c3a; }
-.app-root--theme-chinese-retro .pair-submit { border-color: #b08d49; border-radius: 4px; background: #174c53; color: #fff2d3; }
+.app-root--theme-chinese-retro .pair-submit { border-color: #60a3b0; border-radius: 4px; background: #174c53; color: #ebfcff; }
 .app-root--theme-chinese-retro .pair-submit:hover:not(:disabled) { background: #21636a; }
 
 .remote-shell--theme-chinese-retro {
-  --line: #c8b782;
+  --line: #91bfc8;
   --muted: #747b70;
-  --panel: #f5edd9;
-  --panel-raised: #ede2c9;
+  --panel: #e8f3f5;
+  --panel-raised: #ddeaed;
   --accent: #1a5961;
-  --pane-marquee-color: #c6a352;
+  --pane-marquee-color: #6cb7c6;
   color-scheme: light;
-  background: #e7dcc1;
+  background: #d6e4e7;
   color: #293c39;
 }
-.remote-shell--theme-chinese-retro .remote-sidebar { --sidebar-selection-border: #b6934c; --sidebar-selection-bg: #dce5d8; border-color: #c5b47e; background: #eee5cf; }
-.remote-shell--theme-chinese-retro .remote-sidebar__heading { border-bottom: 1px solid #b49452; background: linear-gradient(135deg, #1d5960, #103b43); }
-.remote-shell--theme-chinese-retro :is(.remote-brand__copy strong, .remote-chat__title strong, .theme-settings-panel__header h1, .workspace-explorer__header strong) { color: #fff0cf; }
-.remote-shell--theme-chinese-retro :is(.remote-brand__copy small, .remote-chat__title span, .remote-chat__title .remote-chat__eyebrow, .theme-settings-panel__header p, .workspace-explorer__eyebrow) { color: #d7d0b7; }
-.remote-shell--theme-chinese-retro :is(.remote-chat__header, .theme-settings-panel__header, .workspace-explorer__header) { border-color: #b3914c; background: linear-gradient(135deg, #1d5960, #103b43); color: #fff0cf; box-shadow: none; }
-.remote-shell--theme-chinese-retro .remote-brand__mark { border-color: #c4a65c; border-radius: 4px; background: #123f46; color: #f5e7c8; box-shadow: none; }
-.remote-shell--theme-chinese-retro :is(.remote-sidebar__footer, .remote-chat__header, .workspace-explorer) { border-color: #c5b47e; }
+.remote-shell--theme-chinese-retro .remote-sidebar { --sidebar-selection-border: #63a8b6; --sidebar-selection-bg: #dce5d8; border-color: #8ebcc5; background: #e0ecee; }
+.remote-shell--theme-chinese-retro .remote-sidebar__heading { border-bottom: 1px solid #68a7b4; background: linear-gradient(135deg, #1d5960, #103b43); }
+.remote-shell--theme-chinese-retro :is(.remote-brand__copy strong, .remote-chat__title strong, .theme-settings-panel__header h1, .workspace-explorer__header strong) { color: #e9fbff; }
+.remote-shell--theme-chinese-retro :is(.remote-brand__copy small, .remote-chat__title span, .remote-chat__title .remote-chat__eyebrow, .theme-settings-panel__header p, .workspace-explorer__eyebrow) { color: #c9d5d7; }
+.remote-shell--theme-chinese-retro :is(.remote-chat__header, .theme-settings-panel__header, .workspace-explorer__header) { border-color: #63a6b3; background: linear-gradient(135deg, #1d5960, #103b43); color: #e9fbff; box-shadow: none; }
+.remote-shell--theme-chinese-retro .remote-brand__mark { border-color: #73b6c4; border-radius: 4px; background: #123f46; color: #e1f2f5; box-shadow: none; }
+.remote-shell--theme-chinese-retro :is(.remote-sidebar__footer, .remote-chat__header, .workspace-explorer) { border-color: #8ebcc5; }
 .remote-shell--theme-chinese-retro .remote-sidebar__footer { color: #66756b; }
-.remote-shell--theme-chinese-retro .sidebar-search { border-color: #c8b782; border-radius: 4px; background: #fbf4e2; color: #718076; box-shadow: none; }
-.remote-shell--theme-chinese-retro .sidebar-search:focus-within { border-color: #9f8143; background: #fff9e9; box-shadow: 0 0 0 2px rgba(196, 162, 82, .15); }
+.remote-shell--theme-chinese-retro .sidebar-search { border-color: #91bfc8; border-radius: 4px; background: #f0f9fb; color: #718076; box-shadow: none; }
+.remote-shell--theme-chinese-retro .sidebar-search:focus-within { border-color: #57939f; background: #f5fdff; box-shadow: 0 0 0 2px rgba(107, 181, 196, .15); }
 .remote-shell--theme-chinese-retro .sidebar-search input { color: #293c39; }
 .remote-shell--theme-chinese-retro .sidebar-search input::placeholder { color: #8a8f80; }
 .remote-shell--theme-chinese-retro .sidebar-search button { color: #47686a; }
 .remote-shell--theme-chinese-retro :is(.thread-list-heading, .thread-list__section) { color: #6b776e; }
-.remote-shell--theme-chinese-retro .thread-list__section { border-color: #d2c39a; background: #e8dfc8; }
+.remote-shell--theme-chinese-retro .thread-list__section { border-color: #b9ced2; background: #dae6e8; }
 .remote-shell--theme-chinese-retro .thread-list__empty { color: #747c70; }
 .remote-shell--theme-chinese-retro .thread-row { color: #50645c; }
-.remote-shell--theme-chinese-retro :is(.thread-row:hover, .sidebar-settings:hover, .sidebar-settings--active) { border-color: #c3b27d; background: #e4e7d6; color: #24464a; box-shadow: none; }
+.remote-shell--theme-chinese-retro :is(.thread-row:hover, .sidebar-settings:hover, .sidebar-settings--active) { border-color: #8cbac3; background: #dfe6e7; color: #24464a; box-shadow: none; }
 .remote-shell--theme-chinese-retro .thread-row--active { --thread-row-surface: #dbe5d6; color: #1d454a; }
-.remote-shell--theme-chinese-retro .thread-row--selected { background: #e3e6d6; color: #1d454a; }
+.remote-shell--theme-chinese-retro .thread-row--selected { background: #dfe5e6; color: #1d454a; }
 .remote-shell--theme-chinese-retro :is(.thread-row__meta, .thread-row__time, .thread-row__copy small) { color: #778073; }
-.remote-shell--theme-chinese-retro .thread-row__pin { color: #9c7636; }
-.remote-shell--theme-chinese-retro .new-thread-button { border-color: #af914e; border-radius: 4px; background: #1a535a; color: #fff0cf; box-shadow: none; }
-.remote-shell--theme-chinese-retro .new-thread-button__icon { border-radius: 3px; background: rgba(245, 231, 200, .16); color: #f4e3bd; }
-.remote-shell--theme-chinese-retro .new-thread-button:hover:not(:disabled) { border-color: #c9a65a; background: #21666b; color: #fff5df; }
+.remote-shell--theme-chinese-retro .thread-row__pin { color: #4c8f9c; }
+.remote-shell--theme-chinese-retro .new-thread-button { border-color: #63a2af; border-radius: 4px; background: #1a535a; color: #e9fbff; box-shadow: none; }
+.remote-shell--theme-chinese-retro .new-thread-button__icon { border-radius: 3px; background: rgba(225, 242, 245, .16); color: #dbf0f4; }
+.remote-shell--theme-chinese-retro .new-thread-button:hover:not(:disabled) { border-color: #72bbc9; background: #21666b; color: #f1fdff; }
 .remote-shell--theme-chinese-retro .thread-row--active .engine-brand-icon { color: #286a6e; }
 .remote-shell--theme-chinese-retro .conversation-pane--active::before { display: none; }
-.remote-shell--theme-chinese-retro .sidebar-selection-bar { border-color: #c9b782; background: #f4ead2; }
-.remote-shell--theme-chinese-retro .sidebar-selection-bar__actions button { border-color: #c0aa6d; background: #e7dfc8; color: #31565a; }
-.remote-shell--theme-chinese-retro .connection-label { border-color: #c9b782; border-radius: 4px; background: #f3ead4; color: #426064; }
+.remote-shell--theme-chinese-retro .sidebar-selection-bar { border-color: #92c0c9; background: #e5f1f4; }
+.remote-shell--theme-chinese-retro .sidebar-selection-bar__actions button { border-color: #7fb5c0; background: #d9e5e7; color: #31565a; }
+.remote-shell--theme-chinese-retro .connection-label { border-color: #92c0c9; border-radius: 4px; background: #e5f1f3; color: #426064; }
 .remote-shell--theme-chinese-retro .connection-label--connected { color: #356848; }
-.remote-shell--theme-chinese-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button) { border: 1px solid #c7b782; border-radius: 4px; background: #f4ecd8; color: #45656a; box-shadow: none; }
-.remote-shell--theme-chinese-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button):hover:not(:disabled) { border-color: #a58a4d; background: #e9e1c9; color: #173f47; }
+.remote-shell--theme-chinese-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button) { border: 1px solid #91bec7; border-radius: 4px; background: #e7f2f4; color: #45656a; box-shadow: none; }
+.remote-shell--theme-chinese-retro :is(.icon-button, .pane-close-button, .mobile-workspace-button):hover:not(:disabled) { border-color: #609aa5; background: #dbe7e9; color: #173f47; }
 .remote-shell--theme-chinese-retro :is(button, input:not([type="file"]):not([type="range"]):not([type="color"]), textarea, select) { border-radius: 4px; box-shadow: none; }
-.remote-shell--theme-chinese-retro :is(input:not([type="file"]):not([type="range"]):not([type="color"]), textarea, select) { border-color: #c4b17a; background: #fff9e9; color: #293c39; }
+.remote-shell--theme-chinese-retro :is(input:not([type="file"]):not([type="range"]):not([type="color"]), textarea, select) { border-color: #8abac4; background: #f5fdff; color: #293c39; }
 .remote-shell--theme-chinese-retro :is(input, textarea, select)::placeholder { color: #878c7e; }
-.remote-shell--theme-chinese-retro :is(button, input, textarea, select):focus-visible { outline-color: #b38f45; }
+.remote-shell--theme-chinese-retro :is(button, input, textarea, select):focus-visible { outline-color: #5da5b3; }
 .remote-shell--theme-chinese-retro a { color: #17616a; }
-.remote-shell--theme-chinese-retro .remote-chat { background: #f6eedb; }
-.remote-shell--theme-chinese-retro .message-stream { background: #fbf5e5; }
+.remote-shell--theme-chinese-retro .remote-chat { background: #eaf4f6; }
+.remote-shell--theme-chinese-retro .message-stream { background: #f1f9fb; }
 .remote-shell--theme-chinese-retro .chat-message--assistant :is(.chat-message__content, .chat-message__meta) { color: #32423d; }
-.remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body { border-color: #c6b27b; border-radius: 5px; background: #eee4ce; box-shadow: none; }
+.remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body { border-color: #8cbcc6; border-radius: 5px; background: #e0ecee; box-shadow: none; }
 .remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user :is(.chat-message__content, .chat-message__text) { color: #2e403c; }
-.remote-shell--theme-chinese-retro .chat-message__avatar { border-color: #c5b17b; border-radius: 4px; background: #e9e0c9; color: #31585d; }
-.remote-shell--theme-chinese-retro .chat-message__actions button { border-color: #d0c19a; border-radius: 4px; background: #f3ead4; color: #426267; }
-.remote-shell--theme-chinese-retro .chat-message__table-scroll { --chat-message-table-border: #c9bd9b; --chat-message-table-header: #eee5cf; }
+.remote-shell--theme-chinese-retro .chat-message__avatar { border-color: #8bbbc5; border-radius: 4px; background: #dbe7e9; color: #31585d; }
+.remote-shell--theme-chinese-retro .chat-message__actions button { border-color: #b8ccd0; border-radius: 4px; background: #e5f1f3; color: #426267; }
+.remote-shell--theme-chinese-retro .chat-message__table-scroll { --chat-message-table-border: #b4c6c9; --chat-message-table-header: #e0ecee; }
 .remote-shell--theme-chinese-retro :is(.chat-message__timing, .chat-message__sent-at, .running-indicator__elapsed) { color: #7b8072; }
-.remote-shell--theme-chinese-retro .message-composer { border-color: #bba264; border-radius: 5px; background: transparent; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
+.remote-shell--theme-chinese-retro .message-composer { border-color: #77b0bb; border-radius: 5px; background: transparent; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
 .remote-shell--theme-chinese-retro .message-composer:focus-within { border-color: #39777a; box-shadow: 0 0 0 2px rgba(51, 117, 119, .14); }
 .remote-shell--theme-chinese-retro .message-composer textarea { color: #293c39; }
 .remote-shell--theme-chinese-retro :is(.composer-hint, .composer-file-change-summary) { color: #718075; }
-.remote-shell--theme-chinese-retro .composer-queue { border-color: #c7b782; background: #f6edd9; }
-.remote-shell--theme-chinese-retro .composer-menu__popover { border-color: #bca363; background: #fcf5e4; color: #293c39; }
-.remote-shell--theme-chinese-retro :is(.composer-menu__option:hover, .composer-menu__option--selected) { background: #e4e8d9; color: #204b51; }
-.remote-shell--theme-chinese-retro :is(.attach-button, .stop-button, .send-button:not(.send-button--arrow)) { border-color: #c4b17a; border-radius: 4px; background: #f1e8d1; color: #31585d; }
-.remote-shell--theme-chinese-retro .send-button--arrow { background: #1b5960; color: #fff0cf; }
-.remote-shell--theme-chinese-retro .send-button--arrow:hover:not(:disabled) { background: #276d70; color: #fff6df; }
-.remote-shell--theme-chinese-retro :is(.composer-document, .message-document) { border-color: #c9b782; border-radius: 4px; background: #f1e8d1; color: #3d5758; }
-.remote-shell--theme-chinese-retro .operation-log { border-color: #c9bd9b; background: #f6eedb; color: #394942; }
+.remote-shell--theme-chinese-retro .composer-queue { border-color: #91bec7; background: #e9f4f6; }
+.remote-shell--theme-chinese-retro .composer-menu__popover { border-color: #77b0bc; background: #f1fafc; color: #293c39; }
+.remote-shell--theme-chinese-retro :is(.composer-menu__option:hover, .composer-menu__option--selected) { background: #e1e7e8; color: #204b51; }
+.remote-shell--theme-chinese-retro :is(.attach-button, .stop-button, .send-button:not(.send-button--arrow)) { border-color: #8abac4; border-radius: 4px; background: #e3eff1; color: #31585d; }
+.remote-shell--theme-chinese-retro .send-button--arrow { background: #1b5960; color: #e9fbff; }
+.remote-shell--theme-chinese-retro .send-button--arrow:hover:not(:disabled) { background: #276d70; color: #f1fdff; }
+.remote-shell--theme-chinese-retro :is(.composer-document, .message-document) { border-color: #92c0c9; border-radius: 4px; background: #e3eff1; color: #3d5758; }
+.remote-shell--theme-chinese-retro .operation-log { border-color: #b4c6c9; background: #eaf4f6; color: #394942; }
 .remote-shell--theme-chinese-retro .operation-log > summary > span,
 .remote-shell--theme-chinese-retro .operation-log__content strong { color: #30443f; }
-.remote-shell--theme-chinese-retro .theme-settings-panel { background: #e9dfc8; }
+.remote-shell--theme-chinese-retro .theme-settings-panel { background: #dae7e9; }
 .remote-shell--theme-chinese-retro .theme-settings-panel__content { color: #354640; }
-.remote-shell--theme-chinese-retro .theme-settings-card { border-color: #c1a867; border-radius: 5px; background: #fbf4e2; box-shadow: 0 3px 10px rgba(59, 55, 39, .06); }
-.remote-shell--theme-chinese-retro .theme-settings-card__heading { border-color: #d8c9a0; }
+.remote-shell--theme-chinese-retro .theme-settings-card { border-color: #7bb5c1; border-radius: 5px; background: #f0f9fb; box-shadow: 0 3px 10px rgba(43, 56, 59, .06); }
+.remote-shell--theme-chinese-retro .theme-settings-card__heading { border-color: #bfd4d8; }
 .remote-shell--theme-chinese-retro .theme-settings-card__heading h2 { color: #284747; }
 .remote-shell--theme-chinese-retro .theme-settings-card__heading p,
 .remote-shell--theme-chinese-retro :is(.theme-control-row strong, .theme-control-row small, .theme-settings-hint) { color: #727b70; }
-.remote-shell--theme-chinese-retro .theme-settings-card__badge { border-color: #b6a05e; background: #e5e5d3; color: #335b58; }
-.remote-shell--theme-chinese-retro .theme-options { border-color: #d2c49c; }
-.remote-shell--theme-chinese-retro .theme-option { border-color: #d0bd88; border-radius: 5px; background: #f5ecd7; color: #41564e; }
+.remote-shell--theme-chinese-retro .theme-settings-card__badge { border-color: #71abb6; background: #dde4e5; color: #335b58; }
+.remote-shell--theme-chinese-retro .theme-options { border-color: #baced2; }
+.remote-shell--theme-chinese-retro .theme-option { border-color: #98c7d0; border-radius: 5px; background: #e8f3f5; color: #41564e; }
 .remote-shell--theme-chinese-retro .theme-option:hover,
-.remote-shell--theme-chinese-retro .theme-option--active { border-color: #a88c4c; background: #e5e5d3; color: #244e53; box-shadow: inset 0 0 0 1px rgba(191, 161, 86, .22); }
-.remote-shell--theme-chinese-retro .theme-option__preview--chinese-retro { border: 6px solid transparent; border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 6px / 0 stretch; background: #e8dfc8; }
-.remote-shell--theme-chinese-retro :is(.theme-notification-toggle, .theme-image-upload, .theme-image-clear, .theme-background-framing__reset) { border-color: #c4b17a; background: #f2e9d3; color: #385d5e; }
+.remote-shell--theme-chinese-retro .theme-option--active { border-color: #609ca8; background: #dde4e5; color: #244e53; box-shadow: inset 0 0 0 1px rgba(109, 177, 191, .22); }
+.remote-shell--theme-chinese-retro .theme-option__preview--chinese-retro { border: 6px solid transparent; border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 6px / 0 stretch; background: #dae6e8; }
+.remote-shell--theme-chinese-retro :is(.theme-notification-toggle, .theme-image-upload, .theme-image-clear, .theme-background-framing__reset) { border-color: #8abac4; background: #e4f0f2; color: #385d5e; }
 .remote-shell--theme-chinese-retro .theme-notification-toggle--enabled { border-color: #477e69; background: #dce8d8; color: #315f4c; }
 .remote-shell--theme-chinese-retro .chinese-retro-theme-icon { width: 22px; height: 22px; flex: 0 0 22px; object-fit: contain; vertical-align: middle; }
 .remote-shell--theme-chinese-retro :is(.theme-range-input output, .theme-color-input code) { color: #61776f; }
-.remote-shell--theme-chinese-retro .thread-rename-dialog { border-color: #c4ad70; border-radius: 5px; background: #f8f0db; color: #293c39; box-shadow: 0 14px 40px rgba(40, 46, 34, .2); }
+.remote-shell--theme-chinese-retro .thread-rename-dialog { border-color: #82b9c4; border-radius: 5px; background: #ebf6f8; color: #293c39; box-shadow: 0 14px 40px rgba(40, 46, 34, .2); }
 .remote-shell--theme-chinese-retro .thread-rename-dialog__heading h2 { color: #293f3e; }
 .remote-shell--theme-chinese-retro .thread-rename-dialog__heading p,
 .remote-shell--theme-chinese-retro .thread-rename-dialog > label { color: #6f7a70; }
-.remote-shell--theme-chinese-retro .thread-rename-dialog > input { border-color: #c4b17a; background: #fff8e8; color: #293c39; }
-.remote-shell--theme-chinese-retro .thread-rename-dialog__actions button { border-color: #c4b17a; background: #eee4ce; color: #3e5c5d; }
-.remote-shell--theme-chinese-retro .thread-rename-dialog__actions button:last-child { border-color: #a98b4b; background: #1b555c; color: #fff1d0; }
-.remote-shell--theme-chinese-retro .chat-overlay-panel { border-color: #c5b47e; background: #f5edd9; }
-.remote-shell--theme-chinese-retro .chat-overlay-panel__header { border-color: #c5b47e; background: #ede2c9; color: #304640; }
-.remote-shell--theme-chinese-retro .chat-overlay-panel__footer { border-color: #c5b47e; color: #718075; }
-.remote-shell--theme-chinese-retro .workspace-explorer { border-color: #c5b47e; background: #eee5cf; }
+.remote-shell--theme-chinese-retro .thread-rename-dialog > input { border-color: #8abac4; background: #f5fdff; color: #293c39; }
+.remote-shell--theme-chinese-retro .thread-rename-dialog__actions button { border-color: #8abac4; background: #e0ecee; color: #3e5c5d; }
+.remote-shell--theme-chinese-retro .thread-rename-dialog__actions button:last-child { border-color: #609da9; background: #1b555c; color: #eafbff; }
+.remote-shell--theme-chinese-retro .chat-overlay-panel { border-color: #8ebcc5; background: #e8f3f5; }
+.remote-shell--theme-chinese-retro .chat-overlay-panel__header { border-color: #8ebcc5; background: #ddeaed; color: #304640; }
+.remote-shell--theme-chinese-retro .chat-overlay-panel__footer { border-color: #8ebcc5; color: #718075; }
+.remote-shell--theme-chinese-retro .workspace-explorer { border-color: #8ebcc5; background: #e0ecee; }
 .remote-shell--theme-chinese-retro .workspace-explorer__root,
-.remote-shell--theme-chinese-retro .workspace-explorer__footer { border-color: #c5b47e; background: #e8dec6; }
-.remote-shell--theme-chinese-retro .workspace-explorer__tree { background: #f7efd9; }
-.remote-shell--theme-chinese-retro .workspace-explorer__root-form input { border-color: #c5b47e; background: #fff8e8; color: #293c39; }
+.remote-shell--theme-chinese-retro .workspace-explorer__footer { border-color: #8ebcc5; background: #d9e5e8; }
+.remote-shell--theme-chinese-retro .workspace-explorer__tree { background: #eaf5f7; }
+.remote-shell--theme-chinese-retro .workspace-explorer__root-form input { border-color: #8ebcc5; background: #f5fdff; color: #293c39; }
 .remote-shell--theme-chinese-retro .workspace-explorer__entry { color: #53675e; }
 .remote-shell--theme-chinese-retro .workspace-explorer__entry:hover,
-.remote-shell--theme-chinese-retro .workspace-explorer__entry--selected { border-color: #c0a66a; background: #e3e5d4; color: #264b4f; }
-.remote-shell--theme-chinese-retro .terminal-dialog__screen { background: #102f35; color: #f2e5c8; }
+.remote-shell--theme-chinese-retro .workspace-explorer__entry--selected { border-color: #7db5c0; background: #dde4e5; color: #264b4f; }
+.remote-shell--theme-chinese-retro .terminal-dialog__screen { background: #102f35; color: #dfeff2; }
 .remote-shell--theme-chinese-retro .terminal-dialog__error { color: #354640; }
 .remote-shell--theme-chinese-retro .terminal-dialog__error p { color: #53675e; }
-.remote-shell--theme-chinese-retro .terminal-dialog__error button { border-color: #bda465; background: #eee4ce; color: #34595c; }
-.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child { border-color: #1a5961; background: #1a5961; color: #fff0cf; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button { border-color: #78b2bd; background: #e0ecee; color: #34595c; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child { border-color: #1a5961; background: #1a5961; color: #e9fbff; }
 .remote-shell--theme-chinese-retro .terminal-dialog__error button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
-.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child:hover:not(:disabled) { background: #276d70; color: #fff6df; }
+.remote-shell--theme-chinese-retro .terminal-dialog__error button:first-child:hover:not(:disabled) { background: #276d70; color: #f1fdff; }
 .remote-shell--theme-chinese-retro .terminal-dialog__reconnect,
-.remote-shell--theme-chinese-retro .terminal-dialog__navigation-button { border-color: #bda465; background: #eee4ce; color: #34595c; }
-.remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #fff0cf; }
+.remote-shell--theme-chinese-retro .terminal-dialog__navigation-button { border-color: #78b2bd; background: #e0ecee; color: #34595c; }
+.remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #e9fbff; }
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu),
-:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #bda363; }
-.remote-shell--theme-chinese-retro .cpa-usage-range-tabs { border-color: #c9b782; background: #fbf4e2; }
+:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #77b1bd; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs { border-color: #92c0c9; background: #f0f9fb; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button { color: #6b776e; }
-.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button:hover { background: #e5e5d3; color: #244e53; }
-.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: #b89d5e; background: #dce5d8; color: #1a535a; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button:hover { background: #dde4e5; color: #244e53; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: #72acb8; background: #dce5d8; color: #1a535a; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro .workspace-file-context-menu__name { color: #6b776e; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro button { color: #31565a; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
@@ -3630,25 +3630,25 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
    visible borders in the pixel theme; keep the application viewport unframed. */
 .app-root--theme-chinese-retro .pair-card {
   border: 20px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 20px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 20px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro :is(.remote-sidebar, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
   border: 16px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 16px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 16px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro :is(.remote-chat__header, .workspace-explorer__header, .theme-settings-panel__header) {
   border: 14px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro :is(.sidebar-selection-bar, .message-composer, .composer-queue, .approval-card, .theme-settings-card, .file-change-card) {
   border: 14px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 14px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
@@ -3656,19 +3656,19 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   padding: 3px 5px 3px;
   border: 20px solid transparent;
   border-width: 20px 16px 16px;
-  border-image: url('/chinese-retro/composer-frame.png') 260 330 230 420 / 20px 16px 16px / 0 stretch;
+  border-image: url('/chinese-retro/composer-frame-cool.png') 260 330 230 420 / 20px 16px 16px / 0 stretch;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .message-composer:focus-within {
-  border-image-source: url('/chinese-retro/composer-frame.png');
-  box-shadow: 0 0 0 2px rgba(159, 129, 67, .24);
+  border-image-source: url('/chinese-retro/composer-frame-cool.png');
+  box-shadow: 0 0 0 2px rgba(87, 147, 159, .24);
 }
 .remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body {
   border: 14px solid transparent;
   border-width: 5px 12px;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 5px 12px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 5px 12px / 0 stretch;
   border-radius: 0;
   padding-block: 7px;
   box-shadow: none;
@@ -3677,76 +3677,76 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu),
 :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro {
   border: 16px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 16px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 16px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro :is(.thread-row--active, .workspace-explorer__entry--selected) {
   border: 12px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 12px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 12px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .theme-option {
   border: 10px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 10px / 0 stretch;
   border-radius: 0;
 }
 .remote-shell--theme-chinese-retro .theme-option--active {
   border: 12px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 12px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 12px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .remote-sidebar,
 .remote-shell--theme-chinese-retro .theme-settings-panel {
-  border: 1px solid #c5b47e;
+  border: 1px solid #8ebcc5;
   border-image: none;
   border-radius: 0;
   box-shadow: none;
 }
 .remote-shell--theme-chinese-retro .sidebar-search {
   border: 9px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 9px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 9px / 0 stretch;
   border-radius: 0;
-  background: #fbf4e2;
+  background: #f0f9fb;
 }
 .remote-shell--theme-chinese-retro .sidebar-search:focus-within {
-  border-image-source: url('/chinese-retro/frame.png');
-  background: #fff9e9;
-  box-shadow: 0 0 0 2px rgba(159, 129, 67, .24);
+  border-image-source: url('/chinese-retro/frame-cool.png');
+  background: #f5fdff;
+  box-shadow: 0 0 0 2px rgba(87, 147, 159, .24);
 }
 .remote-shell--theme-chinese-retro .workspace-explorer__root-form input {
   height: 42px;
   border: 10px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
+  border-image: url('/chinese-retro/frame-cool.png') 230 260 230 430 / 10px / 0 stretch;
   border-radius: 0;
-  background: #fff8e8;
+  background: #f5fdff;
 }
 .remote-shell--theme-chinese-retro .workspace-explorer__root-form input:focus {
-  border-image-source: url('/chinese-retro/frame.png');
-  box-shadow: 0 0 0 2px rgba(159, 129, 67, .24);
+  border-image-source: url('/chinese-retro/frame-cool.png');
+  box-shadow: 0 0 0 2px rgba(87, 147, 159, .24);
 }
 
-.remote-shell--theme-chinese-retro :is(svg.lucide-search) { background-image: url('/chinese-retro/icons/search.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-refresh-cw, svg.lucide-rotate-cw) { background-image: url('/chinese-retro/icons/refresh.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-messages-square, svg.lucide-message-square, svg.lucide-message-circle) { background-image: url('/chinese-retro/icons/chat.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-settings, svg.lucide-settings-2) { background-image: url('/chinese-retro/icons/settings.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-link, svg.lucide-link-2) { background-image: url('/chinese-retro/icons/connection.png'); }
-.remote-shell--theme-chinese-retro svg.lucide-terminal { background-image: url('/chinese-retro/icons/terminal.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-folder, svg.lucide-folder-open) { background-image: url('/chinese-retro/icons/folder.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-file-plus, svg.lucide-file-plus-2, svg.lucide-folder-plus) { background-image: url('/chinese-retro/icons/add-file.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-send, svg.lucide-arrow-up) { background-image: url('/chinese-retro/icons/send.png'); }
-.remote-shell--theme-chinese-retro svg.lucide-pause { background-image: url('/chinese-retro/icons/pause.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-pencil, svg.lucide-pencil-line) { background-image: url('/chinese-retro/icons/edit.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-check, svg.lucide-circle-check, svg.lucide-check-check) { background-image: url('/chinese-retro/icons/confirm.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-trash, svg.lucide-trash-2) { background-image: url('/chinese-retro/icons/delete.png'); }
-.remote-shell--theme-chinese-retro svg.lucide-palette { background-image: url('/chinese-retro/icons/theme.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-monitor, svg.lucide-monitor-check) { background-image: url('/chinese-retro/icons/display.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-globe, svg.lucide-globe-2) { background-image: url('/chinese-retro/icons/language.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-bell, svg.lucide-bell-off) { background-image: url('/chinese-retro/icons/notification.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-crosshair, svg.lucide-target, svg.lucide-scan, svg.lucide-key-round, svg.lucide-panels-top-left, svg.lucide-panels-left-bottom) { background-image: url('/chinese-retro/icons/match.png'); }
-.remote-shell--theme-chinese-retro :is(svg.lucide-info, svg.lucide-circle-help, svg.lucide-circle-question-mark) { background-image: url('/chinese-retro/icons/about.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-search) { background-image: url('/chinese-retro/icons/search-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-refresh-cw, svg.lucide-rotate-cw) { background-image: url('/chinese-retro/icons/refresh-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-messages-square, svg.lucide-message-square, svg.lucide-message-circle) { background-image: url('/chinese-retro/icons/chat-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-settings, svg.lucide-settings-2) { background-image: url('/chinese-retro/icons/settings-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-link, svg.lucide-link-2) { background-image: url('/chinese-retro/icons/connection-cool.png'); }
+.remote-shell--theme-chinese-retro svg.lucide-terminal { background-image: url('/chinese-retro/icons/terminal-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-folder, svg.lucide-folder-open) { background-image: url('/chinese-retro/icons/folder-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-file-plus, svg.lucide-file-plus-2, svg.lucide-folder-plus) { background-image: url('/chinese-retro/icons/add-file-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-send, svg.lucide-arrow-up) { background-image: url('/chinese-retro/icons/send-cool.png'); }
+.remote-shell--theme-chinese-retro svg.lucide-pause { background-image: url('/chinese-retro/icons/pause-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-pencil, svg.lucide-pencil-line) { background-image: url('/chinese-retro/icons/edit-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-check, svg.lucide-circle-check, svg.lucide-check-check) { background-image: url('/chinese-retro/icons/confirm-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-trash, svg.lucide-trash-2) { background-image: url('/chinese-retro/icons/delete-cool.png'); }
+.remote-shell--theme-chinese-retro svg.lucide-palette { background-image: url('/chinese-retro/icons/theme-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-monitor, svg.lucide-monitor-check) { background-image: url('/chinese-retro/icons/display-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-globe, svg.lucide-globe-2) { background-image: url('/chinese-retro/icons/language-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-bell, svg.lucide-bell-off) { background-image: url('/chinese-retro/icons/notification-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-crosshair, svg.lucide-target, svg.lucide-scan, svg.lucide-key-round, svg.lucide-panels-top-left, svg.lucide-panels-left-bottom) { background-image: url('/chinese-retro/icons/match-cool.png'); }
+.remote-shell--theme-chinese-retro :is(svg.lucide-info, svg.lucide-circle-help, svg.lucide-circle-question-mark) { background-image: url('/chinese-retro/icons/about-cool.png'); }
 .remote-shell--theme-chinese-retro :is(
   svg.lucide-search, svg.lucide-refresh-cw, svg.lucide-rotate-cw,
   svg.lucide-messages-square, svg.lucide-message-square, svg.lucide-message-circle,
