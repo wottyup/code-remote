@@ -225,7 +225,7 @@ export function CPAUsageStatsPanel({
                 <div className="cpa-usage-breakdown-grid">
                   <section className="theme-settings-card cpa-usage-section">
                     <div className="theme-settings-card__heading"><div><h2>按模型</h2><p>{models.length} 个模型</p></div></div>
-                    {models.length ? <div className="cpa-usage-table-wrap"><table className="cpa-usage-table"><thead><tr><th>模型</th><th>请求</th><th>Token</th><th>金额</th></tr></thead><tbody>{models.map((model) => <tr key={model.model}><td title={model.model}>{model.model || '未知模型'}</td><td>{count(model.calls)}</td><td>{count(model.total_tokens)}</td><td>{typeof model.cost === 'number' && Number.isFinite(model.cost) ? moneyFormatter.format(model.cost) : '—'}</td></tr>)}</tbody></table></div> : <div className="cpa-usage-empty">暂无模型数据。</div>}
+                    {models.length ? <div className="cpa-usage-table-wrap"><table className="cpa-usage-table"><thead><tr><th>模型</th><th>请求</th><th>金额</th><th>Token</th></tr></thead><tbody>{models.map((model) => <tr key={model.model}><td title={model.model}>{model.model || '未知模型'}</td><td>{count(model.calls)}</td><td>{typeof model.cost === 'number' && Number.isFinite(model.cost) ? moneyFormatter.format(model.cost) : '—'}</td><td>{count(model.total_tokens)}</td></tr>)}</tbody></table></div> : <div className="cpa-usage-empty">暂无模型数据。</div>}
                   </section>
                   <section className="theme-settings-card cpa-usage-section">
                     <div className="theme-settings-card__heading"><div><h2>按账号</h2><p>{accounts.length} 个接入账号</p></div></div>
