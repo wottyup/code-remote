@@ -3640,7 +3640,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body {
   border: 14px solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
+  border-width: 7px 12px;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 7px 12px / 0 stretch;
   border-radius: 0;
   box-shadow: none;
 }
