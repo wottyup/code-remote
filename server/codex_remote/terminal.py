@@ -22,6 +22,7 @@ TMUX_HISTORY_LIMIT = 5_000
 TMUX_IDLE_TIMEOUT_SECONDS = 30 * 60
 TMUX_MAX_DETACHED_SESSIONS = 10
 TMUX_CLEANUP_INTERVAL_SECONDS = 60
+TMUX_ANDROID_COMPACT_PROMPT_OPTION = "@codex_remote_android_compact_prompt"
 
 
 def tmux_session_name_for_thread(thread_id: str) -> str:
@@ -121,7 +122,7 @@ async def cleanup_tmux_sessions(protected_session_names: set[str] | None = None)
 class TerminalSession:
     """One interactive shell attached to a browser terminal websocket."""
 
-    def __init__(self, cwd: Path, columns: int, rows: int, thread_id: str | None = None) -> None:
+    def __init__(self, cwd: Path, columns: int, rows: int, thread_id: str | None = None, compact_prompt: bool = False) -> None:
         self.cwd = cwd
         self.columns = self._bounded_dimension(columns, 100, 20, 300)
         self.rows = self._bounded_dimension(rows, 30, 5, 120)
@@ -132,6 +133,7 @@ class TerminalSession:
             if thread_id and os.name != "nt"
             else None
         )
+        self.compact_prompt = compact_prompt
         self._master_fd: int | None = None
         self._process: asyncio.subprocess.Process | None = None
         self._windows_process: object | None = None
@@ -166,8 +168,9 @@ class TerminalSession:
         columns: int = 100,
         rows: int = 30,
         thread_id: str | None = None,
+        compact_prompt: bool = False,
     ) -> TerminalSession:
-        session = cls(cwd, columns, rows, thread_id)
+        session = cls(cwd, columns, rows, thread_id, compact_prompt)
         try:
             if os.name == "nt":
                 await session._start_windows()
@@ -242,6 +245,9 @@ class TerminalSession:
                 )
                 await _run_tmux("set-option", "-t", self.tmux_session_name, "mouse", "on")
                 await _set_tmux_last_used(self.tmux_session_name)
+                if self.compact_prompt:
+                    with suppress(OSError, RuntimeError, ValueError):
+                        await self._compact_bash_prompt_if_idle()
         except Exception:
             if self._process is not None and self._process.returncode is None:
                 self._process.kill()
@@ -253,6 +259,32 @@ class TerminalSession:
             raise
         finally:
             os.close(slave_fd)
+
+    async def _compact_bash_prompt_if_idle(self) -> None:
+        session_name = self.tmux_session_name
+        if not session_name:
+            return
+        # A reconnect may restore old screen text. Touch only this idle Bash
+        # pane before the new Android client receives its ready event.
+        for _ in range(10):
+            details = await _run_tmux(
+                "display-message", "-p", "-t", session_name,
+                f"#{{pane_current_command}}|#{{session_attached}}|#{{pane_in_mode}}|#{{cursor_y}}|#{{{TMUX_ANDROID_COMPACT_PROMPT_OPTION}}}",
+            )
+            command, attached, in_mode, cursor_y, already_compact = details.strip().split("|", 4)
+            if command != "bash" or attached != "1" or in_mode != "0" or already_compact == "1":
+                return
+            lines = (await _run_tmux("capture-pane", "-p", "-t", session_name)).splitlines()
+            row = int(cursor_y)
+            if 0 <= row < len(lines) and lines[row].rstrip().endswith(("#", "$")):
+                break
+            await asyncio.sleep(0.05)
+        else:
+            return
+        await _run_tmux("send-keys", "-t", session_name, "-l", "PS1='\\W\\$ '")
+        await _run_tmux("send-keys", "-t", session_name, "Enter")
+        await _run_tmux("send-keys", "-t", session_name, "C-l")
+        await _run_tmux("set-option", "-t", session_name, TMUX_ANDROID_COMPACT_PROMPT_OPTION, "1")
 
     async def _start_windows(self) -> None:
         try:

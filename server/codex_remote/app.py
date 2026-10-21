@@ -2422,6 +2422,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 hello.get("columns", 100),
                 hello.get("rows", 30),
                 thread_id=thread_id,
+                compact_prompt=hello.get("compactPrompt") is True,
             )
         except HTTPException as error:
             await websocket.send_json({"type": "error", "message": str(error.detail)})

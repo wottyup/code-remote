@@ -9692,6 +9692,7 @@ class MainActivity : Activity() {
                 val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
                 val sent = webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
                     .putOpt("threadId", thread).putOpt("cwd", cwd.takeIf { it.isNotBlank() })
+                    .put("compactPrompt", true)
                     .put("columns", terminalColumns).put("rows", terminalRows).toString())
                 if (!sent) updateTerminalStatus("终端连接信息发送失败", ERROR)
             }
