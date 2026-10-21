@@ -3584,12 +3584,13 @@ class MainActivity : Activity() {
                     if (newRevision != null) syncRevisions[threadId] = newRevision
                     activeThread = resolved
                     historyMemoryCache[threadId] = resolved
+                    val wasLoadingHistory = historyLoadingThreadId == threadId
                     historyLoadingThreadId = null
                     historyLoadError = null
                     running = isThreadRunning(resolved)
                     if (!running) clearLiveActivity()
                     renderHeader()
-                    if (historyChanged) renderMessages(false, incrementalTurnId)
+                    if (historyChanged || wasLoadingHistory) renderMessages(false, if (wasLoadingHistory) null else incrementalTurnId)
                     updateComposerFileChanges()
                     io.execute { writeThreadHistoryCache(threadId, resolved, newRevision, profileId) }
                 }
@@ -4107,7 +4108,8 @@ class MainActivity : Activity() {
         if (approval != null) renderApproval(approval)
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
-        if (running && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
+        val loadingActiveHistory = activeThreadId != null && historyLoadingThreadId == activeThreadId
+        if (running && !loadingActiveHistory && !(messages.isEmpty() && !historyLoadError.isNullOrBlank())) {
             val activityColor = if (lightTheme) Color.rgb(80, 80, 80) else Color.rgb(180, 180, 180)
             val activity = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
