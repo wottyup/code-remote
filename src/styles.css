@@ -1513,10 +1513,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .scroll-to-bottom:hover { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .theme-settings-card { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); box-shadow: none; }
 .remote-shell--theme-custom .chat-message__content, .remote-shell--theme-custom .chat-message__meta, .remote-shell--theme-custom .chat-message--user .chat-message__content { color: var(--custom-theme-text-color); }
-.remote-shell--theme-custom .chat-message__content {
-  --chat-message-link: var(--custom-theme-text-color);
-  --chat-message-link: color-mix(in srgb, var(--custom-theme-text-color) 58%, #2563eb);
-}
+.remote-shell--theme-custom .chat-message__content { --chat-message-link: #89b4fa; }
 .remote-shell--theme-custom .chat-message__table-scroll { --chat-message-table-border: var(--custom-theme-border); --chat-message-table-header: var(--custom-theme-control); }
 .remote-shell--theme-custom .chat-message__timing, .remote-shell--theme-custom .chat-message__sent-at { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .running-indicator__elapsed { color: var(--custom-theme-text-color); opacity: .72; }
@@ -1935,11 +1932,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell .remote-chat--claude .chat-message--user .chat-message__body { border: 0; background: #6d4539; }
 .remote-shell .remote-chat--claude .chat-message--user .chat-message__content,
 .remote-shell .remote-chat--claude .chat-message--user .chat-message__text { color: #fff3ee; }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .remote-chat--claude .chat-message--user .chat-message__content a { color: #b8ddff; }
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #c8d0ff; }
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #ee8c6d; }
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body { border: 0; background: #b3b8d5; }
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__content,
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__text { color: #000; }
+.remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__content a { color: #183f83; }
 .remote-shell--claude-mode .new-thread-button { border-color: rgba(238, 140, 109, .5); background: linear-gradient(135deg, rgba(238, 140, 109, .24), rgba(238, 140, 109, .12)); }
 .remote-shell--claude-mode .new-thread-button__icon { background: rgba(238, 140, 109, .18); color: #ee8c6d; }
 .remote-shell--claude-mode .new-thread-button:hover:not(:disabled) { border-color: #ee8c6d; background: linear-gradient(135deg, rgba(238, 140, 109, .32), rgba(238, 140, 109, .18)); }
