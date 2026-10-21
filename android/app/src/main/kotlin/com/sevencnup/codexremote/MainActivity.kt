@@ -894,7 +894,7 @@ class MainActivity : Activity() {
     private var terminalOverlay: LinearLayout? = null
     private var terminalPositionListener: View.OnLayoutChangeListener? = null
     private var terminalSocket: WebSocket? = null
-    private var terminalOutput: TextView? = null
+    private var terminalOutput: TerminalOutputView? = null
     private var terminalOutputScroll: ScrollView? = null
     private var terminalStatusView: TextView? = null
     private var terminalInputSink: TerminalInputSink? = null
@@ -9456,7 +9456,10 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
-        terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226), pixelize = false).apply {
+        terminalOutput = TerminalOutputView(this).apply {
+            textSize = adjustedTextSize(12)
+            setTag(R.id.base_text_size, 12f)
+            setTextColor(if (lightTheme) SUBTLE else Color.rgb(207, 214, 226))
             typeface = Typeface.MONOSPACE
             setTextIsSelectable(false)
             setHorizontallyScrolling(true)
@@ -9767,6 +9770,7 @@ class MainActivity : Activity() {
             val interactionRevision = terminalScrollInteractionRevision
             val rendered = terminalScreen.render(hideStatusLine = terminalPersistent)
             if (output.text.toString() != rendered) output.text = rendered
+            output.updateCursor(if (terminalReady) terminalScreen.cursorPosition(hideStatusLine = terminalPersistent) else null)
             if (terminalInputSink?.hasFocus() == true) output.scrollTo(0, 0)
             scroll?.post {
                 if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
@@ -11356,6 +11360,64 @@ class MainActivity : Activity() {
     }
 }
 
+private class TerminalOutputView(context: Context) : TextView(context) {
+    private var cursorRow = -1
+    private var cursorColumn = -1
+    private var cursorOn = true
+    private val cursorPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val blink = object : Runnable {
+        override fun run() {
+            if (cursorRow < 0 || !isAttachedToWindow) return
+            cursorOn = !cursorOn
+            invalidate()
+            postDelayed(this, 550L)
+        }
+    }
+
+    fun updateCursor(position: Pair<Int, Int>?) {
+        val nextRow = position?.first ?: -1
+        val nextColumn = position?.second ?: -1
+        if (nextRow == cursorRow && nextColumn == cursorColumn) return
+        cursorRow = nextRow
+        cursorColumn = nextColumn
+        cursorOn = true
+        removeCallbacks(blink)
+        if (cursorRow >= 0 && isAttachedToWindow) postDelayed(blink, 550L)
+        invalidate()
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        if (cursorRow >= 0) postDelayed(blink, 550L)
+    }
+
+    override fun onDetachedFromWindow() {
+        removeCallbacks(blink)
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (!cursorOn || cursorRow < 0) return
+        val textLayout = layout ?: return
+        if (cursorRow >= textLayout.lineCount) return
+        val start = textLayout.getLineStart(cursorRow)
+        val end = textLayout.getLineEnd(cursorRow)
+        val contentEnd = if (end > start && text[end - 1] == '\n') end - 1 else end
+        val textColumn = cursorColumn.coerceAtMost(contentEnd - start)
+        val density = resources.displayMetrics.density
+        val cursorWidth = density * 2.5f
+        val x = (compoundPaddingLeft + textLayout.getPrimaryHorizontal(start + textColumn) +
+            (cursorColumn - textColumn) * paint.measureText(" "))
+            .coerceAtMost(width - compoundPaddingRight - cursorWidth)
+        val top = compoundPaddingTop + textLayout.getLineTop(cursorRow) + density * 2f
+        val bottom = compoundPaddingTop + textLayout.getLineBottom(cursorRow) - density * 2f
+        if (bottom <= top) return
+        cursorPaint.color = currentTextColor
+        canvas.drawRoundRect(x, top, x + cursorWidth, bottom, density, density, cursorPaint)
+    }
+}
+
 private class TerminalInputSink(
     context: Context,
     private val sendInput: (String) -> Boolean,
@@ -11502,6 +11564,7 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
     private var scrollBottom = rows - 1
     private var state = 0
     private var receivedOutput = false
+    private var cursorVisible = true
     private val sequence = StringBuilder()
 
     fun append(value: String) {
@@ -11512,6 +11575,10 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
     fun render(hideStatusLine: Boolean = false): String =
         if (!receivedOutput && screen.all { line -> line.all { it == ' ' } }) "等待终端输出…"
         else screen.take(if (hideStatusLine) rows - 1 else rows).joinToString("\n") { String(it).trimEnd() }
+
+    fun cursorPosition(hideStatusLine: Boolean = false): Pair<Int, Int>? =
+        if (!receivedOutput || !cursorVisible || hideStatusLine && cursorRow >= rows - 1) null
+        else cursorRow to cursorColumn.coerceIn(0, columns - 1)
 
     fun resize(newColumns: Int, newRows: Int) {
         if (newColumns == columns && newRows == rows) return
@@ -11606,6 +11673,10 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
     private fun applyCsi(command: Char, raw: String) {
         val cleaned = raw.trimStart('?', '>', '!', '=')
         val values = cleaned.split(';').map { it.toIntOrNull() ?: 0 }
+        if (raw.startsWith('?') && 25 in values && (command == 'h' || command == 'l')) {
+            cursorVisible = command == 'h'
+            return
+        }
         fun value(index: Int, fallback: Int = 1): Int = values.getOrNull(index)?.takeIf { it > 0 } ?: fallback
         when (command) {
             'A' -> cursorRow = (cursorRow - value(0)).coerceAtLeast(0)
@@ -11683,6 +11754,7 @@ private class TerminalScreenBuffer(private var columns: Int, private var rows: I
         if (resetCursor) {
             cursorRow = 0
             cursorColumn = 0
+            cursorVisible = true
             scrollTop = 0
             scrollBottom = rows - 1
         }
