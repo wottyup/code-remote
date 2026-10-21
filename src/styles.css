@@ -3662,6 +3662,21 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 :is(.thread-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button.thread-context-menu__danger { border-color: #e7b9bc; color: #9e383f; }
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .workspace-file-context-menu) button.thread-context-menu__danger:hover:not(:disabled),
 :is(.thread-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button.thread-context-menu__danger:hover:not(:disabled) { background: #fae7e8; color: #7c252d; }
+.remote-shell--theme-chinese-retro .cpa-usage-panel {
+  color: #293c39;
+  color-scheme: light;
+  --cpa-retro-foreground: #293c39;
+}
+.remote-shell--theme-chinese-retro .cpa-usage-panel :where(*) { color: var(--cpa-retro-foreground); }
+.remote-shell--theme-chinese-retro .cpa-usage-summary-card--primary > strong { color: #315d93; }
+.remote-shell--theme-chinese-retro .cpa-usage-summary-card--cost > strong { color: #356848; }
+.remote-shell--theme-chinese-retro .cpa-usage-key-filter { border-color: #92c0c9; background: #f0f9fb; color: #526b70; }
+.remote-shell--theme-chinese-retro .cpa-usage-key-filter select { color: #293c39; color-scheme: light; }
+.remote-shell--theme-chinese-retro .cpa-usage-key-filter select option { background: #f5fdff; color: #293c39; }
+.remote-shell--theme-chinese-retro .cpa-usage-filter-status--error { color: #9e383f; }
+.remote-shell--theme-chinese-retro .cpa-usage-error { border-color: #e7b9bc; background: #fae7e8; color: #8d353c; }
+.remote-shell--theme-chinese-retro .cpa-usage-error button { border-color: #dca7aa; background: #f5dfe1; color: #8d353c; }
+.remote-shell--theme-chinese-retro .cpa-usage-error button:hover { background: #efd0d3; color: #70252c; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs { border-color: #92c0c9; background: #f0f9fb; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button { color: #6b776e; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button:hover { background: #dde4e5; color: #244e53; }
