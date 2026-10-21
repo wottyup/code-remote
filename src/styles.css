@@ -152,8 +152,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .sidebar-settings:hover, .sidebar-settings--active { border-color: rgba(146, 157, 184, .14); background: rgba(38, 41, 49, .7); color: #e4e7ee; }
 .sidebar-settings svg { color: #8b94a5; }
 .sidebar-endpoint { margin-top: 4px; }
-.remote-sidebar__footer { display: flex; align-items: center; gap: 8px; min-height: 40px; margin-top: 6px; padding: 8px 6px 0; border-top: 1px solid var(--line); color: #9298a2; font-size: calc(12px + var(--mobile-font-offset)); }
-.remote-sidebar__footer button { margin-left: auto; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: #737a84; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); }
+.remote-sidebar__footer { display: flex; align-items: center; gap: 8px; min-height: 52px; margin-top: 6px; padding: 8px 6px 0; border-top: 1px solid var(--line); color: #9298a2; font-size: calc(12px + var(--mobile-font-offset)); }
+.remote-sidebar__engine-statuses { display: flex; min-width: 0; flex: 1 1 auto; flex-direction: column; gap: 4px; }
+.remote-sidebar__engine-status { display: flex; min-width: 0; align-items: center; gap: 7px; line-height: 1.25; white-space: nowrap; }
+.remote-sidebar__engine-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.remote-sidebar__footer button { flex: 0 0 auto; margin-left: auto; padding: 4px 6px; border: 0; border-radius: 5px; background: transparent; color: #737a84; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); }
 .remote-sidebar__footer button:hover { background: #25272d; color: #d5d7dc; }
 .composer-engine-notice { display: inline-flex; align-items: center; gap: 6px; min-height: 27px; color: var(--muted); font-size: calc(12px + var(--mobile-font-offset)); white-space: nowrap; }
 .composer-engine-notice svg { color: #aabaff; }
@@ -187,7 +190,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings { justify-content: center; padding-inline: 0; }
   .remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings span { display: none; }
   .remote-shell--sidebar-collapsed .remote-sidebar__footer { gap: 4px; padding-inline: 2px; }
-  .remote-shell--sidebar-collapsed .remote-sidebar__footer > span { display: none; }
+  .remote-shell--sidebar-collapsed .remote-sidebar__engine-statuses { flex: 0 0 auto; flex-direction: row; gap: 6px; }
+  .remote-shell--sidebar-collapsed .remote-sidebar__engine-status { gap: 0; }
+  .remote-shell--sidebar-collapsed .remote-sidebar__engine-status-label { display: none; }
   .remote-shell--sidebar-collapsed .remote-sidebar__footer button { margin-left: auto; padding-inline: 3px; }
 }
 
@@ -2346,6 +2351,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__actions .sidebar-settings span,
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer > span { display: inline; }
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer { gap: 8px; padding-inline: 2px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__engine-statuses { flex-direction: column; gap: 3px; }
+  .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__engine-status-label { display: inline; }
   .remote-shell--theme-retro.remote-shell--sidebar-collapsed .remote-sidebar__footer button { margin-left: auto; padding-inline: 2px; }
   .remote-shell--theme-retro .remote-workspace { width: 100%; margin: 0; border: 0; background: #fff; }
   .remote-shell--theme-retro :is(.remote-chat, .conversation-pane, .remote-pane-grid, .remote-pane-slot) { background: #fff; }

@@ -3924,12 +3924,33 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useEffect(() => {
     let current = true
-    void codexRemoteClient.claudeStatus(token).then((status) => {
-      if (current) setClaudeCodeAvailable(status.available)
-    }).catch(() => {
-      if (current) setClaudeCodeAvailable(false)
-    })
-    return () => { current = false }
+    let checking = false
+    setClaudeCodeAvailable(null)
+    const refreshClaudeStatus = async () => {
+      if (!current || checking || document.visibilityState === 'hidden') return
+      checking = true
+      try {
+        const status = await codexRemoteClient.claudeStatus(token)
+        if (current) setClaudeCodeAvailable(status.available)
+      } catch {
+        if (current) setClaudeCodeAvailable(false)
+      } finally {
+        checking = false
+      }
+    }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState !== 'hidden') void refreshClaudeStatus()
+    }
+    void refreshClaudeStatus()
+    const interval = window.setInterval(() => void refreshClaudeStatus(), 30_000)
+    window.addEventListener('focus', refreshWhenVisible)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      current = false
+      window.clearInterval(interval)
+      window.removeEventListener('focus', refreshWhenVisible)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
   }, [token])
   const openSettingsPanel = useCallback(() => {
     openPanelHistoryEntry('settings')
@@ -5137,11 +5158,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
 
   const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
-  const currentConnectionLabel = activeRemote.handedOff ? '已交还给本机' : isClaudeCodeThread
-    ? activeRemote.connection === 'connected'
-      ? claudeCodeAvailable === false ? 'Claude Code 不可用' : claudeCodeAvailable === null ? '正在检查 Claude Code' : 'Claude Code 就绪'
-      : activeRemote.connection === 'connecting' ? '正在连接' : '连接已断开'
-    : connectionLabel[activeRemote.connection]
+  const sidebarCodexStatus = activeRemote.handedOff
+    ? { label: 'Codex 已交还给本机', state: 'handoff' }
+    : activeRemote.connection === 'connected'
+      ? { label: 'Codex 已连接', state: 'connected' }
+      : activeRemote.connection === 'connecting'
+        ? { label: 'Codex 正在连接', state: 'connecting' }
+        : activeRemote.connection === 'unavailable'
+          ? { label: 'Codex 不可用', state: 'unavailable' }
+          : { label: 'Codex 连接已断开', state: 'disconnected' }
+  const sidebarClaudeStatus = claudeCodeAvailable === null
+    ? { label: '正在检查 Claude Code', state: 'connecting' }
+    : claudeCodeAvailable
+      ? { label: 'Claude Code 可用', state: 'connected' }
+      : { label: 'Claude Code 不可用', state: 'unavailable' }
   const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.CodexRemoteAndroid?.changeEndpoint === 'function'
   const modelSupportsImages = isClaudeCodeThread || !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const modelOptions = useMemo<ComposerMenuOption[]>(() => availableModels.flatMap((model) => {
@@ -5353,7 +5383,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
-        <footer className="remote-sidebar__footer"><i className={'status-dot status-dot--' + (activeRemote.handedOff ? 'handoff' : activeRemote.connection)} role="img" aria-label={currentConnectionLabel} title={currentConnectionLabel} /><span>{currentConnectionLabel}</span><button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button></footer>
+        <footer className="remote-sidebar__footer">
+          <div className="remote-sidebar__engine-statuses" role="group" aria-label="引擎状态">
+            {[sidebarCodexStatus, sidebarClaudeStatus].map((status) => (
+              <span key={status.label} className="remote-sidebar__engine-status" role="img" aria-label={status.label} title={status.label}>
+                <i className={'status-dot status-dot--' + status.state} aria-hidden="true" />
+                <span className="remote-sidebar__engine-status-label">{status.label}</span>
+              </span>
+            ))}
+          </div>
+          <button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button>
+        </footer>
       </aside>
 
       {sidebarOpen || sidebarDragging ? <button className={'sidebar-backdrop' + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
