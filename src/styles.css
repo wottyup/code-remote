@@ -3486,24 +3486,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 /* Chinese retro theme: parchment surfaces, blue-green lacquer and the supplied landscape frame. */
 .app-root--theme-chinese-retro {
-  --chinese-frame-inset: clamp(22px, 5.2vw, 72px);
   background: #e7dcc1;
-}
-.app-root--theme-chinese-retro::after {
-  position: fixed;
-  z-index: 4;
-  inset: 0;
-  border: var(--chinese-frame-inset) solid transparent;
-  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / var(--chinese-frame-inset) / 0 stretch;
-  content: '';
-  pointer-events: none;
-}
-.app-root--theme-chinese-retro > .remote-shell,
-.app-root--theme-chinese-retro > .pair-page {
-  width: calc(100% - var(--chinese-frame-inset) * 2);
-  height: calc(var(--app-viewport-height) - var(--chinese-frame-inset) * 2);
-  min-height: calc(var(--app-viewport-height) - var(--chinese-frame-inset) * 2);
-  margin: var(--chinese-frame-inset);
 }
 .app-root--theme-chinese-retro > .pair-page { background: #e7dcc1; color: #263c3a; }
 .app-root--theme-chinese-retro .pair-card { border: 1px solid #c3aa6e; border-radius: 5px; background: #f7efd9; color: #263c3a; box-shadow: 0 14px 38px rgba(45, 56, 42, .14); }
@@ -3628,6 +3611,65 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #fff0cf; }
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #bda363; }
+
+/* Reuse the landscape frame on the same individual panes and cards that receive
+   visible borders in the pixel theme; keep the application viewport unframed. */
+.app-root--theme-chinese-retro .pair-card {
+  border: 14px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 14px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.remote-sidebar, .conversation-pane, .workspace-explorer, .theme-settings-panel, .chat-overlay-panel, .terminal-dialog) {
+  border: 9px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 9px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.remote-chat__header, .workspace-explorer__header, .theme-settings-panel__header) {
+  border: 8px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.sidebar-selection-bar, .message-composer, .composer-queue, .running-indicator, .approval-card, .theme-settings-card, .file-change-card) {
+  border: 8px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body {
+  border: 8px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 8px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro .thread-rename-dialog,
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu),
+:is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro {
+  border: 10px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 10px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro :is(.thread-row--active, .workspace-explorer__entry--selected) {
+  border: 7px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 7px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+.remote-shell--theme-chinese-retro .theme-option {
+  border: 6px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 6px / 0 stretch;
+  border-radius: 0;
+}
+.remote-shell--theme-chinese-retro .theme-option--active {
+  border: 7px solid transparent;
+  border-image: url('/chinese-retro/frame.png') 230 260 230 430 / 7px / 0 stretch;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .remote-shell--theme-chinese-retro :is(svg.lucide-search) { background-image: url('/chinese-retro/icons/search.png'); }
 .remote-shell--theme-chinese-retro :is(svg.lucide-refresh-cw, svg.lucide-rotate-cw) { background-image: url('/chinese-retro/icons/refresh.png'); }
 .remote-shell--theme-chinese-retro :is(svg.lucide-messages-square, svg.lucide-message-square, svg.lucide-message-circle) { background-image: url('/chinese-retro/icons/chat.png'); }
