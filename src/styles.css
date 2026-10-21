@@ -1981,6 +1981,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   color: #20232a;
   opacity: .55;
 }
+.remote-shell.remote-shell--theme-dark .message-composer__footer .send-button.send-button--arrow:not(:disabled) { background: #fff; color: #000; }
+.remote-shell.remote-shell--theme-light .message-composer__footer .send-button.send-button--arrow:not(:disabled) { background: #000; color: #fff; }
 
 @media (max-width: 700px) {
   .theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
