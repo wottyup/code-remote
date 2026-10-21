@@ -3559,7 +3559,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro :is(.chat-message__timing, .chat-message__sent-at, .running-indicator__elapsed) { color: #7b8072; }
 .remote-shell--theme-chinese-retro .message-composer { border-color: #77b0bb; border-radius: 5px; background: #f1f9fb; box-shadow: 0 3px 12px rgba(48, 56, 42, .08); }
 .remote-shell--theme-chinese-retro .message-composer:focus-within { border-color: #39777a; box-shadow: 0 0 0 2px rgba(51, 117, 119, .14); }
-.remote-shell--theme-chinese-retro .message-composer textarea { color: #293c39; }
+.remote-shell--theme-chinese-retro .message-composer textarea { color: #293c39; -webkit-text-fill-color: #293c39; caret-color: #15464e; }
+.remote-shell--theme-chinese-retro .message-composer textarea::placeholder { color: #657975; opacity: 1; }
+.remote-shell--theme-chinese-retro .message-composer textarea:disabled { color: #526b70; -webkit-text-fill-color: #526b70; opacity: 1; }
 .remote-shell--theme-chinese-retro :is(.composer-hint, .composer-file-change-summary) { color: #718075; }
 .remote-shell--theme-chinese-retro .composer-queue { border-color: #91bec7; background: #e9f4f6; }
 .remote-shell--theme-chinese-retro .composer-queue__heading { color: #294f54; }
@@ -3578,9 +3580,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .composer-menu__option:disabled { color: #526b70; opacity: 1; }
 .remote-shell--theme-chinese-retro .composer-menu__temporary { color: #31565a; }
 .remote-shell--theme-chinese-retro .composer-menu__temporary small { color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-menu__trigger { color: #31565a; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-menu__trigger:disabled { color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-menu__trigger > svg,
+.remote-shell--theme-chinese-retro .composer-menu__label { color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-new-thread-button { border-color: #8abac4; border-radius: 4px; background: #e3eff1; color: #31585d; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-new-thread-button:hover:not(:disabled) { border-color: #609aa5; background: #dcebed; color: #244d52; }
+.remote-shell--theme-chinese-retro .composer-new-thread-button:disabled { color: #526b70; opacity: 1; }
 .remote-shell--theme-chinese-retro :is(.attach-button, .stop-button, .send-button:not(.send-button--arrow)) { border-color: #8abac4; border-radius: 4px; background: #e3eff1; color: #31585d; }
 .remote-shell--theme-chinese-retro .send-button--arrow { background: #15464e; color: #e9fbff; }
 .remote-shell--theme-chinese-retro .send-button--arrow:hover:not(:disabled) { background: #276d70; color: #f1fdff; }
+.remote-shell--theme-chinese-retro .message-composer__footer .send-button--arrow:disabled { background: #d4e2e4; color: #31585d; opacity: 1; }
 .remote-shell--theme-chinese-retro :is(.composer-document, .message-document) { border-color: #92c0c9; border-radius: 4px; background: #e3eff1; color: #3d5758; }
 .remote-shell--theme-chinese-retro .operation-log { border-color: #b4c6c9; background: #eaf4f6; color: #394942; }
 .remote-shell--theme-chinese-retro .operation-log > summary > span,
