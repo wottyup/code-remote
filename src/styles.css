@@ -3571,8 +3571,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro :is(.composer-queue__send:hover:not(:disabled), .composer-queue__edit:hover:not(:disabled)) { background: #dcebed; color: #244d52; }
 .remote-shell--theme-chinese-retro .composer-queue__remove:hover:not(:disabled) { background: #dcebed; color: #244d52; }
 .remote-shell--theme-chinese-retro :is(.composer-queue__send:disabled, .composer-queue__edit:disabled, .composer-queue__remove:disabled) { opacity: 1; color: #526b70; }
-.remote-shell--theme-chinese-retro .composer-menu__popover { border-color: #77b0bc; background: #f1fafc; color: #293c39; }
-.remote-shell--theme-chinese-retro :is(.composer-menu__option:hover, .composer-menu__option--selected) { background: #e1e7e8; color: #204b51; }
+.remote-shell--theme-chinese-retro .composer-menu__popover { border-color: #8abac4; background: #f1fafc; color: #293c39; box-shadow: 0 12px 30px rgba(38, 64, 68, .14); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.remote-shell--theme-chinese-retro .composer-menu__option { color: #31565a; opacity: 1; }
+.remote-shell--theme-chinese-retro :is(.composer-menu__option:hover, .composer-menu__option--selected) { background: #dcebed; color: #244d52; }
+.remote-shell--theme-chinese-retro .composer-menu__option > svg { color: #1e626a; }
+.remote-shell--theme-chinese-retro .composer-menu__option:disabled { color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro .composer-menu__temporary { color: #31565a; }
+.remote-shell--theme-chinese-retro .composer-menu__temporary small { color: #526b70; opacity: 1; }
 .remote-shell--theme-chinese-retro :is(.attach-button, .stop-button, .send-button:not(.send-button--arrow)) { border-color: #8abac4; border-radius: 4px; background: #e3eff1; color: #31585d; }
 .remote-shell--theme-chinese-retro .send-button--arrow { background: #15464e; color: #e9fbff; }
 .remote-shell--theme-chinese-retro .send-button--arrow:hover:not(:disabled) { background: #276d70; color: #f1fdff; }
@@ -3625,16 +3630,38 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .terminal-dialog__reconnect,
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button { border-color: #78b2bd; background: #e0ecee; color: #34595c; }
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #15464e; color: #e9fbff; }
-.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu),
-:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #77b1bd; }
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu),
+:is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro {
+  border-color: #8abac4;
+  background: #f1fafc;
+  color: #293c39;
+  box-shadow: 0 12px 30px rgba(38, 64, 68, .14);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  --context-menu-hover-bg: #dcebed;
+  --context-menu-hover-text: #244d52;
+  --context-menu-hover-border: #77b1bd;
+}
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu) button,
+:is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button { color: #31565a; }
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu) button:hover:not(:disabled),
+:is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button:hover:not(:disabled) { background: #dcebed; color: #244d52; }
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu) button:disabled,
+:is(.thread-context-menu, .terminal-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button:disabled { color: #526b70; opacity: 1; }
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .workspace-file-context-menu) button.thread-context-menu__danger,
+:is(.thread-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button.thread-context-menu__danger { border-color: #e7b9bc; color: #9e383f; }
+.remote-shell--theme-chinese-retro :is(.thread-context-menu, .workspace-file-context-menu) button.thread-context-menu__danger:hover:not(:disabled),
+:is(.thread-context-menu, .workspace-file-context-menu).remote-shell--theme-chinese-retro button.thread-context-menu__danger:hover:not(:disabled) { background: #fae7e8; color: #7c252d; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs { border-color: #92c0c9; background: #f0f9fb; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button { color: #6b776e; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button:hover { background: #dde4e5; color: #244e53; }
 .remote-shell--theme-chinese-retro .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: #72acb8; background: #dce5d8; color: #1a535a; }
-.workspace-file-context-menu.remote-shell--theme-chinese-retro .workspace-file-context-menu__name { color: #6b776e; }
-.workspace-file-context-menu.remote-shell--theme-chinese-retro button { color: #31565a; }
-.workspace-file-context-menu.remote-shell--theme-chinese-retro button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
-.workspace-file-context-menu.remote-shell--theme-chinese-retro button:disabled { color: #788476; opacity: .72; }
+.remote-shell--theme-chinese-retro .workspace-file-context-menu__name,
+.workspace-file-context-menu.remote-shell--theme-chinese-retro .workspace-file-context-menu__name,
+.remote-shell--theme-chinese-retro .workspace-selection-context-menu__note::placeholder,
+.workspace-selection-context-menu.remote-shell--theme-chinese-retro .workspace-selection-context-menu__note::placeholder { color: #526b70; }
+.remote-shell--theme-chinese-retro .workspace-selection-context-menu__note,
+.workspace-selection-context-menu.remote-shell--theme-chinese-retro .workspace-selection-context-menu__note { border-color: #8abac4; background: #f5fdff; color: #293c39; }
 
 /* Reuse the landscape frame on the same individual panes and cards that receive
    visible borders in the pixel theme; keep the application viewport unframed. */
