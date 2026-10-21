@@ -895,17 +895,24 @@ class MainActivity : Activity() {
     private var terminalPositionListener: View.OnLayoutChangeListener? = null
     private var terminalSocket: WebSocket? = null
     private var terminalOutput: TextView? = null
+    private var terminalOutputScroll: ScrollView? = null
     private var terminalStatusView: TextView? = null
     private var terminalInputSink: TerminalInputSink? = null
+    private var terminalResizeRunnable: Runnable? = null
+    private var terminalRenderRunnable: Runnable? = null
+    private var terminalInputFocusPending = false
+    @Volatile private var terminalColumns = 88
+    @Volatile private var terminalRows = 26
     private var pendingTerminalDirectory: String? = null
     private var terminalShellName: String? = null
     private var terminalScreen = TerminalScreenBuffer(88, 26)
     @Volatile private var terminalReady = false
     private var terminalImeVisible = false
+    private var terminalLockedImeInset = 0
+    private var terminalLockedContentBottom = 0
     private var terminalImeHiddenUntil = 0L
     private var terminalScrollInteractionRevision = 0L
     private var terminalScrollGestureActive = false
-    private var terminalOutputFollowBottom = true
     private var attachRequestActive = false
     private var attachmentPickerScope: String? = null
     private var restoreImeAfterAttachment = false
@@ -1200,11 +1207,14 @@ class MainActivity : Activity() {
             webPreviewPopup?.isShowing == true -> closeWebPreview()
             terminalOverlay != null && (terminalImeVisible || System.currentTimeMillis() < terminalImeHiddenUntil) -> {
                 terminalImeHiddenUntil = 0L
+                terminalLockedImeInset = 0
+                terminalLockedContentBottom = 0
                 val input = terminalInputSink
                 if (input != null) {
                     (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
                         ?.hideSoftInputFromWindow(input.windowToken, 0)
                 }
+                root.requestApplyInsets()
             }
             terminalOverlay != null -> closeTerminal()
             workspaceVisible -> handleWorkspaceBack()
@@ -1513,11 +1523,18 @@ class MainActivity : Activity() {
                 systemInsetTop = systemBars.top
                 systemInsetRight = systemBars.right
                 systemInsetBottom = systemBars.bottom
-                chatContentBottomInset = bottom
+                if (terminalOverlay != null && terminalInputSink?.hasFocus() == true && keyboardVisible) {
+                    terminalLockedImeInset = max(terminalLockedImeInset, bottom)
+                } else if (terminalOverlay != null && !keyboardVisible && terminalInputSink?.hasActiveComposition != true) {
+                    terminalLockedImeInset = 0
+                    terminalLockedContentBottom = 0
+                }
+                val effectiveBottom = max(bottom, terminalLockedImeInset)
+                chatContentBottomInset = effectiveBottom
                 if (view.paddingLeft != 0 || view.paddingTop != 0 ||
                     view.paddingRight != 0 || view.paddingBottom != 0
                 ) view.setPadding(0, 0, 0, 0)
-                val contentBottom = bottom + if (keyboardVisible && queueEditItem != null) dp(8) else 0
+                val contentBottom = effectiveBottom + if (keyboardVisible && queueEditItem != null) dp(8) else 0
                 if (content.paddingLeft != 0 || content.paddingTop != 0 ||
                     content.paddingRight != 0 || content.paddingBottom != contentBottom
                 ) {
@@ -1567,6 +1584,9 @@ class MainActivity : Activity() {
                     imeAnimationDepth = (imeAnimationDepth - 1).coerceAtLeast(0)
                     if (imeAnimationDepth == 0) {
                         view.rootWindowInsets?.let(update)
+                        if (terminalOverlay != null) {
+                            terminalOutputScroll?.post { updateTerminalDimensions(forceSend = true) }
+                        }
                         if (imeInsetVisible && imeFollowMessageBottom) scheduleImeMessageBottomFollow()
                     }
                 }
@@ -9394,7 +9414,14 @@ class MainActivity : Activity() {
         if (terminalOverlay != null) return
         terminalShellName = null
         preferencePopup?.dismiss()
-        terminalScreen = TerminalScreenBuffer(88, 26)
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+            ?.hideSoftInputFromWindow(composerInput.windowToken, 0)
+        composerInput.clearFocus()
+        composerDock.visibility = View.GONE
+        root.requestFocus()
+        terminalColumns = 88
+        terminalRows = 26
+        terminalScreen = TerminalScreenBuffer(terminalColumns, terminalRows)
         val shell = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(if (retroTheme) 0 else dp(10), 0, if (retroTheme) 0 else dp(10), dp(4))
@@ -9431,10 +9458,21 @@ class MainActivity : Activity() {
         shell.addView(terminalStatusView, widthWrap())
         terminalOutput = label("", 12, if (lightTheme) SUBTLE else Color.rgb(207, 214, 226), pixelize = false).apply {
             typeface = Typeface.MONOSPACE
-            setTextIsSelectable(true)
+            setTextIsSelectable(false)
+            setHorizontallyScrolling(true)
+            includeFontPadding = false
             setPadding(dp(9), dp(9), dp(9), dp(9))
             gravity = Gravity.TOP or Gravity.START
             setOnClickListener { focusTerminalInput() }
+            setOnLongClickListener {
+                setTextIsSelectable(true)
+                false
+            }
+            setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus && terminalImeVisible && !terminalScrollGestureActive) {
+                    terminalInputSink?.post { terminalInputSink?.requestFocus() }
+                }
+            }
         }
         val registerTerminalScrollTouch: (MotionEvent) -> Unit = { event ->
             when (event.actionMasked) {
@@ -9461,23 +9499,12 @@ class MainActivity : Activity() {
                 false
             }
         }
-        outputScroll.setOnScrollChangeListener { view, _, scrollY, _, _ ->
-            val scroll = view as ScrollView
-            val child = scroll.getChildAt(0) ?: return@setOnScrollChangeListener
-            val distanceToBottom = (child.bottom - (scrollY + scroll.height)).coerceAtLeast(0)
-            terminalOutputFollowBottom = distanceToBottom <= dp(24)
+        outputScroll.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateTerminalDimensions() }
+        terminalOutputScroll = outputScroll
+        val terminalContent = FrameLayout(this).apply {
+            addView(outputScroll, FrameLayout.LayoutParams(MATCH, MATCH))
         }
-        outputScroll.addOnLayoutChangeListener { view, _, top, _, bottom, _, oldTop, _, oldBottom ->
-            if (bottom - top != oldBottom - oldTop && terminalOutputFollowBottom) {
-                view.post {
-                    if (!terminalOutputFollowBottom) return@post
-                    val scroll = view as? ScrollView ?: return@post
-                    val child = scroll.getChildAt(0) ?: return@post
-                    scroll.scrollTo(0, (child.height - scroll.height).coerceAtLeast(0))
-                }
-            }
-        }
-        shell.addView(outputScroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
+        shell.addView(terminalContent, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
         val arrows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("↑" to "\u001b[A", "↓" to "\u001b[B", "←" to "\u001b[D", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
             arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
@@ -9497,53 +9524,75 @@ class MainActivity : Activity() {
         }, LinearLayout.LayoutParams(WRAP, dp(32)))
         shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(32)))
         terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
-            alpha = 0f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        shell.addView(terminalInputSink, LinearLayout.LayoutParams(dp(1), dp(1)))
+        terminalContent.addView(terminalInputSink, FrameLayout.LayoutParams(MATCH, dp(36), Gravity.BOTTOM))
         terminalReady = false
         terminalImeVisible = false
+        terminalLockedImeInset = 0
+        terminalLockedContentBottom = 0
         terminalScrollInteractionRevision = 0L
         terminalScrollGestureActive = false
-        terminalOutputFollowBottom = true
+        terminalInputFocusPending = false
         terminalOverlay = shell
         root.addView(shell, FrameLayout.LayoutParams(MATCH, MATCH, Gravity.TOP))
         terminalPositionListener = View.OnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> positionTerminalOverlay() }
         terminalPositionListener?.let { listener ->
             root.addOnLayoutChangeListener(listener)
-            composerDock.addOnLayoutChangeListener(listener)
+            page.addOnLayoutChangeListener(listener)
         }
         positionTerminalOverlay()
-        shell.post { positionTerminalOverlay() }
+        shell.post {
+            positionTerminalOverlay()
+            updateTerminalDimensions()
+        }
         connectTerminal()
     }
 
     private fun focusTerminalInput() {
         val input = terminalInputSink ?: return
         if (!terminalReady) {
+            terminalInputFocusPending = true
             showToast("终端连接中，请稍等")
             return
         }
+        terminalInputFocusPending = false
+        composerInput.clearFocus()
+        terminalOutput?.setTextIsSelectable(false)
+        terminalOutput?.scrollTo(0, 0)
         if (!input.hasFocus()) input.setText("")
-        input.requestFocus()
+        if (!input.requestFocus()) {
+            input.isFocusableInTouchMode = true
+            input.requestFocus()
+        }
         input.post {
-            (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
-                ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            if (terminalInputSink === input && input.hasFocus()) {
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
+            }
         }
     }
 
     private fun positionTerminalOverlay() {
         val shell = terminalOverlay ?: return
-        if (!::root.isInitialized || !::composerDock.isInitialized || root.height <= 0) return
+        if (!::root.isInitialized || !::page.isInitialized || root.height <= 0) return
         val rootLocation = IntArray(2)
-        val composerLocation = IntArray(2)
+        val pageLocation = IntArray(2)
         root.getLocationOnScreen(rootLocation)
-        composerDock.getLocationOnScreen(composerLocation)
-        val composerTop = (composerLocation[1] - rootLocation[1]).coerceIn(0, root.height)
+        page.getLocationOnScreen(pageLocation)
+        val measuredBottom = (pageLocation[1] - rootLocation[1] + page.height - page.paddingBottom)
+            .coerceIn(0, root.height)
+        val contentBottom = if (terminalInputSink?.hasFocus() == true &&
+            (terminalImeVisible || imeInsetVisible || terminalLockedContentBottom > 0)
+        ) {
+            terminalLockedContentBottom = if (terminalLockedContentBottom == 0) measuredBottom
+                else minOf(terminalLockedContentBottom, measuredBottom)
+            terminalLockedContentBottom
+        } else measuredBottom
         (shell.layoutParams as? FrameLayout.LayoutParams)?.let { params ->
-            if (params.height != composerTop || params.width != MATCH) {
+            if (params.height != contentBottom || params.width != MATCH) {
                 params.width = MATCH
-                params.height = composerTop
+                params.height = contentBottom
                 params.gravity = Gravity.TOP
                 shell.layoutParams = params
             }
@@ -9558,16 +9607,60 @@ class MainActivity : Activity() {
         (shell.getChildAt(0) as? ViewGroup)?.setPadding(0, systemInsetTop, 0, 0)
     }
 
+    private fun updateTerminalDimensions(forceSend: Boolean = false) {
+        val scroll = terminalOutputScroll ?: return
+        val output = terminalOutput ?: return
+        if (scroll.width <= 0 || scroll.height <= 0) return
+        val usableWidth = (scroll.width - output.paddingLeft - output.paddingRight - dp(4)).coerceAtLeast(1)
+        val usableHeight = (scroll.height - output.paddingTop - output.paddingBottom - dp(6)).coerceAtLeast(1)
+        val cellWidth = output.paint.measureText("M").coerceAtLeast(1f)
+        val lineHeight = output.paint.fontSpacing.coerceAtLeast(1f)
+        val columns = (usableWidth / cellWidth).toInt().coerceIn(20, 300)
+        val rows = (usableHeight / lineHeight).toInt().coerceIn(5, 120)
+        val changed = columns != terminalColumns || rows != terminalRows
+        if (!changed && !forceSend) return
+        terminalResizeRunnable?.let(handler::removeCallbacks)
+        terminalResizeRunnable = null
+        val apply = Runnable {
+            terminalResizeRunnable = null
+            if (terminalOutputScroll !== scroll || terminalOutput !== output) return@Runnable
+            val dimensionChanged = columns != terminalColumns || rows != terminalRows
+            if (dimensionChanged) {
+                terminalColumns = columns
+                terminalRows = rows
+                terminalScreen.resize(columns, rows)
+                scheduleTerminalRender()
+            }
+            if (terminalReady && (dimensionChanged || forceSend)) sendTerminalResize()
+        }
+        if (forceSend || !terminalReady) apply.run()
+        else {
+            terminalResizeRunnable = apply
+            handler.postDelayed(apply, 350L)
+        }
+    }
+
+    private fun sendTerminalResize() {
+        terminalSocket?.send(JSONObject().put("type", "resize")
+            .put("columns", terminalColumns).put("rows", terminalRows).toString())
+    }
+
     private fun closeTerminal() {
         val shell = terminalOverlay ?: return
         terminalPositionListener?.let { listener ->
             if (::root.isInitialized) root.removeOnLayoutChangeListener(listener)
-            if (::composerDock.isInitialized) composerDock.removeOnLayoutChangeListener(listener)
+            if (::page.isInitialized) page.removeOnLayoutChangeListener(listener)
         }
         terminalPositionListener = null
+        terminalResizeRunnable?.let(handler::removeCallbacks)
+        terminalResizeRunnable = null
+        terminalRenderRunnable?.let(handler::removeCallbacks)
+        terminalRenderRunnable = null
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
             ?.hideSoftInputFromWindow(terminalInputSink?.windowToken, 0)
         if (::root.isInitialized && shell.parent === root) root.removeView(shell)
+        root.requestFocus()
+        composerDock.visibility = View.VISIBLE
         terminalReady = false
         terminalShellName = null
         pendingTerminalDirectory = null
@@ -9576,9 +9669,13 @@ class MainActivity : Activity() {
         terminalOverlay = null
         terminalInputSink = null
         terminalOutput = null
+        terminalOutputScroll = null
         terminalStatusView = null
         terminalImeVisible = false
+        terminalLockedImeInset = 0
+        terminalLockedContentBottom = 0
         terminalImeHiddenUntil = 0L
+        terminalInputFocusPending = false
     }
 
     private fun connectTerminal() {
@@ -9592,7 +9689,7 @@ class MainActivity : Activity() {
                 val cwd = activeThread?.optString("cwd")?.takeIf { it.isNotBlank() && it != "null" } ?: runtime.optString("workspace", "")
                 val sent = webSocket.send(JSONObject().put("type", "terminal.connect").put("token", token)
                     .putOpt("threadId", thread).putOpt("cwd", cwd.takeIf { it.isNotBlank() })
-                    .put("columns", 88).put("rows", 26).toString())
+                    .put("columns", terminalColumns).put("rows", terminalRows).toString())
                 if (!sent) updateTerminalStatus("终端连接信息发送失败", ERROR)
             }
 
@@ -9605,6 +9702,8 @@ class MainActivity : Activity() {
                             val shellName = event.optString("shell")
                             handler.post {
                                 terminalShellName = shellName
+                                updateTerminalDimensions(forceSend = true)
+                                if (terminalInputFocusPending) focusTerminalInput()
                                 pendingTerminalDirectory?.let { path ->
                                     val command = terminalChangeDirectoryCommand(shellName, path)
                                     if (sendTerminalInput(command)) pendingTerminalDirectory = null
@@ -9646,19 +9745,30 @@ class MainActivity : Activity() {
     }
 
     private fun appendTerminal(value: String) = handler.post {
-        val output = terminalOutput ?: return@post
-        val scroll = output.parent as? ScrollView
-        val oldScrollY = scroll?.scrollY ?: 0
-        val shouldFollowOutput = scroll != null && terminalOutputFollowBottom
-        val interactionRevision = terminalScrollInteractionRevision
-        output.text = terminalScreen.append(value)
-        scroll?.post {
-            if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
-            val child = scroll.getChildAt(0) ?: return@post
-            val maxScrollY = (child.height - scroll.height).coerceAtLeast(0)
-            val targetScrollY = if (shouldFollowOutput) maxScrollY else oldScrollY.coerceAtMost(maxScrollY)
-            scroll.scrollTo(0, targetScrollY)
+        if (terminalOutput == null) return@post
+        terminalScreen.append(value)
+        scheduleTerminalRender()
+    }
+
+    private fun scheduleTerminalRender() {
+        if (terminalRenderRunnable != null) return
+        val pending = Runnable {
+            terminalRenderRunnable = null
+            val output = terminalOutput ?: return@Runnable
+            val scroll = output.parent as? ScrollView
+            val oldScrollY = scroll?.scrollY ?: 0
+            val interactionRevision = terminalScrollInteractionRevision
+            output.text = terminalScreen.render()
+            if (terminalInputSink?.hasFocus() == true) output.scrollTo(0, 0)
+            scroll?.post {
+                if (terminalScrollGestureActive || interactionRevision != terminalScrollInteractionRevision) return@post
+                val child = scroll.getChildAt(0) ?: return@post
+                val maxScrollY = (child.height - scroll.height).coerceAtLeast(0)
+                scroll.scrollTo(0, oldScrollY.coerceAtMost(maxScrollY))
+            }
         }
+        terminalRenderRunnable = pending
+        handler.postDelayed(pending, 32L)
     }
 
     private fun updateTerminalStatus(value: String, color: Int) = handler.post {
@@ -11242,6 +11352,9 @@ private class TerminalInputSink(
     context: Context,
     private val sendInput: (String) -> Boolean,
 ) : EditText(context) {
+    var hasActiveComposition = false
+        private set
+
     init {
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
         imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or EditorInfo.IME_ACTION_NONE
@@ -11249,6 +11362,7 @@ private class TerminalInputSink(
         isFocusable = true
         isFocusableInTouchMode = true
         showSoftInputOnFocus = true
+        isCursorVisible = false
         setTextColor(Color.TRANSPARENT)
         setPadding(0, 0, 0, 0)
         background = ColorDrawable(Color.TRANSPARENT)
@@ -11264,6 +11378,7 @@ private class TerminalInputSink(
             override fun setComposingText(text: CharSequence?, newCursorPosition: Int): Boolean {
                 val handled = super.setComposingText(text, newCursorPosition)
                 composingText = text?.toString().orEmpty()
+                hasActiveComposition = composingText.isNotEmpty()
                 return handled
             }
 
@@ -11276,6 +11391,7 @@ private class TerminalInputSink(
                     super.deleteSurroundingText(committed.length, 0)
                 }
                 composingText = ""
+                hasActiveComposition = false
                 return handled
             }
 
@@ -11284,6 +11400,7 @@ private class TerminalInputSink(
                 val handled = super.finishComposingText()
                 if (pendingLength > 0) super.deleteSurroundingText(pendingLength, 0)
                 composingText = ""
+                hasActiveComposition = false
                 return handled
             }
 
@@ -11362,21 +11479,44 @@ private fun terminalSequenceForKey(event: KeyEvent): String? {
     }
 }
 
-private class TerminalScreenBuffer(private val columns: Int, private val rows: Int) {
-    private val screen = MutableList(rows) { CharArray(columns) { ' ' } }
+private class TerminalScreenBuffer(private var columns: Int, private var rows: Int) {
+    private var screen = MutableList(rows) { CharArray(columns) { ' ' } }
     private var cursorRow = 0
     private var cursorColumn = 0
     private var savedRow = 0
     private var savedColumn = 0
+    private var scrollTop = 0
+    private var scrollBottom = rows - 1
     private var state = 0
+    private var receivedOutput = false
     private val sequence = StringBuilder()
 
     fun append(value: String): String {
+        if (value.isNotEmpty()) receivedOutput = true
         value.forEach(::consume)
-        val rendered = screen.map { String(it).trimEnd() }
-        val first = rendered.indexOfFirst { it.isNotBlank() }
-        val last = rendered.indexOfLast { it.isNotBlank() }
-        return if (first < 0 || last < first) "等待终端输出…" else rendered.subList(first, last + 1).joinToString("\n")
+        return render()
+    }
+
+    fun render(): String =
+        if (!receivedOutput && screen.all { line -> line.all { it == ' ' } }) "等待终端输出…"
+        else screen.joinToString("\n") { String(it).trimEnd() }
+
+    fun resize(newColumns: Int, newRows: Int) {
+        if (newColumns == columns && newRows == rows) return
+        val next = MutableList(newRows) { CharArray(newColumns) { ' ' } }
+        val topRows = minOf(rows - 1, newRows - 1)
+        val copyColumns = minOf(columns, newColumns)
+        for (row in 0 until topRows) screen[row].copyInto(next[row], endIndex = copyColumns)
+        screen[rows - 1].copyInto(next[newRows - 1], endIndex = copyColumns)
+        cursorRow = if (cursorRow == rows - 1) newRows - 1 else cursorRow.coerceAtMost(newRows - 1)
+        savedRow = if (savedRow == rows - 1) newRows - 1 else savedRow.coerceAtMost(newRows - 1)
+        cursorColumn = cursorColumn.coerceAtMost(newColumns - 1)
+        savedColumn = savedColumn.coerceAtMost(newColumns - 1)
+        columns = newColumns
+        rows = newRows
+        screen = next
+        scrollTop = 0
+        scrollBottom = rows - 1
     }
 
     private fun consume(character: Char) {
@@ -11395,7 +11535,10 @@ private class TerminalScreenBuffer(private val columns: Int, private val rows: I
                 ']' -> { sequence.setLength(0); state = 3 }
                 '7' -> { savedRow = cursorRow; savedColumn = cursorColumn; state = 0 }
                 '8' -> { cursorRow = savedRow; cursorColumn = savedColumn; state = 0 }
-                'c' -> { clear(); state = 0 }
+                'c' -> { clear(resetCursor = true); state = 0 }
+                'D' -> { newLine(resetColumn = false); state = 0 }
+                'E' -> { newLine(); state = 0 }
+                'M' -> { reverseIndex(); state = 0 }
                 '(', ')', '#', '%' -> state = 4
                 else -> state = 0
             }
@@ -11422,13 +11565,30 @@ private class TerminalScreenBuffer(private val columns: Int, private val rows: I
         cursorColumn += 1
     }
 
-    private fun newLine() {
-        cursorRow += 1
-        cursorColumn = 0
-        if (cursorRow < rows) return
-        screen.removeAt(0)
-        screen.add(CharArray(columns) { ' ' })
-        cursorRow = rows - 1
+    private fun newLine(resetColumn: Boolean = true) {
+        if (cursorRow == scrollBottom) scrollUp(1)
+        else if (cursorRow < rows - 1) cursorRow++
+        else scrollUp(1, 0, rows - 1)
+        if (resetColumn) cursorColumn = 0
+    }
+
+    private fun reverseIndex() {
+        if (cursorRow == scrollTop) scrollDown(1)
+        else cursorRow = (cursorRow - 1).coerceAtLeast(0)
+    }
+
+    private fun scrollUp(count: Int, top: Int = scrollTop, bottom: Int = scrollBottom) {
+        repeat(count.coerceAtMost(bottom - top + 1)) {
+            screen.removeAt(top)
+            screen.add(bottom, CharArray(columns) { ' ' })
+        }
+    }
+
+    private fun scrollDown(count: Int) {
+        repeat(count.coerceAtMost(scrollBottom - scrollTop + 1)) {
+            screen.removeAt(scrollBottom)
+            screen.add(scrollTop, CharArray(columns) { ' ' })
+        }
     }
 
     private fun applyCsi(command: Char, raw: String) {
@@ -11453,8 +11613,18 @@ private class TerminalScreenBuffer(private val columns: Int, private val rows: I
             'P' -> deleteCharacters(value(0))
             '@' -> insertCharacters(value(0))
             'X' -> repeat(value(0).coerceAtMost(columns - cursorColumn)) { screen[cursorRow][cursorColumn + it] = ' ' }
-            'S' -> repeat(value(0).coerceAtMost(rows)) { screen.removeAt(0); screen.add(CharArray(columns) { ' ' }) }
-            'T' -> repeat(value(0).coerceAtMost(rows)) { screen.removeAt(rows - 1); screen.add(0, CharArray(columns) { ' ' }) }
+            'S' -> scrollUp(value(0))
+            'T' -> scrollDown(value(0))
+            'r' -> {
+                val top = value(0)
+                val bottom = value(1, rows)
+                if (top < bottom && bottom <= rows) {
+                    scrollTop = top - 1
+                    scrollBottom = bottom - 1
+                    cursorRow = 0
+                    cursorColumn = 0
+                }
+            }
             's' -> { savedRow = cursorRow; savedColumn = cursorColumn }
             'u' -> { cursorRow = savedRow; cursorColumn = savedColumn }
         }
@@ -11466,7 +11636,7 @@ private class TerminalScreenBuffer(private val columns: Int, private val rows: I
                 for (row in 0 until cursorRow) screen[row].fill(' ')
                 for (column in 0..cursorColumn.coerceAtMost(columns - 1)) screen[cursorRow][column] = ' '
             }
-            2, 3 -> clear()
+            2, 3 -> screen.forEach { it.fill(' ') }
             else -> {
                 for (column in cursorColumn until columns) screen[cursorRow][column] = ' '
                 for (row in cursorRow + 1 until rows) screen[row].fill(' ')
@@ -11496,10 +11666,14 @@ private class TerminalScreenBuffer(private val columns: Int, private val rows: I
         for (column in cursorColumn until cursorColumn + amount) line[column] = ' '
     }
 
-    private fun clear() {
+    private fun clear(resetCursor: Boolean = false) {
         screen.forEach { it.fill(' ') }
-        cursorRow = 0
-        cursorColumn = 0
+        if (resetCursor) {
+            cursorRow = 0
+            cursorColumn = 0
+            scrollTop = 0
+            scrollBottom = rows - 1
+        }
     }
 }
 
