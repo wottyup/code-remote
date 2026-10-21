@@ -14,7 +14,7 @@
 在项目目录创建 Python 虚拟环境并安装服务端依赖：
 
 ```bash
-cd /code/codex-remote
+cd /code/code-remote
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r server/requirements.txt
@@ -28,18 +28,18 @@ pip install -r server/requirements.txt
 
 ```bash
 cd /code
-pnpm --filter codex-remote start
+pnpm --filter code-remote start
 ```
 
-构建后的网页资源支持压缩与缓存，适合手机长时间访问。仅在编辑前端、需要热更新时使用 `pnpm --filter codex-remote dev`；开发服务器会加载较大的调试资源。
+构建后的网页资源支持压缩与缓存，适合手机长时间访问。仅在编辑前端、需要热更新时使用 `pnpm --filter code-remote dev`；开发服务器会加载较大的调试资源。
 
 启动完成后，终端会显示首次授权新浏览器所需的配对码。手机浏览器打开 `http://电脑的局域网 IP:4173`。配对成功后，该浏览器会被记为受信任设备：即使本机服务重启也不用再次输入；新浏览器、无痕窗口或清除站点数据后才需要重新配对。电脑端本机也可以访问 `http://127.0.0.1:4173`。
 
 需要后台常驻时，可安装仓库中的 systemd unit：
 
 ```bash
-sudo install -m 0644 /code/codex-remote/deploy/codex-remote.service /etc/systemd/system/codex-remote.service
-sudo install -m 0644 /code/codex-remote/deploy/codex-remote-tmux.service /etc/systemd/system/codex-remote-tmux.service
+sudo install -m 0644 /code/code-remote/deploy/codex-remote.service /etc/systemd/system/codex-remote.service
+sudo install -m 0644 /code/code-remote/deploy/codex-remote-tmux.service /etc/systemd/system/codex-remote-tmux.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now codex-remote-tmux.service codex-remote.service
 ```
@@ -54,12 +54,12 @@ journalctl -u codex-remote.service -f
 
 网页服务把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
 
-Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter codex-remote start`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
+Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter code-remote start`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
 
 ```powershell
 $env:CODEX_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.cmd"
 $env:CODEX_REMOTE_WORKSPACE = "C:\path\to\your\project"
-pnpm --filter codex-remote start
+pnpm --filter code-remote start
 ```
 
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `codex-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
@@ -78,10 +78,10 @@ Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-
 
 ## 工作目录和历史会话
 
-新建对话默认使用应用仓库的上一级目录作为工作目录（例如应用位于 `/code/codex-remote` 时，默认工作目录为 `/code`），因此新拉取的项目会与 `codex-remote` 并列，而不是放进应用仓库内部。可以通过环境变量或启动参数更改：
+新建对话默认使用应用仓库的上一级目录作为工作目录（例如应用位于 `/code/code-remote` 时，默认工作目录为 `/code`），因此新拉取的项目会与 `code-remote` 并列，而不是放进应用仓库内部。可以通过环境变量或启动参数更改：
 
 ```bash
-CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:dev
+CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter code-remote engine:dev
 ```
 
 历史列表读取本机 Codex 最近 100 条未归档会话，包含其他工作目录创建的会话；打开会话后，标题下方会显示该会话的工作目录。后端监听 Codex 会话文件变化，并通过 WebSocket 通知侧栏更新，无需刷新网页。
@@ -98,7 +98,7 @@ CODEX_REMOTE_WORKSPACE=/path/to/your/project pnpm --filter codex-remote engine:d
 
 ```bash
 cd /code
-pnpm --filter codex-remote build
+pnpm --filter code-remote build
 ```
 
-构建产物位于 `codex-remote/dist`。`pnpm start` 自动构建并通过 Vite preview 提供网页，由 `scripts/dev.mjs --production` 同时启动 Python 引擎；使用 systemd 时由 `codex-remote.service` 在后台持续管理。
+构建产物位于 `code-remote/dist`。`pnpm start` 自动构建并通过 Vite preview 提供网页，由 `scripts/dev.mjs --production` 同时启动 Python 引擎；使用 systemd 时由 `codex-remote.service` 在后台持续管理。

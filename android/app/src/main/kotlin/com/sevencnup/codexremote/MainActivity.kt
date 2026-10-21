@@ -7820,7 +7820,7 @@ class MainActivity : Activity() {
         about.addView(label("在手机上连接本机的代码助手，查看对话、文件和终端。", 11, MUTED).apply {
             setPadding(0, dp(4), 0, dp(5))
         }, widthWrap())
-        val projectUrl = "https://github.com/sevencnup/wotty-codex-remote"
+        val projectUrl = "https://github.com/sevencnup/code-remote"
         about.addView(settingsActionRow("GitHub 项目地址", projectUrl) {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(projectUrl)))
         }, widthWrap())
@@ -7850,7 +7850,7 @@ class MainActivity : Activity() {
             try {
                 val client = socketClient.newBuilder().callTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build()
                 val request = Request.Builder()
-                    .url("https://api.github.com/repos/sevencnup/wotty-codex-remote/releases?per_page=30")
+                    .url("https://api.github.com/repos/sevencnup/code-remote/releases?per_page=30")
                     .header("Accept", "application/vnd.github+json")
                     .header("User-Agent", "CAR-Android/${BuildConfig.VERSION_NAME}")
                     .build()
