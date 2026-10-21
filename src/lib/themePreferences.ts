@@ -96,6 +96,14 @@ function rgbaFromHex(hex: string, alpha: number) {
   return `rgba(${red}, ${green}, ${blue}, ${Math.max(0, Math.min(1, alpha))})`
 }
 
+function isLightColor(hex: string) {
+  const value = normalizeHexColor(hex, '#f1f5f9').slice(1)
+  const red = Number.parseInt(value.slice(0, 2), 16)
+  const green = Number.parseInt(value.slice(2, 4), 16)
+  const blue = Number.parseInt(value.slice(4, 6), 16)
+  return red * 0.299 + green * 0.587 + blue * 0.114 >= 128
+}
+
 export function saveThemePreferences(preferences: ThemePreferences) {
   try {
     window.localStorage.setItem(themePreferencesStorageKey, JSON.stringify(preferences))
@@ -106,6 +114,7 @@ export function saveThemePreferences(preferences: ThemePreferences) {
 
 export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
   const customBackgroundOpacity = (100 - preferences.customBackgroundTransparency) / 100
+  const darkCustomTheme = isLightColor(preferences.customTextColor)
   return {
     '--custom-theme-background': preferences.customBackgroundColor,
     '--custom-theme-background-opacity': customBackgroundOpacity,
@@ -115,6 +124,9 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
       ? 'linear-gradient(rgba(0, 0, 0, .2), rgba(0, 0, 0, .2)), url("' + preferences.customBackgroundImage + '")'
       : 'none',
     '--custom-theme-text-color': preferences.customTextColor,
+    '--custom-theme-send-circle': darkCustomTheme ? '#fff' : '#000',
+    '--custom-theme-send-arrow': darkCustomTheme ? '#000' : '#fff',
+    '--custom-theme-send-disabled-circle': darkCustomTheme ? '#6f737a' : '#8b8e95',
     '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
     '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
     '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
