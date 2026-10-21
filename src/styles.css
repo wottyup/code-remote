@@ -3611,6 +3611,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .terminal-dialog__navigation-button[aria-pressed='true'] { background: #1a5961; color: #fff0cf; }
 .remote-shell--theme-chinese-retro :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-chinese-retro { --context-menu-hover-bg: #e3e8d8; --context-menu-hover-text: #244d52; --context-menu-hover-border: #bda363; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs { border-color: #c9b782; background: #fbf4e2; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button { color: #6b776e; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button:hover { background: #e5e5d3; color: #244e53; }
+.remote-shell--theme-chinese-retro .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: #b89d5e; background: #dce5d8; color: #1a535a; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro .workspace-file-context-menu__name { color: #6b776e; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro button { color: #31565a; }
 .workspace-file-context-menu.remote-shell--theme-chinese-retro button:hover:not(:disabled) { background: #e3e8d8; color: #244d52; }
