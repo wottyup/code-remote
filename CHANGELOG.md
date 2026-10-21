@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.66.0-dev.1] - 支持从文件树在终端运行脚本
+
 ## [0.65.1-dev.1] - 统一 Code Remote 产品名称
 
 ## [0.65.0-dev.1] - 在网页侧栏显示 Codex 与 Claude Code 状态

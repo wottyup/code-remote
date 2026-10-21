@@ -5,7 +5,7 @@ import { useEffect, useRef, useState, type FormEvent, type PointerEvent as React
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
 import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
-import { terminalChangeDirectoryCommand } from '../lib/terminalPathCommand'
+import { terminalChangeDirectoryCommand, terminalRunScriptCommand } from '../lib/terminalPathCommand'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
@@ -25,6 +25,8 @@ interface TerminalDialogProps {
   cwd?: string
   directoryRequest: { id: number; path: string } | null
   onDirectoryRequestConsumed: (id: number) => void
+  runRequest: { id: number; path: string } | null
+  onRunRequestConsumed: (id: number) => void
   onClose: () => void
   onInsertText: (value: string) => void
 }
@@ -112,7 +114,7 @@ function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clie
   return terminal.hasSelection()
 }
 
-export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
+export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, runRequest, onRunRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [shellName, setShellName] = useState('')
@@ -122,8 +124,10 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
   const [manualPasteOpen, setManualPasteOpen] = useState(false)
   const [manualPasteText, setManualPasteText] = useState('')
   const [desktopPasteHintVisible, setDesktopPasteHintVisible] = useState(false)
+  const [runError, setRunError] = useState('')
   const [connectionRound, setConnectionRound] = useState(0)
   const handledDirectoryRequestId = useRef<number | null>(null)
+  const handledRunRequestId = useRef<number | null>(null)
   const activeModifierRef = useRef<TerminalModifier | null>(null)
   const desktopPasteHintTimer = useRef<number | undefined>(undefined)
   const terminalActions = useRef<TerminalActions>({
@@ -684,6 +688,20 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
     onDirectoryRequestConsumed(directoryRequest.id)
   }, [directoryRequest, onDirectoryRequestConsumed, shellName, status])
 
+  useEffect(() => {
+    if (status !== 'connected' || !shellName || !runRequest || handledRunRequestId.current === runRequest.id) return
+    handledRunRequestId.current = runRequest.id
+    const command = terminalRunScriptCommand(shellName, runRequest.path)
+    if (command) {
+      setRunError('')
+      sendTerminalInput.current(`${command}\r`)
+      terminalActions.current.focus()
+    } else {
+      setRunError('当前终端无法安全运行这个脚本路径。')
+    }
+    onRunRequestConsumed(runRequest.id)
+  }, [onRunRequestConsumed, runRequest, shellName, status])
+
   const statusLabel = {
     connecting: '正在启动',
     connected: '已连接',
@@ -815,6 +833,7 @@ export function TerminalDialog({ token, threadId, cwd, directoryRequest, onDirec
       )}
     >
       <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
+      {runError ? <div className="terminal-dialog__paste-hint" role="alert">{runError}</div> : null}
       {desktopPasteHintVisible ? (
         <div className="terminal-dialog__paste-hint" role="status">
           终端已聚焦，请按 Ctrl/⌘+V 粘贴

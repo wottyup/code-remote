@@ -32,6 +32,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Play,
   Plus,
   Quote,
   RefreshCw,
@@ -48,6 +49,7 @@ import {
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
+import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
@@ -2163,6 +2165,7 @@ interface WorkspaceExplorerProps {
   draft: string
   onInsertPath: (path: string, focus?: boolean) => void
   onAddToTerminal: (path: string) => void
+  onRunInTerminal: (path: string) => void
   onAddDocument: (document: CodexDocumentAttachment, focus?: boolean) => void
   mobileOpen: boolean
   mobileDragging: boolean
@@ -2214,6 +2217,7 @@ interface WorkspaceTerminalRequest {
   id: number
   paneIndex: number
   path: string
+  action: 'directory' | 'run'
 }
 
 interface WorkspaceClipboard {
@@ -2309,7 +2313,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -3085,13 +3089,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     : []
   const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && threadId)
   const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.root && contextMenu.paths.length === 1)
+  const contextMenuCanRunInTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'file' && contextMenu.paths.length === 1 && isRunnableScriptPath(contextMenu.entry.path))
   const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
   const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
   const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
   const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
-  const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuMissingDraftPaths.length > 0
+  const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
   const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste
   return (
     <>
@@ -3254,6 +3259,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
             <span className="workspace-file-context-menu__group-label">快捷操作</span>
             {contextMenuCanBind ? <button type="button" role="menuitem" disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</button> : null}
             {contextMenuCanOpenTerminal ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</button> : null}
+            {contextMenuCanRunInTerminal ? <button type="button" role="menuitem" onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />终端运行</button> : null}
             {contextMenuMissingDraftPaths.length > 0 ? <button type="button" role="menuitem" onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</button> : null}
           </div> : null}
           {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
@@ -3402,6 +3408,10 @@ function RemoteChatPane({
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const [terminalRunRequest, setTerminalRunRequest] = useState<WorkspaceTerminalRequest | null>(null)
+  const [terminalSessionCwd, setTerminalSessionCwd] = useState<string | undefined>()
+  const [terminalSessionId, setTerminalSessionId] = useState(0)
+  const [terminalSessionIsolated, setTerminalSessionIsolated] = useState(false)
   const handledDirectoryRequestId = useRef(0)
   const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
@@ -3419,10 +3429,22 @@ function RemoteChatPane({
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
     handledDirectoryRequestId.current = directoryRequest.id
     onActivate()
-    setTerminalDirectoryRequest(directoryRequest)
+    if (directoryRequest.action === 'run') {
+      setTerminalRunRequest(directoryRequest)
+      setTerminalDirectoryRequest(null)
+      setTerminalSessionCwd(workspaceParentPath(directoryRequest.path))
+      setTerminalSessionIsolated(true)
+      setTerminalSessionId((value) => value + 1)
+    } else {
+      setTerminalDirectoryRequest(directoryRequest)
+      if (!terminalOpen) {
+        setTerminalSessionCwd(undefined)
+        setTerminalSessionIsolated(false)
+      }
+    }
     setTerminalOpen(true)
     onDirectoryRequestHandled(directoryRequest.id)
-  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled])
+  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
 
   const activeThreadId = remote.activeThread?.id
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
@@ -3672,6 +3694,9 @@ function RemoteChatPane({
                 setTerminalOpen(false)
               } else {
                 onActivate()
+                setTerminalSessionCwd(undefined)
+                setTerminalSessionIsolated(false)
+                setTerminalRunRequest(null)
                 setTerminalOpen(true)
               }
             }}
@@ -3788,11 +3813,14 @@ function RemoteChatPane({
             </ChatOverlayPanel>
           )}>
             <TerminalDialog
+              key={terminalSessionId}
               token={token}
-              threadId={remote.activeThread?.id}
-              cwd={remote.activeThread?.cwd || remote.runtime.workspace || undefined}
+              threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
+              cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}
               onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
+              runRequest={terminalRunRequest}
+              onRunRequestConsumed={(id) => setTerminalRunRequest((current) => current?.id === id ? null : current)}
               onClose={() => setTerminalOpen(false)}
               onInsertText={(value) => {
                 if (value.length >= longPasteThreshold) {
@@ -5600,7 +5628,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onInsertPath={insertWorkspacePath}
             onAddToTerminal={(path) => {
               workspaceTerminalRequestSequence.current += 1
-              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path })
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path, action: 'directory' })
+              if (isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)) setWorkspaceOpen(false)
+            }}
+            onRunInTerminal={(path) => {
+              workspaceTerminalRequestSequence.current += 1
+              setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path, action: 'run' })
               if (isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)) setWorkspaceOpen(false)
             }}
             onAddDocument={addWorkspaceDocument}
