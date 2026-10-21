@@ -1,1 +1,1 @@
-# Codex Remote currently has no custom ProGuard rules.
+# Code Remote currently has no custom ProGuard rules.

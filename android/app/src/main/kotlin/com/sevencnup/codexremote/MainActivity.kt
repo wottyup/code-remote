@@ -1339,8 +1339,8 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(12))
         }
         card.addView(mark, LinearLayout.LayoutParams(dp(48), dp(48)).apply { bottomMargin = dp(18) })
-        card.addView(label("CODEX REMOTE · ANDROID", 10, MUTED, true), widthWrap())
-        card.addView(label("连接本机 Codex", 25, TEXT, true).apply { setPadding(0, dp(8), 0, dp(4)) }, widthWrap())
+        card.addView(label("CODE REMOTE · ANDROID", 10, MUTED, true), widthWrap())
+        card.addView(label("连接 Code Remote", 25, TEXT, true).apply { setPadding(0, dp(8), 0, dp(4)) }, widthWrap())
         card.addView(label("输入电脑网页地址和终端显示的匹配码。配对信息保存在本机，之后会自动重连。", 13, MUTED).apply {
             setLineSpacing(dp(2).toFloat(), 1.2f)
         }, widthWrap())
@@ -1364,7 +1364,7 @@ class MainActivity : Activity() {
             setLineSpacing(dp(2).toFloat(), 1.2f)
         }
         card.addView(status, widthWrap())
-        card.addView(label("手机需要能访问电脑上的 Codex Remote 服务。地址和配对码只用于本机连接。", 11, MUTED).apply {
+        card.addView(label("手机需要能访问电脑上的 Code Remote 服务。地址和配对码只用于本机连接。", 11, MUTED).apply {
             setPadding(0, dp(24), 0, 0)
         }, widthWrap())
         connect.setOnClickListener {
@@ -1782,7 +1782,7 @@ class MainActivity : Activity() {
         headerView.addView(menu, LinearLayout.LayoutParams(actionSize, actionSize))
         val titleColumn = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), 0, dp(4), 0) }
         val titleBaseSize = if (retroTheme) 18 else 15
-        titleView = label("Codex Remote", titleBaseSize, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
+        titleView = label("Code Remote", titleBaseSize, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }
         titleColumn.addView(titleView, widthWrap())
         headerView.addView(titleColumn, LinearLayout.LayoutParams(0, WRAP, 1f))
         val targetMode = modeSwitchTarget()
@@ -2192,17 +2192,17 @@ class MainActivity : Activity() {
             setPadding(dp(2), 0, 0, dp(2))
         }
         sidebarBrandMark = ImageView(this).apply {
-            setImageResource(R.drawable.codex_remote)
+            setImageResource(R.drawable.code_remote)
             imageTintList = null
             background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
                 else rounded(PANEL_INSET, dp(10))
             val markPadding = if (pixelTheme) dp(6) else dp(8)
             setPadding(markPadding, markPadding, markPadding, markPadding)
-            contentDescription = "Codex Remote"
+            contentDescription = "Code Remote"
         }
         brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 36), dp(if (retroTheme) 40 else 36)).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
-        brandCopy.addView(label("Codex Remote", if (retroTheme) 18 else 15, TEXT, true), widthWrap())
+        brandCopy.addView(label("Code Remote", if (retroTheme) 18 else 15, TEXT, true), widthWrap())
         brandCopy.addView(label("对话工作台", if (retroTheme) 12 else 10, MUTED), widthWrap())
         brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
         drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
@@ -2445,7 +2445,7 @@ class MainActivity : Activity() {
     private fun renderHeader() {
         if (!::titleView.isInitialized) return
         val title = activeThread?.let { threadTitle(it) }
-            ?: if (activeThreadId == null) "新对话" else "Codex Remote"
+            ?: if (activeThreadId == null) "新对话" else "Code Remote"
         titleView.text = title
         titleView.setTextColor(if (retroTheme) ANDROID1_TITLE_TEXT else TEXT)
         if (::modeButton.isInitialized) {
@@ -2468,9 +2468,9 @@ class MainActivity : Activity() {
 
     private fun updateSidebarBrand() {
         if (!::sidebarBrandMark.isInitialized) return
-        sidebarBrandMark.setImageResource(R.drawable.codex_remote)
+        sidebarBrandMark.setImageResource(R.drawable.code_remote)
         sidebarBrandMark.imageTintList = null
-        sidebarBrandMark.contentDescription = "Codex Remote"
+        sidebarBrandMark.contentDescription = "Code Remote"
     }
 
     private fun threadTitleKey(threadId: String) = "$activeConnectionId:$threadId"
@@ -7852,7 +7852,7 @@ class MainActivity : Activity() {
                 val request = Request.Builder()
                     .url("https://api.github.com/repos/sevencnup/code-remote/releases?per_page=30")
                     .header("Accept", "application/vnd.github+json")
-                    .header("User-Agent", "CAR-Android/${BuildConfig.VERSION_NAME}")
+                    .header("User-Agent", "CodeRemote-Android/${BuildConfig.VERSION_NAME}")
                     .build()
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
@@ -10303,14 +10303,14 @@ class MainActivity : Activity() {
             return
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Codex Remote", NotificationManager.IMPORTANCE_DEFAULT))
+            manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Code Remote", NotificationManager.IMPORTANCE_DEFAULT))
             if (manager.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE) {
                 if (test) handler.post { showToast("手机系统已关闭此通知类别") }
                 return
             }
         }
         val thread = threadId?.let(::findThread)
-        val profileName = connectionProfiles.firstOrNull { it.id == activeConnectionId }?.name ?: "CAR"
+        val profileName = connectionProfiles.firstOrNull { it.id == activeConnectionId }?.name ?: "Code Remote"
         val threadName = thread?.optString("name")?.takeIf { !it.isNullOrBlank() && it != "null" } ?: "回复完成"
         val title = if (test) "$profileName · 测试通知" else "$profileName · $threadName"
         val intent = Intent(this, MainActivity::class.java).apply {

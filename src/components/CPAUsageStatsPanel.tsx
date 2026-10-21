@@ -234,7 +234,7 @@ export function CPAUsageStatsPanel({
                 </div>
               </>
             ) : null}
-            <p className="theme-settings-hint cpa-usage-disclaimer">Token 数量直接显示 CPAMP 收到的用量统计，不在 Codex Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。</p>
+            <p className="theme-settings-hint cpa-usage-disclaimer">Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。</p>
           </>
         )}
       </div>

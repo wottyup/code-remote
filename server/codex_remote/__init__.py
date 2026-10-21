@@ -1,1 +1,1 @@
-"""Local Codex Remote web application backend."""
+"""Local Code Remote web application backend."""

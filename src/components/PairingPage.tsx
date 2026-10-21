@@ -58,9 +58,9 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
     <main className="pair-page">
       <section className="pair-card">
         <div className="pair-card__mark">C</div>
-        <p className="pair-eyebrow">LOCAL CODEX SESSION</p>
-        <h1>连接你的本机 Codex</h1>
-        <p className="pair-description">在运行 Codex Remote 的电脑终端里找到配对码，然后在这里输入。</p>
+        <p className="pair-eyebrow">CODE REMOTE</p>
+        <h1>连接你的 Code Remote</h1>
+        <p className="pair-description">在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。</p>
         <form onSubmit={(event) => void submit(event)}>
           <label htmlFor="pair-code">8 位配对码</label>
           <div className="pair-input-wrap"><KeyRound size={17} /><input
@@ -94,7 +94,7 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
               : cooldownRemaining > 0 ? `请等待 ${cooldownRemaining} 秒` : <>连接本机 <ArrowRight size={16} /></>}
           </button>
         </form>
-        <div className="pair-security"><ShieldCheck size={15} /><span>配对后，此浏览器即可访问本机 Codex 会话。</span></div>
+        <div className="pair-security"><ShieldCheck size={15} /><span>配对后，此浏览器即可访问电脑上的聊天会话。</span></div>
       </section>
     </main>
   )

@@ -27,9 +27,9 @@ if ($null -eq $pnpmCommand) {
 
 Set-Location -LiteralPath $projectRoot
 $utf8 = New-Object System.Text.UTF8Encoding($false)
-[IO.File]::AppendAllText($logPath, "`r`n[$(Get-Date -Format o)] Starting Codex Remote background service.`r`n", $utf8)
+[IO.File]::AppendAllText($logPath, "`r`n[$(Get-Date -Format o)] Starting Code Remote background service.`r`n", $utf8)
 $commandLine = "`"$pnpmPath`" start >> `"$logPath`" 2>&1"
 & $env:COMSPEC /d /s /c $commandLine
 $serviceExitCode = $LASTEXITCODE
-[IO.File]::AppendAllText($logPath, "[$(Get-Date -Format o)] Codex Remote exited with code $serviceExitCode.`r`n", $utf8)
+[IO.File]::AppendAllText($logPath, "[$(Get-Date -Format o)] Code Remote exited with code $serviceExitCode.`r`n", $utf8)
 exit $serviceExitCode

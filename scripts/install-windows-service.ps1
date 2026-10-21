@@ -8,6 +8,7 @@ if ($env:OS -ne 'Windows_NT') {
     throw 'This installer only supports Windows.'
 }
 
+# Keep the registered task name so existing installations are updated in place.
 $taskName = 'Wotty Codex Remote'
 $runnerPath = Join-Path $PSScriptRoot 'run-windows-service.ps1'
 $projectRoot = Split-Path -Parent $PSScriptRoot
@@ -36,7 +37,7 @@ Register-ScheduledTask `
     -Trigger $trigger `
     -Settings $settings `
     -Principal $principal `
-    -Description 'Keeps Wotty Codex Remote running independently of Codex Desktop.' `
+    -Description 'Keeps Code Remote running independently of Codex Desktop.' `
     -Force | Out-Null
 
 if ($Start) {

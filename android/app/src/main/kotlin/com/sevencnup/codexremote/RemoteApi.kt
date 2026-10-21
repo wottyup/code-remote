@@ -78,7 +78,7 @@ internal class RemoteApi(
         val builder = Request.Builder()
             .url(endpoint.trimEnd('/') + path)
             .header("Accept", "application/json")
-            .header("User-Agent", "CodexRemoteAndroid/${BuildConfig.VERSION_NAME}")
+            .header("User-Agent", "CodeRemoteAndroid/${BuildConfig.VERSION_NAME}")
         if (token != null) builder.header("Authorization", "Bearer $token")
         if (contentType != null) builder.header("Content-Type", contentType)
         when (method) {

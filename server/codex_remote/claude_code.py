@@ -50,7 +50,7 @@ def _now() -> str:
 
 
 class ClaudeCodeServer:
-    """Owns Claude Code CLI sessions and projects them into Codex Remote threads."""
+    """Owns Claude Code CLI sessions and projects them into Code Remote threads."""
 
     def __init__(
         self,

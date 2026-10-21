@@ -1,5 +1,5 @@
 [Unit]
-Description=Codex Remote tmux session server
+Description=Code Remote tmux session server
 After=network.target
 
 [Service]

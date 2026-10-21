@@ -630,7 +630,7 @@ export const codexRemoteClient = {
       body: JSON.stringify({ code }),
     }, { timeoutMs: 10_000 }).catch((reason) => {
       if (reason instanceof Error && (reason.name === 'TimeoutError' || reason.name === 'AbortError')) {
-        throw new Error('连接超时，请确认 Codex Remote 服务正在运行后重试。')
+        throw new Error('连接超时，请确认 Code Remote 服务正在运行后重试。')
       }
       throw reason
     })

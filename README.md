@@ -1,6 +1,6 @@
-# Codex Remote
+# Code Remote
 
-在手机浏览器里远程查看和继续本机 Codex 对话。网页提供对话记录侧栏、聊天页面、实时消息、模型选择和图片输入；Codex CLI 与 App Server 都运行在开发电脑上。
+在手机浏览器和 Android APP 中远程查看并继续本机 Codex 与 Claude Code 对话。网页提供对话记录侧栏、聊天页面、实时消息、模型选择和图片输入；代码助手运行在开发电脑上。
 
 ## 需要准备
 
@@ -54,7 +54,7 @@ journalctl -u codex-remote.service -f
 
 网页服务把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
 
-Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后直接运行同一条 `pnpm --filter code-remote start`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
+Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后运行 `pnpm --filter code-remote start`，也可双击 `启动 Code Remote.bat`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
 
 ```powershell
 $env:CODEX_REMOTE_COMMAND = "C:\Users\你的用户名\AppData\Roaming\npm\codex.cmd"

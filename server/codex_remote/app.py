@@ -1363,16 +1363,16 @@ class PairingAuth:
         except FileNotFoundError:
             return set()
         except OSError as error:
-            logger.warning("Could not read Codex Remote trusted-device state: %s", error)
+            logger.warning("Could not read Code Remote trusted-device state: %s", error)
             return set()
 
         try:
             parsed_state = json.loads(raw_state)
         except json.JSONDecodeError:
-            logger.warning("Ignoring malformed Codex Remote trusted-device state")
+            logger.warning("Ignoring malformed Code Remote trusted-device state")
             return set()
         if not isinstance(parsed_state, dict) or parsed_state.get("version") != 1:
-            logger.warning("Ignoring unsupported Codex Remote trusted-device state")
+            logger.warning("Ignoring unsupported Code Remote trusted-device state")
             return set()
         token_hashes = parsed_state.get("token_hashes")
         if not isinstance(token_hashes, list):
@@ -1471,7 +1471,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     try:
         auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as error:
-        raise RuntimeError(f"无法准备 Codex Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
+        raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
@@ -1589,7 +1589,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        print(f"\nCodex Remote 配对码：{auth.code}\n", flush=True)
+        print(f"\nCode Remote 配对码：{auth.code}\n", flush=True)
         try:
             deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
             if deleted:
@@ -1620,7 +1620,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Codex Remote", version="0.43.0-dev.2", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.43.0-dev.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

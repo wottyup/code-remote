@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.65.1-dev.1] - 统一 Code Remote 产品名称
+
 ## [0.65.0-dev.1] - 在网页侧栏显示 Codex 与 Claude Code 状态
 
 ## [0.64.0-dev.1] - 将项目目录与 GitHub、Gitea 仓库统一更名为 code-remote

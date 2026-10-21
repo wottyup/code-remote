@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:drawable="@drawable/codex_remote"
+    android:drawable="@drawable/code_remote"
     android:inset="18dp" />

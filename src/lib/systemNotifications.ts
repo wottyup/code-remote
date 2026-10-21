@@ -89,7 +89,7 @@ export function sendSystemNotification(title: string, body: string, threadId: st
   try {
     const notification = new Notification(title, {
       body,
-      icon: '/codex-remote.webp',
+      icon: '/code-remote.webp',
       tag: eventKey,
     })
     notification.onclick = () => {

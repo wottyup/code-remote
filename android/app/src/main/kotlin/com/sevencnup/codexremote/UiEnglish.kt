@@ -142,7 +142,8 @@ internal object UiEnglish {
         "重新配对" to "Pair again", "重命名连接" to "Rename connection", "删除连接" to "Delete connection",
         "电脑服务暂时无法连接，已保留配对信息，正在重试。" to "Computer unavailable. Pairing is saved; retrying.",
         "正在连接电脑服务并验证配对码…" to "Connecting and verifying pairing code…",
-        "手机需要能访问电脑上的 Codex Remote 服务。地址和配对码只用于本机连接。" to "This phone must reach Codex Remote on your computer. The address and code stay on this device.",
+        "连接 Code Remote" to "Connect to Code Remote",
+        "手机需要能访问电脑上的 Code Remote 服务。地址和配对码只用于本机连接。" to "This phone must reach Code Remote on your computer. The address and code stay on this device.",
         "输入电脑网页地址和终端显示的匹配码。配对信息保存在本机，之后会自动重连。" to "Enter the computer address and pairing code. This device saves pairing for automatic reconnection.",
         "没有可用的图片选择器" to "No image picker available", "没有可用的文件选择器" to "No file picker available",
         "请输入 #RRGGBB 格式的颜色" to "Enter a color in #RRGGBB format",
@@ -177,7 +178,7 @@ internal object UiEnglish {
         "请输入电脑终端显示的匹配码。" to "Enter the pairing code shown on the computer.",
         "配对已失效，请重新输入匹配码。" to "Pairing expired. Enter the code again.",
         "服务器返回了不匹配的聊天记录。" to "Server returned a different chat.",
-        "关闭应用" to "Close app", "要关闭 Codex Remote 吗？" to "Close Codex Remote?",
+        "关闭应用" to "Close app", "要关闭 Code Remote 吗？" to "Close Code Remote?",
         "打开文件" to "Open file", "排队图片" to "Queued image",
     )
 

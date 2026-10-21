@@ -11,8 +11,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 343
-        versionName '0.65.0-dev.1'
+        versionCode 344
+        versionName '0.65.1-dev.1'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }
@@ -52,6 +52,6 @@ dependencies {
 
 android.applicationVariants.all { variant ->
     variant.outputs.all {
-        outputFileName = "codex-remote-android-${variant.versionName}-${variant.buildType.name}.apk"
+        outputFileName = "code-remote-android-${variant.versionName}-${variant.buildType.name}.apk"
     }
 }

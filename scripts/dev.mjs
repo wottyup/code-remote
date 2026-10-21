@@ -103,7 +103,7 @@ async function waitForEngine() {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (await engineReady()) return
     if (engine?.exitCode !== null) {
-      throw new Error('Codex Remote 后端启动失败，请检查上面的 Python/Codex 错误。')
+      throw new Error('Code Remote 后端启动失败，请检查上面的 Python/Codex 错误。')
     }
     await sleep(100)
   }

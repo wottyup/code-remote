@@ -1547,7 +1547,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (reason instanceof RemoteApiError && reason.status === 404) {
-        setError('电脑端服务尚未加载共享排队接口，请重启 Codex Remote 后端。')
+        setError('电脑端服务尚未加载共享排队接口，请重启 Code Remote 后端。')
       }
     }
   }, [isBackground, onUnauthorized, publishServerQueue, token])
@@ -2270,7 +2270,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       if (reason instanceof RemoteApiError && reason.status === 404) {
-        throw new Error('当前运行的 Codex Remote 后端版本缺少会话重命名接口，请更新并重启后端后再试。')
+        throw new Error('当前运行的 Code Remote 后端版本缺少会话重命名接口，请更新并重启后端后再试。')
       }
       throw reason
     }
@@ -4287,7 +4287,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         retractPendingMessage()
         if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
         setError(reason instanceof RemoteApiError && reason.status === 404
-          ? '电脑端服务尚未加载新的发送接口，请重启 Codex Remote 后端。'
+          ? '电脑端服务尚未加载新的发送接口，请重启 Code Remote 后端。'
           : isAmbiguousNetworkFailure(reason)
             ? '连接中断，发送结果尚未确认。请先核对聊天记录和排队消息，避免重复发送。'
             : reason instanceof Error ? reason.message : '消息发送失败')

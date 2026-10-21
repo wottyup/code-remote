@@ -1147,7 +1147,7 @@ class CodexAppServer:
             await self._request("initialize", {
                 "clientInfo": {
                     "name": "codex_remote_web",
-                    "title": "Codex Remote Web",
+                    "title": "Code Remote Web",
                     "version": "0.2.0-dev.7",
                 },
                 "capabilities": {
@@ -1344,7 +1344,7 @@ class CodexAppServer:
         try:
             changed = await asyncio.to_thread(self._sync_runtime_thread_to_history, thread_id)
         except Exception as error:
-            logger.warning("Unable to sync Codex Remote thread %s: %s", thread_id, error)
+            logger.warning("Unable to sync Code Remote thread %s: %s", thread_id, error)
             return
         if changed:
             self._history.invalidate()
@@ -1370,7 +1370,7 @@ class CodexAppServer:
         try:
             changed = await asyncio.to_thread(self._sync_runtime_created_history_to_main, source_home)
         except OSError as error:
-            logger.warning("Unable to sync existing Codex Remote history: %s", error)
+            logger.warning("Unable to sync existing Code Remote history: %s", error)
             return
         if changed:
             self._history.invalidate()
@@ -1390,7 +1390,7 @@ class CodexAppServer:
                     indexed = self._sync_runtime_thread_index(source, source_home)
                     changed = copied or indexed or changed
                 except OSError as error:
-                    logger.warning("Unable to sync Codex Remote rollout %s: %s", source, error)
+                    logger.warning("Unable to sync Code Remote rollout %s: %s", source, error)
         return changed
 
     @staticmethod
@@ -1449,7 +1449,7 @@ class CodexAppServer:
                     main_columns = connection.execute("PRAGMA main.table_info(threads)").fetchall()
                     runtime_columns = runtime_connection.execute("PRAGMA table_info(threads)").fetchall()
                     if not main_columns or main_columns != runtime_columns:
-                        logger.warning("Skipping Codex Remote index sync: desktop and runtime schemas differ")
+                        logger.warning("Skipping Code Remote index sync: desktop and runtime schemas differ")
                         return False
                     columns = [column[1] for column in main_columns]
                     if "originator" not in columns or "rollout_path" not in columns or "history_mode" not in columns:
@@ -1474,7 +1474,7 @@ class CodexAppServer:
                     connection.commit()
                     return cursor.rowcount > 0
         except sqlite3.Error as error:
-            logger.warning("Unable to index Codex Remote thread %s in desktop history: %s", thread_id, error)
+            logger.warning("Unable to index Code Remote thread %s in desktop history: %s", thread_id, error)
             return False
 
     @staticmethod
@@ -1743,7 +1743,7 @@ class CodexAppServer:
             }:
                 await self._write({
                     "id": request_id,
-                    "error": {"code": -32601, "message": "This Codex Remote client does not support this request."},
+                    "error": {"code": -32601, "message": "This Code Remote client does not support this request."},
                 })
                 return
             request_params = message.get("params")

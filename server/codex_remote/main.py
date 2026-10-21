@@ -11,7 +11,7 @@ from .app import create_app, resolve_default_workspace
 
 def parse_arguments() -> argparse.Namespace:
     project_root = Path(__file__).resolve().parents[2]
-    parser = argparse.ArgumentParser(description="Run the local Codex Remote web engine")
+    parser = argparse.ArgumentParser(description="Run the local Code Remote web engine")
     parser.add_argument("--host", default="127.0.0.1", help="Bind address; defaults to loopback only")
     parser.add_argument("--port", type=int, default=18766)
     configured_workspace = Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None

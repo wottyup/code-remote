@@ -7,9 +7,9 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/codex_remote"
-        android:label="Codex Remote"
-        android:roundIcon="@drawable/codex_remote"
+        android:icon="@drawable/code_remote"
+        android:label="Code Remote"
+        android:roundIcon="@drawable/code_remote"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"

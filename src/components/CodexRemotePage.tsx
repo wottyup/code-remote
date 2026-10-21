@@ -4676,7 +4676,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         if (completion && now - completion.completedAt < 120_000) {
           const thread = remote0.threads.find((item) => item.id === completion.threadId)
             ?? remotes.find((item) => item.activeThread?.id === completion.threadId)?.activeThread
-          const title = thread ? titleOf(thread) : 'Codex Remote'
+          const title = thread ? titleOf(thread) : 'Code Remote'
           notifySystemOnce(
             `completion:${completion.threadId}:${completion.completedAt}`,
             `${title} 已完成回复`,
@@ -5313,9 +5313,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
       {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
-      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="Codex 对话记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="聊天记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
-          <div className="remote-brand"><img className="remote-brand__logo" src="/codex-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Codex Remote</strong><small>Codex 远程工作台</small></span></div>
+          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>代码助手远程工作台</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
@@ -5751,7 +5751,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     try {
       const granted = await requestSystemNotificationPermission()
       if (granted) onChange({ ...preferences, systemNotificationsEnabled: true })
-      else setNotificationError('没有获得通知权限。请在系统设置中允许 Codex Remote 发送通知后重试。')
+      else setNotificationError('没有获得通知权限。请在系统设置中允许 Code Remote 发送通知后重试。')
     } catch {
       setNotificationError('请求通知权限失败，请重试。')
     } finally {

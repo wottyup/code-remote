@@ -33,7 +33,7 @@ def tmux_session_name_for_thread(thread_id: str) -> str:
 async def _run_tmux(*arguments: str, check: bool = True) -> str:
     executable = shutil.which("tmux")
     if not executable:
-        raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Codex Remote。")
+        raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Code Remote。")
     environment = os.environ.copy()
     environment.pop("TMUX", None)
     process = await asyncio.create_subprocess_exec(
@@ -204,7 +204,7 @@ class TerminalSession:
             if self.tmux_session_name:
                 executable = shutil.which("tmux")
                 if not executable:
-                    raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Codex Remote。")
+                    raise RuntimeError("本机未安装 tmux，无法保留终端会话。请安装 tmux 后重启 Code Remote。")
                 environment.pop("TMUX", None)
                 argv = [
                     executable,

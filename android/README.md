@@ -1,4 +1,4 @@
-# Codex Remote Android
+# Code Remote Android
 
 Android 客户端使用 Kotlin 和原生 Android View 绘制，不通过 WebView 加载网页。聊天输入框使用 Android 原生 `EditText`，键盘由系统输入法提供。
 
@@ -13,4 +13,4 @@ cd android
 ANDROID_HOME=/path/to/android-sdk ./gradlew assembleDebug
 ```
 
-APK 输出在 `app/build/outputs/apk/debug/codex-remote-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
+APK 输出在 `app/build/outputs/apk/debug/code-remote-android-<版本号>-debug.apk`。发布安装包应配置正式签名后再构建 release 版本。
