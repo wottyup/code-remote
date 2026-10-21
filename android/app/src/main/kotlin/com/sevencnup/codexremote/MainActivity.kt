@@ -7640,20 +7640,14 @@ class MainActivity : Activity() {
         }
 
         if (themeName == "custom") {
-            appearance.addView(settingsActionRow("背景颜色", prefs.getString(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND).orEmpty()) {
+            appearance.addView(settingsThemeColorRow("背景颜色", "作为半透明面板背后的底色。", prefs.getString(KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND).orEmpty(), DEFAULT_CUSTOM_BACKGROUND) {
                 showThemeColorDialog("背景颜色", KEY_CUSTOM_BACKGROUND, DEFAULT_CUSTOM_BACKGROUND)
-            }, widthWrap())
-            appearance.addView(settingsActionRow("字体颜色", prefs.getString(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT).orEmpty()) {
+            }, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(5) })
+            appearance.addView(settingsThemeColorRow("字体颜色", "应用于界面文字和控件。", prefs.getString(KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT).orEmpty(), DEFAULT_CUSTOM_TEXT) {
                 showThemeColorDialog("字体颜色", KEY_CUSTOM_TEXT, DEFAULT_CUSTOM_TEXT)
-            }, widthWrap())
+            }, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(5) })
             val selectedImage = prefs.getString(KEY_CUSTOM_BACKGROUND_IMAGE, null)
-            appearance.addView(settingsActionRow("背景图片", if (selectedImage.isNullOrBlank()) "选择图片" else "更换或清除当前图片") {
-                chooseThemeBackground()
-            }, widthWrap())
-            if (!selectedImage.isNullOrBlank()) appearance.addView(settingsActionRow("清除背景图片", "保留自定义颜色") {
-                prefs.edit().remove(KEY_CUSTOM_BACKGROUND_IMAGE).apply()
-                rerenderAppKeepSettings()
-            }, widthWrap())
+            appearance.addView(settingsThemeImageRow(!selectedImage.isNullOrBlank()), LinearLayout.LayoutParams(MATCH, WRAP))
             val transparencyRow = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(2), dp(7), dp(2), 0) }
             val transparencyHeader = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
             transparencyHeader.addView(label("背景透明度", 12, SUBTLE), LinearLayout.LayoutParams(0, WRAP, 1f))
@@ -7921,6 +7915,68 @@ class MainActivity : Activity() {
             setPixelAwareImageResource(iconResource("chevron_right"))
             imageTintList = retroIconTint(MUTED)
         }, LinearLayout.LayoutParams(dp(18), dp(18)).apply { leftMargin = dp(6) })
+    }
+
+    private fun settingsThemeColorRow(title: String, description: String, value: String, fallback: String, action: () -> Unit): View = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        minimumHeight = dp(58)
+        setPadding(dp(9), dp(7), dp(9), dp(7))
+        background = rounded(colorWithAlpha(OPAQUE_PANEL, .42f), dp(9), colorWithAlpha(BORDER, .65f), dp(1))
+        isClickable = true
+        isFocusable = true
+        contentDescription = "$title，当前 $value，点按选择颜色"
+        setOnClickListener { action() }
+        val copy = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.VERTICAL }
+        copy.addView(label(title, 12, TEXT, true), widthWrap())
+        copy.addView(label(description, 10, MUTED), widthWrap())
+        addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        val color = runCatching { Color.parseColor(value) }.getOrElse { Color.parseColor(fallback) }
+        addView(View(this@MainActivity).apply {
+            background = rounded(color, dp(6), BORDER, dp(1))
+            contentDescription = "$title 色块"
+        }, LinearLayout.LayoutParams(dp(32), dp(28)).apply { leftMargin = dp(8) })
+        addView(label(value.uppercase(Locale.ROOT), 10, TEXT).apply { typeface = Typeface.MONOSPACE }, LinearLayout.LayoutParams(WRAP, WRAP).apply { leftMargin = dp(6) })
+    }
+
+    private fun settingsThemeImageRow(hasImage: Boolean): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(9), dp(8), dp(9), dp(9))
+        background = rounded(colorWithAlpha(OPAQUE_PANEL, .42f), dp(9), colorWithAlpha(BORDER, .65f), dp(1))
+        addView(label("背景图片", 12, TEXT, true), widthWrap())
+        addView(label("选择图片作为全局背景。", 10, MUTED), widthWrap())
+        val controls = LinearLayout(this@MainActivity).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val preview = FrameLayout(this@MainActivity).apply {
+            background = GradientDrawable().apply {
+                setColor(colorWithAlpha(OPAQUE_PANEL, .7f))
+                cornerRadius = dp(7).toFloat()
+                setStroke(dp(1), BORDER, dp(4).toFloat(), dp(3).toFloat())
+            }
+            clipToOutline = true
+            contentDescription = if (hasImage) "当前背景图片预览" else "未设置背景图片"
+        }
+        val bitmap = if (hasImage) customThemeBackgroundBitmap() else null
+        if (bitmap != null) preview.addView(ImageView(this@MainActivity).apply {
+            setImageBitmap(bitmap)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+        }, FrameLayout.LayoutParams(MATCH, MATCH))
+        else preview.addView(label(if (hasImage) "无法预览" else "未设置", 10, MUTED).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
+        controls.addView(preview, LinearLayout.LayoutParams(dp(76), dp(44)))
+        controls.addView(View(this@MainActivity), LinearLayout.LayoutParams(0, dp(1), 1f))
+        fun imageButton(text: String, action: () -> Unit): TextView = label(text, 11, TEXT, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(10), 0, dp(10), 0)
+            background = rounded(colorWithAlpha(PANEL, .9f), dp(7), BORDER, dp(1))
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { action() }
+        }
+        if (hasImage) controls.addView(imageButton("清除") {
+            prefs.edit().remove(KEY_CUSTOM_BACKGROUND_IMAGE).apply()
+            rerenderAppKeepSettings()
+        }, LinearLayout.LayoutParams(WRAP, dp(34)).apply { rightMargin = dp(7) })
+        controls.addView(imageButton(if (hasImage) "更换图片" else "选择图片") { chooseThemeBackground() }, LinearLayout.LayoutParams(WRAP, dp(34)))
+        addView(controls, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(8) })
     }
 
     private fun applyThemeFromSettings(theme: String) {
