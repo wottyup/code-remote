@@ -69,7 +69,8 @@ import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberW
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
-import { DeviceChatPage } from './DeviceChatPage'
+import { DeviceChatMessageItem, DeviceChatRoomPanel } from './DeviceChatRoomPanel'
+import { useDeviceChat, type DeviceChatController } from '../hooks/useDeviceChat'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
@@ -975,6 +976,7 @@ interface ComposerHandle {
 }
 
 interface MessageComposerProps {
+  deviceChat?: DeviceChatController
   token: string
   draftScope: string
   onDraftChange: (draft: string) => void
@@ -1028,6 +1030,7 @@ interface MessageComposerProps {
 }
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
+  deviceChat,
   token,
   draftScope,
   onDraftChange,
@@ -1473,16 +1476,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }, [])
 
-  const canCompose = !sending && !writerConflict && connection === 'connected'
+  const canCompose = !sending && (deviceChat ? Boolean(deviceChat.state?.room) && !deviceChat.busy && (deviceChat.state?.connected || deviceChat.state?.role === 'host') : !writerConflict && connection === 'connected')
   const canConfigure = canCompose
-  const canSend = (draft.trim().length > 0 || attachedImages.length > 0 || attachedDocuments.length > 0)
+  const canSend = (draft.trim().length > 0 || (!deviceChat && (attachedImages.length > 0 || attachedDocuments.length > 0)))
     && !readingDocuments
     && !readingImages
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
-  const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
-  const stopWithSendButton = isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
-  const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
+  const canAttachFiles = !deviceChat && (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
+  const stopWithSendButton = !deviceChat && isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
+  const continueWithSendButton = !deviceChat && continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
       aria-checked={temporaryPreferences} disabled={!canConfigure}
@@ -1684,6 +1687,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (deviceChat) {
+      if (!draft.trim() || sendingRef.current || !canCompose) return
+      sendingRef.current = true
+      setSending(true)
+      const submittedDraft = draft
+      const sent = await deviceChat.sendMessage(submittedDraft)
+      if (sent) updateDraft((current) => current === submittedDraft ? '' : current)
+      sendingRef.current = false
+      setSending(false)
+      return
+    }
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
     if (editingQueuedMessageId) {
@@ -2100,24 +2114,24 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             if (inputIsComposing.current && event.key === 'Escape') event.stopPropagation()
           }}
           onKeyDown={handleInputKey}
-          onPaste={handlePaste}
+          onPaste={deviceChat ? undefined : handlePaste}
           onFocus={requestComposerKeyboard}
           onPointerDown={(event) => {
             if (document.activeElement === event.currentTarget) {
               requestComposerKeyboard()
             }
           }}
-          placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
-          aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
+          placeholder={deviceChat ? '发送群聊消息…' : editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
+          aria-label={deviceChat ? '发送设备群聊消息' : editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
           inputMode="text"
           enterKeyHint="send"
         />
       </div>
       <div className="message-composer__footer">
         <div className="composer-footer-start">
-          <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
+          {!deviceChat ? <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button> : null}
           <div className="composer-preferences">
-            {showCodexPreferences ? <>
+            {deviceChat ? <label className="device-chat-recipient"><span>发送给</span><select value={deviceChat.targetId} onChange={(event) => deviceChat.setTargetId(event.currentTarget.value)}><option value="">所有人（只同步）</option>{deviceChat.state?.members.map((member) => <option key={member.id} value={member.id}>@{member.name}（运行本机 Codex）</option>)}</select></label> : showCodexPreferences ? <>
               <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
               <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
               <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
@@ -2130,10 +2144,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </div>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
+          {!deviceChat ? <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
-          </span>
+          </span> : null}
           {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
@@ -3377,6 +3391,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themeP
 })
 
 interface RemoteChatPaneProps {
+  deviceChat?: DeviceChatController
+  onToggleDeviceChatPanel?: () => void
   token: string
   remote: CodexRemoteController
   active: boolean
@@ -3401,6 +3417,8 @@ interface RemoteChatPaneProps {
 }
 
 function RemoteChatPane({
+  deviceChat,
+  onToggleDeviceChatPanel,
   token,
   remote,
   active,
@@ -3463,7 +3481,7 @@ function RemoteChatPane({
     onDirectoryRequestHandled(directoryRequest.id)
   }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
 
-  const activeThreadId = remote.activeThread?.id
+  const activeThreadId = deviceChat ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : remote.activeThread?.id
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
     ? remote.approval.params.threadId
     : null
@@ -3599,7 +3617,7 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
+  }, [active, activeThreadId, deviceChat?.state?.messages, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
 
   useLayoutEffect(() => {
     const anchor = olderMessageScrollAnchor.current
@@ -3632,7 +3650,7 @@ function RemoteChatPane({
     if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
   }, [])
 
-  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const activeTitle = deviceChat ? deviceChat.state?.room?.name ?? '设备群聊' : remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const currentConnectionLabel = remote.handedOff
     ? '已交还给本机'
     : connectionLabel[remote.connection]
@@ -3666,13 +3684,13 @@ function RemoteChatPane({
     return indexes
   }, [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${!deviceChat && remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
       <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{activeEngineLabel} · 当前工作区</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'}` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
-        {active ? <button
+        {active && !deviceChat ? <button
           className="icon-button chat-history-refresh-button"
           type="button"
           aria-label="刷新对话记录"
@@ -3681,6 +3699,8 @@ function RemoteChatPane({
           onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
         ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
+          {deviceChat ? <button className="icon-button" type="button" aria-label="房间与成员" title="房间与成员" onClick={onToggleDeviceChatPanel}><Users size={18} /></button> : null}
+          {!deviceChat ? <>
           <button
             className="icon-button engine-switch-button"
             type="button"
@@ -3722,11 +3742,13 @@ function RemoteChatPane({
           </button>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
+          </> : null}
         </div>
       </header>
 
-      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
-        <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
+      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
+        <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
+          {deviceChat ? (deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => <DeviceChatMessageItem key={message.id} message={message} />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开“房间与成员”创建或加入设备群聊。'}</span></div>) : <>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
@@ -3806,16 +3828,17 @@ function RemoteChatPane({
               ) : null}
             </div>
           ) : null}
+          </>}
         </div>
       </section>
       {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
-      {remote.error ? (
+      {!deviceChat && remote.error ? (
         <div className="remote-error" role="alert">
           <AlertTriangle size={15} /><span>{remote.error}</span>
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
-      {terminalOpen ? (
+      {!deviceChat && terminalOpen ? (
         <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
           <Suspense fallback={(
             <ChatOverlayPanel
@@ -3945,6 +3968,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
   const [deviceChatMode, setDeviceChatMode] = useState(false)
+  const [deviceChatPanelOpen, setDeviceChatPanelOpen] = useState(true)
+  const deviceChat = useDeviceChat(token, deviceChatMode)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -4031,10 +4056,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSettingsOpen(false)
     setUsageStatsOpen(false)
     setDeviceChatMode(true)
+    setDeviceChatPanelOpen(true)
     setSidebarOpen(false)
     setWorkspaceOpen(false)
   }, [])
-  const closeDeviceChatMode = useCallback(() => setDeviceChatMode(false), [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
@@ -5360,7 +5385,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (!deviceChatMode && isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' + (deviceChatPanelOpen ? ' remote-shell--device-panel-open' : '') : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -5513,20 +5538,20 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
-      ) : deviceChatMode ? (
-        <DeviceChatPage token={token} onClose={closeDeviceChatMode} onOpenSidebar={openSidebarPanel} />
       ) : (
         <>
           <section className="remote-workspace">
-            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
-              {openPaneIndexes.map((paneIndex) => (
-                <div className="remote-pane-slot" data-pane-index={paneIndex} key={paneIndex}>
+            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': deviceChatMode ? 1 : openPaneIndexes.length } as CSSProperties}>
+              {(deviceChatMode ? [selectedPaneIndex] : openPaneIndexes).map((paneIndex) => (
+                <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-${deviceChatMode ? 'device' : 'thread'}`}>
                   <RemoteChatPane
+                    deviceChat={deviceChatMode ? deviceChat : undefined}
+                    onToggleDeviceChatPanel={() => setDeviceChatPanelOpen((open) => !open)}
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
-                    showActiveFrame={openPaneIndexes.length > 1}
-                    showPaneClose={openPaneIndexes.length > 1}
+                    showActiveFrame={!deviceChatMode && openPaneIndexes.length > 1}
+                    showPaneClose={!deviceChatMode && openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
@@ -5556,23 +5581,24 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ))}
             </div>
             <MessageComposer
+              deviceChat={deviceChatMode ? deviceChat : undefined}
               token={token}
-              key={composerDraftScope}
+              key={deviceChatMode ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : composerDraftScope}
               ref={composerHandle}
-              draftScope={composerDraftScope}
-              onDraftChange={syncWorkspaceDraft}
+              draftScope={deviceChatMode ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : composerDraftScope}
+              onDraftChange={deviceChatMode ? () => undefined : syncWorkspaceDraft}
               composerHeightMemory={composerHeightMemory}
-              connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
-              isRunning={activeRemote.isRunning}
-              isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
+              connection={deviceChatMode ? 'connected' : activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
+              isRunning={!deviceChatMode && activeRemote.isRunning}
+              isReplying={!deviceChatMode && (activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true)}
               canInterrupt={activeRemote.activeEngine === 'claude-code' || activeRemote.activeThread?.canInterrupt !== false}
-              fileChangeSummary={runningFileChangeSummary}
+              fileChangeSummary={deviceChatMode ? null : runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
-              reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
-              reserveQueuedMessageSpace={openPaneIndexes.length > 1}
-              showCodexPreferences={!isClaudeCodeThread}
-              isInterrupting={activeRemote.isInterrupting}
-              writerConflict={activeRemote.writerConflict}
+              reserveFileChangeSummarySpace={!deviceChatMode && openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
+              reserveQueuedMessageSpace={!deviceChatMode && openPaneIndexes.length > 1}
+              showCodexPreferences={deviceChatMode || !isClaudeCodeThread}
+              isInterrupting={!deviceChatMode && activeRemote.isInterrupting}
+              writerConflict={!deviceChatMode && activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
               selectedModel={selectedModel}
               selectedEffort={selectedEffort}
@@ -5594,7 +5620,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
-              queuedMessages={activeRemote.queuedMessages}
+              queuedMessages={deviceChatMode ? [] : activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
@@ -5602,14 +5628,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onRemoveQueued={activeRemote.removeQueuedMessage}
               onInterrupt={pauseCurrentReply}
               onContinue={continueInterruptedReply}
-              canContinue={canContinue}
-              continuationPending={Boolean(activeContinuation)}
+              canContinue={!deviceChatMode && canContinue}
+              continuationPending={!deviceChatMode && Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
               onCreateThread={() => { void createThread() }}
               createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)}
               createThreadTitle={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}
             />
           </section>
+          {deviceChatMode ? <div className={`device-chat-room-dock${deviceChatPanelOpen ? ' device-chat-room-dock--open' : ''}`}><DeviceChatRoomPanel chat={deviceChat} /></div> : null}
+          {!deviceChatMode ? <>
           <div
             className="workspace-resize-handle"
             role="separator"
@@ -5684,6 +5712,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onCloseMobile={() => setWorkspaceOpen(false)}
             panelRef={workspacePanel}
           />
+          </> : null}
         </>
       )}
     </div>

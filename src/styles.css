@@ -60,7 +60,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
 .remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior: none; background: #101114; color: #e9ebef; }
 .remote-shell--device-chat { grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr); }
+.remote-shell--device-chat.remote-shell--device-panel-open { grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) minmax(260px, 320px); }
 .remote-shell--sidebar-collapsed.remote-shell--device-chat { grid-template-columns: 112px minmax(0, 1fr); }
+.remote-shell--sidebar-collapsed.remote-shell--device-chat.remote-shell--device-panel-open { grid-template-columns: 112px minmax(0, 1fr) minmax(260px, 320px); }
 .remote-shell--android { padding-top: var(--native-status-bar-inset); }
 .remote-sidebar { --sidebar-selection-border: #8296ce; --sidebar-selection-bg: rgba(107, 128, 185, .2); z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 12px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
 .remote-sidebar__heading { display: flex; align-items: center; justify-content: space-between; gap: 4px; min-height: 38px; margin: 0 2px 10px; }
@@ -1142,6 +1144,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (pointer: coarse) {
   :where(:root[data-touch-landscape="true"]) .remote-shell { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); }
   :where(:root[data-touch-landscape="true"]) .remote-shell--device-chat { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr); }
+  :where(:root[data-touch-landscape="true"]) .remote-shell--device-chat.remote-shell--device-panel-open { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); }
   :where(:root[data-touch-landscape="true"]) .workspace-resize-handle { display: none; }
   :where(:root[data-touch-landscape="true"]) .remote-workspace { grid-column: 2; }
   :where(:root[data-touch-landscape="true"]) .workspace-explorer { grid-column: 3; }
@@ -3826,3 +3829,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   svg.lucide-key-round, svg.lucide-panels-top-left, svg.lucide-panels-left-bottom,
   svg.lucide-info, svg.lucide-circle-help, svg.lucide-circle-question-mark
 ) { background-position: center; background-repeat: no-repeat; background-size: contain; color: transparent !important; stroke: transparent !important; }
+
+@media (min-width: 701px) {
+  .remote-shell--theme-retro.remote-shell--device-chat { grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr); }
+  .remote-shell--theme-retro.remote-shell--device-chat.remote-shell--device-panel-open { grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) minmax(260px, 320px); }
+  .remote-shell--theme-retro.remote-shell--device-chat .remote-sidebar { display: flex; }
+  .remote-shell--theme-retro.remote-shell--device-chat .remote-workspace { width: 100%; margin: 0; }
+  .remote-shell--theme-retro.remote-shell--device-chat .message-stream__content { display: flex; min-height: 100%; flex-direction: column; gap: 14px; padding: 18px 0 0; }
+}
