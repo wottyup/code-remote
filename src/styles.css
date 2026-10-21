@@ -3547,8 +3547,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro :is(input, textarea, select)::placeholder { color: #878c7e; }
 .remote-shell--theme-chinese-retro :is(button, input, textarea, select):focus-visible { outline-color: #5da5b3; }
 .remote-shell--theme-chinese-retro a { color: #17616a; }
-.remote-shell--theme-chinese-retro :is(.remote-workspace, .remote-pane-grid, .remote-pane-slot, .conversation-pane) { background: #eaf4f6; }
-.remote-shell--theme-chinese-retro .remote-chat { background: #eaf4f6; }
+.remote-shell--theme-chinese-retro :is(.remote-workspace, .remote-pane-grid, .remote-pane-slot, .conversation-pane) { background: #f1f9fb; }
+.remote-shell--theme-chinese-retro .remote-chat { background: #f1f9fb; }
 .remote-shell--theme-chinese-retro .message-stream { background: #f1f9fb; }
 .remote-shell--theme-chinese-retro .chat-message--assistant :is(.chat-message__content, .chat-message__meta) { color: #32423d; }
 .remote-shell--theme-chinese-retro.remote-shell .remote-chat .chat-message--user .chat-message__body { border-color: #8cbcc6; border-radius: 5px; background: #e0ecee; box-shadow: none; }
