@@ -2361,6 +2361,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
   const currentViewState = useRef({ directories, expanded, selectedPaths })
   currentViewState.current = { directories, expanded, selectedPaths }
 
+  useEffect(() => {
+    if (!manualRoot) setRootInput(cwd ?? '')
+  }, [cwd, manualRoot])
+
   const directoryKey = (path: string) => path || '.'
   const rememberViewState = useCallback((key: string, state: WorkspaceExplorerViewState) => {
     viewStateCache.current.delete(key)
@@ -2806,6 +2810,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
     await Promise.all([...new Set(paths)].map((path) => loadDirectory(path)))
   }
 
+  function refreshVisibleDirectories() {
+    const { directories: loaded, expanded: open } = currentViewState.current
+    const paths = Object.keys(open).filter((path) => open[path] && loaded[path])
+    void refreshWorkspaceDirectories(['', ...paths])
+  }
+
   async function submitWorkspaceMutation(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!mutationDialog || mutationSaving || !browsingRoot) return
@@ -3105,7 +3115,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, engine
           <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
             <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
-            <button className="icon-button" type="button" onClick={() => void loadDirectory('')} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新文件目录"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
         </header>
