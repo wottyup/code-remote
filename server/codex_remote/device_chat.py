@@ -1,0 +1,853 @@
+"""LAN room relay for independent Code Remote + Codex nodes."""
+
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import hmac
+import ipaddress
+import json
+import logging
+import os
+import secrets
+import sqlite3
+import time
+import uuid
+from contextlib import suppress
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlsplit, urlunsplit
+from urllib.request import ProxyHandler, Request, build_opener
+
+from websockets.asyncio.client import connect as websocket_connect
+
+from .codex_app_server import CodexAppServer, CodexNoActiveTurnError, CodexRuntimeError
+
+logger = logging.getLogger(__name__)
+INVITE_TTL_SECONDS = 300
+MAX_CHAT_MESSAGE_LENGTH = 12_000
+RECENT_CONTEXT_MESSAGES = 24
+RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
+INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+class DeviceChatError(RuntimeError):
+    pass
+
+
+class DeviceChatHttpError(DeviceChatError):
+    def __init__(self, message: str, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _safe_name(value: str) -> str:
+    name = " ".join(value.split()).strip()
+    if not name:
+        raise DeviceChatError("设备名称不能为空。")
+    return name[:40]
+
+
+def _room_url(value: str) -> str:
+    try:
+        parsed = urlsplit(value.strip())
+        _ = parsed.port
+    except ValueError as error:
+        raise DeviceChatError("房间地址格式无效，请检查主机名和端口。") from error
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise DeviceChatError("请输入可从另一台设备访问的 http:// 或 https:// 地址。")
+    try:
+        is_loopback = ipaddress.ip_address(parsed.hostname).is_loopback
+    except ValueError:
+        is_loopback = parsed.hostname.casefold() == "localhost" or parsed.hostname.casefold().endswith(".localhost")
+    if is_loopback:
+        raise DeviceChatError("房间地址不能使用 localhost 或回环 IP；请填房间设备的局域网地址。")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise DeviceChatError("地址只填写网页的主机和端口，例如 http://192.168.1.20:4173。")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+class DeviceChatManager:
+    """Stores one room locally and relays guest nodes through the host node."""
+
+    def __init__(self, path: Path, codex: CodexAppServer) -> None:
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+        if os.name != "nt":
+            os.chmod(path, 0o600)
+        self.connection.row_factory = sqlite3.Row
+        self.connection.executescript("""
+            CREATE TABLE IF NOT EXISTS device_chat_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS device_chat_members (
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT, online INTEGER NOT NULL DEFAULT 0,
+                joined_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS device_chat_invites (
+                code_hash TEXT PRIMARY KEY, expires_at REAL NOT NULL, consumed INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS device_chat_messages (
+                sequence INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, payload TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS device_chat_outbox (
+                id TEXT PRIMARY KEY, payload TEXT NOT NULL, created_at TEXT NOT NULL, delivered INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS device_chat_agent_jobs (
+                message_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS device_chat_threads (
+                room_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL
+            );
+        """)
+        self.codex = codex
+        self.node_id = self._get_metadata("node_id")
+        if not self.node_id:
+            self.node_id = str(uuid.uuid4())
+            self._set_metadata("node_id", self.node_id)
+        self._connections: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._client_task: asyncio.Task[None] | None = None
+        self._outbox_task: asyncio.Task[None] | None = None
+        self._agent_tasks: set[asyncio.Task[None]] = set()
+        self._agent_lock = asyncio.Lock()
+        self._active_agent_thread_id: str | None = None
+        self._closed = False
+        self._schedule_pending_jobs()
+
+    def _get_metadata(self, key: str) -> str | None:
+        row = self.connection.execute("SELECT value FROM device_chat_metadata WHERE key = ?", (key,)).fetchone()
+        return str(row["value"]) if row else None
+
+    def _set_metadata(self, key: str, value: str) -> None:
+        self.connection.execute(
+            "INSERT INTO device_chat_metadata(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+
+    def _config(self) -> dict[str, Any] | None:
+        raw = self._get_metadata("room_config")
+        if not raw:
+            return None
+        try:
+            config = json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Ignoring malformed device chat state")
+            self._set_metadata("room_config", "")
+            return None
+        return config if isinstance(config, dict) else None
+
+    def _save_config(self, config: dict[str, Any] | None) -> None:
+        self._set_metadata("room_config", json.dumps(config, ensure_ascii=False, separators=(",", ":")) if config else "")
+
+    def _schedule_pending_jobs(self) -> None:
+        self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending' WHERE state = 'running'")
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        for row in self.connection.execute(
+            "SELECT m.payload FROM device_chat_agent_jobs j JOIN device_chat_messages m ON m.id = j.message_id WHERE j.state = 'pending'"
+        ).fetchall():
+            with suppress(json.JSONDecodeError):
+                event = json.loads(row["payload"])
+                self._launch_agent(event)
+
+    async def start(self) -> None:
+        self._closed = False
+        config = self._config()
+        if config and config.get("role") == "host":
+            self.connection.execute("UPDATE device_chat_members SET online = 0 WHERE id != ?", (self.node_id,))
+            self.connection.execute("UPDATE device_chat_members SET online = 1 WHERE id = ?", (self.node_id,))
+        elif config and config.get("role") == "peer":
+            self._set_local_online(self.node_id, False)
+            self._start_peer_connection()
+            if not self._outbox_task or self._outbox_task.done():
+                self._outbox_task = asyncio.create_task(self._outbox_flush_loop())
+        self._schedule_pending_jobs()
+
+    async def close(self) -> None:
+        self._closed = True
+        if self._client_task:
+            self._client_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._client_task
+            self._client_task = None
+        if self._outbox_task:
+            self._outbox_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._outbox_task
+            self._outbox_task = None
+        for task in tuple(self._agent_tasks):
+            task.cancel()
+        if self._agent_tasks:
+            await asyncio.gather(*self._agent_tasks, return_exceptions=True)
+        self.connection.close()
+
+    def _start_peer_connection(self) -> None:
+        if self._closed or (self._client_task and not self._client_task.done()):
+            return
+        self._client_task = asyncio.create_task(self._peer_connection_loop())
+
+    async def create_or_invite(self, name: str) -> dict[str, Any]:
+        cleaned_name = _safe_name(name)
+        config = self._config()
+        if config and config.get("role") != "host":
+            raise DeviceChatError("本机已加入其他设备创建的房间，请先退出再创建。")
+        if not config:
+            config = {
+                "role": "host",
+                "room": {"id": str(uuid.uuid4()), "name": "设备协作群聊", "host_id": self.node_id, "host_name": cleaned_name},
+                "name": cleaned_name,
+            }
+            self._save_config(config)
+            self.connection.execute(
+                "INSERT OR REPLACE INTO device_chat_members(id, name, token_hash, online, joined_at) VALUES (?, ?, NULL, 1, ?)",
+                (self.node_id, cleaned_name, _now()),
+            )
+        else:
+            config["name"] = cleaned_name
+            config["room"]["host_name"] = cleaned_name
+            self._save_config(config)
+            self.connection.execute("UPDATE device_chat_members SET name = ?, online = 1 WHERE id = ?", (cleaned_name, self.node_id))
+        code = "".join(secrets.choice(INVITE_ALPHABET) for _ in range(12))
+        self.connection.execute("DELETE FROM device_chat_invites WHERE expires_at < ? OR consumed = 1", (time.time(),))
+        self.connection.execute(
+            "INSERT INTO device_chat_invites(code_hash, expires_at, consumed) VALUES (?, ?, 0)",
+            (_token_hash(code), time.time() + INVITE_TTL_SECONDS),
+        )
+        return {"state": self.state(), "invite_code": code, "expires_in": INVITE_TTL_SECONDS}
+
+    async def join_room(self, host_url: str, code: str, name: str) -> dict[str, Any]:
+        if self._config():
+            raise DeviceChatError("本机已经加入一个设备群聊，请先退出。")
+        url = _room_url(host_url)
+        payload = {"code": code.strip().upper(), "device_id": self.node_id, "name": _safe_name(name)}
+        response = await asyncio.to_thread(self._post_json, f"{url}/api/v1/device-chat/join-peer", payload, None)
+        room = response.get("room")
+        token = response.get("token")
+        members = response.get("members")
+        if not isinstance(room, dict) or not isinstance(token, str) or not isinstance(members, list):
+            raise DeviceChatError("房间服务返回了无法识别的加入信息。")
+        config = {"role": "peer", "room": room, "name": payload["name"], "host_url": url, "host_token": token}
+        self._save_config(config)
+        self.connection.execute("DELETE FROM device_chat_members")
+        for member in members:
+            self._upsert_member(member)
+        self._upsert_member({"id": self.node_id, "name": payload["name"], "online": False})
+        self.connection.execute("DELETE FROM device_chat_messages")
+        self.connection.execute("DELETE FROM device_chat_outbox")
+        self._start_peer_connection()
+        if not self._outbox_task or self._outbox_task.done():
+            self._outbox_task = asyncio.create_task(self._outbox_flush_loop())
+        return self.state()
+
+    async def create_invite(self, name: str | None = None) -> dict[str, Any]:
+        config = self._config()
+        if not config or config.get("role") != "host":
+            raise DeviceChatError("只有房间创建设备可以生成加入码。")
+        return await self.create_or_invite(name or config.get("name", "本机 Codex"))
+
+    async def accept_join(self, code: str, device_id: str, name: str) -> dict[str, Any]:
+        config = self._config()
+        if not config or config.get("role") != "host":
+            raise DeviceChatError("该设备当前没有可加入的房间。")
+        cleaned_code = code.strip().upper()
+        row = self.connection.execute(
+            "SELECT code_hash, expires_at, consumed FROM device_chat_invites WHERE code_hash = ?",
+            (_token_hash(cleaned_code),),
+        ).fetchone()
+        if not row or row["consumed"] or float(row["expires_at"]) < time.time():
+            raise DeviceChatError("加入码无效、已使用或已过期，请让房间设备重新生成。")
+        if not device_id or len(device_id) > 80 or device_id == self.node_id:
+            raise DeviceChatError("设备标识无效。")
+        existing = self.connection.execute("SELECT id FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+        if existing:
+            raise DeviceChatError("这台设备已经在房间里。")
+        token = secrets.token_urlsafe(32)
+        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            consumed = self.connection.execute(
+                "UPDATE device_chat_invites SET consumed = 1 WHERE code_hash = ? AND consumed = 0 AND expires_at > ?",
+                (row["code_hash"], time.time()),
+            )
+            if consumed.rowcount != 1:
+                raise DeviceChatError("加入码无效、已使用或已过期，请让房间设备重新生成。")
+            self.connection.execute(
+                "INSERT INTO device_chat_members(id, name, token_hash, online, joined_at) VALUES (?, ?, ?, 0, ?)",
+                (device_id, _safe_name(name), _token_hash(token), _now()),
+            )
+            self.connection.execute("COMMIT")
+        except Exception:
+            self.connection.execute("ROLLBACK")
+            raise
+        member = {"id": device_id, "name": _safe_name(name), "online": False}
+        self._broadcast({"type": "member_upsert", "member": member})
+        room = {**config["room"]}
+        members = self._members()
+        return {"room": room, "members": members, "token": token}
+
+    def authenticate_peer(self, device_id: str, token: str) -> bool:
+        config = self._config()
+        if not config or config.get("role") != "host" or device_id == self.node_id:
+            return False
+        row = self.connection.execute("SELECT token_hash FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+        known = str(row["token_hash"]) if row and row["token_hash"] else ""
+        return bool(known and token and hmac.compare_digest(known, _token_hash(token)))
+
+    async def connect_peer(self, device_id: str, token: str, last_sequence: int) -> tuple[asyncio.Queue[dict[str, Any]], dict[str, Any]]:
+        if not self.authenticate_peer(device_id, token):
+            raise DeviceChatError("设备节点授权无效。")
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._connections[device_id] = queue
+        self._set_member_online(device_id, True)
+        snapshot = {
+            "type": "snapshot",
+            "room": self._config()["room"],
+            "members": self._members(),
+            "events": self._messages_after(max(0, last_sequence)),
+        }
+        return queue, snapshot
+
+    def disconnect_peer(self, device_id: str, queue: asyncio.Queue[dict[str, Any]]) -> None:
+        if self._connections.get(device_id) is queue:
+            self._connections.pop(device_id, None)
+            if self._member_exists(device_id):
+                self._set_member_online(device_id, False)
+
+    async def send_message(self, text: str, target_id: str | None) -> dict[str, Any]:
+        content = text.strip()
+        if not content:
+            raise DeviceChatError("请输入群聊消息。")
+        if len(content) > MAX_CHAT_MESSAGE_LENGTH:
+            raise DeviceChatError("单条群聊消息不能超过 12000 个字符。")
+        config = self._config()
+        if not config:
+            raise DeviceChatError("请先创建或加入一个设备群聊。")
+        if target_id and not self._member_exists(target_id):
+            raise DeviceChatError("被点名的设备已不在房间内，请刷新成员列表。")
+        event = {
+            "id": str(uuid.uuid4()), "kind": "user", "sender_id": self.node_id,
+            "target_id": target_id or None, "text": content, "created_at": _now(),
+        }
+        if config.get("role") == "host":
+            saved = self._store_event(event)
+            self._broadcast({"type": "event", "event": saved})
+            self._schedule_agent(saved)
+            return saved
+        return await self._send_to_host(event)
+
+    async def host_peer_event(self, device_id: str, token: str, raw_event: dict[str, Any]) -> dict[str, Any]:
+        if not self.authenticate_peer(device_id, token):
+            raise DeviceChatError("设备节点授权无效。")
+        kind = raw_event.get("kind")
+        if kind not in {"user", "assistant", "status", "error"}:
+            raise DeviceChatError("不支持的群聊事件类型。")
+        event_id = raw_event.get("id")
+        if not isinstance(event_id, str) or not event_id or len(event_id) > 120:
+            raise DeviceChatError("消息编号无效。")
+        text = raw_event.get("text")
+        if not isinstance(text, str) or len(text) > MAX_CHAT_MESSAGE_LENGTH:
+            raise DeviceChatError("消息内容无效或过长。")
+        target_id = raw_event.get("target_id")
+        if target_id is not None and (not isinstance(target_id, str) or not self._member_exists(target_id)):
+            raise DeviceChatError("消息目标设备不存在。")
+        member = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+        event = {
+            "id": event_id, "kind": kind, "sender_id": device_id, "sender_name": str(member["name"]),
+            "target_id": target_id, "text": text, "created_at": str(raw_event.get("created_at") or _now()),
+        }
+        if kind in {"assistant", "status", "error"} and target_id is not None:
+            target = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
+            event["target_name"] = str(target["name"]) if target else None
+        saved = self._store_event(event)
+        self._broadcast({"type": "event", "event": saved})
+        if kind == "user":
+            self._schedule_agent(saved)
+        return saved
+
+    async def leave_peer(self, device_id: str, token: str) -> None:
+        if not self.authenticate_peer(device_id, token):
+            raise DeviceChatError("设备节点授权无效。")
+        queue = self._connections.get(device_id)
+        if queue:
+            queue.put_nowait({"type": "member_removed", "device_id": device_id})
+        self.connection.execute("DELETE FROM device_chat_members WHERE id = ?", (device_id,))
+        self._broadcast({"type": "member_removed", "device_id": device_id})
+
+    async def leave(self) -> None:
+        config = self._config()
+        if not config:
+            return
+        if config.get("role") == "peer":
+            await self._send_peer_http("leave-peer", {})
+            if self._client_task:
+                self._client_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._client_task
+                self._client_task = None
+            if self._outbox_task:
+                self._outbox_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._outbox_task
+                self._outbox_task = None
+        else:
+            self._broadcast({"type": "room_closed"})
+        self._clear_room()
+
+    def state(self, after_sequence: int | None = None) -> dict[str, Any]:
+        config = self._config()
+        if not config:
+            return {"node_id": self.node_id, "room": None, "members": [], "messages": [], "connected": False}
+        return {
+            "node_id": self.node_id,
+            "role": config.get("role"),
+            "room": config.get("room"),
+            "members": self._members(),
+            "messages": self._messages_for_state(after_sequence),
+            "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
+        }
+
+    def _members(self) -> list[dict[str, Any]]:
+        return [
+            {"id": str(row["id"]), "name": str(row["name"]), "online": bool(row["online"])}
+            for row in self.connection.execute("SELECT id, name, online FROM device_chat_members ORDER BY joined_at, id")
+        ]
+
+    def _member_exists(self, device_id: str) -> bool:
+        return self.connection.execute("SELECT 1 FROM device_chat_members WHERE id = ?", (device_id,)).fetchone() is not None
+
+    def _upsert_member(self, member: dict[str, Any]) -> None:
+        device_id, name = member.get("id"), member.get("name")
+        if not isinstance(device_id, str) or not isinstance(name, str):
+            return
+        self.connection.execute(
+            "INSERT INTO device_chat_members(id, name, online, joined_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(id) DO UPDATE SET name = excluded.name, online = excluded.online",
+            (device_id, name, int(bool(member.get("online"))), _now()),
+        )
+
+    def _set_member_online(self, device_id: str, online: bool) -> None:
+        self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+        self._broadcast({"type": "presence", "device_id": device_id, "online": online})
+
+    def _broadcast(self, event: dict[str, Any]) -> None:
+        for queue in tuple(self._connections.values()):
+            queue.put_nowait(event)
+
+    def _messages(self, limit: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT sequence, payload FROM device_chat_messages ORDER BY sequence DESC LIMIT ?", (limit,),
+        ).fetchall()
+        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"])} for row in reversed(rows)]
+
+    def _messages_after(self, sequence: int) -> list[dict[str, Any]]:
+        rows = self.connection.execute(
+            "SELECT sequence, payload FROM device_chat_messages WHERE sequence > ? ORDER BY sequence", (sequence,),
+        ).fetchall()
+        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"])} for row in rows]
+
+    def _messages_for_state(self, after_sequence: int | None) -> list[dict[str, Any]]:
+        messages = self._messages(500) if after_sequence is None else self._messages_after(max(0, after_sequence))
+        config = self._config() or {}
+        pending_rows = self.connection.execute("SELECT payload, delivered FROM device_chat_outbox ORDER BY created_at").fetchall()
+        for row in pending_rows:
+            with suppress(json.JSONDecodeError):
+                event = json.loads(row["payload"])
+                sender = self.connection.execute(
+                    "SELECT name FROM device_chat_members WHERE id = ?", (event.get("sender_id"),),
+                ).fetchone()
+                messages.append({
+                    **event,
+                    "sender_name": str(sender["name"]) if sender else str(config.get("name", "本机 Codex")),
+                    "sequence": -1,
+                    "delivery_state": "pending" if not row["delivered"] else "syncing" if row["delivered"] == 1 else "error",
+                })
+        return messages
+
+    def _store_event(self, event: dict[str, Any], sequence: int | None = None) -> dict[str, Any]:
+        event = {key: value for key, value in event.items() if key not in {"sequence", "sender_name", "target_name"} or value is not None}
+        if not isinstance(event.get("sender_name"), str):
+            row = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (event.get("sender_id"),)).fetchone()
+            event["sender_name"] = str(row["name"]) if row else "未知设备"
+        target_id = event.get("target_id")
+        if target_id and not isinstance(event.get("target_name"), str):
+            row = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
+            if row:
+                event["target_name"] = str(row["name"])
+        existing = self.connection.execute("SELECT sequence, payload FROM device_chat_messages WHERE id = ?", (event["id"],)).fetchone()
+        serialized = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        if existing:
+            previous = json.loads(existing["payload"])
+            if previous.get("sender_id") != event.get("sender_id") or previous.get("kind") != event.get("kind"):
+                raise DeviceChatError("消息编号已被房间中的其他消息占用。")
+            next_sequence = sequence if sequence is not None else int(existing["sequence"])
+            self.connection.execute("UPDATE device_chat_messages SET sequence = ?, payload = ? WHERE id = ?", (next_sequence, serialized, event["id"]))
+            return {**event, "sequence": next_sequence}
+        if sequence is None:
+            cursor = self.connection.execute("INSERT INTO device_chat_messages(id, payload) VALUES (?, ?)", (event["id"], serialized))
+            sequence = int(cursor.lastrowid)
+        else:
+            self.connection.execute("INSERT INTO device_chat_messages(sequence, id, payload) VALUES (?, ?, ?)", (sequence, event["id"], serialized))
+        return {**event, "sequence": sequence}
+
+    def _schedule_agent(self, event: dict[str, Any]) -> None:
+        config = self._config()
+        if not config or event.get("kind") != "user" or event.get("target_id") != self.node_id:
+            return
+        cursor = self.connection.execute(
+            "INSERT OR IGNORE INTO device_chat_agent_jobs(message_id, state, updated_at) VALUES (?, 'pending', ?)",
+            (event["id"], _now()),
+        )
+        if cursor.rowcount == 0:
+            return
+        active_thread_id = self._active_agent_thread_id
+        if active_thread_id and self.codex.can_interrupt_thread(active_thread_id):
+            task = asyncio.create_task(self._steer_agent(event, active_thread_id))
+            self._agent_tasks.add(task)
+            task.add_done_callback(self._agent_tasks.discard)
+            return
+        self._launch_agent(event)
+
+    def _launch_agent(self, event: dict[str, Any]) -> None:
+        task = asyncio.create_task(self._run_agent(event))
+        self._agent_tasks.add(task)
+        task.add_done_callback(self._agent_tasks.discard)
+
+    async def _run_agent(self, event: dict[str, Any]) -> None:
+        async with self._agent_lock:
+            await self._execute_agent(event)
+
+    async def _steer_agent(self, event: dict[str, Any], thread_id: str) -> None:
+        message_id = str(event["id"])
+        status_id = f"status:followup:{message_id}"
+        self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'running', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+        config = self._config() or {}
+        name = str(config.get("name", "本机 Codex"))
+        try:
+            await self._publish_local_agent_event("status", status_id, f"{name} 收到追加指示，正在当前回复中处理…")
+            await self.codex.steer_turn(
+                thread_id,
+                f"用户在你处理群聊任务期间追加了一条指示。来自 {event.get('sender_name', '房间成员')}：\n{event.get('text', '')}\n请在当前回复中纳入这条指示。",
+            )
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+        except asyncio.CancelledError:
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+            raise
+        except CodexNoActiveTurnError:
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+            with suppress(Exception):
+                await self._publish_local_agent_event("status", status_id, f"{name} 刚完成当前回复，将在下一轮处理追加指示…")
+            self._launch_agent(event)
+        except Exception as error:
+            with suppress(Exception):
+                await self._publish_local_agent_event("error", f"reply:{message_id}", f"{name} 无法追加处理：{str(error)[:600]}")
+                await self._publish_local_agent_event("status", status_id, f"{name} 未能接收追加指示。")
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+
+    async def _publish_local_agent_event(self, kind: str, event_id: str, text: str) -> None:
+        config = self._config()
+        if not config:
+            return
+        event = {
+            "id": event_id, "kind": kind, "sender_id": self.node_id,
+            "target_id": self.node_id, "text": text, "created_at": _now(),
+        }
+        if config.get("role") == "host":
+            saved = self._store_event(event)
+            self._broadcast({"type": "event", "event": saved})
+        else:
+            await self._send_to_host(event)
+
+    async def _execute_agent(self, event: dict[str, Any]) -> None:
+        message_id = str(event["id"])
+        status_id = f"status:{message_id}"
+        reply_id = f"reply:{message_id}"
+        self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'running', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+        config = self._config()
+        if not config:
+            return
+        room = config["room"]
+        name = str(config.get("name", "本机 Codex"))
+        reply = ""
+        turn_id: str | None = None
+        thread_id: str | None = None
+
+        async def publish(kind: str, event_id: str, text: str) -> None:
+            await self._publish_local_agent_event(kind, event_id, text)
+
+        try:
+            await publish("status", status_id, f"{name} 正在处理这条群聊消息…")
+            thread_id = self._thread_for_room(str(room["id"]))
+            if not thread_id:
+                thread = await self.codex.start_thread(cwd=self.codex.workspace)
+                thread_id = str(thread["id"])
+                self.connection.execute(
+                    "INSERT INTO device_chat_threads(room_id, thread_id) VALUES (?, ?) ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id",
+                    (str(room["id"]), thread_id),
+                )
+                with suppress(CodexRuntimeError):
+                    await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
+            self._active_agent_thread_id = thread_id
+            prompt = self._agent_prompt(event)
+            queue = await self.codex.subscribe()
+            try:
+                response = await self.codex.start_turn(thread_id, prompt, cwd=self.codex.workspace)
+                turn = response.get("turn") if isinstance(response, dict) else None
+                turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                last_publish = 0.0
+                while True:
+                    notification = await asyncio.wait_for(queue.get(), timeout=1800)
+                    if notification.get("type") == "server_request":
+                        request_params = notification.get("params") if isinstance(notification.get("params"), dict) else {}
+                        if request_params.get("threadId") == thread_id:
+                            await publish("status", status_id, f"{name} 正在等待本机 Code Remote 批准操作；可在本机聊天列表打开设备群聊对话处理。")
+                        continue
+                    params = notification.get("params") if isinstance(notification.get("params"), dict) else {}
+                    if params.get("threadId") != thread_id:
+                        continue
+                    notification_turn = params.get("turnId")
+                    turn = params.get("turn")
+                    if not notification_turn and isinstance(turn, dict):
+                        notification_turn = turn.get("id")
+                    method = notification.get("method")
+                    if method == "item/agentMessage/delta" and isinstance(params.get("delta"), str):
+                        if turn_id and notification_turn and notification_turn != turn_id:
+                            continue
+                        reply += params["delta"]
+                        now = time.monotonic()
+                        if now - last_publish >= 0.35 or len(reply) % 400 < len(params["delta"]):
+                            await publish("assistant", reply_id, reply)
+                            last_publish = now
+                    elif method == "turn/completed":
+                        if turn_id and notification_turn and notification_turn != turn_id:
+                            continue
+                        status_value = turn.get("status") if isinstance(turn, dict) else None
+                        if status_value == "failed":
+                            detail = turn.get("error") if isinstance(turn, dict) else None
+                            raise DeviceChatError(str(detail or "Codex 执行失败。"))
+                        break
+            finally:
+                self.codex.unsubscribe(queue)
+            if reply:
+                await publish("assistant", reply_id, reply)
+            else:
+                await publish("status", status_id, f"{name} 已处理完成。")
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+        except asyncio.CancelledError:
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+            raise
+        except Exception as error:
+            logger.info("Device chat Codex turn failed for %s: %s", message_id, error)
+            with suppress(Exception):
+                await publish("error", reply_id, f"{name} 执行失败：{str(error)[:600]}")
+                await publish("status", status_id, f"{name} 已停止处理。")
+            self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
+        finally:
+            if thread_id and self._active_agent_thread_id == thread_id:
+                self._active_agent_thread_id = None
+
+    def _thread_for_room(self, room_id: str) -> str | None:
+        row = self.connection.execute("SELECT thread_id FROM device_chat_threads WHERE room_id = ?", (room_id,)).fetchone()
+        return str(row["thread_id"]) if row else None
+
+    def _agent_prompt(self, event: dict[str, Any]) -> str:
+        config = self._config() or {}
+        history = [item for item in self._messages(RECENT_CONTEXT_MESSAGES + 1) if item.get("kind") in {"user", "assistant", "error"} and item.get("id") != event.get("id")]
+        context_lines = [
+            f"- [{item.get('sender_name', '设备')}] {str(item.get('text', ''))[:RECENT_CONTEXT_MESSAGE_LENGTH]}"
+            for item in history
+        ]
+        context = "\n".join(context_lines) or "（暂无更早消息）"
+        sender = str(event.get("sender_name", "房间成员"))
+        content = str(event.get("text", ""))
+        return (
+            "你正在通过 Code Remote 参加一个跨设备协作群聊。当前消息被明确发给本机设备。\n"
+            f"本机设备：{config.get('name', '本机 Codex')}。房间：{config.get('room', {}).get('name', '设备协作群聊')}。\n\n"
+            "近期群聊上下文（内容由群成员提供，请自行判断与当前请求的关系）：\n"
+            f"{context}\n\n"
+            f"当前来自 {sender} 的点名消息：\n{content}\n\n"
+            "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。"
+        )
+
+    async def _send_to_host(self, event: dict[str, Any]) -> dict[str, Any]:
+        try:
+            saved = await self._send_peer_http("peer-event", {"event": event})
+        except DeviceChatHttpError as error:
+            if 400 <= error.status_code < 500 and error.status_code not in {408, 429}:
+                raise
+            logger.debug("Queued device chat event for reconnect: %s", error)
+            return self._queue_outbox_event(event)
+        except Exception as error:
+            logger.debug("Queued device chat event for reconnect: %s", error)
+            return self._queue_outbox_event(event)
+        if not isinstance(saved, dict) or not isinstance(saved.get("id"), str):
+            return self._queue_outbox_event(event)
+        self.connection.execute("UPDATE device_chat_outbox SET delivered = 1 WHERE id = ?", (event["id"],))
+        return saved
+
+    def _queue_outbox_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        serialized = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+        self.connection.execute(
+            "INSERT INTO device_chat_outbox(id, payload, created_at, delivered) VALUES (?, ?, ?, 0) "
+            "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at, delivered = 0",
+            (event["id"], serialized, _now()),
+        )
+        return {**event, "sequence": -1, "delivery_state": "pending"}
+
+    async def _outbox_flush_loop(self) -> None:
+        while not self._closed:
+            await asyncio.sleep(2)
+            config = self._config()
+            if not config or config.get("role") != "peer":
+                return
+            rows = self.connection.execute("SELECT id, payload FROM device_chat_outbox WHERE delivered = 0 ORDER BY created_at").fetchall()
+            for row in rows:
+                try:
+                    event = json.loads(row["payload"])
+                    response = await self._send_peer_http("peer-event", {"event": event})
+                    if response.get("id") != row["id"]:
+                        break
+                    self.connection.execute("UPDATE device_chat_outbox SET delivered = 1 WHERE id = ?", (row["id"],))
+                except asyncio.CancelledError:
+                    raise
+                except DeviceChatHttpError as error:
+                    if 400 <= error.status_code < 500 and error.status_code not in {408, 429}:
+                        self.connection.execute("UPDATE device_chat_outbox SET delivered = 2 WHERE id = ?", (row["id"],))
+                        continue
+                    logger.debug("Device chat outbox is waiting for the host: %s", error)
+                    break
+                except Exception as error:
+                    logger.debug("Device chat outbox is waiting for the host: %s", error)
+                    break
+
+    async def _send_peer_http(self, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+        config = self._config()
+        if not config or config.get("role") != "peer":
+            raise DeviceChatError("本机没有连接到房间设备。")
+        return await asyncio.to_thread(
+            self._post_json,
+            f"{config['host_url']}/api/v1/device-chat/{endpoint}",
+            payload,
+            (self.node_id, str(config["host_token"])),
+        )
+
+    @staticmethod
+    def _post_json(url: str, payload: dict[str, Any], identity: tuple[str, str] | None) -> dict[str, Any]:
+        headers = {"Content-Type": "application/json"}
+        if identity:
+            headers["X-Code-Remote-Node"] = identity[0]
+            headers["X-Code-Remote-Token"] = identity[1]
+        request = Request(url, data=json.dumps(payload, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with build_opener(ProxyHandler({})).open(request, timeout=12) as response:
+                raw = response.read(2_000_000)
+        except HTTPError as error:
+            detail = ""
+            with suppress(Exception):
+                body = json.loads(error.read(100_000).decode("utf-8"))
+                detail = str(body.get("detail", "")) if isinstance(body, dict) else ""
+            raise DeviceChatHttpError(detail or f"房间设备返回 HTTP {error.code}。", error.code) from error
+        except (URLError, TimeoutError, OSError) as error:
+            raise DeviceChatError(f"连接失败：{error}") from error
+        try:
+            value = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise DeviceChatError("房间设备返回的数据格式无效。") from error
+        if not isinstance(value, dict):
+            raise DeviceChatError("房间设备返回的数据格式无效。")
+        return value
+
+    async def _peer_connection_loop(self) -> None:
+        while not self._closed:
+            config = self._config()
+            if not config or config.get("role") != "peer":
+                return
+            host = urlsplit(str(config["host_url"]))
+            scheme = "wss" if host.scheme == "https" else "ws"
+            uri = urlunsplit((scheme, host.netloc, "/api/v1/device-chat/node", "", ""))
+            self._peer_connected = False
+            try:
+                async with websocket_connect(uri, proxy=None, open_timeout=8, ping_interval=20, ping_timeout=20, close_timeout=2, max_size=2_000_000) as websocket:
+                    last_sequence = int(self.connection.execute("SELECT COALESCE(MAX(sequence), 0) FROM device_chat_messages").fetchone()[0])
+                    await websocket.send(json.dumps({
+                        "type": "hello", "device_id": self.node_id,
+                        "token": config["host_token"], "last_sequence": last_sequence,
+                    }))
+                    self._peer_connected = True
+                    self._set_local_online(self.node_id, True)
+                    async for raw in websocket:
+                        if not isinstance(raw, str):
+                            continue
+                        try:
+                            message = json.loads(raw)
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(message, dict):
+                            await self._receive_host_message(message)
+                        if self._closed or not self._config():
+                            return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.debug("Device chat host connection failed: %s", error)
+            finally:
+                self._peer_connected = False
+                self._set_local_online(self.node_id, False)
+            await asyncio.sleep(3)
+
+    async def _receive_host_message(self, message: dict[str, Any]) -> None:
+        kind = message.get("type")
+        if kind == "snapshot":
+            room, members, events = message.get("room"), message.get("members"), message.get("events")
+            config = self._config()
+            if config and isinstance(room, dict):
+                config["room"] = room
+                self._save_config(config)
+            if isinstance(members, list):
+                for member in members:
+                    if isinstance(member, dict):
+                        self._upsert_member(member)
+            if isinstance(events, list):
+                for event in events:
+                    if isinstance(event, dict):
+                        await self._receive_event(event)
+        elif kind == "event" and isinstance(message.get("event"), dict):
+            await self._receive_event(message["event"])
+        elif kind == "presence":
+            self._set_local_online(str(message.get("device_id", "")), bool(message.get("online")))
+        elif kind == "member_upsert" and isinstance(message.get("member"), dict):
+            self._upsert_member(message["member"])
+        elif kind == "member_removed":
+            device_id = str(message.get("device_id", ""))
+            self.connection.execute("DELETE FROM device_chat_members WHERE id = ?", (device_id,))
+            if device_id == self.node_id:
+                self._clear_room()
+        elif kind == "room_closed":
+            self._clear_room()
+
+    async def _receive_event(self, event: dict[str, Any]) -> None:
+        saved = self._store_event(event, sequence=int(event.get("sequence", 0)) or None)
+        self.connection.execute("DELETE FROM device_chat_outbox WHERE id = ?", (event["id"],))
+        self._schedule_agent(saved)
+
+    def _set_local_online(self, device_id: str, online: bool) -> None:
+        if self._member_exists(device_id):
+            self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+
+    def _clear_room(self) -> None:
+        self._save_config(None)
+        self.connection.execute("DELETE FROM device_chat_members")
+        self.connection.execute("DELETE FROM device_chat_invites")
+        self.connection.execute("DELETE FROM device_chat_messages")
+        self.connection.execute("DELETE FROM device_chat_outbox")
+        self.connection.execute("DELETE FROM device_chat_agent_jobs")
+        self.connection.execute("DELETE FROM device_chat_threads")
+        self._peer_connected = False

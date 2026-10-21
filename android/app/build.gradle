@@ -11,8 +11,8 @@ android {
         applicationId 'com.sevencnup.codexremote'
         minSdk 26
         targetSdk 35
-        versionCode 350
-        versionName '0.66.1-dev.6'
+        versionCode 351
+        versionName '0.68.0-dev.1'
         ndk {
             abiFilters 'arm64-v8a', 'armeabi-v7a'
         }

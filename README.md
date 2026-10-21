@@ -54,6 +54,12 @@ journalctl -u codex-remote.service -f
 
 网页服务把 API 和 WebSocket 请求转发给电脑上的 `127.0.0.1:18766`。Codex App Server 只通过本机 stdio 连接，不开放网络端口。手机与电脑之间的网页连接使用局域网 HTTP；只在可信网络中使用，并允许电脑防火墙接收 4173 端口的连接。
 
+## 跨设备 Codex 群聊
+
+Linux 和 Windows 各自启动 Code Remote，并分别在自己的浏览器中完成配对。选择一台设备作为房间设备，在侧栏打开“设备群聊”并创建房间；把页面显示的局域网网页地址和一次性加入码填到另一台设备的“加入房间”表单。地址必须能从另一台电脑访问，不能填写 `localhost`；房间设备的 Code Remote 服务需要保持运行。
+
+加入后，在“发送给”中选择 `@设备名`，消息会交给那台设备上的本机 Codex，回复和其他群聊消息会同步到两边。每台设备会为房间创建独立 Codex 对话，普通聊天记录不会被改写。若 Codex 请求操作批准，请在目标设备自己的 Code Remote 聊天列表中打开“设备群聊”对话进行处理。
+
 Windows 和 Linux 都支持。Windows 原生环境请在项目目录的 PowerShell 中创建 `.venv`，然后运行 `pnpm --filter code-remote start`，也可双击 `启动 Code Remote.bat`；启动器会自动使用 `.venv\Scripts\python.exe`，并兼容 `codex.cmd`/`codex.exe`。如果 Codex 不在 PATH 中，可显式设置：
 
 ```powershell

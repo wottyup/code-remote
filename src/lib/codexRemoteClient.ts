@@ -108,6 +108,34 @@ export interface CodexRuntime {
   error: string | null
 }
 
+export interface DeviceChatMember {
+  id: string
+  name: string
+  online: boolean
+}
+
+export interface DeviceChatMessage {
+  id: string
+  sequence: number
+  kind: 'user' | 'assistant' | 'status' | 'error'
+  sender_id: string
+  sender_name: string
+  target_id?: string | null
+  target_name?: string | null
+  text: string
+  created_at: string
+  delivery_state?: 'pending' | 'syncing' | 'error'
+}
+
+export interface DeviceChatState {
+  node_id: string
+  role?: 'host' | 'peer'
+  room: { id: string; name: string; host_id: string; host_name: string } | null
+  members: DeviceChatMember[]
+  messages: DeviceChatMessage[]
+  connected: boolean
+}
+
 export interface CodexWorkspaceEntry {
   name: string
   path: string
@@ -638,6 +666,33 @@ export const codexRemoteClient = {
   },
   unpair(token: string) {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
+  },
+  deviceChatState(token: string, afterSequence?: number) {
+    const query = afterSequence === undefined ? '' : `?after_sequence=${encodeURIComponent(String(afterSequence))}`
+    return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, undefined, { timeoutMs: 8_000, networkRetries: 0 })
+  },
+  createDeviceChat(token: string, name: string) {
+    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/create', {
+      method: 'POST', body: JSON.stringify({ name }),
+    })
+  },
+  inviteDeviceChat(token: string, name: string) {
+    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/invite', {
+      method: 'POST', body: JSON.stringify({ name }),
+    })
+  },
+  joinDeviceChat(token: string, hostUrl: string, code: string, name: string) {
+    return request<DeviceChatState>(token, '/api/v1/device-chat/join', {
+      method: 'POST', body: JSON.stringify({ host_url: hostUrl, code, name }),
+    }, { timeoutMs: 20_000, networkRetries: 0 })
+  },
+  sendDeviceChatMessage(token: string, text: string, targetId: string | null) {
+    return request<DeviceChatMessage>(token, '/api/v1/device-chat/message', {
+      method: 'POST', body: JSON.stringify({ text, target_id: targetId }),
+    }, { timeoutMs: 15_000, networkRetries: 0 })
+  },
+  leaveDeviceChat(token: string) {
+    return request<{ left: boolean }>(token, '/api/v1/device-chat/leave', { method: 'POST' }, { timeoutMs: 10_000, networkRetries: 0 })
   },
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })

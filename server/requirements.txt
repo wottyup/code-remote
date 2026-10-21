@@ -1,5 +1,5 @@
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.30,<1.0
 watchfiles>=0.21,<2.0
-websockets>=14,<16
+websockets>=15,<16
 pywinpty>=2.0.13; sys_platform == 'win32'

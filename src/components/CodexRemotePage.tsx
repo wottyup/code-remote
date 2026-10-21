@@ -44,6 +44,7 @@ import {
   Square,
   Terminal as TerminalIcon,
   Trash2,
+  Users,
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
@@ -68,6 +69,7 @@ import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberW
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
+import { DeviceChatPanel } from './DeviceChatPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
@@ -109,8 +111,9 @@ function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: num
 type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification'
 
 function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
-  if (theme !== 'pixel') return null
-  return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
+  if (theme === 'pixel') return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
+  if (theme === 'chinese-retro') return <img className="chinese-retro-theme-icon" src={`/chinese-retro/icons/${name}-cool.png`} alt="" aria-hidden="true" />
+  return null
 }
 
 function WelcomeTypingTitle({ text }: { text: string }) {
@@ -169,7 +172,7 @@ function WelcomeTypingTitle({ text }: { text: string }) {
 }
 
 function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
-  if (preferences.theme === 'light' || preferences.theme === 'warm' || preferences.theme === 'retro') return true
+  if (preferences.theme === 'light' || preferences.theme === 'warm' || preferences.theme === 'retro' || preferences.theme === 'chinese-retro') return true
   if (preferences.theme === 'dark') return false
 
   const hex = preferences.customBackgroundColor.slice(1)
@@ -3941,6 +3944,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
+  const [deviceChatOpen, setDeviceChatOpen] = useState(false)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -4021,6 +4025,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(false)
     setWorkspaceOpen(true)
   }, [])
+  const openDeviceChatPanel = useCallback(() => {
+    setDeviceChatOpen(true)
+    setSidebarOpen(false)
+    setWorkspaceOpen(false)
+  }, [])
+  const closeDeviceChatPanel = useCallback(() => setDeviceChatOpen(false), [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
@@ -5423,6 +5433,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </nav>
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
+          <button className={'sidebar-settings' + (deviceChatOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设备群聊" title="设备群聊" onClick={openDeviceChatPanel}><Users size={16} /><span>设备群聊</span></button>
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
@@ -5662,6 +5673,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
         </>
       )}
+      {deviceChatOpen ? <DeviceChatPanel token={token} onClose={closeDeviceChatPanel} /> : null}
     </div>
   )
 }
@@ -5696,6 +5708,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
     { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
+    { value: 'chinese-retro', label: '中国复古', description: '青黛山水与冷白灰青纹样', previewClass: 'theme-option__preview--chinese-retro' },
     { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
     { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },

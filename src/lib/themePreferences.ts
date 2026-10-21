@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 
-export type AppTheme = 'light' | 'dark' | 'warm' | 'custom' | 'retro' | 'pixel'
+export type AppTheme = 'light' | 'dark' | 'warm' | 'custom' | 'retro' | 'pixel' | 'chinese-retro'
 
 export interface ThemePreferences {
   theme: AppTheme
@@ -67,7 +67,7 @@ export function readThemePreferences(): ThemePreferences {
     const value = window.localStorage.getItem(themePreferencesStorageKey)
     if (!value) return defaultThemePreferences
     const parsed = JSON.parse(value) as Record<string, unknown>
-    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' || parsed.theme === 'retro' || parsed.theme === 'pixel'
+    const theme = parsed.theme === 'light' || parsed.theme === 'dark' || parsed.theme === 'warm' || parsed.theme === 'custom' || parsed.theme === 'retro' || parsed.theme === 'pixel' || parsed.theme === 'chinese-retro'
       ? parsed.theme
       : defaultThemePreferences.theme
     const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
