@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.68.0-dev.1] - 新增跨设备 Codex 群聊
+
 ## [0.67.0-dev.1] - 新增中国复古风主题
 
 ## [0.66.1-dev.6] - 同步 Windows、Claude 与 Codex 稳定性修复
