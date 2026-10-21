@@ -877,11 +877,25 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
     async def test_interrupt_reports_turn_owned_by_another_app_server(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         app_server.request = AsyncMock(side_effect=CodexRuntimeError("thread not found: thread-id"))
+        app_server.resume_thread = AsyncMock(return_value={"id": "thread-id"})
 
         with self.assertRaises(CodexExternalTurnError):
             await app_server.interrupt("thread-id", "turn-id")
 
         self.assertEqual(app_server._active_turn_ids.get("thread-id"), None)
+        app_server.resume_thread.assert_awaited_once_with("thread-id")
+
+    async def test_interrupt_retries_after_resuming_unloaded_thread(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server.request = AsyncMock(side_effect=[
+            CodexRuntimeError("thread not found: thread-id"),
+            {"interrupted": True},
+        ])
+        app_server.resume_thread = AsyncMock(return_value={"id": "thread-id"})
+
+        self.assertEqual(await app_server.interrupt("thread-id", "turn-id"), {"interrupted": True})
+        app_server.resume_thread.assert_awaited_once_with("thread-id")
+        self.assertEqual(app_server.request.await_count, 2)
 
     async def test_interrupt_waits_for_a_turn_that_is_still_starting(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())

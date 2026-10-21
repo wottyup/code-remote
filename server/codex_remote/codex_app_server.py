@@ -1012,9 +1012,20 @@ class CodexAppServer:
         except CodexRuntimeError as error:
             if "thread not found" in str(error).casefold():
                 self._active_turn_ids.pop(thread_id, None)
-                raise CodexExternalTurnError(
-                    "此回复由 Codex Desktop 的另一个进程运行；请在 Codex 窗口中停止。"
-                ) from error
+                # After a Remote restart, the shared history can contain a
+                # web-created thread that this app-server has not loaded yet.
+                # Resume it once before deciding that another process owns it.
+                try:
+                    await self.resume_thread(thread_id)
+                    return await self.request("turn/interrupt", {
+                        "threadId": thread_id, "turnId": active_turn_id,
+                    })
+                except CodexRuntimeError as retry_error:
+                    if "thread not found" in str(retry_error).casefold():
+                        raise CodexExternalTurnError(
+                            "当前 Codex 进程无法暂停此回复；请在实际运行该对话的窗口中停止。"
+                        ) from retry_error
+                    raise
             raise
 
     async def answer_server_request(self, request_id: str | int, decision: str) -> None:
