@@ -54,6 +54,7 @@ import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
+import { formatAssistantChoiceReply, parseAssistantChoiceGroups, type MessageChoiceGroup } from '../lib/messageChoices'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
@@ -987,6 +988,7 @@ type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'doc
 
 interface ComposerHandle {
   replaceDraft(value: string): void
+  appendReplyDraft(value: string): boolean
   appendDraft(value: string, focus?: boolean): void
   insertDraftAtCursor(value: string, focus?: boolean): void
   addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
@@ -1353,6 +1355,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     replaceDraft(value) {
       updateDraft(value)
       window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+    },
+    appendReplyDraft(value) {
+      if (editingQueuedMessageIdRef.current || sendingRef.current) return false
+      const current = draftRef.current
+      const separator = current.trim() ? current.endsWith('\n') ? '\n' : '\n\n' : ''
+      const next = `${current}${separator}${value}`
+      updateDraft(next)
+      window.requestAnimationFrame(() => {
+        const textarea = composer.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.setSelectionRange(next.length, next.length)
+      })
+      return true
     },
     appendDraft(value, focus = true) {
       const current = draftRef.current
@@ -3523,6 +3539,11 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const fillChoiceReply = useCallback((reply: string) => {
+    const currentComposer = composerHandle.current
+    if (!active || !currentComposer) return false
+    return currentComposer.appendReplyDraft(reply)
+  }, [active, composerHandle])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -3557,6 +3578,8 @@ function RemoteChatPane({
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
   const visibleMessages = remote.messages.slice(visibleStartIndex)
+  const latestDeviceChatContentId = [...(deviceChat?.state?.messages ?? [])]
+    .reverse().find((message) => message.kind === 'user' || message.kind === 'assistant')?.id
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -3822,6 +3845,8 @@ function RemoteChatPane({
                 fileChanges={[]}
                 activityTimeline={[]}
                 showOperations={false}
+                choiceEnabled={active && message.kind === 'assistant' && message.id === latestDeviceChatContentId}
+                onUseChoices={fillChoiceReply}
                 copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                 onCopy={onCopy}
                 onOpenFile={openChangedFilePreview}
@@ -3871,6 +3896,8 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
+                  choiceEnabled={active && message.role === 'assistant' && turnComplete && index === remote.messages.length - 1}
+                  onUseChoices={fillChoiceReply}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
@@ -6730,7 +6757,44 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean }) {
+  const [selected, setSelected] = useState(() => groups.map(() => -1))
+  const [inserted, setInserted] = useState(false)
+  const [notice, setNotice] = useState('可在输入框修改后发送')
+  const complete = selected.every((optionIndex) => optionIndex >= 0)
+
+  return (
+    <div className="message-choices" aria-label="助手提出的选择题">
+      <strong className="message-choices__heading">快速选择</strong>
+      {groups.map((group, groupIndex) => (
+        <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
+          <legend>{group.question}</legend>
+          <div className="message-choices__options">
+            {group.options.map((option, optionIndex) => (
+              <button
+                className={`message-choices__option${selected[groupIndex] === optionIndex ? ' message-choices__option--selected' : ''}`}
+                type="button"
+                key={`${optionIndex}-${option}`}
+                aria-pressed={selected[groupIndex] === optionIndex}
+                disabled={inserted}
+                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? optionIndex : value))}
+              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}{option}</button>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+      <div className="message-choices__footer">
+        <button type="button" disabled={!complete || inserted} onClick={() => {
+          if (onUse(formatAssistantChoiceReply(groups, selected))) setInserted(true)
+          else setNotice('请先结束当前编辑，再填入回答')
+        }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
+        <small>{notice}</small>
+      </div>
+    </div>
+  )
+}
+
+const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   deviceChatMessage?: DeviceChatMessage
   assistantName: string
@@ -6738,6 +6802,8 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
+  choiceEnabled?: boolean
+  onUseChoices?: (reply: string) => boolean
   copyFeedback: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
@@ -6751,6 +6817,13 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)
   const deviceDelivery = deviceChatMessage?.delivery_state === 'pending' ? '等待发送' : deviceChatMessage?.delivery_state === 'syncing' ? '等待同步' : deviceChatMessage?.delivery_state === 'error' ? '发送失败' : null
+  const choiceGroups = choiceEnabled && message.role === 'assistant' && message.text
+    ? parseAssistantChoiceGroups(message.text) : []
+  const firstChoiceQuestionOffset = choiceGroups.length > 0 ? message.text.indexOf(choiceGroups[0].question) : -1
+  const showChoiceFormInsteadOfText = firstChoiceQuestionOffset >= 0
+    && !message.text.slice(0, firstChoiceQuestionOffset).replace(/[\s#>*_\d.)、-]/gu, '')
+  const renderedText = showChoiceFormInsteadOfText ? '' : message.text
+
   return (
     <article className={`chat-message chat-message--${message.role}${deviceChatMessage ? ' chat-message--device' : ''}${deviceChatMessage?.kind === 'error' ? ' chat-message--device-error' : ''}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
@@ -6763,10 +6836,11 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
-          : message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
+          : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={message.text} groups={choiceGroups} onUse={onUseChoices} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">

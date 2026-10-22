@@ -744,6 +744,19 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message__actions button:hover { background: #252931; color: #d6dce7; }
 .chat-message--user .chat-message__actions { justify-content: flex-end; }
 .chat-message--user .chat-message__footer .chat-message__actions { margin-top: 0; }
+.message-choices { display: grid; width: min(100%, 840px); gap: 12px; margin-top: 12px; padding: 13px 14px; border: 1px solid color-mix(in srgb, currentColor 23%, transparent); border-radius: 10px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; font-size: calc(12.5px + var(--mobile-font-offset)); line-height: 1.5; }
+.message-choices__heading { font-size: calc(12px + var(--mobile-font-offset)); font-weight: 650; }
+.message-choices__group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.message-choices__group legend { margin-bottom: 7px; padding: 0; font-weight: 580; }
+.message-choices__options { display: flex; flex-wrap: wrap; gap: 7px; }
+.message-choices__option { display: inline-flex; max-width: 100%; min-height: 32px; align-items: center; gap: 5px; padding: 5px 10px; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 5%, transparent); color: inherit; cursor: pointer; text-align: left; white-space: normal; }
+.message-choices__option:hover:not(:disabled), .message-choices__option--selected { border-color: color-mix(in srgb, currentColor 64%, transparent); background: color-mix(in srgb, currentColor 13%, transparent); }
+.message-choices__option:disabled { cursor: default; }
+.message-choices__footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.message-choices__footer > button { min-height: 32px; padding: 5px 12px; border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 17%, transparent); color: inherit; cursor: pointer; font-weight: 600; }
+.message-choices__footer > button:disabled { cursor: default; opacity: .5; }
+.message-choices__footer > small { opacity: .7; }
+@media (max-width: 700px) { .message-choices__option { width: 100%; min-height: 40px; } .message-choices__footer > button { min-height: 40px; } }
 .running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -3px auto 0; }
 .running-indicator__row { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 8px; }
 .running-indicator__activity { display: flex; min-width: 0; flex: 0 1 auto; align-items: center; gap: 5px; color: #8d939d; font: 400 13.5px/1.72 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(13.5px + var(--mobile-font-offset)); }
