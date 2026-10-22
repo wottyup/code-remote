@@ -1349,7 +1349,8 @@ function activityTimelineFromThread(thread: { turns?: unknown[] }): ActivityTime
       const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       const itemId = typeof item.id === 'string' && item.id ? item.id : `history-${turnId}-${itemIndex}`
       if (itemType === 'agentmessage') {
-        const length = assistantItemText(item.text).length
+        const length = typeof item.length === 'number' && Number.isFinite(item.length)
+          ? Math.max(0, item.length) : assistantItemText(item.text).length
         if (length > 0) timeline.push({ type: 'message', itemId, length })
         continue
       }
@@ -1360,6 +1361,16 @@ function activityTimelineFromThread(thread: { turns?: unknown[] }): ActivityTime
     if (timeline.length > 0) groups[turnId] = timeline
     return groups
   }, {})
+}
+
+export function deviceChatActivityFromItems(items: unknown[]) {
+  const turnId = 'device-chat-activity'
+  const thread = { turns: [{ id: turnId, items }] }
+  return {
+    operations: operationsFromThread(thread)[turnId] ?? [],
+    fileChanges: fileChangesFromThread(thread)[turnId] ?? [],
+    timeline: activityTimelineFromThread(thread)[turnId] ?? [],
+  }
 }
 
 function finishTurnOperations(current: OperationsByTurn, turnId: string, status: CodexOperationStatus): OperationsByTurn {

@@ -52,11 +52,10 @@
 .remote-shell--device-chat .chat-message.chat-message--user .chat-message__meta { display: flex; min-height: 18px; margin-bottom: 3px; }
 .remote-shell--device-chat .chat-message--device-error .chat-message__meta strong { color: #e28e95; }
 .remote-shell--device-chat .device-chat-recipient { font-size: 12px; }
-.remote-shell--device-chat .device-chat-recipient select { height: 32px; font-size: 12px; }
 .remote-shell--theme-light .device-chat-card { background: #fff; }
 .remote-shell--theme-light .device-chat-card h3, .remote-shell--theme-light .device-chat-member strong, .remote-shell--theme-light .device-chat-members__heading { color: #222; }
 .remote-shell--theme-light .device-chat-card p, .remote-shell--theme-light .device-chat-field, .remote-shell--theme-light .device-chat-peer-note { color: #666; }
-.remote-shell--theme-light .device-chat-field input, .remote-shell--theme-light .device-chat-recipient select { background: #fff; color: #222; }
+.remote-shell--theme-light .device-chat-field input { background: #fff; color: #222; }
 .remote-shell--theme-light .device-chat-code strong { color: #263965; }
 .remote-shell--theme-light .device-chat-invite-tools button, .remote-shell--theme-light .device-chat-code button { background: #fff; color: #394357; }
 .remote-shell--theme-light .device-chat-member { background: #fff; }
@@ -99,10 +98,16 @@
 .device-chat-leave:hover:not(:disabled) { border-color: rgba(207, 119, 125, .42); background: rgba(131, 48, 56, .24); color: #f0b5b9; }
 .device-chat-leave:disabled { cursor: default; opacity: .55; }
 .device-chat-status { display: inline-flex; max-width: 100%; align-self: center; align-items: center; gap: 7px; padding: 5px 9px; border: 1px solid rgba(146, 157, 184, .1); border-radius: 999px; background: rgba(22, 24, 30, .7); color: #858c9a; font-size: 10px; }
-.device-chat-recipient { display: flex; align-items: center; gap: 8px; min-width: 0; color: #929aa8; font-size: 10px; }
-.device-chat-recipient select { min-width: 0; max-width: 100%; height: 29px; padding: 0 8px; border: 1px solid rgba(146, 157, 184, .2); border-radius: 7px; background: #1a1d24; color: #cbd1dd; font-size: 10px; }
+.device-chat-recipient { display: flex; flex: 1 0 100%; align-items: flex-start; gap: 8px; min-width: 0; color: var(--muted); }
+.device-chat-recipient > span { flex: 0 0 auto; line-height: 32px; }
+.device-chat-recipient__options { display: flex; min-width: 0; flex-wrap: wrap; gap: 5px; }
+.device-chat-recipient__options button { min-height: 32px; max-width: 100%; padding: 4px 10px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: inherit; cursor: pointer; font: inherit; overflow-wrap: anywhere; }
+.device-chat-recipient__options button:hover { border-color: #718ac5; }
+.device-chat-recipient__options button[aria-pressed="true"] { border-color: #718ac5; background: rgba(68, 87, 145, .25); color: inherit; }
+.device-chat-recipient__options button:focus-visible { outline: 2px solid #718ac5; outline-offset: 2px; }
 .remote-shell--device-chat .composer-preferences { flex-wrap: wrap; }
 .remote-shell--device-chat .device-chat-recipient { max-width: 100%; }
+.remote-shell--theme-retro.remote-shell--device-chat .composer-preferences .device-chat-recipient { grid-column: 1 / -1; }
 
 @media (max-width: 700px) {
   .device-chat-members { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 10px; overflow: visible; padding: 8px 11px; border-right: 0; border-bottom: 1px solid rgba(146, 157, 184, .13); }

@@ -33,12 +33,18 @@ export function useDeviceChat(token: string, enabled: boolean) {
   const [copied, setCopied] = useState<string | null>(null)
   const lastCursor = useRef<number | undefined>(undefined)
   const lastSequence = useRef<number | undefined>(undefined)
+  const lastRoomId = useRef<string | null>(null)
 
   const mergeState = (next: DeviceChatState) => {
+    const nextRoomId = next.room?.id ?? null
+    const sameRoom = lastRoomId.current !== null && lastRoomId.current === nextRoomId
+    const nextCursor = Math.max(0, ...next.messages.map((message) => message.cursor ?? message.sequence))
+    const nextSequence = Math.max(0, ...next.messages.map((message) => message.sequence))
+    lastCursor.current = sameRoom ? Math.max(lastCursor.current ?? 0, nextCursor) : nextCursor
+    lastSequence.current = sameRoom ? Math.max(lastSequence.current ?? 0, nextSequence) : nextSequence
+    lastRoomId.current = nextRoomId
     setState((current) => {
       if (!current?.room || !next.room || current.room.id !== next.room.id) {
-        lastCursor.current = Math.max(0, ...next.messages.map((message) => message.cursor ?? message.sequence))
-        lastSequence.current = Math.max(0, ...next.messages.map((message) => message.sequence))
         return next
       }
       const messages = new Map(current.messages.map((message) => [message.id, message]))
@@ -49,29 +55,50 @@ export function useDeviceChat(token: string, enabled: boolean) {
         }
       }
       const ordered = [...messages.values()].sort(messageOrder).slice(-500)
-      lastCursor.current = Math.max(lastCursor.current ?? 0, ...next.messages.map((message) => message.cursor ?? message.sequence))
-      lastSequence.current = Math.max(lastSequence.current ?? 0, ...next.messages.map((message) => message.sequence))
       return { ...next, messages: ordered }
     })
   }
 
-  const refresh = async (showError = false) => {
+  const refresh = async (showError = false, signal?: AbortSignal, waitMs = 0) => {
     try {
-      const next = await codexRemoteClient.deviceChatState(token, lastCursor.current, lastSequence.current)
+      const next = await codexRemoteClient.deviceChatState(token, lastCursor.current, lastSequence.current, waitMs, signal)
       mergeState(next)
+      return true
     } catch (reason) {
-      if (showError) setError(reason instanceof Error ? reason.message : '无法读取设备群聊状态。')
+      if (!signal?.aborted && showError) setError(reason instanceof Error ? reason.message : '无法读取设备群聊状态。')
+      return false
     } finally {
-      if (showError) setLoading(false)
+      if (!signal?.aborted && showError) setLoading(false)
     }
   }
 
   useEffect(() => {
     if (!enabled) return
-    void refresh(true)
-    const timer = window.setInterval(() => void refresh(), 1200)
+    let stopped = false
+    let initial = true
+    let activeRequest: AbortController | null = null
+    const poll = async () => {
+      while (!stopped) {
+        const controller = new AbortController()
+        activeRequest = controller
+        const waitMs = initial ? 0 : 20_000
+        const cursorBeforeRequest = lastCursor.current
+        const requestStartedAt = performance.now()
+        const updated = await refresh(initial, controller.signal, waitMs)
+        initial = false
+        if (activeRequest === controller) activeRequest = null
+        const unsupportedLongPoll = updated && waitMs > 0
+          && lastCursor.current === cursorBeforeRequest
+          && performance.now() - requestStartedAt < 500
+        if ((!updated || unsupportedLongPoll) && !stopped) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 750))
+        }
+      }
+    }
+    void poll()
     return () => {
-      window.clearInterval(timer)
+      stopped = true
+      activeRequest?.abort()
     }
   }, [token, enabled])
 

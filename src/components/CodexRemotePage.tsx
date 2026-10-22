@@ -47,13 +47,14 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { deviceChatActivityFromItems, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
+import { formatAssistantChoiceReply, parseAssistantChoiceGroups, type MessageChoiceGroup } from '../lib/messageChoices'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
@@ -987,6 +988,7 @@ type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'doc
 
 interface ComposerHandle {
   replaceDraft(value: string): void
+  appendReplyDraft(value: string): boolean
   appendDraft(value: string, focus?: boolean): void
   insertDraftAtCursor(value: string, focus?: boolean): void
   addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
@@ -1353,6 +1355,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     replaceDraft(value) {
       updateDraft(value)
       window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
+    },
+    appendReplyDraft(value) {
+      if (editingQueuedMessageIdRef.current || sendingRef.current) return false
+      const current = draftRef.current
+      const separator = current.trim() ? current.endsWith('\n') ? '\n' : '\n\n' : ''
+      const next = `${current}${separator}${value}`
+      updateDraft(next)
+      window.requestAnimationFrame(() => {
+        const textarea = composer.current
+        if (!textarea) return
+        textarea.focus({ preventScroll: true })
+        textarea.setSelectionRange(next.length, next.length)
+      })
+      return true
     },
     appendDraft(value, focus = true) {
       const current = draftRef.current
@@ -2190,7 +2206,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {!deviceChat ? <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button> : null}
           <div className="composer-preferences">
             {deviceChat ? <>
-              <label className="device-chat-recipient"><span>发送给</span><select value={deviceChat.targetId} onChange={(event) => deviceChat.setTargetId(event.currentTarget.value)}><option value="">所有人（只同步）</option>{deviceChat.state?.members.map((member) => <option key={member.id} value={member.id}>@{member.name}（运行该设备 Codex）</option>)}</select></label>
+              <div className="device-chat-recipient" role="group" aria-label="发送给设备">
+                <span>发送给</span>
+                <div className="device-chat-recipient__options">
+                  <button type="button" aria-pressed={!deviceChat.targetId} title="只同步群消息，不运行设备 Codex" onClick={() => deviceChat.setTargetId('')}>所有人</button>
+                  {deviceChat.state?.members.map((member) => <button key={member.id} type="button" aria-pressed={deviceChat.targetId === member.id} title={`运行 ${member.name} 设备上的 Codex`} onClick={() => deviceChat.setTargetId(member.id)}>@{member.name}</button>)}
+                </div>
+              </div>
               <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="目标默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
               <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="目标默认思考" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
               {deviceChat.targetId === deviceChat.state?.node_id && deviceChat.targetId
@@ -3523,6 +3545,11 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const fillChoiceReply = useCallback((reply: string) => {
+    const currentComposer = composerHandle.current
+    if (!active || !currentComposer) return false
+    return currentComposer.appendReplyDraft(reply)
+  }, [active, composerHandle])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -3557,6 +3584,8 @@ function RemoteChatPane({
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
   const visibleMessages = remote.messages.slice(visibleStartIndex)
+  const latestDeviceChatContentId = [...(deviceChat?.state?.messages ?? [])]
+    .reverse().find((message) => message.kind === 'user' || message.kind === 'assistant')?.id
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -3811,22 +3840,33 @@ function RemoteChatPane({
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
         <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => message.kind === 'status'
-            ? <div className="device-chat-status" key={message.id}>{message.text}</div>
-            : <MessageBubble
+          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => {
+            if (message.kind === 'status') return <div className="device-chat-status" key={message.id}>{message.text}</div>
+            const activity = message.kind === 'assistant' && message.activity?.items
+              ? deviceChatActivityFromItems(message.activity.items) : null
+            // Room paths belong to the sending device. Keep operation text but
+            // do not offer a local file open action for another machine's path.
+            const displayOperations = activity?.operations.map((operation) => ({
+              ...operation, paths: [], imagePath: undefined,
+              steps: operation.steps?.map((step) => ({ ...step, path: undefined })),
+            })) ?? []
+            return <Fragment key={message.id}><MessageBubble
                 key={message.id}
-                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at }}
+                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at, streaming: message.activity?.state === 'running' }}
                 deviceChatMessage={message}
                 assistantName="Codex"
-                operations={[]}
+                operations={displayOperations}
                 fileChanges={[]}
-                activityTimeline={[]}
-                showOperations={false}
+                activityTimeline={activity?.timeline ?? []}
+                showOperations={message.kind === 'assistant'}
+                choiceEnabled={active && message.kind === 'assistant' && message.id === latestDeviceChatContentId}
+                onUseChoices={fillChoiceReply}
                 copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                 onCopy={onCopy}
                 onOpenFile={openChangedFilePreview}
                 onOpenImage={openViewedImagePreview}
-              />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
+              />{activity?.fileChanges.length ? <FileChangeCard changes={activity.fileChanges} readOnly onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}</Fragment>
+          }) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
           {deviceChat.approval ? <div className="approval-card" role="alert">
             <div className="approval-card__heading"><AlertTriangle size={17} /><strong>本机群聊 Codex 需要你的批准</strong></div>
             <p>{typeof deviceChat.approval.params.reason === 'string' ? deviceChat.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
@@ -3871,6 +3911,8 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
+                  choiceEnabled={active && message.role === 'assistant' && turnComplete && index === remote.messages.length - 1}
+                  onUseChoices={fillChoiceReply}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
@@ -6460,7 +6502,7 @@ function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
   }
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void }) {
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile, readOnly = false }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void; readOnly?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const { files, additions, deletions } = summarizeFileChanges(changes)
@@ -6495,10 +6537,10 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
         {visibleFiles.map((item) => (
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
-              <button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
-              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
+              {readOnly ? <span className="file-change-card__path-readonly" title={item.path}>{item.path}</span> : <><button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button></>}
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
-              <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
+              {!readOnly ? <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button> : null}
             </div>
             {reviewing ? (
               item.diff
@@ -6730,7 +6772,44 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean }) {
+  const [selected, setSelected] = useState(() => groups.map(() => -1))
+  const [inserted, setInserted] = useState(false)
+  const [notice, setNotice] = useState('可在输入框修改后发送')
+  const complete = selected.every((optionIndex) => optionIndex >= 0)
+
+  return (
+    <div className="message-choices" aria-label="助手提出的选择题">
+      <strong className="message-choices__heading">快速选择</strong>
+      {groups.map((group, groupIndex) => (
+        <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
+          <legend>{group.question}</legend>
+          <div className="message-choices__options">
+            {group.options.map((option, optionIndex) => (
+              <button
+                className={`message-choices__option${selected[groupIndex] === optionIndex ? ' message-choices__option--selected' : ''}`}
+                type="button"
+                key={`${optionIndex}-${option}`}
+                aria-pressed={selected[groupIndex] === optionIndex}
+                disabled={inserted}
+                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? optionIndex : value))}
+              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}{option}</button>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+      <div className="message-choices__footer">
+        <button type="button" disabled={!complete || inserted} onClick={() => {
+          if (onUse(formatAssistantChoiceReply(groups, selected))) setInserted(true)
+          else setNotice('请先结束当前编辑，再填入回答')
+        }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
+        <small>{notice}</small>
+      </div>
+    </div>
+  )
+}
+
+const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   deviceChatMessage?: DeviceChatMessage
   assistantName: string
@@ -6738,6 +6817,8 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
+  choiceEnabled?: boolean
+  onUseChoices?: (reply: string) => boolean
   copyFeedback: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
@@ -6751,6 +6832,13 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)
   const deviceDelivery = deviceChatMessage?.delivery_state === 'pending' ? '等待发送' : deviceChatMessage?.delivery_state === 'syncing' ? '等待同步' : deviceChatMessage?.delivery_state === 'error' ? '发送失败' : null
+  const choiceGroups = choiceEnabled && message.role === 'assistant' && message.text
+    ? parseAssistantChoiceGroups(message.text) : []
+  const firstChoiceQuestionOffset = choiceGroups.length > 0 ? message.text.indexOf(choiceGroups[0].question) : -1
+  const showChoiceFormInsteadOfText = firstChoiceQuestionOffset >= 0
+    && !message.text.slice(0, firstChoiceQuestionOffset).replace(/[\s#>*_\d.)、-]/gu, '')
+  const renderedText = showChoiceFormInsteadOfText ? '' : message.text
+
   return (
     <article className={`chat-message chat-message--${message.role}${deviceChatMessage ? ' chat-message--device' : ''}${deviceChatMessage?.kind === 'error' ? ' chat-message--device-error' : ''}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
@@ -6763,10 +6851,12 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={message.text} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
-          : message.text ? <MessageContent text={message.text} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
+          : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {deviceChatMessage?.kind === 'assistant' && deviceChatMessage.activity?.state === 'running' ? <div className="running-indicator" role="status"><div className="running-indicator__row"><OperationActivityLine className="running-indicator__activity" operation={operations.filter((operation) => operation.status === 'running').at(-1) ?? null} activity={{ label: operations.length ? '正在处理' : '正在思考' }} iconSize={15} /></div></div> : null}
+        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={message.text} groups={choiceGroups} onUse={onUseChoices} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">

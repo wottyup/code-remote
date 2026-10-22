@@ -24,10 +24,13 @@ from urllib.request import ProxyHandler, Request, build_opener
 from websockets.asyncio.client import connect as websocket_connect
 
 from .codex_app_server import CodexAppServer, CodexNoActiveTurnError, CodexRuntimeError
+from .device_chat_activity import project_activity, upsert_activity_item
+from .device_chat_sync import DeviceChatThreadSync
 
 logger = logging.getLogger(__name__)
 INVITE_TTL_SECONDS = 300
 MAX_CHAT_MESSAGE_LENGTH = 12_000
+MAX_PEER_MESSAGE_LENGTH = 500_000
 MAX_AUTO_HANDOFFS = 4
 AGENT_REPLY_FLUSH_INTERVAL_SECONDS = 0.35
 DOCUMENT_MESSAGE_MIN_LENGTH = 1_200
@@ -174,12 +177,15 @@ class DeviceChatManager:
         if stored_cursor > current_cursor:
             self._set_metadata("message_cursor", str(stored_cursor))
         self._connections: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._state_waiters: set[asyncio.Queue[None]] = set()
+        self._state_revision = 0
         self._client_task: asyncio.Task[None] | None = None
         self._outbox_task: asyncio.Task[None] | None = None
         self._agent_tasks: set[asyncio.Task[None]] = set()
         self._agent_lock = asyncio.Lock()
         self._active_agent_thread_id: str | None = None
         self._closed = False
+        self.thread_sync = DeviceChatThreadSync(self)
         self._schedule_pending_jobs()
 
     def _get_metadata(self, key: str) -> str | None:
@@ -207,6 +213,31 @@ class DeviceChatManager:
     def _save_config(self, config: dict[str, Any] | None) -> None:
         self._set_metadata("room_config", json.dumps(config, ensure_ascii=False, separators=(",", ":")) if config else "")
 
+    async def wait_for_state_update(self, after_cursor: int, timeout: float) -> None:
+        current_cursor = int(self._get_metadata("message_cursor") or "0")
+        if current_cursor > after_cursor:
+            return
+        revision = self._state_revision
+        waiter: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self._state_waiters.add(waiter)
+        if int(self._get_metadata("message_cursor") or "0") > after_cursor or revision != self._state_revision:
+            waiter.put_nowait(None)
+        try:
+            await asyncio.wait_for(waiter.get(), timeout=max(0.0, timeout))
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._state_waiters.discard(waiter)
+
+    def _notify_state_waiters(self) -> None:
+        self._state_revision += 1
+        for waiter in tuple(self._state_waiters):
+            if waiter.empty():
+                waiter.put_nowait(None)
+
+    def notify_state_changed(self) -> None:
+        self._notify_state_waiters()
+
     def _schedule_pending_jobs(self) -> None:
         self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending' WHERE state = 'running'")
         try:
@@ -222,6 +253,8 @@ class DeviceChatManager:
 
     async def start(self) -> None:
         self._closed = False
+        self._recover_completed_statuses()
+        await self.thread_sync.start()
         config = self._config()
         if config and config.get("role") == "host":
             self.connection.execute("UPDATE device_chat_members SET online = 0 WHERE id != ?", (self.node_id,))
@@ -233,8 +266,26 @@ class DeviceChatManager:
                 self._outbox_task = asyncio.create_task(self._outbox_flush_loop())
         self._schedule_pending_jobs()
 
+    def _recover_completed_statuses(self) -> None:
+        config = self._config()
+        if not config:
+            return
+        for row in self.connection.execute(
+            "SELECT m.payload FROM device_chat_agent_jobs j JOIN device_chat_messages m "
+            "ON m.id = 'status:' || j.message_id WHERE j.state = 'complete'"
+        ).fetchall():
+            event = json.loads(row["payload"])
+            if event.get("sender_id") != self.node_id or not event.get("text", "").endswith("正在处理这条群聊消息…"):
+                continue
+            event["text"] = f"{config.get('name', '本机 Codex')} 已处理完成。"
+            if config.get("role") == "host":
+                self._broadcast({"type": "event", "event": self._store_event(event)})
+            else:
+                self._queue_outbox_event(event)
+
     async def close(self) -> None:
         self._closed = True
+        await self.thread_sync.close()
         if self._client_task:
             self._client_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -277,6 +328,7 @@ class DeviceChatManager:
             config["room"]["host_name"] = cleaned_name
             self._save_config(config)
             self.connection.execute("UPDATE device_chat_members SET name = ?, online = 1 WHERE id = ?", (cleaned_name, self.node_id))
+        self._notify_state_waiters()
         code = "".join(secrets.choice(INVITE_ALPHABET) for _ in range(12))
         self.connection.execute("DELETE FROM device_chat_invites WHERE expires_at < ? OR consumed = 1", (time.time(),))
         self.connection.execute(
@@ -305,6 +357,7 @@ class DeviceChatManager:
         self.connection.execute("DELETE FROM device_chat_messages")
         self.connection.execute("DELETE FROM device_chat_outbox")
         self._start_peer_connection()
+        self._notify_state_waiters()
         if not self._outbox_task or self._outbox_task.done():
             self._outbox_task = asyncio.create_task(self._outbox_flush_loop())
         return self.state()
@@ -419,7 +472,7 @@ class DeviceChatManager:
         if not isinstance(event_id, str) or not event_id or len(event_id) > 120:
             raise DeviceChatError("消息编号无效。")
         text = raw_event.get("text")
-        if not isinstance(text, str) or len(text) > MAX_CHAT_MESSAGE_LENGTH:
+        if not isinstance(text, str) or len(text) > MAX_PEER_MESSAGE_LENGTH:
             raise DeviceChatError("消息内容无效或过长。")
         target_id = raw_event.get("target_id")
         if target_id is not None and (not isinstance(target_id, str) or not self._member_exists(target_id)):
@@ -447,6 +500,13 @@ class DeviceChatManager:
                 raise DeviceChatError("设备接力信息无效。")
             event["handoff_root_id"] = root_id
             event["handoff_depth"] = depth
+        if kind == "assistant" and "activity" in raw_event:
+            activity = raw_event["activity"]
+            if not isinstance(activity, dict) or not isinstance(activity.get("items"), list):
+                raise DeviceChatError("设备活动数据无效。")
+            if len(json.dumps(activity, ensure_ascii=False).encode("utf-8")) > 65_000:
+                raise DeviceChatError("设备活动数据过长。")
+            event["activity"] = project_activity(activity["items"], activity.get("state", "running"))
         if kind in {"assistant", "status", "error"} and target_id is not None:
             target = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
             event["target_name"] = str(target["name"]) if target else None
@@ -538,13 +598,14 @@ class DeviceChatManager:
         if self._agent_has_work():
             raise DeviceChatError("本机 Codex 正在处理群聊消息，请等回复完成后切换聊天。")
         room_id = str(config["room"]["id"])
+        previous_thread_id = self._thread_for_room(room_id)
         if thread_id is None:
             self.connection.execute("DELETE FROM device_chat_threads WHERE room_id = ? AND manual = 1", (room_id,))
         else:
             if not thread_id or len(thread_id) > 512 or thread_id.startswith("claude:"):
                 raise DeviceChatError("只能选择本机的 Codex 聊天。")
             try:
-                thread = await self.codex.read_thread(thread_id, include_turns=False)
+                thread = await self.codex.read_thread(thread_id, tail_turns=100, compact=True)
             except CodexRuntimeError as error:
                 raise DeviceChatError(f"无法读取所选 Codex 聊天：{error}") from error
             if thread.get("id") != thread_id:
@@ -557,6 +618,9 @@ class DeviceChatManager:
                 "ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id, manual = 1, cwd = excluded.cwd",
                 (room_id, thread_id, selected_cwd if isinstance(selected_cwd, str) else None),
             )
+            if previous_thread_id != thread_id:
+                self.thread_sync.bind(room_id, thread_id, thread.get("turns", []))
+        self._notify_state_waiters()
         return self.state()
 
     async def ensure_local_thread(self) -> str:
@@ -578,6 +642,8 @@ class DeviceChatManager:
             "INSERT INTO device_chat_threads(room_id, thread_id, cwd) VALUES (?, ?, ?) ON CONFLICT(room_id) DO NOTHING",
             (room_id, thread_id, str(self.codex.workspace)),
         )
+        self.thread_sync.bind(room_id, thread_id)
+        self._notify_state_waiters()
         with suppress(CodexRuntimeError):
             await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
         return self._thread_for_room(room_id) or thread_id
@@ -595,11 +661,16 @@ class DeviceChatManager:
         device_id, name = member.get("id"), member.get("name")
         if not isinstance(device_id, str) or not isinstance(name, str):
             return
+        next_online = int(bool(member.get("online")))
+        existing = self.connection.execute("SELECT name, online FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+        if existing and str(existing["name"]) == name and int(existing["online"]) == next_online:
+            return
         self.connection.execute(
             "INSERT INTO device_chat_members(id, name, online, joined_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET name = excluded.name, online = excluded.online",
-            (device_id, name, int(bool(member.get("online"))), _now()),
+            (device_id, name, next_online, _now()),
         )
+        self._notify_state_waiters()
 
     def _set_member_online(self, device_id: str, online: bool) -> None:
         self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
@@ -608,6 +679,7 @@ class DeviceChatManager:
     def _broadcast(self, event: dict[str, Any]) -> None:
         for queue in tuple(self._connections.values()):
             queue.put_nowait(event)
+        self._notify_state_waiters()
 
     def _messages(self, limit: int) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -775,6 +847,7 @@ class DeviceChatManager:
         target_id: str | None = None,
         handoff_root_id: str | None = None,
         handoff_depth: int | None = None,
+        activity: dict[str, Any] | None = None,
     ) -> None:
         config = self._config()
         if not config:
@@ -786,10 +859,18 @@ class DeviceChatManager:
         if handoff_root_id is not None and handoff_depth is not None:
             event["handoff_root_id"] = handoff_root_id
             event["handoff_depth"] = handoff_depth
+        if kind == "assistant" and activity is not None:
+            event["activity"] = activity
+        await self._publish_local_event(event)
+
+    async def _publish_local_event(self, event: dict[str, Any]) -> None:
+        config = self._config()
+        if not config:
+            return
         if config.get("role") == "host":
             saved = self._store_event(event)
             self._broadcast({"type": "event", "event": saved})
-            if kind == "assistant":
+            if event["kind"] == "assistant":
                 self._schedule_agent(saved)
         else:
             await self._send_to_host(event)
@@ -805,6 +886,7 @@ class DeviceChatManager:
         room = config["room"]
         name = str(config.get("name", "本机 Codex"))
         reply = ""
+        activity_items: list[dict[str, Any]] = []
         turn_id: str | None = None
         thread_id: str | None = None
 
@@ -821,6 +903,7 @@ class DeviceChatManager:
             target_id: str | None = None,
             handoff_root_id: str | None = None,
             handoff_depth: int | None = None,
+            activity: dict[str, Any] | None = None,
         ) -> None:
             await self._publish_local_agent_event(
                 kind,
@@ -829,6 +912,7 @@ class DeviceChatManager:
                 target_id=target_id,
                 handoff_root_id=handoff_root_id,
                 handoff_depth=handoff_depth,
+                activity=activity,
             )
 
         try:
@@ -854,16 +938,23 @@ class DeviceChatManager:
                 )
                 turn = response.get("turn") if isinstance(response, dict) else None
                 turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                if turn_id:
+                    self.thread_sync.mark_group_turn(str(room["id"]), thread_id, turn_id)
                 reply_parts: dict[str | None, str] = {}
                 last_published_reply = ""
+                last_published_activity = ""
                 last_publish = time.monotonic() - AGENT_REPLY_FLUSH_INTERVAL_SECONDS
+                await publish("assistant", reply_id, "", activity=project_activity([]))
 
                 async def flush_reply() -> None:
-                    nonlocal last_publish, last_published_reply
-                    if reply and reply != last_published_reply:
+                    nonlocal last_publish, last_published_reply, last_published_activity
+                    snapshot = project_activity(activity_items)
+                    activity_key = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+                    if reply != last_published_reply or activity_key != last_published_activity:
                         # Only the final turn publication may carry a handoff.
-                        await publish("assistant", reply_id, reply)
+                        await publish("assistant", reply_id, reply, activity=snapshot)
                         last_published_reply = reply
+                        last_published_activity = activity_key
                         last_publish = time.monotonic()
 
                 def complete_reply_item(item: Any) -> None:
@@ -880,10 +971,12 @@ class DeviceChatManager:
                         reply_parts[item_id] = reply_parts.pop(None)
                     reply_parts[item_id] = text
                     reply = "\n\n".join(part for part in reply_parts.values() if part)
+                    if item_id:
+                        upsert_activity_item(activity_items, item)
 
                 while True:
                     timeout = 1800.0
-                    if reply != last_published_reply:
+                    if reply != last_published_reply or (activity_items and json.dumps(project_activity(activity_items), ensure_ascii=False, sort_keys=True) != last_published_activity):
                         timeout = last_publish + AGENT_REPLY_FLUSH_INTERVAL_SECONDS - time.monotonic()
                         if timeout <= 0:
                             await flush_reply()
@@ -891,7 +984,7 @@ class DeviceChatManager:
                     try:
                         notification = await asyncio.wait_for(queue.get(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        if reply != last_published_reply:
+                        if reply != last_published_reply or (activity_items and json.dumps(project_activity(activity_items), ensure_ascii=False, sort_keys=True) != last_published_activity):
                             # A short burst can end before the throttle window.
                             # Flush its tail even while Codex is busy with tools.
                             await flush_reply()
@@ -916,9 +1009,17 @@ class DeviceChatManager:
                         item_id = params.get("itemId") if isinstance(params.get("itemId"), str) else None
                         reply_parts[item_id] = reply_parts.get(item_id, "") + params["delta"]
                         reply = "\n\n".join(part for part in reply_parts.values() if part)
-                    elif method == "item/completed":
-                        complete_reply_item(params.get("item"))
-                        await flush_reply()
+                        if item_id:
+                            upsert_activity_item(activity_items, {"id": item_id, "type": "agentMessage", "text": reply_parts[item_id]})
+                    elif method in {"item/started", "item/completed"}:
+                        upsert_activity_item(activity_items, params.get("item"))
+                        if method == "item/completed":
+                            complete_reply_item(params.get("item"))
+                            await flush_reply()
+                    elif method in {"item/fileChange/patchUpdated", "turn/workspaceChanges"}:
+                        change_id = params.get("itemId") if method == "item/fileChange/patchUpdated" else f"workspace-change-{turn_id}"
+                        if isinstance(change_id, str):
+                            upsert_activity_item(activity_items, {"id": change_id, "type": "fileChange", "status": "inProgress" if method == "item/fileChange/patchUpdated" else "completed", "changes": params.get("changes", [])})
                     elif method == "turn/completed":
                         status_value = turn.get("status") if isinstance(turn, dict) else None
                         if status_value == "failed":
@@ -929,6 +1030,7 @@ class DeviceChatManager:
                             ordered_parts: dict[str | None, str] = {}
                             for item in items:
                                 complete_reply_item(item)
+                                upsert_activity_item(activity_items, item)
                                 item_id = item.get("id") if isinstance(item, dict) else None
                                 if isinstance(item_id, str) and item_id in reply_parts:
                                     ordered_parts[item_id] = reply_parts[item_id]
@@ -954,9 +1056,11 @@ class DeviceChatManager:
                     target_id=handoff["id"] if handoff_id else None,
                     handoff_root_id=handoff_id,
                     handoff_depth=next_depth if handoff_id else None,
+                    activity=project_activity(activity_items, "completed"),
                 )
             else:
-                await publish("status", status_id, f"{name} 已处理完成。")
+                await publish("assistant", reply_id, "处理完成，但没有文字回复。", activity=project_activity(activity_items, "completed"))
+            await publish("status", status_id, f"{name} 已处理完成。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
         except asyncio.CancelledError:
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending', updated_at = ? WHERE message_id = ?", (_now(), message_id))
@@ -964,7 +1068,7 @@ class DeviceChatManager:
         except Exception as error:
             logger.info("Device chat Codex turn failed for %s: %s", message_id, error)
             with suppress(Exception):
-                await publish("error", reply_id, f"{name} 执行失败：{str(error)[:600]}")
+                await publish("assistant", reply_id, f"{name} 执行失败：{str(error)[:600]}", activity=project_activity(activity_items, "failed"))
                 await publish("status", status_id, f"{name} 已停止处理。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
         finally:
@@ -1027,6 +1131,7 @@ class DeviceChatManager:
             "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at, delivered = 0",
             (event["id"], serialized, _now()),
         )
+        self._notify_state_waiters()
         return {**event, "sequence": -1, "delivery_state": "pending"}
 
     async def _outbox_flush_loop(self) -> None:
@@ -1043,11 +1148,13 @@ class DeviceChatManager:
                     if response.get("id") != row["id"]:
                         break
                     self.connection.execute("UPDATE device_chat_outbox SET delivered = 1 WHERE id = ?", (row["id"],))
+                    self._notify_state_waiters()
                 except asyncio.CancelledError:
                     raise
                 except DeviceChatHttpError as error:
                     if 400 <= error.status_code < 500 and error.status_code not in {408, 429}:
                         self.connection.execute("UPDATE device_chat_outbox SET delivered = 2 WHERE id = ?", (row["id"],))
+                        self._notify_state_waiters()
                         continue
                     logger.debug("Device chat outbox is waiting for the host: %s", error)
                     break
@@ -1141,6 +1248,7 @@ class DeviceChatManager:
             if config and isinstance(room, dict):
                 config["room"] = room
                 self._save_config(config)
+                self._notify_state_waiters()
             if isinstance(members, list):
                 for member in members:
                     if isinstance(member, dict):
@@ -1160,6 +1268,8 @@ class DeviceChatManager:
             self.connection.execute("DELETE FROM device_chat_members WHERE id = ?", (device_id,))
             if device_id == self.node_id:
                 self._clear_room()
+            else:
+                self._notify_state_waiters()
         elif kind == "room_closed":
             self._clear_room()
 
@@ -1170,11 +1280,15 @@ class DeviceChatManager:
             cursor=int(event.get("cursor", 0)) or None,
         )
         self.connection.execute("DELETE FROM device_chat_outbox WHERE id = ?", (event["id"],))
+        self._notify_state_waiters()
         self._schedule_agent(saved)
 
     def _set_local_online(self, device_id: str, online: bool) -> None:
         if self._member_exists(device_id):
-            self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+            row = self.connection.execute("SELECT online FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+            if row and bool(row["online"]) != online:
+                self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+                self._notify_state_waiters()
 
     def _clear_room(self) -> None:
         self._save_config(None)
@@ -1184,4 +1298,7 @@ class DeviceChatManager:
         self.connection.execute("DELETE FROM device_chat_outbox")
         self.connection.execute("DELETE FROM device_chat_agent_jobs")
         self.connection.execute("DELETE FROM device_chat_threads")
+        self.connection.execute("DELETE FROM device_chat_sync_bindings")
+        self.connection.execute("DELETE FROM device_chat_sync_turns")
         self._peer_connected = False
+        self._notify_state_waiters()

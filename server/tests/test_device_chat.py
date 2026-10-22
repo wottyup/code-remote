@@ -8,6 +8,7 @@ from contextlib import suppress
 from pathlib import Path
 
 from codex_remote.device_chat import MAX_AUTO_HANDOFFS, DeviceChatError, DeviceChatManager, _can_handoff, _handoff_target
+from codex_remote.device_chat_activity import project_activity
 
 
 class _FakeCodex:
@@ -98,7 +99,7 @@ class DeviceChatStreamingTests(unittest.IsolatedAsyncioTestCase):
         async def read() -> dict[str, object]:
             while True:
                 event = await self.updates.get()
-                if event.get("kind") == "assistant":
+                if event.get("kind") == "assistant" and event.get("text"):
                     return event
 
         return await asyncio.wait_for(read(), timeout=1.5)
@@ -211,6 +212,40 @@ class DeviceChatStreamingTests(unittest.IsolatedAsyncioTestCase):
         published_count = len(self.published)
         await asyncio.sleep(0.4)
         self.assertEqual(published_count, len(self.published))
+
+    async def test_activity_stream_keeps_one_reply_and_restores_file_changes(self) -> None:
+        initial = self.manager.state()["messages"]
+        self.assertEqual("running", next(message for message in initial if message["kind"] == "assistant")["activity"]["state"])
+        self.codex.emit("item/started", item={"id": "command", "type": "commandExecution", "status": "inProgress", "command": "pnpm test"})
+        self.codex.emit("turn/workspaceChanges", changes=[{"path": "src/app.ts", "diff": "+fixed"}])
+        async def activity_ready() -> dict[str, object]:
+            while True:
+                reply = next(message for message in self.manager.state()["messages"] if message["kind"] == "assistant")
+                if len(reply["activity"]["items"]) >= 2:
+                    return reply
+                await asyncio.sleep(0.01)
+        interim = await asyncio.wait_for(activity_ready(), timeout=1.5)
+        self.assertEqual(["commandExecution", "fileChange"], [item["type"] for item in interim["activity"]["items"]])
+        self.codex.emit("item/completed", item={"id": "answer", "type": "agentMessage", "text": "检查完成"})
+        self.codex.emit("turn/completed", turn={"id": "turn-id", "status": "completed"})
+        await asyncio.wait_for(self.agent_task, timeout=1.5)
+        final = next(message for message in self.manager.state()["messages"] if message["kind"] == "assistant")
+        self.assertEqual(interim["id"], final["id"])
+        self.assertEqual(interim["sequence"], final["sequence"])
+        self.assertEqual("completed", final["activity"]["state"], final["text"])
+        self.assertEqual("src/app.ts", next(item for item in final["activity"]["items"] if item["type"] == "fileChange")["changes"][0]["path"])
+
+
+class DeviceChatActivityProjectionTests(unittest.TestCase):
+    def test_projection_bounds_payload_and_hides_command_secrets(self) -> None:
+        activity = project_activity([
+            {"id": "thought", "type": "reasoning", "text": "private"},
+            {"id": "command", "type": "commandExecution", "command": "run --token=super-secret", "status": "inProgress"},
+            {"id": "change", "type": "fileChange", "changes": [{"path": "src/app.ts", "diff": "+" * 100_000}]},
+        ])
+        self.assertEqual(2, len(activity["items"]))
+        self.assertNotIn("super-secret", str(activity))
+        self.assertLessEqual(len(activity["items"][1]["changes"][0]["diff"]), 4000)
 
 
 class DeviceChatHandoffTargetTests(unittest.TestCase):
