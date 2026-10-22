@@ -31,6 +31,7 @@ MAX_CHAT_MESSAGE_LENGTH = 12_000
 RECENT_CONTEXT_MESSAGES = 24
 RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
 MAX_AUTO_HANDOFFS = 4
+AGENT_REPLY_FLUSH_INTERVAL_SECONDS = 0.35
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -796,9 +797,49 @@ class DeviceChatManager:
                 response = await self.codex.start_turn(thread_id, prompt, cwd=thread_cwd)
                 turn = response.get("turn") if isinstance(response, dict) else None
                 turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
-                last_publish = 0.0
+                reply_parts: dict[str | None, str] = {}
+                last_published_reply = ""
+                last_publish = time.monotonic() - AGENT_REPLY_FLUSH_INTERVAL_SECONDS
+
+                async def flush_reply() -> None:
+                    nonlocal last_publish, last_published_reply
+                    if reply and reply != last_published_reply:
+                        # Only the final turn publication may carry a handoff.
+                        await publish("assistant", reply_id, reply)
+                        last_published_reply = reply
+                        last_publish = time.monotonic()
+
+                def complete_reply_item(item: Any) -> None:
+                    nonlocal reply
+                    if not isinstance(item, dict):
+                        return
+                    item_type = str(item.get("type", "")).replace("_", "").replace("-", "").lower()
+                    text = item.get("text")
+                    if item_type != "agentmessage" or not isinstance(text, str) or not text:
+                        return
+                    item_id = item.get("id") if isinstance(item.get("id"), str) else None
+                    if item_id is not None and item_id not in reply_parts and None in reply_parts:
+                        # Reconcile anonymous deltas once the item ID is known.
+                        reply_parts[item_id] = reply_parts.pop(None)
+                    reply_parts[item_id] = text
+                    reply = "\n\n".join(part for part in reply_parts.values() if part)
+
                 while True:
-                    notification = await asyncio.wait_for(queue.get(), timeout=1800)
+                    timeout = 1800.0
+                    if reply != last_published_reply:
+                        timeout = last_publish + AGENT_REPLY_FLUSH_INTERVAL_SECONDS - time.monotonic()
+                        if timeout <= 0:
+                            await flush_reply()
+                            continue
+                    try:
+                        notification = await asyncio.wait_for(queue.get(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        if reply != last_published_reply:
+                            # A short burst can end before the throttle window.
+                            # Flush its tail even while Codex is busy with tools.
+                            await flush_reply()
+                            continue
+                        raise
                     if notification.get("type") == "server_request":
                         request_params = notification.get("params") if isinstance(notification.get("params"), dict) else {}
                         if request_params.get("threadId") == thread_id:
@@ -811,22 +852,31 @@ class DeviceChatManager:
                     turn = params.get("turn")
                     if not notification_turn and isinstance(turn, dict):
                         notification_turn = turn.get("id")
+                    if turn_id and notification_turn and notification_turn != turn_id:
+                        continue
                     method = notification.get("method")
                     if method == "item/agentMessage/delta" and isinstance(params.get("delta"), str):
-                        if turn_id and notification_turn and notification_turn != turn_id:
-                            continue
-                        reply += params["delta"]
-                        now = time.monotonic()
-                        if now - last_publish >= 0.35 or len(reply) % 400 < len(params["delta"]):
-                            await publish("assistant", reply_id, reply)
-                            last_publish = now
+                        item_id = params.get("itemId") if isinstance(params.get("itemId"), str) else None
+                        reply_parts[item_id] = reply_parts.get(item_id, "") + params["delta"]
+                        reply = "\n\n".join(part for part in reply_parts.values() if part)
+                    elif method == "item/completed":
+                        complete_reply_item(params.get("item"))
+                        await flush_reply()
                     elif method == "turn/completed":
-                        if turn_id and notification_turn and notification_turn != turn_id:
-                            continue
                         status_value = turn.get("status") if isinstance(turn, dict) else None
                         if status_value == "failed":
                             detail = turn.get("error") if isinstance(turn, dict) else None
                             raise DeviceChatError(str(detail or "Codex 执行失败。"))
+                        items = turn.get("items") if isinstance(turn, dict) else None
+                        if isinstance(items, list):
+                            ordered_parts: dict[str | None, str] = {}
+                            for item in items:
+                                complete_reply_item(item)
+                                item_id = item.get("id") if isinstance(item, dict) else None
+                                if isinstance(item_id, str) and item_id in reply_parts:
+                                    ordered_parts[item_id] = reply_parts[item_id]
+                            reply_parts = {**ordered_parts, **reply_parts}
+                            reply = "\n\n".join(part for part in reply_parts.values() if part)
                         break
             finally:
                 self.codex.unsubscribe(queue)

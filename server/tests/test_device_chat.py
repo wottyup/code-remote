@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
+from contextlib import suppress
 from pathlib import Path
 
 from codex_remote.device_chat import MAX_AUTO_HANDOFFS, DeviceChatManager, _can_handoff, _handoff_target
@@ -38,6 +39,174 @@ class _FakeCodex:
             "params": {"threadId": thread_id, "turnId": "turn-id", "turn": {"id": "turn-id", "status": "completed"}},
         })
         return {"turn": {"id": "turn-id"}}
+
+
+class _StreamingCodex(_FakeCodex):
+    def __init__(self, workspace: Path) -> None:
+        super().__init__(workspace, "")
+        self.turn_started = asyncio.Event()
+        self.unsubscribed = False
+
+    async def start_turn(self, thread_id: str, prompt: str, *, cwd: Path) -> dict[str, object]:
+        self.turn_started.set()
+        return {"turn": {"id": "turn-id"}}
+
+    def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
+        self.unsubscribed = True
+
+    def emit(self, method: str, *, thread_id: str = "thread-id", turn_id: str = "turn-id", **params: object) -> None:
+        self.notifications.put_nowait({
+            "method": method,
+            "params": {"threadId": thread_id, "turnId": turn_id, **params},
+        })
+
+
+class DeviceChatStreamingTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.codex = _StreamingCodex(Path(self.temp_dir.name))
+        self.manager = DeviceChatManager(Path(self.temp_dir.name) / "device-chat.sqlite3", self.codex)
+        self.manager._save_config({"role": "host", "room": {"id": "room-id"}, "name": "Linux"})
+        self.manager._upsert_member({"id": self.manager.node_id, "name": "Linux", "online": True})
+        self.manager._upsert_member({"id": "windows-id", "name": "Windows", "online": True})
+        self.updates: asyncio.Queue[dict[str, object]] = asyncio.Queue()
+        self.published: list[dict[str, object]] = []
+
+        def capture(message: dict[str, object]) -> None:
+            if message.get("type") == "event":
+                self.published.append(message["event"])
+                self.updates.put_nowait(message["event"])
+
+        self.manager._broadcast = capture
+        self.agent_task = asyncio.create_task(self.manager._execute_agent({
+            "id": "stream-request", "kind": "user", "sender_name": "我", "text": "请测试。",
+        }))
+        await asyncio.wait_for(self.codex.turn_started.wait(), timeout=1.5)
+
+    async def asyncTearDown(self) -> None:
+        self.agent_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self.agent_task
+        self.manager.connection.close()
+        self.temp_dir.cleanup()
+
+    async def next_reply(self) -> dict[str, object]:
+        async def read() -> dict[str, object]:
+            while True:
+                event = await self.updates.get()
+                if event.get("kind") == "assistant":
+                    return event
+
+        return await asyncio.wait_for(read(), timeout=1.5)
+
+    async def test_short_burst_is_flushed_while_tool_is_still_running(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="我")
+        first = await self.next_reply()
+        self.assertEqual("我", first["text"])
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="先按 Linux 的要求补齐证据。")
+        self.codex.emit("item/started", item={"id": "tool", "type": "commandExecution"})
+
+        updated = await self.next_reply()
+
+        self.assertEqual("我先按 Linux 的要求补齐证据。", updated["text"])
+        self.assertEqual(first["id"], updated["id"])
+        self.assertEqual(first["sequence"], updated["sequence"])
+        self.assertGreater(updated["cursor"], first["cursor"])
+        self.assertFalse(self.agent_task.done())
+        self.assertNotIn("handoff_depth", updated)
+
+    async def test_tool_notifications_do_not_postpone_pending_text(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="我")
+        await self.next_reply()
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="正在检查。")
+
+        async def tool_output() -> None:
+            while True:
+                self.codex.emit("item/commandExecution/outputDelta", itemId="tool", delta="working\n")
+                await asyncio.sleep(0.01)
+
+        tool_task = asyncio.create_task(tool_output())
+        try:
+            updated = await self.next_reply()
+            self.assertEqual("我正在检查。", updated["text"])
+            self.assertFalse(self.agent_task.done())
+        finally:
+            tool_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await tool_task
+
+    async def test_completed_items_reconcile_missing_text_without_duplicate_paragraphs(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="我")
+        await self.next_reply()
+        completed = {"id": "commentary", "type": "agentMessage", "text": "我先补齐证据。"}
+        self.codex.emit("item/completed", item=completed)
+        self.assertEqual("我先补齐证据。", (await self.next_reply())["text"])
+        self.codex.emit("item/completed", item=completed)
+        self.codex.emit("item/agentMessage/delta", itemId="answer", delta="检查")
+        self.codex.emit("item/completed", item={"id": "answer", "type": "agentMessage", "text": "检查完成。"})
+        self.assertEqual("我先补齐证据。\n\n检查完成。", (await self.next_reply())["text"])
+        self.codex.emit("item/completed", item={"id": "extra", "type": "agentMessage", "text": "附上证据。"})
+        self.assertEqual("我先补齐证据。\n\n检查完成。\n\n附上证据。", (await self.next_reply())["text"])
+        self.assertFalse(self.agent_task.done())
+
+    async def test_turn_snapshot_reconciles_final_reply(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="answer", delta="检查")
+        await self.next_reply()
+        self.codex.emit("turn/completed", turn={
+            "id": "turn-id", "status": "completed",
+            "items": [
+                {"id": "commentary", "type": "agentMessage", "text": "先检查。"},
+                {"id": "answer", "type": "agentMessage", "text": "检查完成。"},
+            ],
+        })
+
+        await asyncio.wait_for(self.agent_task, timeout=1.5)
+
+        self.assertEqual("先检查。\n\n检查完成。", (await self.next_reply())["text"])
+        self.assertTrue(self.codex.unsubscribed)
+
+    async def test_other_thread_and_turn_events_are_ignored(self) -> None:
+        for identity in ({"thread_id": "other-thread"}, {"turn_id": "other-turn"}):
+            self.codex.emit("item/agentMessage/delta", delta="其他对话", itemId="foreign", **identity)
+            self.codex.emit("item/completed", item={"id": "foreign", "type": "agentMessage", "text": "其他对话"}, **identity)
+            self.codex.emit("turn/completed", turn={"id": identity.get("turn_id", "turn-id"), "status": "completed"}, **identity)
+        self.codex.emit("item/completed", item={"id": "answer", "type": "agentMessage", "text": "当前对话。"})
+
+        self.assertEqual("当前对话。", (await self.next_reply())["text"])
+        self.assertFalse(self.agent_task.done())
+
+    async def test_flushed_mention_hands_off_only_after_turn_completion(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="answer", delta="请继续。")
+        await self.next_reply()
+        self.codex.emit("item/agentMessage/delta", itemId="answer", delta="\n@Windows")
+        interim = await self.next_reply()
+        self.assertEqual(self.manager.node_id, interim["target_id"])
+        self.assertNotIn("handoff_depth", interim)
+        self.assertFalse(self.agent_task.done())
+
+        self.codex.emit("item/completed", item={"id": "answer", "type": "agentMessage", "text": "请继续。\n@Windows"})
+        self.codex.emit("turn/completed", turn={"id": "turn-id", "status": "completed"})
+        await asyncio.wait_for(self.agent_task, timeout=1.5)
+
+        final = await self.next_reply()
+        self.assertEqual("windows-id", final["target_id"])
+        self.assertEqual("stream-request", final["handoff_root_id"])
+        self.assertEqual(1, final["handoff_depth"])
+        self.assertEqual(1, sum("handoff_depth" in event for event in self.published))
+
+    async def test_cancel_releases_subscription_and_stops_pending_flush(self) -> None:
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="我")
+        await self.next_reply()
+        self.codex.emit("item/agentMessage/delta", itemId="commentary", delta="正在检查。")
+        await asyncio.sleep(0.02)
+
+        self.agent_task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await self.agent_task
+        self.assertTrue(self.codex.unsubscribed)
+        published_count = len(self.published)
+        await asyncio.sleep(0.4)
+        self.assertEqual(published_count, len(self.published))
 
 
 class DeviceChatHandoffTargetTests(unittest.TestCase):
