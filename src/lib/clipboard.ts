@@ -62,6 +62,50 @@ export interface ClipboardImageContent {
   previewUrl: string
 }
 
+export interface ClipboardImageCopyResult {
+  copied: boolean
+  imageCount: number
+}
+
+const embeddedImagePattern = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i
+const maxEmbeddedImageBytes = 8 * 1024 * 1024
+const imageExtension: Record<string, string> = {
+  'image/png': 'png',
+  'image/jpeg': 'jpg',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+}
+
+function embeddedImageFile(source: string, name: string): File | null {
+  const match = embeddedImagePattern.exec(source)
+  if (!match || match[2].length > Math.ceil(maxEmbeddedImageBytes / 3) * 4) return null
+  try {
+    const binary = atob(match[2])
+    if (binary.length > maxEmbeddedImageBytes) return null
+    const bytes = new Uint8Array(binary.length)
+    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+    const type = match[1].toLowerCase()
+    const filename = name || `image.${imageExtension[type]}`
+    return new File([bytes], filename, { type })
+  } catch {
+    return null
+  }
+}
+
+export function embeddedImageFilesFromClipboardHtml(html: string): File[] {
+  if (!html.includes('data:image/')) return []
+  try {
+    const document = new DOMParser().parseFromString(html, 'text/html')
+    return Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, 4)
+      .flatMap((image, index) => {
+        const file = embeddedImageFile(image.getAttribute('src') ?? '', image.getAttribute('alt') || `image-${index + 1}`)
+        return file ? [file] : []
+      })
+  } catch {
+    return []
+  }
+}
+
 function escapeClipboardHtml(value: string) {
   const entities: Record<string, string> = {
     '&': '&amp;',
@@ -93,7 +137,7 @@ function imageAsPngBlob(source: string): Promise<Blob> {
   })
 }
 
-function copyRichClipboardContent(plainText: string, html: string) {
+function copyRichClipboardContent(plainText: string, html: string, images: readonly ClipboardImageContent[]): ClipboardImageCopyResult {
   const selection = window.getSelection()
   const savedRanges = selection ? Array.from({ length: selection.rangeCount }, (_, index) => selection.getRangeAt(index).cloneRange()) : []
   const focusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
@@ -107,11 +151,23 @@ function copyRichClipboardContent(plainText: string, html: string) {
   document.body.appendChild(target)
 
   let clipboardDataWritten = false
+  let imageCount = 0
+  const imageFiles = images.flatMap((image) => {
+    const file = embeddedImageFile(image.previewUrl, image.name)
+    return file ? [file] : []
+  })
   const writeRichData = (event: ClipboardEvent) => {
     if (!event.clipboardData) return
     event.preventDefault()
     event.clipboardData.setData('text/plain', plainText)
     event.clipboardData.setData('text/html', html)
+    for (const file of imageFiles) {
+      try {
+        if (event.clipboardData.items.add(file)?.kind === 'file') imageCount += 1
+      } catch {
+        // Some browsers only allow text formats in a synchronous copy event.
+      }
+    }
     clipboardDataWritten = true
   }
   document.addEventListener('copy', writeRichData, true)
@@ -134,11 +190,11 @@ function copyRichClipboardContent(plainText: string, html: string) {
     focusedElement?.focus({ preventScroll: true })
   }
 
-  return succeeded
+  return { copied: succeeded, imageCount: succeeded ? imageCount : 0 }
 }
 
-export async function copyTextAndImagesToClipboard(text: string, images: readonly ClipboardImageContent[]): Promise<boolean> {
-  if (images.length === 0) return copyTextToClipboard(text)
+export async function copyTextAndImagesToClipboard(text: string, images: readonly ClipboardImageContent[]): Promise<ClipboardImageCopyResult> {
+  if (images.length === 0) return { copied: await copyTextToClipboard(text), imageCount: 0 }
 
   const trimmedText = text.trim()
   const plainText = [trimmedText, ...images.map((image) => `[图片：${image.name || '未命名'}]`)].filter(Boolean).join('\n\n')
@@ -158,19 +214,28 @@ export async function copyTextAndImagesToClipboard(text: string, images: readonl
         'image/png': pngPromise,
       })
       await navigator.clipboard.write([clipboardItem])
-      return true
+      return { copied: true, imageCount: 1 }
     } catch {
+      try {
+        await navigator.clipboard.write([new ClipboardItem({
+          'text/plain': new Blob([plainText], { type: 'text/plain' }),
+          'image/png': pngPromise,
+        })])
+        return { copied: true, imageCount: 1 }
+      } catch {
+        // Keep the text and HTML path available if this browser rejects PNG.
+      }
       try {
         await navigator.clipboard.write([new ClipboardItem({
           'text/plain': new Blob([plainText], { type: 'text/plain' }),
           'text/html': new Blob([html], { type: 'text/html' }),
         })])
-        return true
+        return { copied: true, imageCount: 0 }
       } catch {
         // Fall through to the legacy rich clipboard path used on LAN HTTP pages.
       }
     }
   }
 
-  return copyRichClipboardContent(plainText, html)
+  return copyRichClipboardContent(plainText, html, images)
 }
