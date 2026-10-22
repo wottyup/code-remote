@@ -890,7 +890,9 @@ function ComposerMenu({
       if (!root.current?.contains(event.target as Node) && !popover.current?.contains(event.target as Node)) onOpenChange(false)
     }
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') onOpenChange(false)
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      onOpenChange(false)
     }
     document.addEventListener('pointerdown', closeOnOutside)
     document.addEventListener('keydown', closeOnEscape)
@@ -990,6 +992,7 @@ interface ComposerHandle {
   addDocumentAttachment(document: CodexDocumentAttachment, focus?: boolean): boolean
   adoptUnassignedDraft(threadId: string, includeImages?: boolean): void
   closeOpenMenu(): boolean
+  cancelQueuedEdit(): boolean
 }
 
 interface MessageComposerProps {
@@ -1421,7 +1424,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       changeOpenMenu(null)
       return true
     },
-  }), [changeOpenMenu, draftScope, updateAttachedImages, updateDraft])
+    cancelQueuedEdit() {
+      if (!editingQueuedMessageIdRef.current) return false
+      if (!sendingRef.current) void finishQueuedEdit()
+      return true
+    },
+  }), [changeOpenMenu, draftScope, onEndQueuedEdit, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -4737,6 +4745,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         return
       }
       if (composerHandle.current?.closeOpenMenu()) {
+        event.preventDefault()
+        return
+      }
+      if (composerHandle.current?.cancelQueuedEdit()) {
         event.preventDefault()
         return
       }
