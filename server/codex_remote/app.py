@@ -142,7 +142,7 @@ IMAGE_EXTENSIONS = {
     "image/gif": ".gif",
 }
 IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EXTENSIONS.items()}
-MAX_IMAGES_PER_TURN = 4
+MAX_IMAGES_PER_TURN = 8
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
 MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
@@ -1646,7 +1646,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.73.1-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.74.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

@@ -60,6 +60,7 @@ import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSideb
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
@@ -204,7 +205,6 @@ const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageEdge = 1_920
-const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
 
 function formatMessageTimestamp(value: string | undefined) {
@@ -1595,7 +1595,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     const remaining = maxImagesPerTurn - attachedImagesRef.current.length
     if (remaining <= 0) {
-      const message = '单条消息最多附加 4 张图片。'
+      const message = `单条消息最多附加 ${maxImagesPerTurn} 张图片。`
       setAttachmentError(message)
       return message
     }
@@ -1604,7 +1604,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     try {
       const next = await Promise.all(chosen.map(readImage))
       updateAttachedImages([...attachedImagesRef.current, ...next])
-      const message = files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null
+      const message = files.length > remaining ? `单条消息最多附加 ${maxImagesPerTurn} 张图片，其余图片未添加。` : null
       setAttachmentError(message)
       return message
     } catch (reason) {

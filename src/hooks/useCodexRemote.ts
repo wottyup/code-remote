@@ -18,6 +18,7 @@ import {
   type CodexThreadDetails,
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
+import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
 import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/threadHistoryPolicy'
 import { ThreadLiveHistory } from '../lib/threadLiveHistory'
@@ -498,7 +499,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     ? payload.images.flatMap((image) => {
       const parsed = persistedQueuedImage(image)
       return parsed ? [parsed] : []
-    }).slice(0, 4)
+    }).slice(0, maxImagesPerTurn)
     : []
   const documents = persistedQueuedDocuments(payload.documents ?? payload.document)
   if (!text && images.length === 0 && documents.length === 0) return null
