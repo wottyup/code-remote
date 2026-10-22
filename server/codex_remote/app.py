@@ -1679,7 +1679,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.69.11-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.69.12-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1765,8 +1765,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return {"unpaired": True}
 
     @app.get("/api/v1/device-chat/state")
-    async def device_chat_state(after_sequence: int | None = None) -> dict[str, Any]:
-        return device_chat.state(after_sequence)
+    async def device_chat_state(after_cursor: int | None = None, after_sequence: int | None = None) -> dict[str, Any]:
+        # A sequence tracks message order, while a cursor also changes when a
+        # streaming message body is updated. Older clients only send sequences,
+        # so give them a full snapshot instead of silently dropping revisions.
+        if after_cursor is None and after_sequence is not None:
+            return device_chat.state()
+        return device_chat.state(after_cursor)
 
     @app.post("/api/v1/device-chat/create")
     async def device_chat_create(body: DeviceChatCreateRequest) -> dict[str, Any]:
@@ -1857,11 +1862,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             device_id = str(hello.get("device_id", ""))
             node_token = str(hello.get("token", ""))
             try:
-                last_sequence = max(0, int(hello.get("last_sequence", 0)))
+                # Older peers only know chronological message sequences. Ask for
+                # a full snapshot so they cannot skip updates to existing rows.
+                last_cursor = max(0, int(hello.get("last_cursor", 0))) if "last_cursor" in hello else 0
             except (TypeError, ValueError):
-                last_sequence = 0
+                last_cursor = 0
             try:
-                queue, snapshot = await device_chat.connect_peer(device_id, node_token, last_sequence)
+                queue, snapshot = await device_chat.connect_peer(device_id, node_token, last_cursor)
             except DeviceChatError as error:
                 await websocket.send_json({"type": "error", "message": str(error)})
                 await websocket.close(code=status.WS_1008_POLICY_VIOLATION)

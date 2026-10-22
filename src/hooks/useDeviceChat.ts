@@ -26,17 +26,25 @@ export function useDeviceChat(token: string, enabled: boolean) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
+  const lastCursor = useRef<number | undefined>(undefined)
   const lastSequence = useRef<number | undefined>(undefined)
 
   const mergeState = (next: DeviceChatState) => {
     setState((current) => {
       if (!current?.room || !next.room || current.room.id !== next.room.id) {
+        lastCursor.current = Math.max(0, ...next.messages.map((message) => message.cursor ?? message.sequence))
         lastSequence.current = Math.max(0, ...next.messages.map((message) => message.sequence))
         return next
       }
       const messages = new Map(current.messages.map((message) => [message.id, message]))
-      for (const message of next.messages) messages.set(message.id, message)
+      for (const message of next.messages) {
+        const previous = messages.get(message.id)
+        if (!previous || (message.cursor ?? message.sequence) >= (previous.cursor ?? previous.sequence)) {
+          messages.set(message.id, message)
+        }
+      }
       const ordered = [...messages.values()].sort(messageOrder).slice(-500)
+      lastCursor.current = Math.max(lastCursor.current ?? 0, ...next.messages.map((message) => message.cursor ?? message.sequence))
       lastSequence.current = Math.max(lastSequence.current ?? 0, ...next.messages.map((message) => message.sequence))
       return { ...next, messages: ordered }
     })
@@ -44,7 +52,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
 
   const refresh = async (showError = false) => {
     try {
-      const next = await codexRemoteClient.deviceChatState(token, lastSequence.current)
+      const next = await codexRemoteClient.deviceChatState(token, lastCursor.current, lastSequence.current)
       mergeState(next)
     } catch (reason) {
       if (showError) setError(reason instanceof Error ? reason.message : '无法读取设备群聊状态。')
@@ -101,6 +109,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     setError(null)
     try {
       const next = await codexRemoteClient.joinDeviceChat(token, hostUrl, joinCode, deviceName)
+      lastCursor.current = undefined
       lastSequence.current = undefined
       mergeState(next)
       setInviteCode('')
@@ -141,6 +150,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     setError(null)
     try {
       await codexRemoteClient.leaveDeviceChat(token)
+      lastCursor.current = undefined
       lastSequence.current = undefined
       setState((current) => current ? { ...current, room: null, role: undefined, members: [], messages: [], connected: false } : current)
       setInviteCode('')
