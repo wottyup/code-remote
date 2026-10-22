@@ -4718,6 +4718,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (document.querySelector('dialog[open]')) return
       if (threadRenameTarget || threadDeleteTargets) return
       if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
