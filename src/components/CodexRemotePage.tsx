@@ -49,7 +49,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
-import { copyTextToClipboard } from '../lib/clipboard'
+import { copyTextAndImagesToClipboard, copyTextToClipboard } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
@@ -5126,7 +5126,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ? `\n\n[原始 PDF 附件：${document.name}]`
       : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
     const value = (message.text + documentText).trim()
-    if (!value || !(await copyTextToClipboard(value))) return
+    const copied = message.images?.length
+      ? await copyTextAndImagesToClipboard(value, message.images)
+      : value ? await copyTextToClipboard(value) : false
+    if (!copied) return
     setCopiedMessageId(message.id)
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
     copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
@@ -6635,7 +6638,7 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
 }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
-  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
+  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length || message.images?.length)
   const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
