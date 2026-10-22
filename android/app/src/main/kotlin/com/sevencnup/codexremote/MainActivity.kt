@@ -1525,6 +1525,7 @@ class MainActivity : Activity() {
             val ime = insets.getInsets(WindowInsets.Type.ime())
             val keyboardVisible = insets.isVisible(WindowInsets.Type.ime()) || ime.bottom > systemBars.bottom
             val keyboardJustOpened = keyboardVisible && !imeInsetVisible
+            val keyboardVisibilityChanged = keyboardVisible != imeInsetVisible
             val bottom = max(systemBars.bottom, ime.bottom)
             imeInsetVisible = keyboardVisible
             if (content == null) {
@@ -1558,6 +1559,7 @@ class MainActivity : Activity() {
                 ) {
                     content.setPadding(0, 0, 0, contentBottom)
                 }
+                if (keyboardVisibilityChanged) updateQueueEditLayout()
                 if (systemInsetsChanged) {
                     updateInsetAwareOverlays()
                     overlaysInitialized = true
@@ -1620,6 +1622,21 @@ class MainActivity : Activity() {
         if (page.paddingLeft != 0 || page.paddingTop != 0 || page.paddingRight != 0 || page.paddingBottom != bottom) {
             page.setPadding(0, 0, 0, bottom)
         }
+    }
+
+    private fun updateQueueEditLayout() {
+        if (::composerInput.isInitialized) {
+            val visibleLines = if (imeInsetVisible && queueEditItem != null) 3 else 5
+            if (composerInput.maxLines != visibleLines) composerInput.maxLines = visibleLines
+        }
+        updateQueuePanelVisibility()
+    }
+
+    private fun updateQueuePanelVisibility() {
+        if (!::queuePanel.isInitialized || !::queueContent.isInitialized) return
+        val showQueue = queuePanel.childCount > 0 && queueEditItem == null && !imeInsetVisible
+        queuePanel.visibility = if (showQueue) View.VISIBLE else View.GONE
+        queueContent.visibility = if (showQueue && queueExpanded) View.VISIBLE else View.GONE
     }
 
     private fun isMessageListNearBottom(): Boolean {
@@ -1983,6 +2000,9 @@ class MainActivity : Activity() {
             minHeight = dp(44)
             maxLines = 5
             gravity = Gravity.TOP or Gravity.START
+            setHorizontallyScrolling(false)
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_SEND
             setPadding(dp(2), dp(5), dp(2), dp(4))
             setLineSpacing(dp(2).toFloat(), 1.25f)
@@ -1990,9 +2010,14 @@ class MainActivity : Activity() {
             setOnFocusChangeListener { _, hasFocus ->
                 if (hasFocus && !imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
             }
-            setOnTouchListener { _, event ->
-                if (event.actionMasked == MotionEvent.ACTION_DOWN && !imeInsetVisible) {
-                    messageNearBottomBeforeIme = isMessageListNearBottom()
+            setOnTouchListener { view, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        view.parent?.requestDisallowInterceptTouchEvent(false)
                 }
                 false
             }
@@ -6667,7 +6692,6 @@ class MainActivity : Activity() {
             queueContent.visibility = View.GONE
             return
         }
-        queuePanel.visibility = View.VISIBLE
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         if (retroTheme) header.addView(ImageView(this).apply {
             setPixelAwareImageResource(iconResource("send"))
@@ -6681,7 +6705,7 @@ class MainActivity : Activity() {
         }.apply { setPadding(dp(5), dp(5), dp(5), dp(5)) }, LinearLayout.LayoutParams(dp(24), dp(24)))
         queuePanel.addView(header, widthWrap())
         queueContent.removeAllViews()
-        queueContent.visibility = if (queueExpanded) View.VISIBLE else View.GONE
+        updateQueuePanelVisibility()
         if (!queueExpanded) return
         for (index in 0 until count) {
             val item = visibleQueue[index]
@@ -7162,6 +7186,7 @@ class MainActivity : Activity() {
                         queueEditPreferences[key] = item.optString(key).takeIf { it.isNotBlank() }
                     }
                     composerInput.setText(item.optString("text"))
+                    composerInput.setSelection(composerInput.text.length)
                     selectedFiles.clear()
                     item.optJSONArray("images")?.let { images ->
                         for (index in 0 until images.length()) images.optJSONObject(index)?.let { image ->
@@ -7176,10 +7201,16 @@ class MainActivity : Activity() {
                     composerInput.hint = tr("编辑排队消息…")
                     queueEditBar.visibility = View.VISIBLE
                     updateQueueEditImeSpacing()
+                    updateQueueEditLayout()
                     renderAttachmentStrip()
                     updateComposerPreferences()
                     setSendBusy(false)
                     renderQueue()
+                    composerInput.post {
+                        if (queueEditItem?.optString("id") == item.optString("id")) {
+                            composerInput.bringPointIntoView(composerInput.selectionEnd)
+                        }
+                    }
                 }
             } catch (error: Exception) { handler.post {
                 queueEditPending = false
@@ -7229,6 +7260,7 @@ class MainActivity : Activity() {
                     queueEditOwnerId = null
                     queueEditPreferences.clear()
                     updateQueueEditImeSpacing()
+                    updateQueueEditLayout()
                     composerInput.setText(queueEditDraft)
                     selectedFiles = queueEditDraftFiles
                     queueEditDraftFiles = mutableListOf()
