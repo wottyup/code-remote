@@ -154,7 +154,8 @@ class DeviceChatThreadSync:
         if self.manager._active_agent_thread_id == key[1]:
             return
         revision = self.manager.codex.thread_history_revision(key[1])
-        if revision is not None and revision == self._revision:
+        needs_user = any(not _text(turn, "userMessage") for turn in self._live.values())
+        if revision is not None and revision == self._revision and not needs_user:
             return
         binding = self.db.execute(
             "SELECT since,last_turn_id FROM device_chat_sync_bindings WHERE room_id=? AND thread_id=?", key,
@@ -193,7 +194,17 @@ class DeviceChatThreadSync:
                 }]}
             if turn_id in self._live:
                 if turn.get("status") not in FINISHED:
-                    continue  # A persisted snapshot can lag live token deltas.
+                    # Persisted assistant text can lag live deltas, but its user
+                    # item may be the only copy we receive before completion.
+                    live_turn = self._live[turn_id]
+                    if not _text(live_turn, "userMessage"):
+                        user_items = [item for item in turn.get("items", [])
+                                      if isinstance(item, dict) and item.get("type") == "userMessage"]
+                        if user_items:
+                            live_turn["items"] = [*user_items, *live_turn["items"]]
+                            live_turn["startedAt"] = turn.get("startedAt") or live_turn["startedAt"]
+                            await self._sync_turn(key, since, live_turn)
+                    continue
                 self._live.pop(turn_id, None)
             if turn.get("status") not in FINISHED:
                 self._eligible.add(turn_id)
@@ -271,6 +282,10 @@ class DeviceChatThreadSync:
         if not isinstance(turn_id, str) or _timestamp(turn.get("startedAt")) < since:
             return
         user = _text(turn, "userMessage")
+        if not user:
+            # Codex can stream an assistant item before its user item appears
+            # in notifications. The room must never show that reply first.
+            return
         if user.startswith(GROUP_PROMPT_PREFIX):
             self.mark_group_turn(*key, turn_id)
             return

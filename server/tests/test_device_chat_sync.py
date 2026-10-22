@@ -109,6 +109,26 @@ class DeviceChatBoundThreadSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final["cursor"], self.messages("assistant")[0]["cursor"])
         self.assertEqual([], self.manager.connection.execute("SELECT * FROM device_chat_agent_jobs").fetchall())
 
+    async def test_live_assistant_waits_for_user_and_recovers_it_from_unchanged_history_revision(self):
+        await self.sync.sync_history()
+        self.notify("item/agentMessage/delta", itemId="turn-answer", delta="正在处理")
+        await self.sync.flush_live()
+        self.assertEqual([], self.messages())
+
+        # History can expose the user item without changing its revision yet.
+        self.codex.turns = [turn(reply="", status="inProgress")]
+        await self.sync.sync_history()
+        messages = self.messages()
+        self.assertEqual(["user", "assistant"], [message["kind"] for message in messages])
+        self.assertEqual("继续测试", messages[0]["text"])
+        self.assertEqual("正在处理", messages[1]["text"])
+        self.assertLess(messages[0]["sequence"], messages[1]["sequence"])
+
+        self.notify("item/agentMessage/delta", itemId="turn-answer", delta="完成")
+        await self.sync.flush_live()
+        self.assertEqual(["user", "assistant"], [message["kind"] for message in self.messages()])
+        self.assertEqual("正在处理完成", self.messages("assistant")[0]["text"])
+
     async def test_external_history_changes_sync_without_browser_notifications(self):
         self.codex.turns = [turn(reply="开始检查", status="inProgress")]
         await self.sync.sync_history()

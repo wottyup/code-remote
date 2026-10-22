@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { codexRemoteClient, type CodexApprovalPolicy, type DeviceChatMessage, type DeviceChatState } from '../lib/codexRemoteClient'
+import { orderDeviceChatMessages } from '../lib/deviceChatOrder'
 
 function defaultDeviceName() {
   const agent = navigator.userAgent.toLowerCase()
@@ -7,12 +8,6 @@ function defaultDeviceName() {
   if (agent.includes('linux')) return 'Linux'
   if (agent.includes('mac')) return 'Mac'
   return '本机 Codex'
-}
-
-function messageOrder(left: DeviceChatMessage, right: DeviceChatMessage) {
-  if (left.sequence < 0) return right.sequence < 0 ? 0 : 1
-  if (right.sequence < 0) return -1
-  return left.sequence - right.sequence
 }
 
 export function useDeviceChat(token: string, enabled: boolean) {
@@ -45,7 +40,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     lastRoomId.current = nextRoomId
     setState((current) => {
       if (!current?.room || !next.room || current.room.id !== next.room.id) {
-        return next
+        return { ...next, messages: orderDeviceChatMessages(next.messages) }
       }
       const messages = new Map(current.messages.map((message) => [message.id, message]))
       for (const message of next.messages) {
@@ -54,7 +49,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
           messages.set(message.id, message)
         }
       }
-      const ordered = [...messages.values()].sort(messageOrder).slice(-500)
+      const ordered = orderDeviceChatMessages([...messages.values()]).slice(-500)
       return { ...next, messages: ordered }
     })
   }
@@ -208,7 +203,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
         targetId === state.node_id ? approvalPolicy : undefined)
       setState((current) => current ? {
         ...current,
-        messages: [...current.messages.filter((message) => message.id !== sent.id), sent].sort(messageOrder).slice(-500),
+        messages: orderDeviceChatMessages([...current.messages.filter((message) => message.id !== sent.id), sent]).slice(-500),
       } : current)
       return true
     } catch (reason) {
