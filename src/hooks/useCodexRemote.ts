@@ -19,6 +19,7 @@ import {
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
+import { completedAssistantText, completedAssistantTextLength, streamingAssistantText } from '../lib/assistantTextStream'
 import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
 import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/threadHistoryPolicy'
 import { ThreadLiveHistory } from '../lib/threadLiveHistory'
@@ -284,6 +285,10 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
           ? { replyDurationMs: message.replyDurationMs }
           : {}),
         ...(typeof message.turnId === 'string' ? { turnId: message.turnId } : {}),
+        ...(message.streaming === true ? { streaming: true } : {}),
+        ...(typeof message.completedTextLength === 'number' && Number.isFinite(message.completedTextLength)
+          ? { completedTextLength: Math.max(0, Math.min(message.text.length, message.completedTextLength)) }
+          : {}),
       } as CodexMessage]
     })
     return { threadId, thread: thread as unknown as CodexThread, messages }
@@ -324,6 +329,10 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.replyStartedAt ? { replyStartedAt: message.replyStartedAt } : {}),
         ...(message.replyDurationMs !== undefined ? { replyDurationMs: message.replyDurationMs } : {}),
         ...(message.turnId ? { turnId: message.turnId } : {}),
+        ...(message.streaming ? { streaming: true } : {}),
+        ...(message.completedTextLength !== undefined
+          ? { completedTextLength: Math.min(message.completedTextLength, text.length) }
+          : {}),
       } as CodexMessage
       const messageCharacters = text.length + 128
       if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
@@ -689,6 +698,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.replyStartedAt === candidate.replyStartedAt
       && message.replyDurationMs === candidate.replyDurationMs
       && Boolean(message.streaming) === Boolean(candidate.streaming)
+      && message.completedTextLength === candidate.completedTextLength
       && sameMessageImages(message.images, candidate.images)
       && sameMessageDocuments(message.documents, candidate.documents)
   })
@@ -733,16 +743,18 @@ function collapseAssistantMessagesForTurn(
   messageId: string,
   incomingText: string,
   replyStartedAt?: string,
+  completedText = '',
 ) {
   // The normal streaming path only changes the last assistant bubble. Avoid
   // searching/merging the whole history for every rendered text chunk.
   const tail = messages.at(-1)
   if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) {
     const text = mergeStreamingText(tail.text, incomingText)
-    if (text === tail.text && (tail.replyStartedAt || !replyStartedAt)) return messages
+    const completedTextLength = completedAssistantTextLength(text, completedText, tail.completedTextLength)
+    if (text === tail.text && completedTextLength === tail.completedTextLength && (tail.replyStartedAt || !replyStartedAt)) return messages
     return [
       ...messages.slice(0, -1),
-      { ...tail, text, ...(tail.replyStartedAt || !replyStartedAt ? {} : { replyStartedAt }) },
+      { ...tail, text, completedTextLength, ...(tail.replyStartedAt || !replyStartedAt ? {} : { replyStartedAt }) },
     ]
   }
   const matching = assistantMessagesForStreamSegment(messages, turnId, messageId)
@@ -759,6 +771,7 @@ function collapseAssistantMessagesForTurn(
     createdAt: source?.createdAt ?? new Date().toISOString(),
     ...((source?.replyStartedAt ?? replyStartedAt) ? { replyStartedAt: source?.replyStartedAt ?? replyStartedAt } : {}),
     streaming: true,
+    completedTextLength: completedAssistantTextLength(text, completedText, source?.completedTextLength),
     ...(turnId ? { turnId } : {}),
   }
   let inserted = false
@@ -769,13 +782,6 @@ function collapseAssistantMessagesForTurn(
     return [merged]
   })
   return inserted ? next : [...next, merged]
-}
-
-function streamingAssistantText(parts: Map<string, string>) {
-  // Codex can emit commentary and a final answer as separate agentMessage
-  // items in one turn. Match the restored-history presentation by preserving
-  // a paragraph boundary between those items.
-  return [...parts.values()].filter(Boolean).join('\n\n')
 }
 
 function sameActiveThread(left: CodexThread | null, right: CodexThread) {
@@ -1457,6 +1463,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantTurnId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
+  const streamingCompletedItems = useRef(new Set<string>())
   const streamingRenderTimer = useRef<number | undefined>(undefined)
   const streamingRenderGeneration = useRef(0)
   const turnStartedAtById = useRef(new Map<string, number>())
@@ -1728,6 +1735,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     streamingAssistantMessageId.current = null
     streamingAssistantTurnId.current = null
     streamingAssistantParts.current.clear()
+    streamingCompletedItems.current.clear()
   }, [])
 
   const addFileChangeToTurn = useCallback((turnId: string | null, fileChange: CodexFileChange) => {
@@ -1744,6 +1752,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     const messageId = streamingAssistantMessageId.current
     const text = streamingAssistantText(streamingAssistantParts.current)
+    const completedText = completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)
     if (!messageId || !text) return
     const startedAt = turnId ? turnStartedAtById.current.get(turnId) : undefined
     const replyStartedAt = new Date(startedAt ?? Date.now()).toISOString()
@@ -1753,7 +1762,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         // A delayed transition from a previous turn must never recreate an
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
-        const next = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt)
+        const next = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt, completedText)
         const tail = current.at(-1)
         if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) return next
         return sameMessages(current, next) ? current : next
@@ -2417,6 +2426,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             latestTurnId,
             runningMessageId,
             mergeStreamingText(assistantTextForTurn(current, latestTurnId, runningMessageId), streamedText),
+            undefined,
+            completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current),
           )
           : loaded
         return sameMessages(current, next) ? current : next
@@ -2762,7 +2773,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const streamMessageId = streamingAssistantMessageId.current
       const streamedText = streamingAssistantText(streamingAssistantParts.current)
       if (!turnId || !streamMessageId || !streamedText) return next
-      return collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText)
+      return collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText, undefined,
+        completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current))
     })
   }, [])
 
@@ -3736,13 +3748,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         }
         return
       }
-      const text = typeof item?.text === 'string' ? item.text : ''
+      const text = assistantItemText(item?.text)
       if (!itemId) return
       if (streamingAssistantTurnId.current && turnId && streamingAssistantTurnId.current !== turnId) {
         finalizeVisibleStreamingTurn(streamingAssistantTurnId.current)
       }
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       streamingAssistantParts.current.set(itemId, text || streamingAssistantParts.current.get(itemId) || '')
+      streamingCompletedItems.current.add(itemId)
       const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       scheduleStreamingAssistantRender()

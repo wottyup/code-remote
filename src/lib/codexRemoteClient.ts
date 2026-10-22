@@ -60,6 +60,8 @@ export interface CodexMessage {
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
   streaming?: boolean
+  /** Prefix whose agentMessage items have completed, even while the turn continues. */
+  completedTextLength?: number
 }
 
 export interface CodexImageAttachment {
@@ -424,11 +426,21 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         'createdAt', 'created_at', 'sentAt', 'sent_at', 'timestamp', 'timestampMs', 'timestamp_ms',
       )
       const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
+      // Stored messages are complete unless the snapshot explicitly includes
+      // a live item (for example, Claude's current partial reply).
+      const itemComplete = !['active', 'inprogress', 'running', 'started', 'streaming'].includes(
+        typeof item.status === 'string' ? item.status.replace(/[-_]/g, '').toLowerCase() : '',
+      )
 
       if (itemType === 'agentmessage' && assistantMessage) {
+        const previousLength = assistantMessage.text.length
         assistantMessage.text = assistantMessage.text
           ? `${assistantMessage.text}\n\n${text}`
           : text
+        if (itemComplete && assistantMessage.completedTextLength === previousLength) {
+          assistantMessage.completedTextLength = assistantMessage.text.length
+        }
+        if (!itemComplete) assistantMessage.streaming = true
         continue
       }
 
@@ -440,6 +452,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
+        ...(itemType === 'agentmessage' ? { completedTextLength: itemComplete ? text.length : 0 } : {}),
+        ...(itemType === 'agentmessage' && !itemComplete ? { streaming: true } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
         ...(documents.length > 0 ? {

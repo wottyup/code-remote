@@ -53,7 +53,7 @@ import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
-import { formatAssistantChoiceReply, parseAssistantChoiceGroups, type MessageChoiceGroup } from '../lib/messageChoices'
+import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantChoiceContent, type MessageChoiceGroup } from '../lib/messageChoices'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
@@ -3711,6 +3711,7 @@ function RemoteChatPane({
     })
     return indexes
   }, [remote.messages])
+  const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
       <header className="remote-chat__header">
@@ -3799,7 +3800,7 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
-                  choiceEnabled={active && message.role === 'assistant' && turnComplete && index === remote.messages.length - 1}
+                  choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
                   onUseChoices={fillChoiceReply}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
@@ -6662,12 +6663,11 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
-  const choiceGroups = choiceEnabled && message.role === 'assistant' && message.text
-    ? parseAssistantChoiceGroups(message.text) : []
-  const firstChoiceQuestionOffset = choiceGroups.length > 0 ? message.text.indexOf(choiceGroups[0].question) : -1
-  const showChoiceFormInsteadOfText = firstChoiceQuestionOffset >= 0
-    && !message.text.slice(0, firstChoiceQuestionOffset).replace(/[\s#>*_\d.)、-]/gu, '')
-  const renderedText = showChoiceFormInsteadOfText ? '' : message.text
+  const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
+  const choiceContent = useMemo(() => choiceEnabled && message.role === 'assistant'
+    ? parseAssistantChoiceContent(choiceText) : null, [choiceEnabled, choiceText, message.role])
+  const choiceGroups = choiceContent?.groups ?? []
+  const renderedText = choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
 
   return (
     <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
@@ -6685,7 +6685,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
-        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={message.text} groups={choiceGroups} onUse={onUseChoices} /> : null}
+        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} onUse={onUseChoices} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">
