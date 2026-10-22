@@ -1363,16 +1363,6 @@ function activityTimelineFromThread(thread: { turns?: unknown[] }): ActivityTime
   }, {})
 }
 
-export function deviceChatActivityFromItems(items: unknown[]) {
-  const turnId = 'device-chat-activity'
-  const thread = { turns: [{ id: turnId, items }] }
-  return {
-    operations: operationsFromThread(thread)[turnId] ?? [],
-    fileChanges: fileChangesFromThread(thread)[turnId] ?? [],
-    timeline: activityTimelineFromThread(thread)[turnId] ?? [],
-  }
-}
-
 function finishTurnOperations(current: OperationsByTurn, turnId: string, status: CodexOperationStatus): OperationsByTurn {
   const operations = current[turnId]
   if (!operations?.some((operation) => operation.status === 'running')) return current

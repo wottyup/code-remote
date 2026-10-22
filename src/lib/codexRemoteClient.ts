@@ -108,42 +108,6 @@ export interface CodexRuntime {
   error: string | null
 }
 
-export interface DeviceChatMember {
-  id: string
-  name: string
-  online: boolean
-}
-
-export interface DeviceChatMessage {
-  id: string
-  sequence: number
-  cursor?: number
-  kind: 'user' | 'assistant' | 'status' | 'error'
-  sender_id: string
-  sender_name: string
-  target_id?: string | null
-  target_name?: string | null
-  text: string
-  model?: string | null
-  effort?: string | null
-  approval_policy?: CodexApprovalPolicy | null
-  created_at: string
-  delivery_state?: 'pending' | 'syncing' | 'error'
-  activity?: { state: 'running' | 'completed' | 'failed'; items: Record<string, unknown>[] }
-}
-
-export interface DeviceChatState {
-  node_id: string
-  role?: 'host' | 'peer'
-  room: { id: string; name: string; host_id: string; host_name: string } | null
-  members: DeviceChatMember[]
-  messages: DeviceChatMessage[]
-  local_thread_id?: string | null
-  agent_thread_id?: string | null
-  agent_thread_cwd?: string | null
-  connected: boolean
-}
-
 export interface CodexWorkspaceEntry {
   name: string
   path: string
@@ -674,51 +638,6 @@ export const codexRemoteClient = {
   },
   unpair(token: string) {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
-  },
-  deviceChatState(token: string, afterCursor?: number, afterSequence?: number, waitMs = 0, signal?: AbortSignal) {
-    const parameters = new URLSearchParams()
-    if (afterCursor !== undefined) parameters.set('after_cursor', String(afterCursor))
-    if (afterSequence !== undefined) parameters.set('after_sequence', String(afterSequence))
-    if (waitMs > 0) parameters.set('wait_ms', String(waitMs))
-    const encodedParameters = parameters.toString()
-    const query = encodedParameters ? `?${encodedParameters}` : ''
-    return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, signal ? { signal } : undefined, {
-      timeoutMs: waitMs > 0 ? waitMs + 10_000 : 8_000,
-      networkRetries: 0,
-    })
-  },
-  createDeviceChat(token: string, name: string) {
-    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/create', {
-      method: 'POST', body: JSON.stringify({ name }),
-    })
-  },
-  inviteDeviceChat(token: string, name: string) {
-    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/invite', {
-      method: 'POST', body: JSON.stringify({ name }),
-    })
-  },
-  joinDeviceChat(token: string, hostUrl: string, code: string, name: string) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/join', {
-      method: 'POST', body: JSON.stringify({ host_url: hostUrl, code, name }),
-    }, { timeoutMs: 20_000, networkRetries: 0 })
-  },
-  sendDeviceChatMessage(token: string, text: string, targetId: string | null, model?: string, effort?: string, approvalPolicy?: CodexApprovalPolicy) {
-    return request<DeviceChatMessage>(token, '/api/v1/device-chat/message', {
-      method: 'POST', body: JSON.stringify({ text, target_id: targetId, model: model || null, effort: effort || null, approval_policy: approvalPolicy || null }),
-    }, { timeoutMs: 15_000, networkRetries: 0 })
-  },
-  bindDeviceChatWorkspace(token: string, cwd: string) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/workspace', {
-      method: 'PUT', body: JSON.stringify({ cwd }),
-    })
-  },
-  selectDeviceChatThread(token: string, threadId: string | null) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/thread', {
-      method: 'PUT', body: JSON.stringify({ thread_id: threadId }),
-    })
-  },
-  leaveDeviceChat(token: string) {
-    return request<{ left: boolean }>(token, '/api/v1/device-chat/leave', { method: 'POST' }, { timeoutMs: 10_000, networkRetries: 0 })
   },
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
