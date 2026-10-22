@@ -105,9 +105,12 @@ class DeviceChatManager:
                 message_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS device_chat_threads (
-                room_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL
+                room_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, manual INTEGER NOT NULL DEFAULT 0
             );
         """)
+        thread_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(device_chat_threads)")}
+        if "manual" not in thread_columns:
+            self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
         self.codex = codex
         self.node_id = self._get_metadata("node_id")
         if not self.node_id:
@@ -412,8 +415,48 @@ class DeviceChatManager:
             "room": config.get("room"),
             "members": self._members(),
             "messages": self._messages_for_state(after_sequence),
+            "local_thread_id": self._manual_thread_for_room(str(config["room"]["id"])),
             "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
         }
+
+    def _manual_thread_for_room(self, room_id: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT thread_id FROM device_chat_threads WHERE room_id = ? AND manual = 1", (room_id,),
+        ).fetchone()
+        return str(row["thread_id"]) if row else None
+
+    def _agent_has_work(self) -> bool:
+        pending = self.connection.execute(
+            "SELECT 1 FROM device_chat_agent_jobs WHERE state IN ('pending', 'running') LIMIT 1"
+        ).fetchone()
+        return bool(self._active_agent_thread_id or self._agent_lock.locked() or pending)
+
+    async def select_local_thread(self, thread_id: str | None) -> dict[str, Any]:
+        config = self._config()
+        if not config:
+            raise DeviceChatError("请先创建或加入设备群聊。")
+        if self._agent_has_work():
+            raise DeviceChatError("本机 Codex 正在处理群聊消息，请等回复完成后切换聊天。")
+        room_id = str(config["room"]["id"])
+        if thread_id is None:
+            self.connection.execute("DELETE FROM device_chat_threads WHERE room_id = ? AND manual = 1", (room_id,))
+        else:
+            if not thread_id or len(thread_id) > 512 or thread_id.startswith("claude:"):
+                raise DeviceChatError("只能选择本机的 Codex 聊天。")
+            try:
+                thread = await self.codex.read_thread(thread_id, include_turns=False)
+            except CodexRuntimeError as error:
+                raise DeviceChatError(f"无法读取所选 Codex 聊天：{error}") from error
+            if thread.get("id") != thread_id:
+                raise DeviceChatError("所选 Codex 聊天不存在。")
+            if self._agent_has_work():
+                raise DeviceChatError("本机 Codex 正在处理群聊消息，请等回复完成后切换聊天。")
+            self.connection.execute(
+                "INSERT INTO device_chat_threads(room_id, thread_id, manual) VALUES (?, ?, 1) "
+                "ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id, manual = 1",
+                (room_id, thread_id),
+            )
+        return self.state()
 
     def _members(self) -> list[dict[str, Any]]:
         return [
@@ -597,9 +640,15 @@ class DeviceChatManager:
                     await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
             self._active_agent_thread_id = thread_id
             prompt = self._agent_prompt(event)
+            thread_cwd = self.codex.workspace
+            if self._manual_thread_for_room(str(room["id"])):
+                selected_thread = await self.codex.read_thread(thread_id, include_turns=False)
+                selected_cwd = selected_thread.get("cwd")
+                if isinstance(selected_cwd, str) and selected_cwd.strip():
+                    thread_cwd = Path(selected_cwd)
             queue = await self.codex.subscribe()
             try:
-                response = await self.codex.start_turn(thread_id, prompt, cwd=self.codex.workspace)
+                response = await self.codex.start_turn(thread_id, prompt, cwd=thread_cwd)
                 turn = response.get("turn") if isinstance(response, dict) else None
                 turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
                 last_publish = 0.0

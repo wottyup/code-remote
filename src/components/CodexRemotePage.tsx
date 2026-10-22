@@ -4075,7 +4075,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setDeviceChatMode(true)
     setSidebarCollapsed(false)
     setWorkspaceOpen(false)
-  }, [])
+    void remote0.refreshThreads(true)
+  }, [remote0.refreshThreads])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
@@ -5430,7 +5431,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           <button type="button" className={!deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={!deviceChatMode} aria-label="普通聊天模式" onClick={() => setDeviceChatMode(false)}><MessagesSquare size={16} /><span>普通聊天</span></button>
           <button type="button" className={deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={deviceChatMode} aria-label="设备群聊模式" onClick={openDeviceChatMode}><Users size={16} /><span>设备群聊</span></button>
         </div>
-        {deviceChatMode ? <DeviceChatSidebar chat={deviceChat} onSelectRoom={() => setSidebarOpen(false)} /> : <>
+        {deviceChatMode ? <DeviceChatSidebar chat={deviceChat} threads={remote0.threads} onSelectRoom={() => setSidebarOpen(false)} /> : <>
         <div className="sidebar-search">
           <Search size={15} aria-hidden="true" />
           <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />

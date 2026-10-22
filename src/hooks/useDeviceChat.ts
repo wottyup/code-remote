@@ -147,6 +147,19 @@ export function useDeviceChat(token: string, enabled: boolean) {
     }
   }
 
+  async function selectLocalThread(threadId: string | null) {
+    setBusy(true)
+    setError(null)
+    try {
+      const next = await codexRemoteClient.selectDeviceChatThread(token, threadId)
+      mergeState(next)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '选择本机 Codex 聊天失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function copyValue(value: string, label: string) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -169,7 +182,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     }
   }
 
-  return { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, leaveRoom, copyValue }
+  return { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, selectLocalThread, leaveRoom, copyValue }
 }
 
 export type DeviceChatController = ReturnType<typeof useDeviceChat>

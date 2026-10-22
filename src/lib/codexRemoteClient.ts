@@ -133,6 +133,7 @@ export interface DeviceChatState {
   room: { id: string; name: string; host_id: string; host_name: string } | null
   members: DeviceChatMember[]
   messages: DeviceChatMessage[]
+  local_thread_id?: string | null
   connected: boolean
 }
 
@@ -690,6 +691,11 @@ export const codexRemoteClient = {
     return request<DeviceChatMessage>(token, '/api/v1/device-chat/message', {
       method: 'POST', body: JSON.stringify({ text, target_id: targetId }),
     }, { timeoutMs: 15_000, networkRetries: 0 })
+  },
+  selectDeviceChatThread(token: string, threadId: string | null) {
+    return request<DeviceChatState>(token, '/api/v1/device-chat/thread', {
+      method: 'PUT', body: JSON.stringify({ thread_id: threadId }),
+    })
   },
   leaveDeviceChat(token: string) {
     return request<{ left: boolean }>(token, '/api/v1/device-chat/leave', { method: 'POST' }, { timeoutMs: 10_000, networkRetries: 0 })

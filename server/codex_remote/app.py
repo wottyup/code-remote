@@ -141,6 +141,10 @@ class DeviceChatMessageRequest(BaseModel):
     target_id: str | None = Field(default=None, max_length=80)
 
 
+class DeviceChatThreadRequest(BaseModel):
+    thread_id: str | None = Field(default=None, max_length=512)
+
+
 class DeviceChatPeerJoinRequest(BaseModel):
     code: str = Field(min_length=6, max_length=24)
     device_id: str = Field(min_length=1, max_length=80)
@@ -1675,7 +1679,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.68.1-dev.3", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.69.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1789,6 +1793,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def device_chat_message(body: DeviceChatMessageRequest) -> dict[str, Any]:
         try:
             return await device_chat.send_message(body.text, body.target_id)
+        except DeviceChatError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.put("/api/v1/device-chat/thread")
+    async def device_chat_select_thread(body: DeviceChatThreadRequest) -> dict[str, Any]:
+        try:
+            return await device_chat.select_local_thread(body.thread_id)
         except DeviceChatError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 

@@ -1,13 +1,30 @@
-import { Copy, LoaderCircle, MessageSquare, Plus, Users, X } from 'lucide-react'
+import { useState } from 'react'
+import { Check, Copy, LoaderCircle, MessageSquare, Plus, Search, Users, X } from 'lucide-react'
 import type { DeviceChatController } from '../hooks/useDeviceChat'
+import type { CodexThread } from '../lib/codexRemoteClient'
 import './DeviceChatSidebar.css'
 
-export function DeviceChatSidebar({ chat, onSelectRoom }: { chat: DeviceChatController; onSelectRoom: () => void }) {
-  const { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, leaveRoom, copyValue } = chat
+export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: DeviceChatController; threads: CodexThread[]; onSelectRoom: () => void }) {
+  const { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, selectLocalThread, leaveRoom, copyValue } = chat
+  const [threadSearch, setThreadSearch] = useState('')
+  const codexThreads = threads.filter((thread) => thread.engine !== 'claude-code')
+  const matchingThreads = codexThreads.filter((thread) => (thread.name || thread.preview || '新对话').toLocaleLowerCase().includes(threadSearch.trim().toLocaleLowerCase()))
+  const selectedThread = codexThreads.find((thread) => thread.id === state?.local_thread_id)
   const hostAddress = window.location.origin
   return <div className="device-chat-sidebar" aria-label="设备群聊侧栏">
     <div className="thread-list-heading"><span>群聊</span></div>
     {state?.room ? <button className="thread-row thread-row--active device-chat-sidebar__room" type="button" aria-current="page" onClick={onSelectRoom}><span className="thread-row__icon"><Users size={16} /></span><span className="thread-row__copy"><strong>{state.room.name}</strong><span className="thread-row__meta"><small>{state.members.length} 台设备 · {state.connected || state.role === 'host' ? '已连接' : '重连中'}</small></span></span></button> : null}
+    {state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
+      <div className="thread-list-heading"><span>本机 Codex 聊天</span><small>{codexThreads.length} 条</small></div>
+      <p className="device-chat-thread-picker__hint">@本机时继续使用所选聊天的项目上下文。每台设备分别选择。</p>
+      <div className="device-chat-thread-picker__search"><Search size={14} /><input value={threadSearch} onChange={(event) => setThreadSearch(event.currentTarget.value)} placeholder="搜索本机聊天记录" aria-label="搜索本机 Codex 聊天" /></div>
+      <div className="device-chat-thread-picker__list">
+        <button type="button" className={'thread-row device-chat-thread-picker__row' + (!state.local_thread_id ? ' thread-row--active' : '')} aria-pressed={!state.local_thread_id} disabled={busy} onClick={() => void selectLocalThread(null)}><span className="thread-row__icon"><MessageSquare size={15} /></span><span className="thread-row__copy"><strong>自动创建群聊专用聊天</strong></span>{!state.local_thread_id ? <Check size={14} /> : null}</button>
+        {matchingThreads.map((thread) => <button type="button" key={thread.id} className={'thread-row device-chat-thread-picker__row' + (state.local_thread_id === thread.id ? ' thread-row--active' : '')} aria-pressed={state.local_thread_id === thread.id} disabled={busy} title={thread.cwd || undefined} onClick={() => void selectLocalThread(thread.id)}><span className="thread-row__icon"><MessageSquare size={15} /></span><span className="thread-row__copy"><strong>{thread.name || thread.preview || '新对话'}</strong>{thread.cwd ? <span className="thread-row__meta"><small>{thread.cwd}</small></span> : null}</span>{state.local_thread_id === thread.id ? <Check size={14} /> : null}</button>)}
+        {matchingThreads.length === 0 ? <p className="thread-list__empty">{threadSearch ? '没有找到匹配的 Codex 聊天' : '暂无本机 Codex 聊天记录'}</p> : null}
+      </div>
+      {state.local_thread_id && !selectedThread ? <p className="device-chat-thread-picker__hint">已选聊天不在当前历史列表中：{state.local_thread_id}</p> : null}
+    </section> : null}
     <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
     <header className="device-chat-room-panel__header"><strong>{state?.room ? '成员与邀请' : '创建或加入群聊'}</strong></header>
     {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
