@@ -49,7 +49,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
-import { copyTextToClipboard } from '../lib/clipboard'
+import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
@@ -1909,40 +1909,51 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (readingDocuments) return
     const pastedText = event.clipboardData.getData('text/plain')
-    const pastedTable = clipboardTableToMarkdown(event.clipboardData.getData('text/html'), pastedText)
-    if (pastedTable) {
-      event.preventDefault()
-      if (pastedTable.length >= longPasteThreshold) {
-        appendDocument({ name: 'pasted-table.md', content: pastedTable })
-        return
-      }
-
+    const html = event.clipboardData.getData('text/html')
+    const pastedTable = clipboardTableToMarkdown(html, pastedText)
+    const insertPastedText = (value: string, asBlock: boolean) => {
       const textarea = composer.current
       const current = draftRef.current
       const start = textarea?.selectionStart ?? current.length
       const end = textarea?.selectionEnd ?? start
       const before = current.slice(0, start)
       const after = current.slice(end)
-      const prefix = before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
-      const suffix = after.length === 0 || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n'
-      updateDraft(`${before}${prefix}${pastedTable}${suffix}${after}`)
+      const prefix = !asBlock || before.length === 0 || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n'
+      const suffix = !asBlock || after.length === 0 || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n'
+      updateDraft(`${before}${prefix}${value}${suffix}${after}`)
       window.requestAnimationFrame(() => {
         const activeTextarea = composer.current
         if (!activeTextarea) return
-        const cursor = before.length + prefix.length + pastedTable.length
+        const cursor = before.length + prefix.length + value.length
         activeTextarea.focus({ preventScroll: true })
         activeTextarea.setSelectionRange(cursor, cursor)
       })
-      return
     }
     const directFiles = Array.from(event.clipboardData.files)
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
       .filter((file): file is File => file !== null)
-    const images = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    const fileImages = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    const embeddedImages = embeddedImageFilesFromClipboardHtml(html)
+    const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
     if (images.length > 0) {
       event.preventDefault()
       void attachImages(images)
+      const labels = embeddedImages.map((image) => `[图片：${image.name}]`).join('\n\n')
+      const text = labels && pastedText === labels
+        ? ''
+        : labels && pastedText.endsWith(`\n\n${labels}`)
+          ? pastedText.slice(0, -(labels.length + 2))
+          : pastedText
+      const value = pastedTable ?? text
+      if (pastedTable && value.length >= longPasteThreshold) appendDocument({ name: 'pasted-table.md', content: value })
+      else if (value) insertPastedText(value, Boolean(pastedTable))
+      return
+    }
+    if (pastedTable) {
+      event.preventDefault()
+      if (pastedTable.length >= longPasteThreshold) appendDocument({ name: 'pasted-table.md', content: pastedTable })
+      else insertPastedText(pastedTable, true)
       return
     }
     if (pastedText.length < longPasteThreshold) return
@@ -3428,7 +3439,7 @@ interface RemoteChatPaneProps {
   directoryRequest: WorkspaceTerminalRequest | null
   onDirectoryRequestHandled: (id: number) => void
   composerHandle: RefObject<ComposerHandle | null>
-  copiedMessageId: string | null
+  copyFeedback: { id: string; label: string } | null
   onCopy: (message: CodexMessage) => void | Promise<void>
 }
 
@@ -3453,7 +3464,7 @@ function RemoteChatPane({
   directoryRequest,
   onDirectoryRequestHandled,
   composerHandle,
-  copiedMessageId,
+  copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
@@ -3703,7 +3714,7 @@ function RemoteChatPane({
       <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'}` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'} · 群消息监听中` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
         {active && !deviceChat ? <button
           className="icon-button chat-history-refresh-button"
@@ -3773,7 +3784,7 @@ function RemoteChatPane({
                 fileChanges={[]}
                 activityTimeline={[]}
                 showOperations={false}
-                copied={copiedMessageId === message.id}
+                copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                 onCopy={onCopy}
                 onOpenFile={openChangedFilePreview}
                 onOpenImage={openViewedImagePreview}
@@ -3812,7 +3823,7 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
-                  copied={copiedMessageId === message.id}
+                  copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
                   onOpenImage={openViewedImagePreview}
@@ -4002,7 +4013,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
-  const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null)
+  const [copyFeedback, setCopyFeedback] = useState<{ id: string; label: string } | null>(null)
   const [completionToast, setCompletionToast] = useState<CodexThreadCompletion | null>(null)
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
@@ -4718,6 +4729,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || event.isComposing || event.keyCode === 229) return
+      if (document.querySelector('dialog[open]')) return
       if (threadRenameTarget || threadDeleteTargets) return
       if (workspacePreviewModeRef.current !== null) {
         event.preventDefault()
@@ -5125,10 +5137,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ? `\n\n[原始 PDF 附件：${document.name}]`
       : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
     const value = (message.text + documentText).trim()
-    if (!value || !(await copyTextToClipboard(value))) return
-    setCopiedMessageId(message.id)
+    let label = '复制失败'
+    if (message.images?.length) {
+      const result = await copyTextAndImagesToClipboard(value, message.images)
+      if (result.copied) label = result.imageCount === message.images.length
+        ? '已复制'
+        : result.imageCount > 0 ? '部分图片已复制' : '仅复制文字'
+    } else if (value && await copyTextToClipboard(value)) {
+      label = '已复制'
+    }
+    setCopyFeedback({ id: message.id, label })
     if (copyResetTimer.current !== undefined) window.clearTimeout(copyResetTimer.current)
-    copyResetTimer.current = window.setTimeout(() => setCopiedMessageId(null), 1600)
+    copyResetTimer.current = window.setTimeout(() => setCopyFeedback(null), 2200)
   }, [])
 
   const sendComposerMessage = useCallback(async (input: ComposerSendInput) => {
@@ -5607,7 +5627,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
                     onDirectoryRequestHandled={(id) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current)}
                     composerHandle={composerHandle}
-                    copiedMessageId={copiedMessageId}
+                    copyFeedback={copyFeedback}
                     onCopy={copyMessage}
                   />
                 </div>
@@ -6619,7 +6639,7 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   deviceChatMessage?: DeviceChatMessage
   assistantName: string
@@ -6627,15 +6647,15 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
-  copied: boolean
+  copyFeedback: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
 }) {
   // A streaming answer is incomplete, so none of its copy controls should be
   // available until Codex has finished the turn.
-  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length)
-  const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null
+  const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length || message.images?.length)
+  const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)

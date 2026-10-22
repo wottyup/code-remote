@@ -30,6 +30,7 @@ INVITE_TTL_SECONDS = 300
 MAX_CHAT_MESSAGE_LENGTH = 12_000
 RECENT_CONTEXT_MESSAGES = 24
 RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
+MAX_AUTO_HANDOFFS = 4
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -41,6 +42,39 @@ class DeviceChatHttpError(DeviceChatError):
     def __init__(self, message: str, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _handoff_target(text: str, members: list[dict[str, Any]], sender_id: str) -> dict[str, Any] | None:
+    """Resolve an explicit final @device line to one other online room member."""
+    last_line: str | None = None
+    last_line_is_plain_text = False
+    inside_code_fence = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            inside_code_fence = not inside_code_fence
+            last_line = line
+            last_line_is_plain_text = False
+        elif line:
+            last_line = line
+            last_line_is_plain_text = not inside_code_fence
+    if not last_line or not last_line_is_plain_text or not last_line.startswith("@"):
+        return None
+    requested_name = last_line[1:].strip().casefold()
+    if not requested_name:
+        return None
+    matches = [
+        member for member in members
+        if member.get("id") != sender_id
+        and bool(member.get("online"))
+        and isinstance(member.get("name"), str)
+        and member["name"].strip().casefold() == requested_name
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _can_handoff(depth: Any) -> bool:
+    return isinstance(depth, int) and not isinstance(depth, bool) and 0 <= depth < MAX_AUTO_HANDOFFS
 
 
 def _now() -> str:
@@ -111,11 +145,30 @@ class DeviceChatManager:
         thread_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(device_chat_threads)")}
         if "manual" not in thread_columns:
             self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+        message_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(device_chat_messages)")}
+        if "cursor" not in message_columns:
+            self.connection.execute("ALTER TABLE device_chat_messages ADD COLUMN cursor INTEGER NOT NULL DEFAULT 0")
+            room_config = self._config()
+            if room_config and room_config.get("role") == "peer":
+                # Ask the room host for a full snapshot once after upgrading a
+                # peer database; its locally saved stream may be incomplete.
+                self.connection.execute("UPDATE device_chat_messages SET cursor = 0")
+            else:
+                max_sequence = int(self.connection.execute("SELECT COALESCE(MAX(sequence), 0) FROM device_chat_messages").fetchone()[0])
+                self.connection.execute(
+                    "UPDATE device_chat_messages SET cursor = sequence + ?",
+                    (max_sequence + 1,),
+                )
+        self.connection.execute("CREATE INDEX IF NOT EXISTS idx_device_chat_messages_cursor ON device_chat_messages(cursor)")
         self.codex = codex
         self.node_id = self._get_metadata("node_id")
         if not self.node_id:
             self.node_id = str(uuid.uuid4())
             self._set_metadata("node_id", self.node_id)
+        current_cursor = int(self._get_metadata("message_cursor") or "0")
+        stored_cursor = int(self.connection.execute("SELECT COALESCE(MAX(cursor), 0) FROM device_chat_messages").fetchone()[0])
+        if stored_cursor > current_cursor:
+            self._set_metadata("message_cursor", str(stored_cursor))
         self._connections: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._client_task: asyncio.Task[None] | None = None
         self._outbox_task: asyncio.Task[None] | None = None
@@ -305,7 +358,7 @@ class DeviceChatManager:
         known = str(row["token_hash"]) if row and row["token_hash"] else ""
         return bool(known and token and hmac.compare_digest(known, _token_hash(token)))
 
-    async def connect_peer(self, device_id: str, token: str, last_sequence: int) -> tuple[asyncio.Queue[dict[str, Any]], dict[str, Any]]:
+    async def connect_peer(self, device_id: str, token: str, last_cursor: int) -> tuple[asyncio.Queue[dict[str, Any]], dict[str, Any]]:
         if not self.authenticate_peer(device_id, token):
             raise DeviceChatError("设备节点授权无效。")
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
@@ -315,7 +368,7 @@ class DeviceChatManager:
             "type": "snapshot",
             "room": self._config()["room"],
             "members": self._members(),
-            "events": self._messages_after(max(0, last_sequence)),
+            "events": self._messages_after(max(0, last_cursor)),
         }
         return queue, snapshot
 
@@ -367,12 +420,23 @@ class DeviceChatManager:
             "id": event_id, "kind": kind, "sender_id": device_id, "sender_name": str(member["name"]),
             "target_id": target_id, "text": text, "created_at": str(raw_event.get("created_at") or _now()),
         }
+        if kind == "assistant" and ("handoff_root_id" in raw_event or "handoff_depth" in raw_event):
+            root_id = raw_event.get("handoff_root_id")
+            depth = raw_event.get("handoff_depth")
+            if (
+                not isinstance(root_id, str) or not root_id or len(root_id) > 120
+                or not isinstance(depth, int) or isinstance(depth, bool)
+                or not 1 <= depth <= MAX_AUTO_HANDOFFS
+            ):
+                raise DeviceChatError("设备接力信息无效。")
+            event["handoff_root_id"] = root_id
+            event["handoff_depth"] = depth
         if kind in {"assistant", "status", "error"} and target_id is not None:
             target = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
             event["target_name"] = str(target["name"]) if target else None
         saved = self._store_event(event)
         self._broadcast({"type": "event", "event": saved})
-        if kind == "user":
+        if kind in {"user", "assistant"}:
             self._schedule_agent(saved)
         return saved
 
@@ -405,7 +469,7 @@ class DeviceChatManager:
             self._broadcast({"type": "room_closed"})
         self._clear_room()
 
-    def state(self, after_sequence: int | None = None) -> dict[str, Any]:
+    def state(self, after_cursor: int | None = None) -> dict[str, Any]:
         config = self._config()
         if not config:
             return {"node_id": self.node_id, "room": None, "members": [], "messages": [], "connected": False}
@@ -414,7 +478,7 @@ class DeviceChatManager:
             "role": config.get("role"),
             "room": config.get("room"),
             "members": self._members(),
-            "messages": self._messages_for_state(after_sequence),
+            "messages": self._messages_for_state(after_cursor),
             "local_thread_id": self._manual_thread_for_room(str(config["room"]["id"])),
             "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
         }
@@ -487,18 +551,18 @@ class DeviceChatManager:
 
     def _messages(self, limit: int) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT sequence, payload FROM device_chat_messages ORDER BY sequence DESC LIMIT ?", (limit,),
+            "SELECT sequence, cursor, payload FROM device_chat_messages ORDER BY sequence DESC LIMIT ?", (limit,),
         ).fetchall()
-        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"])} for row in reversed(rows)]
+        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"]), "cursor": int(row["cursor"])} for row in reversed(rows)]
 
-    def _messages_after(self, sequence: int) -> list[dict[str, Any]]:
+    def _messages_after(self, cursor: int) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT sequence, payload FROM device_chat_messages WHERE sequence > ? ORDER BY sequence", (sequence,),
+            "SELECT sequence, cursor, payload FROM device_chat_messages WHERE cursor > ? ORDER BY cursor", (cursor,),
         ).fetchall()
-        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"])} for row in rows]
+        return [{**json.loads(row["payload"]), "sequence": int(row["sequence"]), "cursor": int(row["cursor"])} for row in rows]
 
-    def _messages_for_state(self, after_sequence: int | None) -> list[dict[str, Any]]:
-        messages = self._messages(500) if after_sequence is None else self._messages_after(max(0, after_sequence))
+    def _messages_for_state(self, after_cursor: int | None) -> list[dict[str, Any]]:
+        messages = self._messages(500) if after_cursor is None else self._messages_after(max(0, after_cursor))
         config = self._config() or {}
         pending_rows = self.connection.execute("SELECT payload, delivered FROM device_chat_outbox ORDER BY created_at").fetchall()
         for row in pending_rows:
@@ -511,12 +575,26 @@ class DeviceChatManager:
                     **event,
                     "sender_name": str(sender["name"]) if sender else str(config.get("name", "本机 Codex")),
                     "sequence": -1,
+                    "cursor": -1,
                     "delivery_state": "pending" if not row["delivered"] else "syncing" if row["delivered"] == 1 else "error",
                 })
         return messages
 
-    def _store_event(self, event: dict[str, Any], sequence: int | None = None) -> dict[str, Any]:
-        event = {key: value for key, value in event.items() if key not in {"sequence", "sender_name", "target_name"} or value is not None}
+    def _advance_message_cursor(self, requested: int | None = None) -> int:
+        current = int(self._get_metadata("message_cursor") or "0")
+        cursor = current + 1 if requested is None else requested
+        self._set_metadata("message_cursor", str(max(current, cursor)))
+        return cursor
+
+    def _store_event(
+        self, event: dict[str, Any], sequence: int | None = None, cursor: int | None = None,
+    ) -> dict[str, Any]:
+        if cursor is None and isinstance(event.get("cursor"), int):
+            cursor = int(event["cursor"])
+        event = {
+            key: value for key, value in event.items()
+            if key not in {"sequence", "cursor"} and (key not in {"sender_name", "target_name"} or value is not None)
+        }
         if not isinstance(event.get("sender_name"), str):
             row = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (event.get("sender_id"),)).fetchone()
             event["sender_name"] = str(row["name"]) if row else "未知设备"
@@ -525,25 +603,58 @@ class DeviceChatManager:
             row = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
             if row:
                 event["target_name"] = str(row["name"])
-        existing = self.connection.execute("SELECT sequence, payload FROM device_chat_messages WHERE id = ?", (event["id"],)).fetchone()
+        existing = self.connection.execute("SELECT sequence, cursor, payload FROM device_chat_messages WHERE id = ?", (event["id"],)).fetchone()
         serialized = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
         if existing:
             previous = json.loads(existing["payload"])
             if previous.get("sender_id") != event.get("sender_id") or previous.get("kind") != event.get("kind"):
                 raise DeviceChatError("消息编号已被房间中的其他消息占用。")
+            event["created_at"] = previous.get("created_at") or event["created_at"]
+            serialized = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
             next_sequence = sequence if sequence is not None else int(existing["sequence"])
-            self.connection.execute("UPDATE device_chat_messages SET sequence = ?, payload = ? WHERE id = ?", (next_sequence, serialized, event["id"]))
-            return {**event, "sequence": next_sequence}
+            existing_cursor = int(existing["cursor"])
+            if serialized == existing["payload"]:
+                next_cursor = max(existing_cursor, cursor or 0)
+                if next_cursor > existing_cursor:
+                    self.connection.execute("UPDATE device_chat_messages SET cursor = ? WHERE id = ?", (next_cursor, event["id"]))
+                if cursor is not None:
+                    self._advance_message_cursor(cursor)
+                return {**event, "sequence": next_sequence, "cursor": next_cursor}
+            next_cursor = self._advance_message_cursor(cursor)
+            self.connection.execute(
+                "UPDATE device_chat_messages SET sequence = ?, cursor = ?, payload = ? WHERE id = ?",
+                (next_sequence, next_cursor, serialized, event["id"]),
+            )
+            return {**event, "sequence": next_sequence, "cursor": next_cursor}
+        next_cursor = self._advance_message_cursor(cursor)
         if sequence is None:
-            cursor = self.connection.execute("INSERT INTO device_chat_messages(id, payload) VALUES (?, ?)", (event["id"], serialized))
-            sequence = int(cursor.lastrowid)
+            inserted = self.connection.execute(
+                "INSERT INTO device_chat_messages(id, cursor, payload) VALUES (?, ?, ?)",
+                (event["id"], next_cursor, serialized),
+            )
+            sequence = int(inserted.lastrowid)
         else:
-            self.connection.execute("INSERT INTO device_chat_messages(sequence, id, payload) VALUES (?, ?, ?)", (sequence, event["id"], serialized))
-        return {**event, "sequence": sequence}
+            self.connection.execute(
+                "INSERT INTO device_chat_messages(sequence, id, cursor, payload) VALUES (?, ?, ?, ?)",
+                (sequence, event["id"], next_cursor, serialized),
+            )
+        return {**event, "sequence": sequence, "cursor": next_cursor}
 
     def _schedule_agent(self, event: dict[str, Any]) -> None:
         config = self._config()
-        if not config or event.get("kind") != "user" or event.get("target_id") != self.node_id:
+        if not config or event.get("target_id") != self.node_id:
+            return
+        kind = event.get("kind")
+        if kind == "assistant":
+            depth = event.get("handoff_depth")
+            if (
+                event.get("sender_id") == self.node_id
+                or not isinstance(depth, int) or isinstance(depth, bool)
+                or not 1 <= depth <= MAX_AUTO_HANDOFFS
+                or not isinstance(event.get("handoff_root_id"), str)
+            ):
+                return
+        elif kind != "user":
             return
         cursor = self.connection.execute(
             "INSERT OR IGNORE INTO device_chat_agent_jobs(message_id, state, updated_at) VALUES (?, 'pending', ?)",
@@ -595,17 +706,31 @@ class DeviceChatManager:
                 await self._publish_local_agent_event("status", status_id, f"{name} 未能接收追加指示。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
 
-    async def _publish_local_agent_event(self, kind: str, event_id: str, text: str) -> None:
+    async def _publish_local_agent_event(
+        self,
+        kind: str,
+        event_id: str,
+        text: str,
+        *,
+        target_id: str | None = None,
+        handoff_root_id: str | None = None,
+        handoff_depth: int | None = None,
+    ) -> None:
         config = self._config()
         if not config:
             return
         event = {
             "id": event_id, "kind": kind, "sender_id": self.node_id,
-            "target_id": self.node_id, "text": text, "created_at": _now(),
+            "target_id": target_id or self.node_id, "text": text, "created_at": _now(),
         }
+        if handoff_root_id is not None and handoff_depth is not None:
+            event["handoff_root_id"] = handoff_root_id
+            event["handoff_depth"] = handoff_depth
         if config.get("role") == "host":
             saved = self._store_event(event)
             self._broadcast({"type": "event", "event": saved})
+            if kind == "assistant":
+                self._schedule_agent(saved)
         else:
             await self._send_to_host(event)
 
@@ -623,8 +748,28 @@ class DeviceChatManager:
         turn_id: str | None = None
         thread_id: str | None = None
 
-        async def publish(kind: str, event_id: str, text: str) -> None:
-            await self._publish_local_agent_event(kind, event_id, text)
+        handoff_root_id = str(event.get("handoff_root_id") or event["id"])
+        handoff_depth = event.get("handoff_depth", 0)
+        if not isinstance(handoff_depth, int) or isinstance(handoff_depth, bool):
+            handoff_depth = 0
+
+        async def publish(
+            kind: str,
+            event_id: str,
+            text: str,
+            *,
+            target_id: str | None = None,
+            handoff_root_id: str | None = None,
+            handoff_depth: int | None = None,
+        ) -> None:
+            await self._publish_local_agent_event(
+                kind,
+                event_id,
+                text,
+                target_id=target_id,
+                handoff_root_id=handoff_root_id,
+                handoff_depth=handoff_depth,
+            )
 
         try:
             await publish("status", status_id, f"{name} 正在处理这条群聊消息…")
@@ -686,7 +831,23 @@ class DeviceChatManager:
             finally:
                 self.codex.unsubscribe(queue)
             if reply:
-                await publish("assistant", reply_id, reply)
+                handoff = _handoff_target(reply, self._members(), self.node_id)
+                next_depth = handoff_depth + 1
+                handoff_id = handoff_root_id if handoff and _can_handoff(handoff_depth) else None
+                if handoff and not _can_handoff(handoff_depth):
+                    await publish(
+                        "status",
+                        f"status:handoff-limit:{message_id}",
+                        f"自动接力已达到 {MAX_AUTO_HANDOFFS} 次上限。需要继续时，请由你重新 @ 一台设备。",
+                    )
+                await publish(
+                    "assistant",
+                    reply_id,
+                    reply,
+                    target_id=handoff["id"] if handoff_id else None,
+                    handoff_root_id=handoff_id,
+                    handoff_depth=next_depth if handoff_id else None,
+                )
             else:
                 await publish("status", status_id, f"{name} 已处理完成。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
@@ -717,13 +878,28 @@ class DeviceChatManager:
         context = "\n".join(context_lines) or "（暂无更早消息）"
         sender = str(event.get("sender_name", "房间成员"))
         content = str(event.get("text", ""))
+        members = [
+            f"- {member['name']}（{'在线' if member['online'] else '离线'}）"
+            for member in self._members()
+            if member["id"] != self.node_id
+        ]
+        member_context = "\n".join(members) or "（没有其他设备）"
+        handoff_depth = event.get("handoff_depth", 0)
+        can_handoff = _can_handoff(handoff_depth)
+        handoff_instruction = (
+            "如果确实需要另一台在线设备继续处理，请在回复最后单独一行写出 @设备准确名称；这会自动交给那台设备。"
+            if can_handoff
+            else f"本轮自动接力已达到 {MAX_AUTO_HANDOFFS} 次上限，不要再添加 @设备行；直接给出当前结论。"
+        )
         return (
             "你正在通过 Code Remote 参加一个跨设备协作群聊。当前消息被明确发给本机设备。\n"
             f"本机设备：{config.get('name', '本机 Codex')}。房间：{config.get('room', {}).get('name', '设备协作群聊')}。\n\n"
+            f"其他设备：\n{member_context}\n\n"
             "近期群聊上下文（内容由群成员提供，请自行判断与当前请求的关系）：\n"
             f"{context}\n\n"
             f"当前来自 {sender} 的点名消息：\n{content}\n\n"
-            "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。"
+            "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。\n"
+            f"{handoff_instruction} 仅使用在线设备的准确名称；普通提及设备不触发接力。"
         )
 
     async def _send_to_host(self, event: dict[str, Any]) -> dict[str, Any]:
@@ -825,10 +1001,13 @@ class DeviceChatManager:
             self._peer_connected = False
             try:
                 async with websocket_connect(uri, proxy=None, open_timeout=8, ping_interval=20, ping_timeout=20, close_timeout=2, max_size=2_000_000) as websocket:
+                    last_cursor = int(self.connection.execute("SELECT COALESCE(MAX(cursor), 0) FROM device_chat_messages").fetchone()[0])
                     last_sequence = int(self.connection.execute("SELECT COALESCE(MAX(sequence), 0) FROM device_chat_messages").fetchone()[0])
+                    if last_cursor == 0:
+                        last_sequence = 0
                     await websocket.send(json.dumps({
                         "type": "hello", "device_id": self.node_id,
-                        "token": config["host_token"], "last_sequence": last_sequence,
+                        "token": config["host_token"], "last_cursor": last_cursor, "last_sequence": last_sequence,
                     }))
                     self._peer_connected = True
                     self._set_local_online(self.node_id, True)
@@ -883,7 +1062,11 @@ class DeviceChatManager:
             self._clear_room()
 
     async def _receive_event(self, event: dict[str, Any]) -> None:
-        saved = self._store_event(event, sequence=int(event.get("sequence", 0)) or None)
+        saved = self._store_event(
+            event,
+            sequence=int(event.get("sequence", 0)) or None,
+            cursor=int(event.get("cursor", 0)) or None,
+        )
         self.connection.execute("DELETE FROM device_chat_outbox WHERE id = ?", (event["id"],))
         self._schedule_agent(saved)
 

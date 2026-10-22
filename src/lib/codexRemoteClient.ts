@@ -117,6 +117,7 @@ export interface DeviceChatMember {
 export interface DeviceChatMessage {
   id: string
   sequence: number
+  cursor?: number
   kind: 'user' | 'assistant' | 'status' | 'error'
   sender_id: string
   sender_name: string
@@ -668,8 +669,12 @@ export const codexRemoteClient = {
   unpair(token: string) {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
   },
-  deviceChatState(token: string, afterSequence?: number) {
-    const query = afterSequence === undefined ? '' : `?after_sequence=${encodeURIComponent(String(afterSequence))}`
+  deviceChatState(token: string, afterCursor?: number, afterSequence?: number) {
+    const parameters = new URLSearchParams()
+    if (afterCursor !== undefined) parameters.set('after_cursor', String(afterCursor))
+    if (afterSequence !== undefined) parameters.set('after_sequence', String(afterSequence))
+    const encodedParameters = parameters.toString()
+    const query = encodedParameters ? `?${encodedParameters}` : ''
     return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, undefined, { timeoutMs: 8_000, networkRetries: 0 })
   },
   createDeviceChat(token: string, name: string) {
