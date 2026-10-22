@@ -3714,7 +3714,7 @@ function RemoteChatPane({
       <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'}` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'} · 群消息监听中` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
         {active && !deviceChat ? <button
           className="icon-button chat-history-refresh-button"

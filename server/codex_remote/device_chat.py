@@ -30,6 +30,7 @@ INVITE_TTL_SECONDS = 300
 MAX_CHAT_MESSAGE_LENGTH = 12_000
 RECENT_CONTEXT_MESSAGES = 24
 RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
+MAX_AUTO_HANDOFFS = 4
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -41,6 +42,39 @@ class DeviceChatHttpError(DeviceChatError):
     def __init__(self, message: str, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _handoff_target(text: str, members: list[dict[str, Any]], sender_id: str) -> dict[str, Any] | None:
+    """Resolve an explicit final @device line to one other online room member."""
+    last_line: str | None = None
+    last_line_is_plain_text = False
+    inside_code_fence = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if line.startswith("```"):
+            inside_code_fence = not inside_code_fence
+            last_line = line
+            last_line_is_plain_text = False
+        elif line:
+            last_line = line
+            last_line_is_plain_text = not inside_code_fence
+    if not last_line or not last_line_is_plain_text or not last_line.startswith("@"):
+        return None
+    requested_name = last_line[1:].strip().casefold()
+    if not requested_name:
+        return None
+    matches = [
+        member for member in members
+        if member.get("id") != sender_id
+        and bool(member.get("online"))
+        and isinstance(member.get("name"), str)
+        and member["name"].strip().casefold() == requested_name
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _can_handoff(depth: Any) -> bool:
+    return isinstance(depth, int) and not isinstance(depth, bool) and 0 <= depth < MAX_AUTO_HANDOFFS
 
 
 def _now() -> str:
@@ -386,12 +420,23 @@ class DeviceChatManager:
             "id": event_id, "kind": kind, "sender_id": device_id, "sender_name": str(member["name"]),
             "target_id": target_id, "text": text, "created_at": str(raw_event.get("created_at") or _now()),
         }
+        if kind == "assistant" and ("handoff_root_id" in raw_event or "handoff_depth" in raw_event):
+            root_id = raw_event.get("handoff_root_id")
+            depth = raw_event.get("handoff_depth")
+            if (
+                not isinstance(root_id, str) or not root_id or len(root_id) > 120
+                or not isinstance(depth, int) or isinstance(depth, bool)
+                or not 1 <= depth <= MAX_AUTO_HANDOFFS
+            ):
+                raise DeviceChatError("设备接力信息无效。")
+            event["handoff_root_id"] = root_id
+            event["handoff_depth"] = depth
         if kind in {"assistant", "status", "error"} and target_id is not None:
             target = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
             event["target_name"] = str(target["name"]) if target else None
         saved = self._store_event(event)
         self._broadcast({"type": "event", "event": saved})
-        if kind == "user":
+        if kind in {"user", "assistant"}:
             self._schedule_agent(saved)
         return saved
 
@@ -597,7 +642,19 @@ class DeviceChatManager:
 
     def _schedule_agent(self, event: dict[str, Any]) -> None:
         config = self._config()
-        if not config or event.get("kind") != "user" or event.get("target_id") != self.node_id:
+        if not config or event.get("target_id") != self.node_id:
+            return
+        kind = event.get("kind")
+        if kind == "assistant":
+            depth = event.get("handoff_depth")
+            if (
+                event.get("sender_id") == self.node_id
+                or not isinstance(depth, int) or isinstance(depth, bool)
+                or not 1 <= depth <= MAX_AUTO_HANDOFFS
+                or not isinstance(event.get("handoff_root_id"), str)
+            ):
+                return
+        elif kind != "user":
             return
         cursor = self.connection.execute(
             "INSERT OR IGNORE INTO device_chat_agent_jobs(message_id, state, updated_at) VALUES (?, 'pending', ?)",
@@ -649,17 +706,31 @@ class DeviceChatManager:
                 await self._publish_local_agent_event("status", status_id, f"{name} 未能接收追加指示。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
 
-    async def _publish_local_agent_event(self, kind: str, event_id: str, text: str) -> None:
+    async def _publish_local_agent_event(
+        self,
+        kind: str,
+        event_id: str,
+        text: str,
+        *,
+        target_id: str | None = None,
+        handoff_root_id: str | None = None,
+        handoff_depth: int | None = None,
+    ) -> None:
         config = self._config()
         if not config:
             return
         event = {
             "id": event_id, "kind": kind, "sender_id": self.node_id,
-            "target_id": self.node_id, "text": text, "created_at": _now(),
+            "target_id": target_id or self.node_id, "text": text, "created_at": _now(),
         }
+        if handoff_root_id is not None and handoff_depth is not None:
+            event["handoff_root_id"] = handoff_root_id
+            event["handoff_depth"] = handoff_depth
         if config.get("role") == "host":
             saved = self._store_event(event)
             self._broadcast({"type": "event", "event": saved})
+            if kind == "assistant":
+                self._schedule_agent(saved)
         else:
             await self._send_to_host(event)
 
@@ -677,8 +748,28 @@ class DeviceChatManager:
         turn_id: str | None = None
         thread_id: str | None = None
 
-        async def publish(kind: str, event_id: str, text: str) -> None:
-            await self._publish_local_agent_event(kind, event_id, text)
+        handoff_root_id = str(event.get("handoff_root_id") or event["id"])
+        handoff_depth = event.get("handoff_depth", 0)
+        if not isinstance(handoff_depth, int) or isinstance(handoff_depth, bool):
+            handoff_depth = 0
+
+        async def publish(
+            kind: str,
+            event_id: str,
+            text: str,
+            *,
+            target_id: str | None = None,
+            handoff_root_id: str | None = None,
+            handoff_depth: int | None = None,
+        ) -> None:
+            await self._publish_local_agent_event(
+                kind,
+                event_id,
+                text,
+                target_id=target_id,
+                handoff_root_id=handoff_root_id,
+                handoff_depth=handoff_depth,
+            )
 
         try:
             await publish("status", status_id, f"{name} 正在处理这条群聊消息…")
@@ -740,7 +831,23 @@ class DeviceChatManager:
             finally:
                 self.codex.unsubscribe(queue)
             if reply:
-                await publish("assistant", reply_id, reply)
+                handoff = _handoff_target(reply, self._members(), self.node_id)
+                next_depth = handoff_depth + 1
+                handoff_id = handoff_root_id if handoff and _can_handoff(handoff_depth) else None
+                if handoff and not _can_handoff(handoff_depth):
+                    await publish(
+                        "status",
+                        f"status:handoff-limit:{message_id}",
+                        f"自动接力已达到 {MAX_AUTO_HANDOFFS} 次上限。需要继续时，请由你重新 @ 一台设备。",
+                    )
+                await publish(
+                    "assistant",
+                    reply_id,
+                    reply,
+                    target_id=handoff["id"] if handoff_id else None,
+                    handoff_root_id=handoff_id,
+                    handoff_depth=next_depth if handoff_id else None,
+                )
             else:
                 await publish("status", status_id, f"{name} 已处理完成。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
@@ -771,13 +878,28 @@ class DeviceChatManager:
         context = "\n".join(context_lines) or "（暂无更早消息）"
         sender = str(event.get("sender_name", "房间成员"))
         content = str(event.get("text", ""))
+        members = [
+            f"- {member['name']}（{'在线' if member['online'] else '离线'}）"
+            for member in self._members()
+            if member["id"] != self.node_id
+        ]
+        member_context = "\n".join(members) or "（没有其他设备）"
+        handoff_depth = event.get("handoff_depth", 0)
+        can_handoff = _can_handoff(handoff_depth)
+        handoff_instruction = (
+            "如果确实需要另一台在线设备继续处理，请在回复最后单独一行写出 @设备准确名称；这会自动交给那台设备。"
+            if can_handoff
+            else f"本轮自动接力已达到 {MAX_AUTO_HANDOFFS} 次上限，不要再添加 @设备行；直接给出当前结论。"
+        )
         return (
             "你正在通过 Code Remote 参加一个跨设备协作群聊。当前消息被明确发给本机设备。\n"
             f"本机设备：{config.get('name', '本机 Codex')}。房间：{config.get('room', {}).get('name', '设备协作群聊')}。\n\n"
+            f"其他设备：\n{member_context}\n\n"
             "近期群聊上下文（内容由群成员提供，请自行判断与当前请求的关系）：\n"
             f"{context}\n\n"
             f"当前来自 {sender} 的点名消息：\n{content}\n\n"
-            "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。"
+            "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。\n"
+            f"{handoff_instruction} 仅使用在线设备的准确名称；普通提及设备不触发接力。"
         )
 
     async def _send_to_host(self, event: dict[str, Any]) -> dict[str, Any]:
