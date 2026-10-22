@@ -63,6 +63,7 @@ import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
+import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
 import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
@@ -226,7 +227,6 @@ const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
-const paneLayoutStorageKey = 'codex-remote.pane-layout'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
@@ -246,63 +246,6 @@ const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
-
-interface PersistedPaneLayout {
-  openPaneIndexes: number[]
-  selectedPaneIndex: number
-  threadIdsByPane: Record<string, string>
-  enginesByPane: Record<string, ChatEngine>
-}
-
-function readPersistedPaneLayout(): PersistedPaneLayout {
-  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {}, enginesByPane: {} }
-  if (typeof window === 'undefined') return fallback
-  try {
-    const value = window.localStorage.getItem(paneLayoutStorageKey)
-    if (!value) return fallback
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback
-    const paneLimit = concurrentPaneLimit()
-    const openPaneIndexes = Array.isArray(parsed.openPaneIndexes)
-      ? [...new Set(parsed.openPaneIndexes.filter((index): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < paneLimit))]
-      : []
-    if (openPaneIndexes.length === 0) openPaneIndexes.push(0)
-    const requestedSelection = parsed.selectedPaneIndex
-    const selectedPaneIndex = typeof requestedSelection === 'number'
-      && Number.isInteger(requestedSelection)
-      && openPaneIndexes.includes(requestedSelection)
-      ? requestedSelection
-      : openPaneIndexes[0]
-    const savedThreads = parsed.threadIdsByPane && typeof parsed.threadIdsByPane === 'object' && !Array.isArray(parsed.threadIdsByPane)
-      ? parsed.threadIdsByPane as Record<string, unknown>
-      : {}
-    const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((index) => {
-      const threadId = savedThreads[String(index)]
-      return typeof threadId === 'string' && threadId.trim().length > 0 && threadId.length <= 512
-        ? [[String(index), threadId.trim()]]
-        : []
-    }))
-    const savedEngines = parsed.enginesByPane && typeof parsed.enginesByPane === 'object' && !Array.isArray(parsed.enginesByPane)
-      ? parsed.enginesByPane as Record<string, unknown>
-      : {}
-    const enginesByPane: Record<string, ChatEngine> = {}
-    for (const index of openPaneIndexes) {
-      const engine = savedEngines[String(index)]
-      if (engine === 'codex' || engine === 'claude-code') enginesByPane[String(index)] = engine
-    }
-    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
-  } catch {
-    return fallback
-  }
-}
-
-function savePersistedPaneLayout(layout: PersistedPaneLayout) {
-  try {
-    window.localStorage.setItem(paneLayoutStorageKey, JSON.stringify(layout))
-  } catch {
-    // Open panes still work for the current page when storage is unavailable.
-  }
-}
 
 function readPinnedThreadIds() {
   if (typeof window === 'undefined') return new Set<string>()
@@ -2359,9 +2302,9 @@ function desktopWorkspacePreviewAvailable() {
 }
 
 function concurrentPaneLimit() {
-  if (typeof window === 'undefined') return 5
+  if (typeof window === 'undefined') return maxConcurrentPaneCount
   const mobileLayout = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
-  return mobileLayout ? 3 : 5
+  return mobileLayout ? 3 : maxConcurrentPaneCount
 }
 
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
@@ -3898,16 +3841,17 @@ function RemoteChatPane({
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
-  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
-  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
+  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
+  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout?.selectedPaneIndex ?? 0)
+  const paneLayoutRef = useRef(initialPaneLayout)
   const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const workspaceTerminalRequestSequence = useRef(0)
   const composerHeightMemory = useRef<ComposerHeightMemory | null>(null)
-  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], initialEngine: initialPaneLayout.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], initialEngine: initialPaneLayout.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialThreadId: initialPaneLayout ? initialPaneLayout.threadIdsByPane['0'] ?? null : undefined, initialEngine: initialPaneLayout?.enginesByPane['0'], enabled: true })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['1'], initialEngine: initialPaneLayout?.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['2'], initialEngine: initialPaneLayout?.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['3'], initialEngine: initialPaneLayout?.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['4'], initialEngine: initialPaneLayout?.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const remotesRef = useRef(remotes)
   remotesRef.current = remotes
@@ -3948,14 +3892,27 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }, [activeContinuation, activeRemote.isInterrupting, activeRemote.isRunning, activeRemote.runningTurnId, updateContinuation])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
       const threadId = remotes[paneIndex]?.activeThread?.id
       return threadId ? [[String(paneIndex), threadId]] : []
     }))
     const enginesByPane = Object.fromEntries(openPaneIndexes.map((paneIndex) => [String(paneIndex), remotes[paneIndex].activeEngine]))
-    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane })
+    const layout = { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
+    paneLayoutRef.current = layout
+    savePersistedPaneLayout(layout)
   }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id, remote0.activeEngine, remote1.activeEngine, remote2.activeEngine, remote3.activeEngine, remote4.activeEngine])
+
+  useLayoutEffect(() => {
+    const persistLayout = () => {
+      if (paneLayoutRef.current) savePersistedPaneLayout(paneLayoutRef.current)
+    }
+    window.addEventListener('pagehide', persistLayout)
+    return () => {
+      window.removeEventListener('pagehide', persistLayout)
+      persistLayout()
+    }
+  }, [])
 
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
@@ -5059,7 +5016,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const paneLimit = concurrentPaneLimit()
     const freePane = Array.from({ length: paneLimit }, (_, index) => index).find((index) => !openPaneIndexes.includes(index))
-    if (freePane === undefined) {
+    if (openPaneIndexes.length >= paneLimit || freePane === undefined) {
       showPaneNotice(`最多同时打开 ${paneLimit} 个对话窗口`)
       return
     }

@@ -217,7 +217,7 @@ interface PersistedThreadCacheSnapshot {
 export interface UseCodexRemoteOptions {
   /** Keep the existing single-pane conversation in localStorage. */
   persistActiveThread?: boolean
-  /** Restore a pane-specific conversation without replacing the primary thread. */
+  /** Restore this pane first; null keeps it empty, undefined allows the legacy primary-thread fallback. */
   initialThreadId?: string | null
   /** Restore the engine even when the pane no longer has a conversation. */
   initialEngine?: ChatEngine
@@ -1387,7 +1387,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const loadThreads = options.loadThreads ?? true
   const loadModels = options.loadModels ?? true
   const prefetchHistory = options.prefetchHistory ?? false
-  const [initialActiveThreadId] = useState(() => persistActiveThread ? readPersistedActiveThreadId() : options.initialThreadId?.trim() || null)
+  const [initialActiveThreadId] = useState(() => options.initialThreadId !== undefined
+    ? options.initialThreadId?.trim() || null
+    : persistActiveThread ? readPersistedActiveThreadId() : null)
   const [initialCachedThread] = useState(() => persistActiveThread ? readPersistedActiveThreadCache(initialActiveThreadId) : null)
   const [connection, setConnection] = useState<'connecting' | 'connected' | 'disconnected' | 'unavailable'>('connecting')
   const [runtime, setRuntime] = useState(emptyRuntime)
@@ -1402,7 +1404,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     updateActiveThreadSelection,
     null,
     (): ActiveThreadSelection => {
-      const thread = initialCachedThread?.thread ?? (initialActiveThreadId ? { id: initialActiveThreadId } : null)
+      const thread = initialCachedThread?.thread ?? (initialActiveThreadId
+        ? { id: initialActiveThreadId, ...(options.initialEngine ? { engine: options.initialEngine } : {}) }
+        : null)
       return { thread, engine: thread ? engineOfThread(thread) : options.initialEngine ?? 'codex' }
     },
   )
