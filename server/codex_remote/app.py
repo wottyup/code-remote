@@ -139,6 +139,9 @@ class DeviceChatJoinRequest(BaseModel):
 class DeviceChatMessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=12_000)
     target_id: str | None = Field(default=None, max_length=80)
+    model: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=50)
+    approval_policy: ApprovalPolicy | None = None
 
 
 class DeviceChatThreadRequest(BaseModel):
@@ -1525,7 +1528,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
-    device_chat = DeviceChatManager(state_path.parent / "device-chat.sqlite3", app_server)
+    device_chat = DeviceChatManager(state_path.parent / "device-chat.sqlite3", app_server, shared_state.thread_workspace)
     claude_code = ClaudeCodeServer(
         os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
         configured_workspace,
@@ -1679,7 +1682,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.70.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.71.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1797,7 +1800,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/device-chat/message")
     async def device_chat_message(body: DeviceChatMessageRequest) -> dict[str, Any]:
         try:
-            return await device_chat.send_message(body.text, body.target_id)
+            return await device_chat.send_message(body.text, body.target_id, body.model, body.effort, body.approval_policy)
         except DeviceChatError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
@@ -1807,6 +1810,19 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return await device_chat.select_local_thread(body.thread_id)
         except DeviceChatError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.put("/api/v1/device-chat/workspace")
+    async def device_chat_bind_workspace(body: ThreadWorkspaceRequest) -> dict[str, Any]:
+        cwd = workspace_base_for_cwd(app_server.workspace, body.cwd)
+        try:
+            thread_id = await device_chat.ensure_local_thread()
+            shared_state.set_thread_workspace(thread_id, str(cwd))
+            await app_server.notify_threads_changed()
+            return device_chat.state()
+        except DeviceChatError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        except CodexRuntimeError as error:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
     @app.post("/api/v1/device-chat/leave")
     async def device_chat_leave() -> dict[str, bool]:

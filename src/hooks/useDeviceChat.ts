@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { codexRemoteClient, type DeviceChatMessage, type DeviceChatState } from '../lib/codexRemoteClient'
+import { codexRemoteClient, type CodexApprovalPolicy, type DeviceChatMessage, type DeviceChatState } from '../lib/codexRemoteClient'
 
 function defaultDeviceName() {
   const agent = navigator.userAgent.toLowerCase()
@@ -23,6 +23,11 @@ export function useDeviceChat(token: string, enabled: boolean) {
   const [inviteCode, setInviteCode] = useState('')
   const [joinCode, setJoinCode] = useState('')
   const [targetId, setTargetId] = useState('')
+  const [model, setModel] = useState('')
+  const [effort, setEffort] = useState('')
+  const [approvalPolicy, setApprovalPolicy] = useState<CodexApprovalPolicy>('on-request')
+  const [approval, setApproval] = useState<{ requestId: string | number; params: Record<string, unknown> } | null>(null)
+  const approvalSocket = useRef<ReturnType<typeof codexRemoteClient.connect> | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState<string | null>(null)
@@ -69,6 +74,50 @@ export function useDeviceChat(token: string, enabled: boolean) {
       window.clearInterval(timer)
     }
   }, [token, enabled])
+
+  useEffect(() => {
+    const threadId = enabled ? state?.agent_thread_id : null
+    setApproval(null)
+    if (!threadId) return
+    let disposed = false
+    let retryTimer: number | undefined
+    const connect = () => {
+      if (disposed) return
+      approvalSocket.current = codexRemoteClient.connect(token, (event) => {
+        if (event.type === 'server_request.resolved') {
+          setApproval((current) => current?.requestId === event.request_id ? null : current)
+          return
+        }
+        if (event.type !== 'server_request' || event.params?.threadId !== threadId) return
+        const supported = new Set([
+          'item/commandExecution/requestApproval', 'item/fileChange/requestApproval',
+          'execCommandApproval', 'applyPatchApproval',
+        ])
+        if (supported.has(event.method ?? '') && (typeof event.request_id === 'string' || typeof event.request_id === 'number')) {
+          setApproval({ requestId: event.request_id, params: event.params ?? {} })
+        }
+      }, (connection) => {
+        if (disposed || (connection !== 'disconnected' && connection !== 'unavailable')) return
+        if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+        retryTimer = window.setTimeout(connect, 1200)
+      }, threadId)
+    }
+    connect()
+    return () => {
+      disposed = true
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      approvalSocket.current?.close()
+      approvalSocket.current = null
+    }
+  }, [enabled, state?.agent_thread_id, token])
+
+  function respondToApproval(decision: 'accept' | 'decline') {
+    if (!approval) return false
+    const sent = approvalSocket.current?.respondToApproval(approval.requestId, decision) ?? false
+    if (sent) setApproval(null)
+    else setError('群聊审批未送达，请检查本机连接。')
+    return sent
+  }
 
   async function createRoom(event: FormEvent) {
     event.preventDefault()
@@ -128,7 +177,8 @@ export function useDeviceChat(token: string, enabled: boolean) {
     setBusy(true)
     setError(null)
     try {
-      const sent = await codexRemoteClient.sendDeviceChatMessage(token, text.trim(), targetId || null)
+      const sent = await codexRemoteClient.sendDeviceChatMessage(token, text.trim(), targetId || null, model, effort,
+        targetId === state.node_id ? approvalPolicy : undefined)
       setState((current) => current ? {
         ...current,
         messages: [...current.messages.filter((message) => message.id !== sent.id), sent].sort(messageOrder).slice(-500),
@@ -174,6 +224,20 @@ export function useDeviceChat(token: string, enabled: boolean) {
     }
   }
 
+  async function bindWorkspace(cwd: string): Promise<boolean> {
+    setBusy(true)
+    setError(null)
+    try {
+      mergeState(await codexRemoteClient.bindDeviceChatWorkspace(token, cwd))
+      return true
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '绑定群聊工作目录失败。')
+      throw reason
+    } finally {
+      setBusy(false)
+    }
+  }
+
   async function copyValue(value: string, label: string) {
     try {
       if (navigator.clipboard?.writeText) {
@@ -196,7 +260,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     }
   }
 
-  return { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, selectLocalThread, leaveRoom, copyValue }
+  return { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, model, setModel, effort, setEffort, approvalPolicy, setApprovalPolicy, approval, respondToApproval, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, selectLocalThread, bindWorkspace, leaveRoom, copyValue }
 }
 
 export type DeviceChatController = ReturnType<typeof useDeviceChat>

@@ -16,7 +16,7 @@ import uuid
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request, build_opener
@@ -28,9 +28,10 @@ from .codex_app_server import CodexAppServer, CodexNoActiveTurnError, CodexRunti
 logger = logging.getLogger(__name__)
 INVITE_TTL_SECONDS = 300
 MAX_CHAT_MESSAGE_LENGTH = 12_000
-RECENT_CONTEXT_MESSAGES = 24
-RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
 MAX_AUTO_HANDOFFS = 4
+AGENT_REPLY_FLUSH_INTERVAL_SECONDS = 0.35
+DOCUMENT_MESSAGE_MIN_LENGTH = 1_200
+DOCUMENT_END_MARKER = "[/附件文档]"
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -114,12 +115,13 @@ def _room_url(value: str) -> str:
 class DeviceChatManager:
     """Stores one room locally and relays guest nodes through the host node."""
 
-    def __init__(self, path: Path, codex: CodexAppServer) -> None:
+    def __init__(self, path: Path, codex: CodexAppServer, thread_workspace: Callable[[str], str | None] | None = None) -> None:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
         if os.name != "nt":
             os.chmod(path, 0o600)
         self.connection.row_factory = sqlite3.Row
+        self.thread_workspace = thread_workspace or (lambda _thread_id: None)
         self.connection.executescript("""
             CREATE TABLE IF NOT EXISTS device_chat_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS device_chat_members (
@@ -139,9 +141,11 @@ class DeviceChatManager:
                 message_id TEXT PRIMARY KEY, state TEXT NOT NULL, updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS device_chat_threads (
-                room_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, manual INTEGER NOT NULL DEFAULT 0
+                room_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, manual INTEGER NOT NULL DEFAULT 0, cwd TEXT
             );
         """)
+        if "cwd" not in {row["name"] for row in self.connection.execute("PRAGMA table_info(device_chat_threads)")}:
+            self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN cwd TEXT")
         thread_columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(device_chat_threads)")}
         if "manual" not in thread_columns:
             self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
@@ -378,7 +382,7 @@ class DeviceChatManager:
             if self._member_exists(device_id):
                 self._set_member_online(device_id, False)
 
-    async def send_message(self, text: str, target_id: str | None) -> dict[str, Any]:
+    async def send_message(self, text: str, target_id: str | None, model: str | None = None, effort: str | None = None, approval_policy: str | None = None) -> dict[str, Any]:
         content = text.strip()
         if not content:
             raise DeviceChatError("请输入群聊消息。")
@@ -393,6 +397,11 @@ class DeviceChatManager:
             "id": str(uuid.uuid4()), "kind": "user", "sender_id": self.node_id,
             "target_id": target_id or None, "text": content, "created_at": _now(),
         }
+        event.update(self._turn_preferences(model, effort))
+        if approval_policy is not None:
+            if target_id != self.node_id or approval_policy not in {"on-request", "untrusted", "never"}:
+                raise DeviceChatError("只能在本机设备上设置群聊授权。")
+            event["approval_policy"] = approval_policy
         if config.get("role") == "host":
             saved = self._store_event(event)
             self._broadcast({"type": "event", "event": saved})
@@ -420,6 +429,13 @@ class DeviceChatManager:
             "id": event_id, "kind": kind, "sender_id": device_id, "sender_name": str(member["name"]),
             "target_id": target_id, "text": text, "created_at": str(raw_event.get("created_at") or _now()),
         }
+        if kind == "user":
+            event.update(self._turn_preferences(raw_event.get("model"), raw_event.get("effort")))
+            approval_policy = raw_event.get("approval_policy")
+            if approval_policy is not None:
+                if device_id != target_id or approval_policy not in {"on-request", "untrusted", "never"}:
+                    raise DeviceChatError("只能在本机设备上设置群聊授权。")
+                event["approval_policy"] = approval_policy
         if kind == "assistant" and ("handoff_root_id" in raw_event or "handoff_depth" in raw_event):
             root_id = raw_event.get("handoff_root_id")
             depth = raw_event.get("handoff_depth")
@@ -439,6 +455,17 @@ class DeviceChatManager:
         if kind in {"user", "assistant"}:
             self._schedule_agent(saved)
         return saved
+
+    @staticmethod
+    def _turn_preferences(model: Any, effort: Any) -> dict[str, str]:
+        preferences: dict[str, str] = {}
+        for key, value, limit in (("model", model, 200), ("effort", effort, 50)):
+            if value is None or value == "":
+                continue
+            if not isinstance(value, str) or not value.strip() or len(value) > limit:
+                raise DeviceChatError(f"群聊{key}设置无效。")
+            preferences[key] = value.strip()
+        return preferences
 
     async def leave_peer(self, device_id: str, token: str) -> None:
         if not self.authenticate_peer(device_id, token):
@@ -473,6 +500,13 @@ class DeviceChatManager:
         config = self._config()
         if not config:
             return {"node_id": self.node_id, "room": None, "members": [], "messages": [], "connected": False}
+        agent_thread_id = self._thread_for_room(str(config["room"]["id"]))
+        agent_thread_cwd = self.thread_workspace(agent_thread_id) if agent_thread_id else None
+        if agent_thread_id and not agent_thread_cwd:
+            row = self.connection.execute(
+                "SELECT cwd FROM device_chat_threads WHERE room_id = ?", (str(config["room"]["id"]),),
+            ).fetchone()
+            agent_thread_cwd = str(row["cwd"]) if row and row["cwd"] else None
         return {
             "node_id": self.node_id,
             "role": config.get("role"),
@@ -480,6 +514,8 @@ class DeviceChatManager:
             "members": self._members(),
             "messages": self._messages_for_state(after_cursor),
             "local_thread_id": self._manual_thread_for_room(str(config["room"]["id"])),
+            "agent_thread_id": agent_thread_id,
+            "agent_thread_cwd": agent_thread_cwd,
             "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
         }
 
@@ -515,12 +551,36 @@ class DeviceChatManager:
                 raise DeviceChatError("所选 Codex 聊天不存在。")
             if self._agent_has_work():
                 raise DeviceChatError("本机 Codex 正在处理群聊消息，请等回复完成后切换聊天。")
+            selected_cwd = thread.get("cwd")
             self.connection.execute(
-                "INSERT INTO device_chat_threads(room_id, thread_id, manual) VALUES (?, ?, 1) "
-                "ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id, manual = 1",
-                (room_id, thread_id),
+                "INSERT INTO device_chat_threads(room_id, thread_id, manual, cwd) VALUES (?, ?, 1, ?) "
+                "ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id, manual = 1, cwd = excluded.cwd",
+                (room_id, thread_id, selected_cwd if isinstance(selected_cwd, str) else None),
             )
         return self.state()
+
+    async def ensure_local_thread(self) -> str:
+        config = self._config()
+        if not config:
+            raise DeviceChatError("请先创建或加入设备群聊。")
+        if self._agent_has_work():
+            raise DeviceChatError("本机 Codex 正在处理群聊消息，请等回复完成后绑定目录。")
+        return await self.ensure_local_thread_for_agent(config["room"], str(config.get("name", "本机 Codex")))
+
+    async def ensure_local_thread_for_agent(self, room: dict[str, Any], name: str) -> str:
+        room_id = str(room["id"])
+        existing = self._thread_for_room(room_id)
+        if existing:
+            return existing
+        thread = await self.codex.start_thread(cwd=self.codex.workspace)
+        thread_id = str(thread["id"])
+        self.connection.execute(
+            "INSERT INTO device_chat_threads(room_id, thread_id, cwd) VALUES (?, ?, ?) ON CONFLICT(room_id) DO NOTHING",
+            (room_id, thread_id, str(self.codex.workspace)),
+        )
+        with suppress(CodexRuntimeError):
+            await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
+        return self._thread_for_room(room_id) or thread_id
 
     def _members(self) -> list[dict[str, Any]]:
         return [
@@ -663,7 +723,7 @@ class DeviceChatManager:
         if cursor.rowcount == 0:
             return
         active_thread_id = self._active_agent_thread_id
-        if active_thread_id and self.codex.can_interrupt_thread(active_thread_id):
+        if active_thread_id and self.codex.can_interrupt_thread(active_thread_id) and not (event.get("model") or event.get("effort") or event.get("approval_policy")):
             task = asyncio.create_task(self._steer_agent(event, active_thread_id))
             self._agent_tasks.add(task)
             task.add_done_callback(self._agent_tasks.discard)
@@ -773,32 +833,70 @@ class DeviceChatManager:
 
         try:
             await publish("status", status_id, f"{name} 正在处理这条群聊消息…")
-            thread_id = self._thread_for_room(str(room["id"]))
-            if not thread_id:
-                thread = await self.codex.start_thread(cwd=self.codex.workspace)
-                thread_id = str(thread["id"])
-                self.connection.execute(
-                    "INSERT INTO device_chat_threads(room_id, thread_id) VALUES (?, ?) ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id",
-                    (str(room["id"]), thread_id),
-                )
-                with suppress(CodexRuntimeError):
-                    await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
+            thread_id = await self.ensure_local_thread_for_agent(room, name)
             self._active_agent_thread_id = thread_id
             prompt = self._agent_prompt(event)
             thread_cwd = self.codex.workspace
-            if self._manual_thread_for_room(str(room["id"])):
+            bound_cwd = self.thread_workspace(thread_id)
+            if bound_cwd:
+                thread_cwd = Path(bound_cwd)
+            elif self._manual_thread_for_room(str(room["id"])):
                 selected_thread = await self.codex.read_thread(thread_id, include_turns=False)
                 selected_cwd = selected_thread.get("cwd")
                 if isinstance(selected_cwd, str) and selected_cwd.strip():
                     thread_cwd = Path(selected_cwd)
             queue = await self.codex.subscribe()
             try:
-                response = await self.codex.start_turn(thread_id, prompt, cwd=thread_cwd)
+                response = await self.codex.start_turn(
+                    thread_id, prompt, model=event.get("model"), effort=event.get("effort"),
+                    approval_policy=event.get("approval_policy") if event.get("sender_id") == self.node_id else None,
+                    cwd=thread_cwd,
+                )
                 turn = response.get("turn") if isinstance(response, dict) else None
                 turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
-                last_publish = 0.0
+                reply_parts: dict[str | None, str] = {}
+                last_published_reply = ""
+                last_publish = time.monotonic() - AGENT_REPLY_FLUSH_INTERVAL_SECONDS
+
+                async def flush_reply() -> None:
+                    nonlocal last_publish, last_published_reply
+                    if reply and reply != last_published_reply:
+                        # Only the final turn publication may carry a handoff.
+                        await publish("assistant", reply_id, reply)
+                        last_published_reply = reply
+                        last_publish = time.monotonic()
+
+                def complete_reply_item(item: Any) -> None:
+                    nonlocal reply
+                    if not isinstance(item, dict):
+                        return
+                    item_type = str(item.get("type", "")).replace("_", "").replace("-", "").lower()
+                    text = item.get("text")
+                    if item_type != "agentmessage" or not isinstance(text, str) or not text:
+                        return
+                    item_id = item.get("id") if isinstance(item.get("id"), str) else None
+                    if item_id is not None and item_id not in reply_parts and None in reply_parts:
+                        # Reconcile anonymous deltas once the item ID is known.
+                        reply_parts[item_id] = reply_parts.pop(None)
+                    reply_parts[item_id] = text
+                    reply = "\n\n".join(part for part in reply_parts.values() if part)
+
                 while True:
-                    notification = await asyncio.wait_for(queue.get(), timeout=1800)
+                    timeout = 1800.0
+                    if reply != last_published_reply:
+                        timeout = last_publish + AGENT_REPLY_FLUSH_INTERVAL_SECONDS - time.monotonic()
+                        if timeout <= 0:
+                            await flush_reply()
+                            continue
+                    try:
+                        notification = await asyncio.wait_for(queue.get(), timeout=timeout)
+                    except asyncio.TimeoutError:
+                        if reply != last_published_reply:
+                            # A short burst can end before the throttle window.
+                            # Flush its tail even while Codex is busy with tools.
+                            await flush_reply()
+                            continue
+                        raise
                     if notification.get("type") == "server_request":
                         request_params = notification.get("params") if isinstance(notification.get("params"), dict) else {}
                         if request_params.get("threadId") == thread_id:
@@ -811,22 +909,31 @@ class DeviceChatManager:
                     turn = params.get("turn")
                     if not notification_turn and isinstance(turn, dict):
                         notification_turn = turn.get("id")
+                    if turn_id and notification_turn and notification_turn != turn_id:
+                        continue
                     method = notification.get("method")
                     if method == "item/agentMessage/delta" and isinstance(params.get("delta"), str):
-                        if turn_id and notification_turn and notification_turn != turn_id:
-                            continue
-                        reply += params["delta"]
-                        now = time.monotonic()
-                        if now - last_publish >= 0.35 or len(reply) % 400 < len(params["delta"]):
-                            await publish("assistant", reply_id, reply)
-                            last_publish = now
+                        item_id = params.get("itemId") if isinstance(params.get("itemId"), str) else None
+                        reply_parts[item_id] = reply_parts.get(item_id, "") + params["delta"]
+                        reply = "\n\n".join(part for part in reply_parts.values() if part)
+                    elif method == "item/completed":
+                        complete_reply_item(params.get("item"))
+                        await flush_reply()
                     elif method == "turn/completed":
-                        if turn_id and notification_turn and notification_turn != turn_id:
-                            continue
                         status_value = turn.get("status") if isinstance(turn, dict) else None
                         if status_value == "failed":
                             detail = turn.get("error") if isinstance(turn, dict) else None
                             raise DeviceChatError(str(detail or "Codex 执行失败。"))
+                        items = turn.get("items") if isinstance(turn, dict) else None
+                        if isinstance(items, list):
+                            ordered_parts: dict[str | None, str] = {}
+                            for item in items:
+                                complete_reply_item(item)
+                                item_id = item.get("id") if isinstance(item, dict) else None
+                                if isinstance(item_id, str) and item_id in reply_parts:
+                                    ordered_parts[item_id] = reply_parts[item_id]
+                            reply_parts = {**ordered_parts, **reply_parts}
+                            reply = "\n\n".join(part for part in reply_parts.values() if part)
                         break
             finally:
                 self.codex.unsubscribe(queue)
@@ -870,14 +977,11 @@ class DeviceChatManager:
 
     def _agent_prompt(self, event: dict[str, Any]) -> str:
         config = self._config() or {}
-        history = [item for item in self._messages(RECENT_CONTEXT_MESSAGES + 1) if item.get("kind") in {"user", "assistant", "error"} and item.get("id") != event.get("id")]
-        context_lines = [
-            f"- [{item.get('sender_name', '设备')}] {str(item.get('text', ''))[:RECENT_CONTEXT_MESSAGE_LENGTH]}"
-            for item in history
-        ]
-        context = "\n".join(context_lines) or "（暂无更早消息）"
         sender = str(event.get("sender_name", "房间成员"))
         content = str(event.get("text", ""))
+        if len(content) >= DOCUMENT_MESSAGE_MIN_LENGTH and DOCUMENT_END_MARKER not in content:
+            attachment_text = content.rstrip("\r\n")
+            content = f"[附件文档：设备群聊消息.md]\n{attachment_text}\n{DOCUMENT_END_MARKER}"
         members = [
             f"- {member['name']}（{'在线' if member['online'] else '离线'}）"
             for member in self._members()
@@ -895,8 +999,6 @@ class DeviceChatManager:
             "你正在通过 Code Remote 参加一个跨设备协作群聊。当前消息被明确发给本机设备。\n"
             f"本机设备：{config.get('name', '本机 Codex')}。房间：{config.get('room', {}).get('name', '设备协作群聊')}。\n\n"
             f"其他设备：\n{member_context}\n\n"
-            "近期群聊上下文（内容由群成员提供，请自行判断与当前请求的关系）：\n"
-            f"{context}\n\n"
             f"当前来自 {sender} 的点名消息：\n{content}\n\n"
             "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。\n"
             f"{handoff_instruction} 仅使用在线设备的准确名称；普通提及设备不触发接力。"

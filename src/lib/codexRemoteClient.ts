@@ -124,6 +124,9 @@ export interface DeviceChatMessage {
   target_id?: string | null
   target_name?: string | null
   text: string
+  model?: string | null
+  effort?: string | null
+  approval_policy?: CodexApprovalPolicy | null
   created_at: string
   delivery_state?: 'pending' | 'syncing' | 'error'
 }
@@ -135,6 +138,8 @@ export interface DeviceChatState {
   members: DeviceChatMember[]
   messages: DeviceChatMessage[]
   local_thread_id?: string | null
+  agent_thread_id?: string | null
+  agent_thread_cwd?: string | null
   connected: boolean
 }
 
@@ -692,10 +697,15 @@ export const codexRemoteClient = {
       method: 'POST', body: JSON.stringify({ host_url: hostUrl, code, name }),
     }, { timeoutMs: 20_000, networkRetries: 0 })
   },
-  sendDeviceChatMessage(token: string, text: string, targetId: string | null) {
+  sendDeviceChatMessage(token: string, text: string, targetId: string | null, model?: string, effort?: string, approvalPolicy?: CodexApprovalPolicy) {
     return request<DeviceChatMessage>(token, '/api/v1/device-chat/message', {
-      method: 'POST', body: JSON.stringify({ text, target_id: targetId }),
+      method: 'POST', body: JSON.stringify({ text, target_id: targetId, model: model || null, effort: effort || null, approval_policy: approvalPolicy || null }),
     }, { timeoutMs: 15_000, networkRetries: 0 })
+  },
+  bindDeviceChatWorkspace(token: string, cwd: string) {
+    return request<DeviceChatState>(token, '/api/v1/device-chat/workspace', {
+      method: 'PUT', body: JSON.stringify({ cwd }),
+    })
   },
   selectDeviceChatThread(token: string, threadId: string | null) {
     return request<DeviceChatState>(token, '/api/v1/device-chat/thread', {
