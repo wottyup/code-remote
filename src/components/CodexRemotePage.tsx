@@ -229,6 +229,7 @@ const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const paneLayoutStorageKey = 'codex-remote.pane-layout'
+const deviceChatModeStorageKey = 'codex-remote.device-chat-mode'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
@@ -303,6 +304,22 @@ function savePersistedPaneLayout(layout: PersistedPaneLayout) {
     window.localStorage.setItem(paneLayoutStorageKey, JSON.stringify(layout))
   } catch {
     // Open panes still work for the current page when storage is unavailable.
+  }
+}
+
+function readPersistedDeviceChatMode() {
+  try {
+    return window.localStorage.getItem(deviceChatModeStorageKey) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function savePersistedDeviceChatMode(enabled: boolean) {
+  try {
+    window.localStorage.setItem(deviceChatModeStorageKey, String(enabled))
+  } catch {
+    // The selected mode still works for the current page when storage is unavailable.
   }
 }
 
@@ -3979,7 +3996,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
-  const [deviceChatMode, setDeviceChatMode] = useState(false)
+  const [deviceChatMode, setDeviceChatMode] = useState(readPersistedDeviceChatMode)
+  useEffect(() => savePersistedDeviceChatMode(deviceChatMode), [deviceChatMode])
   const deviceChat = useDeviceChat(token, deviceChatMode)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
