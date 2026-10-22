@@ -403,6 +403,95 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
     def endpoint(self, path: str):
         return next(route.endpoint for route in self.app.routes if getattr(route, "path", None) == path)
 
+    async def test_explicit_steer_with_saved_preferences_keeps_turn_and_remaining_queue(self) -> None:
+        send_now = self.endpoint("/api/v1/codex/queue/{thread_id}/send-now")
+        codex = self.app.state.codex
+        codex.read_thread = AsyncMock(return_value={"status": {"type": "active"}})
+        codex._active_turn_id = AsyncMock(return_value="running-turn")
+        codex.steer_turn = AsyncMock(return_value={"turnId": "running-turn"})
+        codex.start_turn = AsyncMock()
+        codex.interrupt = AsyncMock()
+        store = self.app.state.shared_state
+        store.enqueue("thread", message("queued-first", "first"))
+        store.enqueue("thread", {
+            **message("queued-urgent", "urgent update"),
+            "model": "saved-model", "effort": "high", "approvalPolicy": "never",
+        })
+        store.enqueue("thread", message("queued-last", "last"))
+        body = QueueMessageIdRequest(message_id="queued-urgent")
+
+        first = await send_now("thread", body)
+        retry = await send_now("thread", body)
+
+        self.assertTrue(first["sent"])
+        self.assertEqual(retry, first)
+        self.assertEqual([item["id"] for item in first["queue"]], ["queued-first", "queued-last"])
+        codex.steer_turn.assert_awaited_once_with("thread", "urgent update", [])
+        codex.start_turn.assert_not_awaited()
+        codex.interrupt.assert_not_awaited()
+        self.assertFalse(store.is_paused("thread"))
+
+    async def test_explicit_idle_send_uses_saved_preferences_and_only_removes_selected_item(self) -> None:
+        send_idle = self.endpoint("/api/v1/codex/queue/{thread_id}/start-if-idle")
+        codex = self.app.state.codex
+        codex._active_turn_id = AsyncMock(return_value=None)
+        codex.start_turn = AsyncMock(return_value={"turn": {"id": "new-turn"}})
+        codex.steer_turn = AsyncMock()
+        store = self.app.state.shared_state
+        store.enqueue("thread", message("queued-first", "first"))
+        store.enqueue("thread", {
+            **message("queued-selected", "selected next"),
+            "model": "saved-model", "effort": "high", "approvalPolicy": "never",
+        })
+        store.enqueue("thread", message("queued-last", "last"))
+
+        result = await send_idle("thread", QueueMessageIdRequest(message_id="queued-selected"))
+
+        self.assertTrue(result["sent"])
+        self.assertEqual([item["id"] for item in result["queue"]], ["queued-first", "queued-last"])
+        codex.start_turn.assert_awaited_once_with(
+            "thread", "selected next", [], "saved-model", "high", "never", Path(self.directory.name),
+        )
+        codex.steer_turn.assert_not_awaited()
+
+    async def test_idle_send_does_not_steer_when_another_turn_has_started(self) -> None:
+        send_idle = self.endpoint("/api/v1/codex/queue/{thread_id}/start-if-idle")
+        codex = self.app.state.codex
+        codex.read_thread = AsyncMock(return_value={"status": {"type": "active"}})
+        codex._active_turn_id = AsyncMock(return_value="newly-started-turn")
+        codex.start_turn = AsyncMock()
+        codex.steer_turn = AsyncMock()
+        self.app.state.shared_state.enqueue("thread", {
+            **message("queued-selected", "use my saved settings"),
+            "model": "saved-model", "effort": "high",
+        })
+
+        result = await send_idle("thread", QueueMessageIdRequest(message_id="queued-selected"))
+
+        self.assertFalse(result["sent"])
+        self.assertEqual(result["queue"][0]["model"], "saved-model")
+        self.assertNotIn("sendAttempt", result["queue"][0])
+        codex.start_turn.assert_not_awaited()
+        codex.steer_turn.assert_not_awaited()
+
+    async def test_busy_claude_keeps_explicit_send_queued_without_interrupting(self) -> None:
+        send_now = self.endpoint("/api/v1/codex/queue/{thread_id}/send-now")
+        thread_id = "claude:12345678-1234-4234-8234-123456789abc"
+        claude = self.app.state.claude_code
+        claude.active_turn_id = AsyncMock(return_value="running-turn")
+        claude.read_thread = AsyncMock(return_value={"status": {"type": "active"}})
+        claude.start_turn = AsyncMock()
+        claude.interrupt = AsyncMock()
+        self.app.state.shared_state.enqueue(thread_id, message("queued-claude", "next prompt"))
+
+        result = await send_now(thread_id, QueueMessageIdRequest(message_id="queued-claude"))
+
+        self.assertFalse(result["sent"])
+        self.assertEqual([item["id"] for item in result["queue"]], ["queued-claude"])
+        self.assertNotIn("sendAttempt", result["queue"][0])
+        claude.start_turn.assert_not_awaited()
+        claude.interrupt.assert_not_awaited()
+
     async def test_continue_endpoint_accepts_empty_codex_request(self) -> None:
         continue_turn = self.endpoint("/api/v1/codex/threads/{thread_id}/continue")
         codex = self.app.state.codex

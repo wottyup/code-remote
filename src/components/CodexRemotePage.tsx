@@ -46,7 +46,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
@@ -1015,7 +1015,7 @@ interface MessageComposerProps {
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
-  onSendQueuedNow: (messageId: string) => Promise<boolean>
+  onSendQueuedNow: (messageId: string, mode: QueuedMessageSendMode) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
   onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
@@ -1877,12 +1877,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     void finishQueuedEdit()
   }
 
-  async function sendQueuedNow(messageId: string) {
+  async function sendQueuedNow(messageId: string, mode: QueuedMessageSendMode) {
     if (sendingQueuedId) return
     setSendingQueuedId(messageId)
     try {
-      if (!await onSendQueuedNow(messageId)) {
-        setAttachmentError('消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
+      if (await onSendQueuedNow(messageId, mode)) {
+        setAttachmentError(null)
+      } else {
+        setAttachmentError(mode === 'steer'
+          ? '插队发送未确认成功，消息仍在队列中；请查看错误提示或核对聊天记录。'
+          : '消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
       }
     } finally {
       setSendingQueuedId((current) => current === messageId ? null : current)
@@ -2078,7 +2082,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在发送排队消息' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? '回复结束后依次发送；点“插队”沿用当前轮次设置立即发送' : 'Claude 当前不支持运行中插队，回复结束后依次发送' : '等待电脑端自动发送')}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
@@ -2093,7 +2097,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
               const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
-              const needsSeparateTurn = Boolean(message.model || message.effort || message.claudeModel || message.claudeEffort)
+              const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
+              const waitingForClaude = isRunning && !showCodexPreferences
+              const sendTitle = isSubmitting ? '消息正在提交，请稍候'
+                : deliveryUnverified ? '请先核对这条消息是否已发送'
+                  : waitingForClaude ? 'Claude 当前不支持运行中插队，请等待回复结束，或暂停后发送'
+                    : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
+                      : index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中'
+                        : '按消息保存的模型和思考等级开始新一轮'
               const attachmentSummary = [
                 message.images.length > 0 ? `${message.images.length} 张图片` : '',
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
@@ -2106,8 +2117,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || (needsSeparateTurn && isRunning)} onClick={() => void sendQueuedNow(message.id)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn && isRunning ? '当前回复结束后才能按这条消息保存的模型和思考等级开始新一轮' : needsSeparateTurn && index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中' : needsSeparateTurn ? '按消息保存的模型和思考等级开始新一轮' : `发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>发送</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || waitingForClaude} onClick={() => void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{sendMode === 'steer' ? '插队' : '发送'}</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
                 </div>

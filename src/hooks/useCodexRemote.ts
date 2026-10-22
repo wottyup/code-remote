@@ -106,6 +106,8 @@ export interface QueuedTurnMessage {
   }
 }
 
+export type QueuedMessageSendMode = 'start' | 'steer'
+
 interface QueuedTurnPayload extends QueuedTurnMessage {
   requestText: string
   approvalPolicy?: CodexApprovalPolicy
@@ -3129,14 +3131,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [applyServerQueueResponse, onUnauthorized, publishServerQueue, refreshServerQueue, token])
 
-  const sharedSendQueuedMessageNow = useCallback(async (messageId: string) => {
+  const sharedSendQueuedMessageNow = useCallback(async (messageId: string, mode: QueuedMessageSendMode = 'start') => {
     const threadId = activeThreadId.current
     if (!threadId) return false
-    const message = serverQueuedMessagesByThreadRef.current[threadId]?.find((item) => item.id === messageId)
-    // turn/steer cannot apply a message's model/effort overrides. The idle-only
-    // endpoint also protects against another client starting a turn meanwhile.
-    const needsSeparateTurn = Boolean(message?.model || message?.effort || message?.claudeModel || message?.claudeEffort)
-    if (!needsSeparateTurn) return sharedQueueAction(threadId, 'send-now', messageId)
+    // The clicked action determines whether to steer. Saved preferences apply
+    // to new turns; steering explicitly uses the current turn's settings.
+    if (mode === 'steer' && !threadId.startsWith('claude:')) return sharedQueueAction(threadId, 'send-now', messageId)
+    // Keep an idle send from becoming a steer if another client starts a turn.
     try {
       const result = await codexRemoteClient.startQueuedIfIdle(token, threadId, messageId)
       applyServerQueueResponse(threadId, result.queue)
