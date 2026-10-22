@@ -6547,6 +6547,12 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   showCodeCopy?: boolean
 }) {
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
+  // Message lengths can lag behind the already rendered streaming text. When
+  // there are no visible operations, splitting on those lengths only creates
+  // a second block that makes one sentence appear to reflow between rows.
+  if (!timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
+    return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
+  }
   const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] }> = []
   let textOffset = 0
   let messageCount = 0
@@ -6556,12 +6562,15 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
     if (entry.type === 'message') {
       if (entry.length <= 0) continue
       hasTextEntry = true
-      if (messageCount > 0 && text.slice(textOffset, textOffset + 2) === '\n\n') textOffset += 2
+      const separator = messageCount > 0 && text.slice(textOffset, textOffset + 2) === '\n\n' ? '\n\n' : ''
+      textOffset += separator.length
       const segment = text.slice(textOffset, textOffset + entry.length)
       textOffset += segment.length
       messageCount += 1
       if (!segment) continue
-      blocks.push({ type: 'message', key: `message-${entry.itemId}`, text: segment })
+      const lastBlock = blocks.at(-1)
+      if (lastBlock?.type === 'message') lastBlock.text += separator + segment
+      else blocks.push({ type: 'message', key: `message-${entry.itemId}`, text: segment })
       continue
     }
 
@@ -6573,7 +6582,12 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   }
 
   if (text && !hasTextEntry) blocks.unshift({ type: 'message', key: 'message-fallback', text })
-  else if (textOffset < text.length) blocks.push({ type: 'message', key: 'message-trailing', text: text.slice(textOffset) })
+  else if (textOffset < text.length) {
+    const trailingText = text.slice(textOffset)
+    const lastBlock = blocks.at(-1)
+    if (lastBlock?.type === 'message') lastBlock.text += trailingText
+    else blocks.push({ type: 'message', key: 'message-trailing', text: trailingText })
+  }
 
   if (blocks.length === 0) return null
 
