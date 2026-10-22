@@ -3423,8 +3423,6 @@ interface RemoteChatPaneProps {
   onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
-  onRefreshThreads: () => void
-  refreshThreadsDisabled: boolean
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
   onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => void
   directoryRequest: WorkspaceTerminalRequest | null
@@ -3447,8 +3445,6 @@ function RemoteChatPane({
   onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
-  onRefreshThreads,
-  refreshThreadsDisabled,
   onOpenWorkspaceFile,
   onOpenWorkspaceImage,
   directoryRequest,
@@ -3706,19 +3702,11 @@ function RemoteChatPane({
   }, [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
-      <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
+      <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
           <div className="remote-chat__title"><span className="remote-chat__eyebrow">{`${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
-        {active ? <button
-          className="icon-button chat-history-refresh-button"
-          type="button"
-          aria-label="刷新对话记录"
-          title="刷新对话记录"
-          disabled={refreshThreadsDisabled}
-          onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
-        ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
           <button
             className="icon-button engine-switch-button"
@@ -5567,8 +5555,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
-                    onRefreshThreads={() => { void remote0.refreshThreads(true) }}
-                    refreshThreadsDisabled={remote0.handedOff}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1

@@ -409,9 +409,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-selection-context-menu__note::placeholder { color: #747d8e; }
 .pane-limit-notice { position: fixed; z-index: 21; top: max(17px, calc(env(safe-area-inset-top) + 6px), calc(var(--native-status-bar-inset) + 6px)); left: 50%; min-height: 31px; padding: 8px 12px; transform: translateX(-50%); border: 1px solid rgba(216, 174, 101, .35); border-radius: 999px; background: rgba(49, 39, 25, .95); color: #ecd3a4; box-shadow: 0 12px 28px rgba(0, 0, 0, .28); font-size: calc(12px + var(--mobile-font-offset)); }
 .remote-chat__header { grid-row: 1; display: flex; align-items: center; justify-content: space-between; gap: 15px; min-width: 0; padding: 0 27px; border-bottom: 1px solid var(--line); background: rgba(15, 17, 21, .72); box-shadow: 0 8px 28px rgba(0, 0, 0, .08); }
-.remote-chat__header--with-history-refresh .remote-chat__title-wrap, .remote-chat__header--with-history-refresh .remote-chat__controls { min-width: 0; flex: 1 1 0; }
-.remote-chat__header--with-history-refresh .remote-chat__controls { justify-content: flex-end; }
-.chat-history-refresh-button { width: 32px; height: 32px; min-height: 32px; flex: 0 0 32px; }
 .remote-chat__title-wrap { display: flex; min-width: 0; align-items: center; gap: 9px; }
 .remote-chat__controls { display: flex; flex: 0 0 auto; align-items: center; gap: 13px; }
 .remote-chat__title { display: grid; min-width: 0; gap: 2px; }
@@ -3028,7 +3025,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .theme-background-framing__preview { border: 1px solid #777; border-radius: 0; }
 .remote-shell--theme-retro .theme-background-framing__control input { accent-color: #00e; }
 
-.remote-chat__header--with-history-refresh { position: relative; }
 .workspace-file-context-menu--retro {
   display: flex;
   flex-direction: column;
@@ -3086,20 +3082,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .workspace-file-context-menu--retro button:disabled { cursor: default; color: #808080; }
 .workspace-file-context-menu--retro button.workspace-file-context-menu__delete { margin-top: 2px; border-top: 1px solid #808080; padding-top: 5px; color: #000; }
 .workspace-file-context-menu--retro button.workspace-file-context-menu__delete:hover:not(:disabled) { border-color: #000080; background: #000080; color: #fff; }
-.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__title-wrap,
-.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { flex: 1 1 0; }
-.remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { margin: 0; justify-content: flex-end; }
-
-@media (max-width: 700px) {
-  .remote-shell--theme-retro .remote-chat__header--with-history-refresh {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 32px minmax(0, 1fr);
-  }
-  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__title-wrap { display: none; }
-  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .chat-history-refresh-button { grid-column: 2; justify-self: center; }
-  .remote-shell--theme-retro .remote-chat__header--with-history-refresh .remote-chat__controls { grid-column: 3; display: flex; min-width: 0; justify-content: flex-end; overflow: visible; }
-}
-
 @font-face {
   font-family: "Fusion Pixel";
   src: url('/pixel-theme/fonts/FusionPixelZhHans.woff2') format('woff2');
