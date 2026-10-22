@@ -71,8 +71,10 @@ export function useDeviceChat(token: string, enabled: boolean) {
       mergeState(result.state)
       setInviteCode(result.invite_code)
       setCopied(null)
+      return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '创建房间失败。')
+      return false
     } finally {
       setBusy(false)
     }
@@ -103,8 +105,10 @@ export function useDeviceChat(token: string, enabled: boolean) {
       mergeState(next)
       setInviteCode('')
       setJoinCode('')
+      return true
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '加入房间失败。')
+      return false
     } finally {
       setBusy(false)
     }

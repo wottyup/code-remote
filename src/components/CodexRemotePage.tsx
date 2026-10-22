@@ -3981,12 +3981,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
   const [deviceChatMode, setDeviceChatMode] = useState(false)
   const deviceChat = useDeviceChat(token, deviceChatMode)
-  const deviceChatRoomId = deviceChat.state?.room?.id
-  useEffect(() => {
-    if (deviceChatMode && deviceChatRoomId && !deviceChat.inviteCode && (isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint))) {
-      setSidebarOpen(false)
-    }
-  }, [deviceChatMode, deviceChatRoomId, deviceChat.inviteCode])
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)

@@ -22,7 +22,9 @@ function validShareAddress(value: string) {
 }
 
 export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: DeviceChatController; threads: CodexThread[]; onSelectRoom: () => void }) {
-  const { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, selectLocalThread, leaveRoom, copyValue } = chat
+  const { state, loading, inviteCode, busy, error, setError, copied, createInvite, selectLocalThread, leaveRoom, copyValue } = chat
+  const [setupAction, setSetupAction] = useState<'create' | 'join' | null>(null)
+  const activeSetup = !state && loading ? null : setupAction ?? (!state?.room ? 'join' : null)
   const [threadSearch, setThreadSearch] = useState('')
   const [shareAddress, setShareAddress] = useState(initialShareAddress)
   const codexThreads = threads.filter((thread) => thread.engine !== 'claude-code')
@@ -31,9 +33,15 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
   const canShareAddress = validShareAddress(shareAddress)
   return <div className="device-chat-sidebar" aria-label="设备群聊侧栏">
     <div className="thread-list-heading"><span>群聊</span></div>
+    <div className="device-chat-room-actions" role="group" aria-label="创建或加入群聊">
+      <button type="button" aria-pressed={activeSetup === 'create'} disabled={busy || (!state && loading)} onClick={() => setSetupAction('create')}><Plus size={15} />创建房间</button>
+      <button type="button" aria-pressed={activeSetup === 'join'} disabled={busy || (!state && loading)} onClick={() => setSetupAction('join')}><MessageSquare size={15} />加入房间</button>
+    </div>
     {state?.room ? <button className="thread-row thread-row--active device-chat-sidebar__room" type="button" aria-current="page" onClick={onSelectRoom}><span className="thread-row__icon"><Users size={16} /></span><span className="thread-row__copy"><strong>{state.room.name}</strong><span className="thread-row__meta"><small>{state.members.length} 台设备 · {state.connected || state.role === 'host' ? '已连接' : '重连中'}</small></span></span></button> : null}
     {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
-    {state?.room && state.role === 'host' ? <section className="device-chat-connect" aria-label="连接另一台设备">
+    {!state && loading ? <div className="device-chat-sidebar__loading" role="status"><LoaderCircle className="spin" size={15} />正在读取群聊…</div> : null}
+    {activeSetup ? <DeviceChatRoomSetup chat={chat} action={activeSetup} onClose={() => setSetupAction(null)} /> : null}
+    {!activeSetup && state?.room && state.role === 'host' ? <section className="device-chat-connect" aria-label="连接另一台设备">
       <strong>连接另一台设备</strong>
       <p>在另一台电脑自己的 Code Remote 网页选择“加入房间”，填写下面的地址和设备加入码。内网穿透时填穿透域名。</p>
       <label className="device-chat-field"><span>另一台设备可访问的房间地址</span><input type="url" value={shareAddress} onChange={(event) => setShareAddress(event.currentTarget.value)} placeholder="https://你的穿透域名" autoComplete="url" /></label>
@@ -42,7 +50,7 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
       <div className="device-chat-connect__code"><span>设备加入码 · 一次性，5 分钟有效</span><strong>{inviteCode || '请生成加入码'}</strong></div>
       <div className="device-chat-connect__actions"><button type="button" disabled={!inviteCode} onClick={() => void copyValue(inviteCode, 'code')}><Copy size={14} />{copied === 'code' ? '加入码已复制' : '复制加入码'}</button><button type="button" disabled={busy} onClick={() => void createInvite()}><Plus size={14} />{inviteCode ? '重新生成' : '生成加入码'}</button></div>
     </section> : null}
-    {state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
+    {!activeSetup && state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
       <div className="thread-list-heading"><span>本机 Codex 聊天</span><small>{codexThreads.length} 条</small></div>
       <p className="device-chat-thread-picker__hint">@本机时继续使用所选聊天的项目上下文。每台设备分别选择。</p>
       <div className="device-chat-thread-picker__search"><Search size={14} /><input value={threadSearch} onChange={(event) => setThreadSearch(event.currentTarget.value)} placeholder="搜索本机聊天记录" aria-label="搜索本机 Codex 聊天" /></div>
@@ -53,32 +61,8 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
       </div>
       {state.local_thread_id && !selectedThread ? <p className="device-chat-thread-picker__hint">已选聊天不在当前历史列表中：{state.local_thread_id}</p> : null}
     </section> : null}
-    <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
-    <header className="device-chat-room-panel__header"><strong>{state?.room ? '成员与邀请' : '创建或加入群聊'}</strong></header>
-        {!state && loading ? <div className="device-chat-sidebar__loading" role="status"><LoaderCircle className="spin" size={15} />正在读取群聊…</div> : !state?.room ? (
-          <div className="device-chat-setup">
-            <label className="device-chat-field">
-              <span>本机在群聊中的名称</span>
-              <input value={deviceName} onChange={(event) => setDeviceName(event.currentTarget.value)} maxLength={40} autoComplete="off" />
-            </label>
-            <div className="device-chat-setup__columns">
-              <form className="device-chat-card" onSubmit={(event) => void createRoom(event)}>
-                <div className="device-chat-card__icon"><Plus size={17} /></div>
-                <h3>创建房间</h3>
-                <p>本机保存群聊记录并协调设备连接。创建后填写可从另一台设备访问的地址，并获取设备加入码。</p>
-                <button className="device-chat-primary" type="submit" disabled={busy || !deviceName.trim()}>{busy ? <LoaderCircle className="spin" size={15} /> : null}创建并生成加入码</button>
-              </form>
-              <form className="device-chat-card" onSubmit={(event) => void joinRoom(event)}>
-                <div className="device-chat-card__icon"><MessageSquare size={17} /></div>
-                <h3>加入房间</h3>
-                <p>在这台电脑自己的 Code Remote 网页填写房间设备的穿透域名或其他可达地址，以及设备加入码。这个码不同于网页登录配对码。</p>
-                <label className="device-chat-field"><span>房间设备的可达地址</span><input type="url" value={hostUrl} onChange={(event) => setHostUrl(event.currentTarget.value)} placeholder="https://房间设备的穿透域名" required autoComplete="url" /></label>
-                <label className="device-chat-field"><span>设备加入码</span><input value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} maxLength={24} required autoComplete="off" /></label>
-                <button className="device-chat-primary" type="submit" disabled={busy || !deviceName.trim() || !hostUrl.trim() || !joinCode.trim()}>{busy ? <LoaderCircle className="spin" size={15} /> : null}加入设备群聊</button>
-              </form>
-            </div>
-          </div>
-        ) : (
+    {!activeSetup && state?.room ? <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
+    <header className="device-chat-room-panel__header"><strong>房间成员</strong></header>
           <div className="device-chat-members">
               <div className="device-chat-members__heading"><span><Users size={15} />房间成员</span><small>{state.members.length} 台设备</small></div>
               <div className="device-chat-members__list">
@@ -92,7 +76,33 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
               {state.role === 'peer' ? <p className="device-chat-peer-note">本机通过房间设备 {state.room.host_name} 同步消息。</p> : null}
               <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state.role === 'host' ? '解散房间' : '退出群聊'}</button>
           </div>
-        )}
-    </div>
+    </div> : null}
+  </div>
+}
+
+function DeviceChatRoomSetup({ chat, action, onClose }: { chat: DeviceChatController; action: 'create' | 'join'; onClose: () => void }) {
+  const { state, deviceName, setDeviceName, hostUrl, setHostUrl, joinCode, setJoinCode, busy, createRoom, joinRoom, leaveRoom } = chat
+  const joining = action === 'join'
+  const blocked = Boolean(state?.room)
+  return <div className="device-chat-setup">
+    <form className="device-chat-card" onSubmit={async (event) => {
+      event.preventDefault()
+      if (blocked || busy) return
+      const succeeded = joining ? await joinRoom(event) : await createRoom(event)
+      if (succeeded) onClose()
+    }}>
+      <div className="device-chat-setup__heading"><h3>{joining ? '加入房间' : '创建房间'}</h3>{blocked ? <button type="button" aria-label="返回当前群聊" onClick={onClose}><X size={16} /></button> : null}</div>
+      <p>{joining ? '填写另一台设备的穿透地址和设备加入码。加入后，两台设备共享同一个群聊。' : '只需一台设备创建房间；另一台设备点击上方“加入房间”。'}</p>
+      <label className="device-chat-field"><span>本机在群聊中的名称</span><input value={deviceName} onChange={(event) => setDeviceName(event.currentTarget.value)} maxLength={40} required autoComplete="off" /></label>
+      {joining ? <>
+        <label className="device-chat-field"><span>房间设备的可达地址</span><input type="url" value={hostUrl} onChange={(event) => setHostUrl(event.currentTarget.value)} placeholder="https://房间设备的穿透域名" required autoComplete="url" /></label>
+        <label className="device-chat-field"><span>设备加入码</span><input value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} maxLength={24} required autoComplete="off" /></label>
+      </> : null}
+      {blocked ? <div className="device-chat-setup__blocked" role="status">
+        <p>本机当前在“{state?.room?.name}”。每台设备一次只能加入一个房间，请先{state?.role === 'host' ? '解散当前房间' : '退出当前房间'}。填写的地址和加入码会保留。</p>
+        <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state?.role === 'host' ? '先解散当前房间' : '先退出当前房间'}</button>
+      </div> : null}
+      <button className="device-chat-primary" type="submit" disabled={busy || blocked || !deviceName.trim() || (joining && (!hostUrl.trim() || !joinCode.trim()))}>{busy ? <LoaderCircle className="spin" size={15} /> : null}{joining ? '加入设备群聊' : '创建并生成加入码'}</button>
+    </form>
   </div>
 }

@@ -1,6 +1,14 @@
 .device-chat-sidebar { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; }
 .device-chat-sidebar > .thread-list-heading { flex: 0 0 auto; margin-top: 8px; }
 .device-chat-sidebar__room { flex: 0 0 auto; width: 100%; }
+.device-chat-room-actions { display: flex; flex: 0 0 auto; gap: 6px; padding: 4px 10px 10px; }
+.device-chat-room-actions button { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 5px 7px; border: 1px solid var(--line); border-radius: 7px; background: transparent; color: inherit; font-size: 12px; cursor: pointer; }
+.device-chat-room-actions button[aria-pressed="true"] { border-color: #718ac5; background: rgba(68, 87, 145, .2); }
+.device-chat-room-actions button:disabled { opacity: .5; cursor: default; }
+.device-chat-setup__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.device-chat-setup__heading button { display: grid; place-items: center; width: 26px; height: 26px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.device-chat-setup__blocked { display: grid; gap: 8px; padding: 9px; border: 1px solid rgba(207, 119, 125, .3); border-radius: 7px; }
+.device-chat-setup__blocked .device-chat-leave { width: 100%; }
 .device-chat-connect { display: grid; flex: 0 0 auto; gap: 8px; margin: 10px; padding: 12px; border: 1px solid rgba(128, 154, 224, .28); border-radius: 10px; background: rgba(68, 87, 145, .12); }
 .device-chat-connect > strong { color: #dce5ff; font-size: 13px; }
 .device-chat-connect > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
