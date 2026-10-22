@@ -1,6 +1,22 @@
 .device-chat-sidebar { display: flex; flex: 1 1 auto; min-height: 0; flex-direction: column; overflow-y: auto; overscroll-behavior: contain; }
 .device-chat-sidebar > .thread-list-heading { flex: 0 0 auto; margin-top: 8px; }
 .device-chat-sidebar__room { flex: 0 0 auto; width: 100%; }
+.device-chat-connect { display: grid; flex: 0 0 auto; gap: 8px; margin: 10px; padding: 12px; border: 1px solid rgba(128, 154, 224, .28); border-radius: 10px; background: rgba(68, 87, 145, .12); }
+.device-chat-connect > strong { color: #dce5ff; font-size: 13px; }
+.device-chat-connect > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.device-chat-connect .device-chat-field input { font-size: 11px; }
+.device-chat-connect__suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
+.device-chat-connect__suggestions button { padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
+.device-chat-connect .device-chat-connect__warning { color: #e7b58a; }
+.device-chat-connect__code { display: grid; gap: 4px; padding: 8px; border-radius: 7px; background: rgba(31, 42, 74, .4); }
+.device-chat-connect__code span { color: var(--muted); font-size: 10px; }
+.device-chat-connect__code strong { color: #e0e7ff; font: 700 15px ui-monospace, SFMono-Regular, Consolas, monospace; letter-spacing: .08em; overflow-wrap: anywhere; }
+.device-chat-connect__actions { display: flex; gap: 7px; }
+.device-chat-connect__copy, .device-chat-connect__actions button { display: inline-flex; min-height: 31px; align-items: center; justify-content: center; gap: 6px; padding: 0 9px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 7px; background: rgba(45, 50, 63, .65); color: #d7deec; cursor: pointer; font-size: 11px; }
+.device-chat-connect__actions button { flex: 1; }
+.device-chat-connect__copy:disabled, .device-chat-connect__actions button:disabled { cursor: default; opacity: .5; }
+.remote-shell--theme-light .device-chat-connect > strong { color: #263965; }
+.remote-shell--theme-light .device-chat-connect__code strong { color: #263965; }
 .device-chat-thread-picker { display: flex; flex: 0 0 auto; min-height: 0; flex-direction: column; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
 .device-chat-thread-picker .thread-list-heading { margin-top: 8px; }
 .device-chat-thread-picker__hint { margin: 4px 12px 8px; color: var(--muted); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }

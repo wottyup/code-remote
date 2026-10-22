@@ -1,19 +1,56 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Check, Copy, LoaderCircle, MessageSquare, Plus, Search, Users, X } from 'lucide-react'
 import type { DeviceChatController } from '../hooks/useDeviceChat'
 import type { CodexThread } from '../lib/codexRemoteClient'
 import './DeviceChatSidebar.css'
 
+function initialShareAddress() {
+  const url = new URL(window.location.origin)
+  return /^(localhost|127(?:\.\d+){3}|\[?::1\]?|0\.0\.0\.0)$/i.test(url.hostname) ? '' : url.origin
+}
+
+function validShareAddress(value: string) {
+  try {
+    const url = new URL(value.trim())
+    return (url.protocol === 'http:' || url.protocol === 'https:')
+      && Boolean(url.hostname)
+      && !/^(localhost|127(?:\.\d+){3}|\[?::1\]?|0\.0\.0\.0)$/i.test(url.hostname)
+      && !url.username && !url.password && url.pathname === '/' && !url.search && !url.hash
+  } catch {
+    return false
+  }
+}
+
 export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: DeviceChatController; threads: CodexThread[]; onSelectRoom: () => void }) {
   const { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, selectLocalThread, leaveRoom, copyValue } = chat
   const [threadSearch, setThreadSearch] = useState('')
+  const [shareAddress, setShareAddress] = useState(initialShareAddress)
+  const suggestedRoom = useRef<string | null>(null)
+  useEffect(() => {
+    if (state?.role !== 'host' || !state.room || suggestedRoom.current === state.room.id) return
+    suggestedRoom.current = state.room.id
+    if (shareAddress || !state.local_lan_ips?.length) return
+    const port = window.location.port ? `:${window.location.port}` : ''
+    setShareAddress(`${window.location.protocol}//${state.local_lan_ips[0]}${port}`)
+  }, [state?.room?.id, state?.role, state?.local_lan_ips, shareAddress])
   const codexThreads = threads.filter((thread) => thread.engine !== 'claude-code')
   const matchingThreads = codexThreads.filter((thread) => (thread.name || thread.preview || '新对话').toLocaleLowerCase().includes(threadSearch.trim().toLocaleLowerCase()))
   const selectedThread = codexThreads.find((thread) => thread.id === state?.local_thread_id)
-  const hostAddress = window.location.origin
+  const canShareAddress = validShareAddress(shareAddress)
   return <div className="device-chat-sidebar" aria-label="设备群聊侧栏">
     <div className="thread-list-heading"><span>群聊</span></div>
     {state?.room ? <button className="thread-row thread-row--active device-chat-sidebar__room" type="button" aria-current="page" onClick={onSelectRoom}><span className="thread-row__icon"><Users size={16} /></span><span className="thread-row__copy"><strong>{state.room.name}</strong><span className="thread-row__meta"><small>{state.members.length} 台设备 · {state.connected || state.role === 'host' ? '已连接' : '重连中'}</small></span></span></button> : null}
+    {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
+    {state?.room && state.role === 'host' ? <section className="device-chat-connect" aria-label="连接另一台设备">
+      <strong>连接另一台设备</strong>
+      <p>在另一台电脑自己的 Code Remote 网页选择“加入房间”，填写下面的地址和设备加入码。</p>
+      <label className="device-chat-field"><span>房间网页的局域网地址</span><input type="url" value={shareAddress} onChange={(event) => setShareAddress(event.currentTarget.value)} placeholder="http://192.168.1.20:4173" autoComplete="url" /></label>
+      {state.local_lan_ips && state.local_lan_ips.length > 1 ? <div className="device-chat-connect__suggestions" aria-label="可用局域网地址">{state.local_lan_ips.map((ip) => <button type="button" key={ip} onClick={() => setShareAddress(`${window.location.protocol}//${ip}${window.location.port ? `:${window.location.port}` : ''}`)}>{ip}</button>)}</div> : null}
+      {!canShareAddress ? <p className="device-chat-connect__warning">请填本机可从另一台设备访问的局域网 IP 和端口。localhost 只能在本机使用。</p> : null}
+      <button className="device-chat-connect__copy" type="button" disabled={!canShareAddress} onClick={() => void copyValue(shareAddress.trim(), 'address')}><Copy size={14} />{copied === 'address' ? '地址已复制' : '复制房间地址'}</button>
+      <div className="device-chat-connect__code"><span>设备加入码 · 一次性，5 分钟有效</span><strong>{inviteCode || '请生成加入码'}</strong></div>
+      <div className="device-chat-connect__actions"><button type="button" disabled={!inviteCode} onClick={() => void copyValue(inviteCode, 'code')}><Copy size={14} />{copied === 'code' ? '加入码已复制' : '复制加入码'}</button><button type="button" disabled={busy} onClick={() => void createInvite()}><Plus size={14} />{inviteCode ? '重新生成' : '生成加入码'}</button></div>
+    </section> : null}
     {state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
       <div className="thread-list-heading"><span>本机 Codex 聊天</span><small>{codexThreads.length} 条</small></div>
       <p className="device-chat-thread-picker__hint">@本机时继续使用所选聊天的项目上下文。每台设备分别选择。</p>
@@ -27,7 +64,6 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
     </section> : null}
     <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
     <header className="device-chat-room-panel__header"><strong>{state?.room ? '成员与邀请' : '创建或加入群聊'}</strong></header>
-    {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
         {!state && loading ? <div className="device-chat-sidebar__loading" role="status"><LoaderCircle className="spin" size={15} />正在读取群聊…</div> : !state?.room ? (
           <div className="device-chat-setup">
             <label className="device-chat-field">
@@ -38,15 +74,15 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
               <form className="device-chat-card" onSubmit={(event) => void createRoom(event)}>
                 <div className="device-chat-card__icon"><Plus size={17} /></div>
                 <h3>创建房间</h3>
-                <p>本机保存群聊记录并协调设备连接。创建后把网页地址和一次性加入码填到另一台设备。</p>
+                <p>本机保存群聊记录并协调设备连接。创建后会显示可分享的局域网地址和设备加入码。</p>
                 <button className="device-chat-primary" type="submit" disabled={busy || !deviceName.trim()}>{busy ? <LoaderCircle className="spin" size={15} /> : null}创建并生成加入码</button>
               </form>
               <form className="device-chat-card" onSubmit={(event) => void joinRoom(event)}>
                 <div className="device-chat-card__icon"><MessageSquare size={17} /></div>
                 <h3>加入房间</h3>
-                <p>填写创建房间设备的网页地址与一次性加入码。两台设备需要能通过局域网互相访问。</p>
+                <p>在这台电脑自己的 Code Remote 网页填写房间设备的局域网地址和设备加入码。这个码不同于网页登录配对码。</p>
                 <label className="device-chat-field"><span>房间设备网页地址</span><input type="url" value={hostUrl} onChange={(event) => setHostUrl(event.currentTarget.value)} placeholder="http://192.168.1.20:4173" required autoComplete="url" /></label>
-                <label className="device-chat-field"><span>一次性加入码</span><input value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} maxLength={24} required autoComplete="off" /></label>
+                <label className="device-chat-field"><span>设备加入码</span><input value={joinCode} onChange={(event) => setJoinCode(event.currentTarget.value.toUpperCase())} maxLength={24} required autoComplete="off" /></label>
                 <button className="device-chat-primary" type="submit" disabled={busy || !deviceName.trim() || !hostUrl.trim() || !joinCode.trim()}>{busy ? <LoaderCircle className="spin" size={15} /> : null}加入设备群聊</button>
               </form>
             </div>
@@ -62,22 +98,7 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
                   </span>
                 ))}
               </div>
-              {state.role === 'host' ? (
-                <>
-                  <div className="device-chat-invite-tools">
-                    <button type="button" onClick={() => void copyValue(hostAddress, 'address')}><Copy size={14} />{copied === 'address' ? '地址已复制' : '复制本机地址'}</button>
-                    <button type="button" onClick={() => void createInvite()} disabled={busy}><Plus size={14} />生成新加入码</button>
-                  </div>
-                  <p className="device-chat-peer-note">把这个地址填到另一台设备；若地址是 localhost，请替换为本机的局域网 IP。</p>
-                </>
-              ) : <p className="device-chat-peer-note">本机通过房间设备 {state.room.host_name} 同步消息。</p>}
-              {inviteCode ? (
-                <div className="device-chat-code">
-                  <span>一次性加入码 · 5 分钟内有效</span>
-                  <strong>{inviteCode}</strong>
-                  <button type="button" onClick={() => void copyValue(inviteCode, 'code')}>{copied === 'code' ? '已复制' : '复制加入码'}</button>
-                </div>
-              ) : null}
+              {state.role === 'peer' ? <p className="device-chat-peer-note">本机通过房间设备 {state.room.host_name} 同步消息。</p> : null}
               <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state.role === 'host' ? '解散房间' : '退出群聊'}</button>
           </div>
         )}

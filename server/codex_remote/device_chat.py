@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import secrets
+import socket
 import sqlite3
 import time
 import uuid
@@ -77,6 +78,27 @@ def _room_url(value: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
 
 
+def _local_lan_ips() -> list[str]:
+    candidates: list[str] = []
+    try:
+        for result in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET):
+            candidates.append(result[4][0])
+    except OSError:
+        pass
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("192.0.2.1", 9))
+            candidates.insert(0, probe.getsockname()[0])
+    except OSError:
+        pass
+    result: list[str] = []
+    for value in candidates:
+        address = ipaddress.ip_address(value)
+        if address.is_private and not address.is_loopback and not address.is_link_local and value not in result:
+            result.append(value)
+    return result
+
+
 class DeviceChatManager:
     """Stores one room locally and relays guest nodes through the host node."""
 
@@ -112,6 +134,7 @@ class DeviceChatManager:
         if "manual" not in thread_columns:
             self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
         self.codex = codex
+        self._local_lan_ips = _local_lan_ips()
         self.node_id = self._get_metadata("node_id")
         if not self.node_id:
             self.node_id = str(uuid.uuid4())
@@ -416,6 +439,7 @@ class DeviceChatManager:
             "members": self._members(),
             "messages": self._messages_for_state(after_sequence),
             "local_thread_id": self._manual_thread_for_room(str(config["room"]["id"])),
+            "local_lan_ips": self._local_lan_ips if config.get("role") == "host" else [],
             "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
         }
 
