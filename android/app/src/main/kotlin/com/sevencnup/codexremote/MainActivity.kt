@@ -879,6 +879,17 @@ class MainActivity : Activity() {
     private var queueEditGeneration = 0L
     private var queueEditRenewRunnable: Runnable? = null
     private var sendBusy = false
+    private enum class ChoiceDelivery { READY, SENDING, SENT, QUEUED, FAILED }
+    private data class AssistantChoiceState(
+        val key: String,
+        val selected: MutableList<Int>,
+        val customAnswers: MutableList<String>,
+        var delivery: ChoiceDelivery = ChoiceDelivery.READY,
+        var focusedGroup: Int? = null,
+        var cursorPosition: Int = 0,
+    )
+    private var assistantChoiceState: AssistantChoiceState? = null
+    private var assistantChoiceFocusedField: EditText? = null
     private var queueEditDraft = ""
     private var queueEditDraftFiles = mutableListOf<JSONObject>()
     private val queueEditPreferences = mutableMapOf<String, String?>()
@@ -3782,6 +3793,9 @@ class MainActivity : Activity() {
         }
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
+        val restoreChoiceGroup = assistantChoiceState?.focusedGroup
+            ?.takeIf { assistantChoiceFocusedField?.hasFocus() == true && imeInsetVisible }
+        assistantChoiceFocusedField = null
         if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
         val turns = thread?.optJSONArray("turns") ?: JSONArray()
@@ -3883,6 +3897,7 @@ class MainActivity : Activity() {
         }
         appendRemoteUserMessageOverlays(messages)
         appendPendingUserMessages(messages)
+        val lastConversationMessageIndex = messages.indexOfLast { (role, _) -> role == "user" || role == "assistant" }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
         val showWelcomeTitle = effectiveIncrementalTurnId == null && !hasConversationMessages && (
             activeThreadId == null || (
@@ -4020,6 +4035,14 @@ class MainActivity : Activity() {
                 bubble.addView(meta, LinearLayout.LayoutParams((maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), WRAP))
             }
             val rawText = messageText(item, role)
+            val choiceGroups = if (role == "assistant" && messageIndex == lastConversationMessageIndex &&
+                !running && !isThreadRunning(thread ?: JSONObject()) &&
+                item.optString("_turnId") == turns.optJSONObject(turns.length() - 1)?.optString("id")) {
+                MessageChoices.parse(rawText)
+            } else emptyList()
+            val firstChoiceOffset = choiceGroups.firstOrNull()?.question?.let { rawText.indexOf(it) } ?: -1
+            val hideChoiceText = firstChoiceOffset >= 0 && rawText.take(firstChoiceOffset)
+                .replace(Regex("""[\s#>*_\d.)、-]"""), "").isEmpty()
             val parsedUserText = if (role == "user") parseUserMessageText(rawText) else null
             val text = parsedUserText?.visibleText ?: rawText
             val documentAttachments = parsedUserText?.documentAttachments.orEmpty()
@@ -4029,10 +4052,10 @@ class MainActivity : Activity() {
                 }
             } == true
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
-                addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+                addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), hideChoiceText)
             } else if (text.isNotBlank() || documentAttachments.isNotEmpty() || !hasImage) {
                 if (role == "assistant") {
-                    addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+                    if (!hideChoiceText) addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
                 } else {
                     addTextDocumentAttachmentCards(bubble, documentAttachments, maxBubbleWidth)
                     val contentColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
@@ -4091,6 +4114,13 @@ class MainActivity : Activity() {
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
                 messageCopyAction(text)?.let { action ->
                     messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
+                }
+                if (choiceGroups.isNotEmpty()) {
+                    val choiceKey = listOf(activeConnectionId, currentMode, activeThreadId.orEmpty(),
+                        item.optString("_turnId"), item.optString("id"), rawText.length.toString(), rawText.hashCode().toString()).joinToString(":")
+                    messageColumn.addView(assistantChoiceCard(choiceGroups, choiceKey,
+                        (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), restoreChoiceGroup),
+                        LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             }
@@ -5383,7 +5413,175 @@ class MainActivity : Activity() {
                 .build().also { assistantMarkdownCache = it; assistantMarkdownAppearance = appearance }
         }
 
-    private fun addAssistantTimeline(container: LinearLayout, message: JSONObject, maximumWidth: Int) {
+    private fun assistantChoiceCard(groups: List<MessageChoiceGroup>, key: String, maximumWidth: Int,
+                                    restoreFocusGroup: Int?): LinearLayout {
+        val state = assistantChoiceState?.takeIf { it.key == key && it.selected.size == groups.size && it.customAnswers.size == groups.size }
+            ?: AssistantChoiceState(key, MutableList(groups.size) { -1 }, MutableList(groups.size) { "" })
+                .also { assistantChoiceState = it }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(11), dp(12), dp(11))
+            background = rounded(PANEL_INSET, dp(10), BORDER, dp(1))
+            minimumWidth = maximumWidth
+            contentDescription = tr("助手提出的选择题")
+        }
+        card.addView(label("快速选择", 12, TEXT, true), LinearLayout.LayoutParams(MATCH, WRAP).apply {
+            bottomMargin = dp(8)
+        })
+        val optionRows = mutableListOf<List<Pair<LinearLayout, ImageView>>>()
+        val customFields = mutableListOf<EditText>()
+        val submitButton = label("发送并继续", 12, TEXT, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(7), dp(12), dp(7))
+            minHeight = dp(40)
+            isFocusable = true
+        }
+        val notice = label("发送后 AI 会继续回复", 11, MUTED)
+
+        fun updateSelection() {
+            val editable = state.delivery == ChoiceDelivery.READY || state.delivery == ChoiceDelivery.FAILED
+            optionRows.forEachIndexed { groupIndex, rows ->
+                rows.forEachIndexed { optionIndex, (row, check) ->
+                    val selected = state.selected[groupIndex] == optionIndex
+                    row.background = rounded(
+                        if (selected) blendColors(PANEL_INSET, ACCENT, .15f) else PANEL,
+                        dp(7), if (selected) ACCENT else BORDER, dp(1),
+                    )
+                    row.isEnabled = editable
+                    check.visibility = if (selected) View.VISIBLE else View.INVISIBLE
+                    row.contentDescription = if (selected) "${tr("已选择")} ${groups[groupIndex].options[optionIndex]}"
+                        else groups[groupIndex].options[optionIndex]
+                }
+            }
+            customFields.forEachIndexed { index, field ->
+                field.isEnabled = editable
+                field.background = rounded(PANEL, dp(7), if (state.selected[index] == -2) ACCENT else BORDER, dp(1))
+            }
+            submitButton.text = tr(if (state.delivery == ChoiceDelivery.SENDING) "正在发送答案…" else "发送并继续")
+            submitButton.isEnabled = editable && state.selected.indices.all { index ->
+                state.selected[index] >= 0 || state.selected[index] == -2 && state.customAnswers[index].isNotBlank()
+            }
+            submitButton.alpha = if (submitButton.isEnabled) 1f else .5f
+            submitButton.background = rounded(blendColors(PANEL_INSET, ACCENT, .17f), dp(7), ACCENT, dp(1))
+            notice.text = tr(when (state.delivery) {
+                ChoiceDelivery.READY -> "发送后 AI 会继续回复"
+                ChoiceDelivery.SENDING -> "正在发送答案…"
+                ChoiceDelivery.SENT -> "答案已发送，AI 正在继续回复"
+                ChoiceDelivery.QUEUED -> "答案已加入排队，等待发送"
+                ChoiceDelivery.FAILED -> "发送失败，可重试"
+            })
+        }
+
+        groups.forEachIndexed { groupIndex, group ->
+            card.addView(label(group.question, 13, TEXT, true, translateUi = false).apply {
+                setLineSpacing(dp(2).toFloat(), 1.15f)
+            }, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+                topMargin = if (groupIndex == 0) 0 else dp(10)
+                bottomMargin = dp(6)
+            })
+            val rows = mutableListOf<Pair<LinearLayout, ImageView>>()
+            group.options.forEachIndexed { optionIndex, option ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    minimumHeight = dp(40)
+                    setPadding(dp(9), dp(6), dp(9), dp(6))
+                    isFocusable = true
+                    isClickable = true
+                    setOnClickListener {
+                        if (state.delivery !in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)) return@setOnClickListener
+                        customFields.getOrNull(groupIndex)?.setText("")
+                        state.selected[groupIndex] = optionIndex
+                        state.delivery = ChoiceDelivery.READY
+                        updateSelection()
+                    }
+                }
+                val check = ImageView(this).apply {
+                    val resource = iconResource("check")
+                    setPixelAwareImageResource(resource)
+                    if (!pixelTheme || resource !in pixelIconResourceIds) imageTintList = ColorStateList.valueOf(ACCENT)
+                }
+                row.addView(check, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
+                row.addView(label(option, 13, TEXT, translateUi = false).apply {
+                    setLineSpacing(dp(2).toFloat(), 1.15f)
+                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                card.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(6) })
+                rows += row to check
+            }
+            optionRows += rows
+            val customField = editField("其他答案（没有合适选项时填写）", state.customAnswers[groupIndex],
+                InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
+                minHeight = dp(40)
+                maxLines = 4
+                setOnFocusChangeListener { _, hasFocus ->
+                    if (hasFocus) {
+                        state.focusedGroup = groupIndex
+                        state.cursorPosition = selectionStart
+                        assistantChoiceFocusedField = this
+                    }
+                }
+                addTextChangedListener(SimpleTextWatcher { value ->
+                    state.customAnswers[groupIndex] = value
+                    state.cursorPosition = selectionStart
+                    if (value.isNotBlank()) state.selected[groupIndex] = -2
+                    else if (state.selected[groupIndex] == -2) state.selected[groupIndex] = -1
+                    if (state.delivery == ChoiceDelivery.FAILED) state.delivery = ChoiceDelivery.READY
+                    updateSelection()
+                })
+            }
+            customFields += customField
+            card.addView(customField, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(1) })
+            if (restoreFocusGroup == groupIndex && state.focusedGroup == groupIndex) {
+                customField.post {
+                    if (assistantChoiceState === state && customField.isAttachedToWindow) {
+                        customField.requestFocus()
+                        customField.setSelection(state.cursorPosition.coerceIn(0, customField.text.length))
+                    }
+                }
+            }
+        }
+        submitButton.setOnClickListener {
+            if (!submitButton.isEnabled) return@setOnClickListener
+            val reply = MessageChoices.formatReply(groups, state.selected, state.customAnswers)
+            state.delivery = ChoiceDelivery.SENDING
+            updateSelection()
+            if (sendAssistantChoiceReply(key, reply) { delivered ->
+                    state.delivery = when (delivered) {
+                        true -> ChoiceDelivery.SENT
+                        false -> ChoiceDelivery.QUEUED
+                        null -> ChoiceDelivery.FAILED
+                    }
+                    if (assistantChoiceState === state) renderMessages(false)
+                }) {
+                customFields.firstOrNull { it.hasFocus() }?.let { field ->
+                    (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                        ?.hideSoftInputFromWindow(field.windowToken, 0)
+                    field.clearFocus()
+                }
+            } else {
+                state.delivery = ChoiceDelivery.READY
+                updateSelection()
+                notice.text = tr("请先结束当前编辑，再发送答案")
+            }
+        }
+        card.addView(submitButton, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(10) })
+        card.addView(notice, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(7) })
+        updateSelection()
+        return card
+    }
+
+    private fun sendAssistantChoiceReply(key: String, reply: String, onResult: (Boolean?) -> Unit): Boolean {
+        val threadId = activeThreadId ?: return false
+        if (assistantChoiceState?.key != key || queueEditPending || queueEditItem != null || sendBusy ||
+            running || isThreadRunning(activeThread ?: JSONObject())) return false
+        val scope = draftStorageKey()
+        val payload = queuedPayload(reply, UUID.randomUUID().toString(), emptyList())
+        addPendingUserMessage(scope, payload, emptyList())
+        submitPayload(threadId, payload, emptyList(), scope, connectionGeneration, endpoint, token, onResult)
+        return true
+    }
+
+    private fun addAssistantTimeline(container: LinearLayout, message: JSONObject, maximumWidth: Int, hideMessageText: Boolean = false) {
         val timeline = message.optJSONArray("_activityTimeline") ?: return
         val pendingOperations = mutableListOf<JSONObject>()
         val turnId = message.optString("_turnId")
@@ -5400,7 +5598,7 @@ class MainActivity : Activity() {
                 "message" -> {
                     flushOperations()
                     val text = block.optString("text")
-                    if (text.isBlank()) continue
+                    if (text.isBlank() || hideMessageText) continue
                     addAssistantMarkdown(container, text, maximumWidth)
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
@@ -6723,37 +6921,44 @@ class MainActivity : Activity() {
     }
 
     private fun submitPayload(threadId: String, payload: JSONObject, outgoingFiles: List<JSONObject>,
-                              outgoingScope: String, sendConnection: Long, sendEndpoint: String, sendToken: String) {
+                              outgoingScope: String, sendConnection: Long, sendEndpoint: String, sendToken: String,
+                              onResult: ((Boolean?) -> Unit)? = null) {
         if (sendConnection == connectionGeneration) setSendBusy(true)
         io.execute {
             try {
                 val response = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
                 handler.post {
-                    if (!response.optBoolean("sent", false)) removePendingUserMessage(outgoingScope, payload.optString("id"))
+                    val sent = response.optBoolean("sent", false)
+                    if (!sent) removePendingUserMessage(outgoingScope, payload.optString("id"))
                     else markPendingUserMessageAccepted(outgoingScope, payload.optString("id"))
-                    if (sendConnection != connectionGeneration) return@post
-                    if (response.optBoolean("sent", false)) {
+                    if (sendConnection != connectionGeneration) {
+                        onResult?.invoke(sent)
+                        return@post
+                    }
+                    if (sent) {
                         deliveredQueueIds += payload.optString("id")
                     }
                     if (activeThreadId == threadId) {
-                        running = response.optBoolean("sent", false) || running
+                        running = sent || running
                         renderHeader()
                         queuedMessages = withoutDeliveredQueueItems(response.optJSONArray("queue") ?: JSONArray())
                         renderQueue()
                         refreshActiveThread(false)
                     }
-                    if (response.optBoolean("sent", false)) pausedThreadKeys.remove(threadTitleKey(threadId))
+                    if (sent) pausedThreadKeys.remove(threadTitleKey(threadId))
                     setSendBusy(false)
                     refreshThreads(false)
+                    onResult?.invoke(sent)
                 }
             } catch (error: Exception) {
                 handler.post {
                     removePendingUserMessage(outgoingScope, payload.optString("id"))
-                    restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
                     if (sendConnection == connectionGeneration) {
                         showStatus(error.message ?: "发送失败")
                         setSendBusy(false)
                     }
+                    onResult?.invoke(null)
                 }
             }
         }
