@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .claude_native_history import scan_native_sessions
+from .claude_stream import ClaudeReplyText
 
 logger = logging.getLogger(__name__)
 
@@ -68,10 +69,12 @@ class ClaudeCodeServer:
         self._native_refresh_lock = asyncio.Lock()
         self._next_native_scan_at = 0.0
         self._native_refresh_task: asyncio.Task[None] | None = None
+        self._native_refresh_pending = False
         self._native_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser().resolve()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._interrupts: set[str] = set()
+        self._live_replies: dict[str, dict[str, Any]] = {}
         self._database_path_parent_ready()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         with suppress(OSError):
@@ -164,6 +167,10 @@ class ClaudeCodeServer:
             "createdAt": row["created_at"],
             "updatedAt": row["updated_at"],
             "status": {"type": "active" if row["running_turn_id"] else "idle"},
+            "historyRevision": (
+                f"native:{row['native_mtime_ns']}" if row["native_source"]
+                else f"remote:{row['updated_at']}:{row['running_turn_id'] or ''}"
+            ),
         }
 
     def list_threads(self) -> list[dict[str, Any]]:
@@ -174,15 +181,22 @@ class ClaudeCodeServer:
 
     def schedule_native_refresh(self) -> None:
         """Refresh imported Claude sessions off the HTTP request path."""
+        self._native_refresh_pending = True
         if self._native_refresh_task is not None and not self._native_refresh_task.done():
             return
-        self._native_refresh_task = asyncio.create_task(self.refresh_native_threads())
+        self._native_refresh_task = asyncio.create_task(self._refresh_pending_native_threads())
+
+    async def _refresh_pending_native_threads(self) -> None:
+        while self._native_refresh_pending:
+            self._native_refresh_pending = False
+            await self.refresh_native_threads()
 
     async def refresh_native_threads(self) -> None:
         """Import local CLI sessions without changing Claude Code's own files."""
         async with self._native_refresh_lock:
-            if time.monotonic() < self._next_native_scan_at:
-                return
+            delay = self._next_native_scan_at - time.monotonic()
+            if delay > 0:
+                await asyncio.sleep(delay)
             self._next_native_scan_at = time.monotonic() + 1
             known = {
                 row["session_id"]: (row["native_source"], row["native_mtime_ns"])
@@ -200,7 +214,7 @@ class ClaudeCodeServer:
             )
             if not sessions:
                 return
-            changed = False
+            changed_threads: set[str] = set()
             async with self._lock:
                 with self._connection:
                     for session in sessions:
@@ -271,8 +285,13 @@ class ClaudeCodeServer:
                                  session["updated_at"], session["messages_json"],
                                  session["native_source"], session["native_mtime_ns"]),
                             )
-                        changed = True
-            if changed:
+                        changed_threads.add(session["thread_id"])
+            for thread_id in changed_threads:
+                await self.emit({
+                    "type": "thread.history.changed", "threadId": thread_id,
+                    "revision": self._summary(self._row(thread_id))["historyRevision"],
+                })
+            if changed_threads:
                 await self._notify_threads_changed()
 
     async def create_thread(self, cwd: Path | None = None) -> dict[str, Any]:
@@ -309,6 +328,18 @@ class ClaudeCodeServer:
         except (TypeError, json.JSONDecodeError):
             messages = []
         result["turns"] = self._turns(messages)
+        running_turn_id = row["running_turn_id"]
+        if running_turn_id:
+            turn = next((turn for turn in result["turns"] if turn["id"] == running_turn_id), None)
+            if turn is not None:
+                turn["status"] = "inProgress"
+                turn.pop("completedAt", None)
+                reply = self._live_replies.get(thread_id)
+                if reply and reply["turnId"] == running_turn_id and reply["text"]:
+                    turn["items"].append({
+                        "id": reply["id"], "type": "agentMessage", "text": reply["text"],
+                        "createdAt": reply["createdAt"], "status": "inProgress",
+                    })
         return result
 
     @staticmethod
@@ -463,6 +494,9 @@ class ClaudeCodeServer:
                     WHERE thread_id = ?""",
                     (name, preview, created_at, turn_id, json.dumps(messages, ensure_ascii=False), thread_id),
                 )
+            self._live_replies[thread_id] = {
+                "id": f"assistant-{turn_id}", "turnId": turn_id, "text": "", "createdAt": created_at,
+            }
             await self.emit({
                 "type": "notification",
                 "method": "turn/started",
@@ -509,6 +543,7 @@ class ClaudeCodeServer:
     ) -> None:
         assistant_item_id = f"assistant-{turn_id}"
         assistant_text = ""
+        reply_text = ClaudeReplyText()
         tool_items: dict[str, dict[str, Any]] = {}
         result_error: str | None = None
         completed_at = _now()
@@ -574,6 +609,21 @@ class ClaudeCodeServer:
                     continue
                 if not isinstance(record, dict):
                     continue
+                next_text = reply_text.consume(record)
+                if next_text != assistant_text:
+                    if next_text.startswith(assistant_text):
+                        await self._emit_delta(thread_id, turn_id, assistant_item_id, next_text[len(assistant_text):])
+                    else:
+                        reply = self._live_replies.get(thread_id)
+                        if reply and reply["turnId"] == turn_id:
+                            reply["text"] = next_text
+                        await self.emit({
+                            "type": "notification", "method": "item/completed",
+                            "params": {"threadId": thread_id, "turnId": turn_id, "item": {
+                                "id": assistant_item_id, "type": "agentMessage", "text": next_text,
+                            }},
+                        })
+                    assistant_text = next_text
                 record_type = record.get("type")
                 if record_type == "system" and record.get("subtype") == "init":
                     received_init = True
@@ -582,15 +632,6 @@ class ClaudeCodeServer:
                         self._connection.execute(
                             "UPDATE claude_threads SET started = 1 WHERE thread_id = ?", (thread_id,),
                         )
-                elif record_type == "stream_event":
-                    event = record.get("event")
-                    if isinstance(event, dict):
-                        delta = event.get("delta")
-                        if event.get("type") == "content_block_delta" and isinstance(delta, dict) and delta.get("type") == "text_delta":
-                            text = delta.get("text")
-                            if isinstance(text, str) and text:
-                                assistant_text += text
-                                await self._emit_delta(thread_id, turn_id, assistant_item_id, text)
                 elif record_type == "assistant":
                     message = record.get("message")
                     content = message.get("content") if isinstance(message, dict) else None
@@ -625,12 +666,8 @@ class ClaudeCodeServer:
                                 })
                                 tool_items.pop(tool_id, None)
                 elif record_type == "result":
-                    result = record.get("result")
                     if record.get("is_error") is True:
                         result_error = "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
-                    elif isinstance(result, str) and result and not assistant_text:
-                        assistant_text = result
-                        await self._emit_delta(thread_id, turn_id, assistant_item_id, result)
 
             return_code = await process.wait()
             if thread_id in self._interrupts:
@@ -666,6 +703,9 @@ class ClaudeCodeServer:
                     await self._emit_delta(thread_id, turn_id, assistant_item_id, final_text)
             with suppress(Exception):
                 await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status)
+            reply = self._live_replies.get(thread_id)
+            if reply and reply["turnId"] == turn_id:
+                self._live_replies.pop(thread_id, None)
             self._interrupts.discard(thread_id)
             current_task = asyncio.current_task()
             if self._tasks.get(thread_id) is current_task:
@@ -684,6 +724,9 @@ class ClaudeCodeServer:
         }
 
     async def _emit_delta(self, thread_id: str, turn_id: str, item_id: str, delta: str) -> None:
+        reply = self._live_replies.get(thread_id)
+        if reply and reply["turnId"] == turn_id:
+            reply["text"] += delta
         await self.emit({
             "type": "notification", "method": "item/agentMessage/delta",
             "params": {"threadId": thread_id, "turnId": turn_id, "itemId": item_id, "delta": delta},
