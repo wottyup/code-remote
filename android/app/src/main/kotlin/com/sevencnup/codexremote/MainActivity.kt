@@ -5600,8 +5600,10 @@ class MainActivity : Activity() {
                     setOnClickListener {
                         if (!currentQuestion || state.pendingPayload != null ||
                             state.delivery !in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)) return@setOnClickListener
+                        val deselect = state.selected[groupIndex] == optionIndex
+                        customFields.getOrNull(groupIndex)?.clearFocus()
                         customFields.getOrNull(groupIndex)?.setText("")
-                        state.selected[groupIndex] = optionIndex
+                        state.selected[groupIndex] = if (deselect) -1 else optionIndex
                         state.delivery = ChoiceDelivery.READY
                         updateSelection()
                     }
@@ -5628,8 +5630,17 @@ class MainActivity : Activity() {
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
                 minHeight = dp(40)
                 maxLines = 4
+                fun selectCustomAnswer() {
+                    if (!currentQuestion || state.pendingPayload != null ||
+                        state.delivery !in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)) return
+                    state.selected[groupIndex] = -2
+                    state.delivery = ChoiceDelivery.READY
+                    updateSelection()
+                }
+                setOnClickListener { selectCustomAnswer() }
                 setOnFocusChangeListener { _, hasFocus ->
                     if (hasFocus) {
+                        selectCustomAnswer()
                         state.focusedGroup = groupIndex
                         state.cursorPosition = selectionStart
                         assistantChoiceFocusedField = this
