@@ -59,6 +59,8 @@ internal object UiEnglish {
         "（附件消息）" to "(Attachment message)", "默认模型" to "Default model", "默认" to "Default",
         "助手提出的选择题" to "Choices from the assistant", "快速选择" to "Quick choices",
         "其他答案（没有合适选项时填写）" to "Other answer (if none fit)",
+        "填写你的回答…" to "Type your answer…", "该问题已有后续消息" to "This question has later messages",
+        "问题已更新或正在编辑消息，请稍后重试" to "The question changed or a message is being edited. Try again shortly",
         "发送并继续" to "Send and continue", "发送后 AI 会继续回复" to "AI continues after you send",
         "正在发送答案…" to "Sending answer…", "答案已发送，AI 正在继续回复" to "Answer sent. AI is continuing",
         "答案已加入排队，等待发送" to "Answer queued for sending", "发送失败，可重试" to "Could not send. Try again",

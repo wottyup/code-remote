@@ -887,9 +887,12 @@ class MainActivity : Activity() {
         var delivery: ChoiceDelivery = ChoiceDelivery.READY,
         var focusedGroup: Int? = null,
         var cursorPosition: Int = 0,
+        var pendingPayload: JSONObject? = null,
     )
-    private var assistantChoiceState: AssistantChoiceState? = null
+    private val assistantChoiceStates = linkedMapOf<String, AssistantChoiceState>()
     private var assistantChoiceFocusedField: EditText? = null
+    private var assistantChoiceFocusedKey: String? = null
+    private var assistantChoiceFocusedScope: String? = null
     private var queueEditDraft = ""
     private var queueEditDraftFiles = mutableListOf<JSONObject>()
     private val queueEditPreferences = mutableMapOf<String, String?>()
@@ -1559,7 +1562,10 @@ class MainActivity : Activity() {
                 ) {
                     content.setPadding(0, 0, 0, contentBottom)
                 }
-                if (keyboardVisibilityChanged) updateQueueEditLayout()
+                if (keyboardVisibilityChanged) {
+                    updateQueueEditLayout()
+                    if (!keyboardVisible) handler.post { flushDeferredMessageRender() }
+                }
                 if (systemInsetsChanged) {
                     updateInsetAwareOverlays()
                     overlaysInitialized = true
@@ -3416,7 +3422,9 @@ class MainActivity : Activity() {
             val thread = wrapper.optJSONObject("thread") ?: return null
             if (wrapper.optString("threadId") != threadId || thread.optString("id") != threadId || thread.optJSONArray("turns") == null) return null
             file.setLastModified(System.currentTimeMillis())
-            thread to wrapper.optString("revision")
+            // Show the cached conversation immediately, then fetch metadata
+            // once for caches written before structured questions were kept.
+            thread to if (wrapper.optInt("questionMetadataVersion") == 1) wrapper.optString("revision") else ""
         } catch (_: Exception) {
             null
         }
@@ -3443,6 +3451,7 @@ class MainActivity : Activity() {
                 .put("threadId", threadId)
                 .put("revision", if (partial) "" else revision.orEmpty())
                 .put("partial", partial)
+                .put("questionMetadataVersion", 1)
                 .put("thread", threadSnapshot)
             val payload = wrapper.toString().toByteArray(StandardCharsets.UTF_8)
             if (payload.size > MAX_HISTORY_CACHE_JSON_BYTES) return
@@ -3810,7 +3819,7 @@ class MainActivity : Activity() {
 
     private fun renderMessages(scrollToEnd: Boolean, incrementalTurnId: String? = null) {
         if (!::messageList.isInitialized) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) {
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) {
             messageRenderDeferred = true
             deferredMessageScrollToEnd = deferredMessageScrollToEnd || scrollToEnd
             if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
@@ -3818,8 +3827,9 @@ class MainActivity : Activity() {
         }
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
-        val restoreChoiceGroup = assistantChoiceState?.focusedGroup
+        val restoreChoiceKey = assistantChoiceFocusedKey
             ?.takeIf { assistantChoiceFocusedField?.hasFocus() == true && imeInsetVisible }
+        val restoreChoiceGroup = assistantChoiceStates[restoreChoiceKey]?.focusedGroup
         assistantChoiceFocusedField = null
         if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
@@ -3870,6 +3880,15 @@ class MainActivity : Activity() {
                     }
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
+                        if (assistantMessageQuestions(item).isNotEmpty()) {
+                            // A question is a separate interactive item. Later
+                            // commentary must not overwrite its identity/data.
+                            assistantInTurn = null
+                            messages += "assistant" to shallowCopyObject(item)
+                                .put("_turnId", turnId)
+                                .put("_displayTime", messageTime(item, turn, true))
+                            continue
+                        }
                         if (text.isNotBlank()) {
                             val message = assistantInTurn ?: shallowCopyObject(item)
                                 .put("_turnId", turnId)
@@ -3923,6 +3942,7 @@ class MainActivity : Activity() {
         appendRemoteUserMessageOverlays(messages)
         appendPendingUserMessages(messages)
         val lastConversationMessageIndex = messages.indexOfLast { (role, _) -> role == "user" || role == "assistant" }
+        val lastUserMessageIndex = messages.indexOfLast { (role, _) -> role == "user" }
         val hasConversationMessages = messages.any { it.first == "user" || it.first == "assistant" }
         val showWelcomeTitle = effectiveIncrementalTurnId == null && !hasConversationMessages && (
             activeThreadId == null || (
@@ -4060,14 +4080,16 @@ class MainActivity : Activity() {
                 bubble.addView(meta, LinearLayout.LayoutParams((maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), WRAP))
             }
             val rawText = messageText(item, role)
-            val choiceGroups = if (role == "assistant" && messageIndex == lastConversationMessageIndex &&
+            val explicitQuestions = if (role == "assistant") assistantMessageQuestions(item) else emptyList()
+            val choiceGroups = if (explicitQuestions.isNotEmpty()) explicitQuestions
+            else if (role == "assistant" && messageIndex == lastConversationMessageIndex &&
                 !running && !isThreadRunning(thread ?: JSONObject()) &&
                 item.optString("_turnId") == turns.optJSONObject(turns.length() - 1)?.optString("id")) {
                 MessageChoices.parse(rawText)
             } else emptyList()
             val firstChoiceOffset = choiceGroups.firstOrNull()?.question?.let { rawText.indexOf(it) } ?: -1
-            val hideChoiceText = firstChoiceOffset >= 0 && rawText.take(firstChoiceOffset)
-                .replace(Regex("""[\s#>*_\d.)、-]"""), "").isEmpty()
+            val hideChoiceText = explicitQuestions.isNotEmpty() || (firstChoiceOffset >= 0 && rawText.take(firstChoiceOffset)
+                .replace(Regex("""[\s#>*_\d.)、-]"""), "").isEmpty())
             val parsedUserText = if (role == "user") parseUserMessageText(rawText) else null
             val text = parsedUserText?.visibleText ?: rawText
             val documentAttachments = parsedUserText?.documentAttachments.orEmpty()
@@ -4142,9 +4164,15 @@ class MainActivity : Activity() {
                 }
                 if (choiceGroups.isNotEmpty()) {
                     val choiceKey = listOf(activeConnectionId, currentMode, activeThreadId.orEmpty(),
-                        item.optString("_turnId"), item.optString("id"), rawText.length.toString(), rawText.hashCode().toString()).joinToString(":")
+                        item.optString("_turnId"), item.optString("id"),
+                        choiceGroups.map { it.question to it.options }.hashCode().toString()).joinToString(":")
+                    val currentQuestion = messageIndex > lastUserMessageIndex &&
+                        item.optString("_turnId") == turns.optJSONObject(turns.length() - 1)?.optString("id")
                     messageColumn.addView(assistantChoiceCard(choiceGroups, choiceKey,
-                        (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), restoreChoiceGroup),
+                        (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)),
+                        restoreChoiceGroup.takeIf { restoreChoiceKey == choiceKey },
+                        item.optString("_turnId"), item.optString("id"),
+                        currentQuestion, explicitQuestions.isNotEmpty()),
                         LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
@@ -5438,11 +5466,63 @@ class MainActivity : Activity() {
                 .build().also { assistantMarkdownCache = it; assistantMarkdownAppearance = appearance }
         }
 
+    private fun assistantMessageQuestions(item: JSONObject): List<MessageChoiceGroup> {
+        val questions = item.optJSONArray("questions")
+        if (questions != null) {
+            val groups = (0 until questions.length()).mapNotNull { index ->
+                val question = questions.optJSONObject(index) ?: return@mapNotNull null
+                val title = question.optString("title").ifBlank { question.optString("question") }.trim()
+                if (title.isEmpty()) return@mapNotNull null
+                val options = question.optJSONArray("options") ?: JSONArray()
+                val labels = mutableListOf<String>()
+                val descriptions = mutableListOf<String>()
+                for (optionIndex in 0 until options.length()) {
+                    val option = options.opt(optionIndex)
+                    val label = (if (option is JSONObject) option.optString("label") else option as? String).orEmpty().trim()
+                    if (label.isEmpty()) continue
+                    labels += label
+                    descriptions += (option as? JSONObject)?.optString("description").orEmpty()
+                }
+                MessageChoiceGroup(title, labels, descriptions)
+            }
+            if (groups.isNotEmpty()) return groups
+        }
+        // Older backends retained the native tool-call ID but dropped questions.
+        return if (item.optString("id").startsWith("call_")) MessageChoices.parsePrompt(messageText(item, "assistant"))
+            else emptyList()
+    }
+
+    private fun isEditingAssistantAnswer(): Boolean {
+        val field = assistantChoiceFocusedField ?: return false
+        return field.isAttachedToWindow && field.hasFocus() && imeInsetVisible &&
+            assistantChoiceFocusedScope == draftStorageKey() &&
+            assistantChoiceStates[assistantChoiceFocusedKey]?.delivery in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)
+    }
+
+    private fun isAssistantQuestionCurrent(threadId: String, turnId: String, itemId: String): Boolean {
+        if (activeThreadId != threadId) return false
+        val turns = activeThread?.optJSONArray("turns") ?: return false
+        val turn = turns.optJSONObject(turns.length() - 1) ?: return false
+        if (turn.optString("id") != turnId) return false
+        val items = turn.optJSONArray("items") ?: return false
+        val questionIndex = (0 until items.length()).indexOfFirst { items.optJSONObject(it)?.optString("id") == itemId }
+        return questionIndex >= 0 && (questionIndex + 1 until items.length()).none {
+            normalizedType(items.optJSONObject(it)?.optString("type").orEmpty()) == "usermessage"
+        }
+    }
+
     private fun assistantChoiceCard(groups: List<MessageChoiceGroup>, key: String, maximumWidth: Int,
-                                    restoreFocusGroup: Int?): LinearLayout {
-        val state = assistantChoiceState?.takeIf { it.key == key && it.selected.size == groups.size && it.customAnswers.size == groups.size }
+                                    restoreFocusGroup: Int?, turnId: String, itemId: String,
+                                    currentQuestion: Boolean, asynchronous: Boolean): LinearLayout {
+        val replyThreadId = activeThreadId.orEmpty()
+        val replyConnection = connectionGeneration
+        val replyScope = draftStorageKey()
+        val state = assistantChoiceStates[key]?.takeIf { it.selected.size == groups.size && it.customAnswers.size == groups.size }
             ?: AssistantChoiceState(key, MutableList(groups.size) { -1 }, MutableList(groups.size) { "" })
-                .also { assistantChoiceState = it }
+                .also {
+                    assistantChoiceStates[key] = it
+                    if (assistantChoiceStates.size > 64) assistantChoiceStates.remove(assistantChoiceStates.keys.first())
+                }
         val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(11), dp(12), dp(11))
@@ -5464,7 +5544,9 @@ class MainActivity : Activity() {
         val notice = label("发送后 AI 会继续回复", 11, MUTED)
 
         fun updateSelection() {
-            val editable = state.delivery == ChoiceDelivery.READY || state.delivery == ChoiceDelivery.FAILED
+            val canSubmit = currentQuestion && state.delivery in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)
+            // Retry an uncertain delivery with the exact same payload/ID.
+            val editable = canSubmit && state.pendingPayload == null
             optionRows.forEachIndexed { groupIndex, rows ->
                 rows.forEachIndexed { optionIndex, (row, check) ->
                     val selected = state.selected[groupIndex] == optionIndex
@@ -5480,15 +5562,17 @@ class MainActivity : Activity() {
             }
             customFields.forEachIndexed { index, field ->
                 field.isEnabled = editable
+                field.visibility = if (currentQuestion || state.customAnswers[index].isNotBlank()) View.VISIBLE else View.GONE
                 field.background = rounded(PANEL, dp(7), if (state.selected[index] == -2) ACCENT else BORDER, dp(1))
             }
             submitButton.text = tr(if (state.delivery == ChoiceDelivery.SENDING) "正在发送答案…" else "发送并继续")
-            submitButton.isEnabled = editable && state.selected.indices.all { index ->
+            submitButton.visibility = if (currentQuestion) View.VISIBLE else View.GONE
+            submitButton.isEnabled = canSubmit && state.selected.indices.all { index ->
                 state.selected[index] >= 0 || state.selected[index] == -2 && state.customAnswers[index].isNotBlank()
             }
             submitButton.alpha = if (submitButton.isEnabled) 1f else .5f
             submitButton.background = rounded(blendColors(PANEL_INSET, ACCENT, .17f), dp(7), ACCENT, dp(1))
-            notice.text = tr(when (state.delivery) {
+            notice.text = tr(if (!currentQuestion && state.delivery == ChoiceDelivery.READY) "该问题已有后续消息" else when (state.delivery) {
                 ChoiceDelivery.READY -> "发送后 AI 会继续回复"
                 ChoiceDelivery.SENDING -> "正在发送答案…"
                 ChoiceDelivery.SENT -> "答案已发送，AI 正在继续回复"
@@ -5514,7 +5598,8 @@ class MainActivity : Activity() {
                     isFocusable = true
                     isClickable = true
                     setOnClickListener {
-                        if (state.delivery !in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)) return@setOnClickListener
+                        if (!currentQuestion || state.pendingPayload != null ||
+                            state.delivery !in setOf(ChoiceDelivery.READY, ChoiceDelivery.FAILED)) return@setOnClickListener
                         customFields.getOrNull(groupIndex)?.setText("")
                         state.selected[groupIndex] = optionIndex
                         state.delivery = ChoiceDelivery.READY
@@ -5527,14 +5612,19 @@ class MainActivity : Activity() {
                     if (!pixelTheme || resource !in pixelIconResourceIds) imageTintList = ColorStateList.valueOf(ACCENT)
                 }
                 row.addView(check, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(7) })
-                row.addView(label(option, 13, TEXT, translateUi = false).apply {
+                val copy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                copy.addView(label(option, 13, TEXT, translateUi = false).apply {
                     setLineSpacing(dp(2).toFloat(), 1.15f)
-                }, LinearLayout.LayoutParams(0, WRAP, 1f))
+                }, LinearLayout.LayoutParams(MATCH, WRAP))
+                group.descriptions.getOrNull(optionIndex)?.takeIf { it.isNotBlank() }?.let { description ->
+                    copy.addView(label(description, 11, MUTED, translateUi = false), LinearLayout.LayoutParams(MATCH, WRAP))
+                }
+                row.addView(copy, LinearLayout.LayoutParams(0, WRAP, 1f))
                 card.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(6) })
                 rows += row to check
             }
             optionRows += rows
-            val customField = editField("其他答案（没有合适选项时填写）", state.customAnswers[groupIndex],
+            val customField = editField(if (group.options.isEmpty()) "填写你的回答…" else "其他答案（没有合适选项时填写）", state.customAnswers[groupIndex],
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
                 minHeight = dp(40)
                 maxLines = 4
@@ -5543,6 +5633,10 @@ class MainActivity : Activity() {
                         state.focusedGroup = groupIndex
                         state.cursorPosition = selectionStart
                         assistantChoiceFocusedField = this
+                        assistantChoiceFocusedKey = key
+                        assistantChoiceFocusedScope = replyScope
+                    } else {
+                        handler.post { if (!isEditingAssistantAnswer()) flushDeferredMessageRender() }
                     }
                 }
                 addTextChangedListener(SimpleTextWatcher { value ->
@@ -5558,7 +5652,7 @@ class MainActivity : Activity() {
             card.addView(customField, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(1) })
             if (restoreFocusGroup == groupIndex && state.focusedGroup == groupIndex) {
                 customField.post {
-                    if (assistantChoiceState === state && customField.isAttachedToWindow) {
+                    if (assistantChoiceStates[key] === state && customField.isAttachedToWindow) {
                         customField.requestFocus()
                         customField.setSelection(state.cursorPosition.coerceIn(0, customField.text.length))
                     }
@@ -5567,26 +5661,27 @@ class MainActivity : Activity() {
         }
         submitButton.setOnClickListener {
             if (!submitButton.isEnabled) return@setOnClickListener
+            customFields.firstOrNull { it.hasFocus() }?.let { field ->
+                android.view.inputmethod.BaseInputConnection.removeComposingSpans(field.text)
+                (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.hideSoftInputFromWindow(field.windowToken, 0)
+                field.clearFocus()
+            }
             val reply = MessageChoices.formatReply(groups, state.selected, state.customAnswers)
             state.delivery = ChoiceDelivery.SENDING
             updateSelection()
-            if (sendAssistantChoiceReply(key, reply) { delivered ->
+            if (!sendAssistantChoiceReply(key, replyThreadId, turnId, itemId, replyConnection, reply, asynchronous) { delivered ->
                     state.delivery = when (delivered) {
                         true -> ChoiceDelivery.SENT
                         false -> ChoiceDelivery.QUEUED
                         null -> ChoiceDelivery.FAILED
                     }
-                    if (assistantChoiceState === state) renderMessages(false)
+                    if (assistantChoiceStates[key] === state && activeThreadId == replyThreadId &&
+                        connectionGeneration == replyConnection) renderMessages(false)
                 }) {
-                customFields.firstOrNull { it.hasFocus() }?.let { field ->
-                    (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
-                        ?.hideSoftInputFromWindow(field.windowToken, 0)
-                    field.clearFocus()
-                }
-            } else {
                 state.delivery = ChoiceDelivery.READY
                 updateSelection()
-                notice.text = tr("请先结束当前编辑，再发送答案")
+                notice.text = tr("问题已更新或正在编辑消息，请稍后重试")
             }
         }
         card.addView(submitButton, LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(10) })
@@ -5595,14 +5690,19 @@ class MainActivity : Activity() {
         return card
     }
 
-    private fun sendAssistantChoiceReply(key: String, reply: String, onResult: (Boolean?) -> Unit): Boolean {
-        val threadId = activeThreadId ?: return false
-        if (assistantChoiceState?.key != key || queueEditPending || queueEditItem != null || sendBusy ||
-            running || isThreadRunning(activeThread ?: JSONObject())) return false
+    private fun sendAssistantChoiceReply(key: String, threadId: String, turnId: String, itemId: String,
+                                        replyConnection: Long, reply: String, asynchronous: Boolean,
+                                        onResult: (Boolean?) -> Unit): Boolean {
+        val state = assistantChoiceStates[key] ?: return false
+        if (replyConnection != connectionGeneration || !isAssistantQuestionCurrent(threadId, turnId, itemId) ||
+            queueEditPending || queueEditItem != null || sendBusy ||
+            !asynchronous && (running || isThreadRunning(activeThread ?: JSONObject()))) return false
         val scope = draftStorageKey()
-        val payload = queuedPayload(reply, UUID.randomUUID().toString(), emptyList())
+        val payload = state.pendingPayload ?: queuedPayload(reply, UUID.randomUUID().toString(), emptyList())
+            .also { state.pendingPayload = it }
         addPendingUserMessage(scope, payload, emptyList())
-        submitPayload(threadId, payload, emptyList(), scope, connectionGeneration, endpoint, token, onResult)
+        submitPayload(threadId, payload, emptyList(), scope, connectionGeneration, endpoint, token, onResult,
+            sendImmediately = asynchronous)
         return true
     }
 
@@ -6946,11 +7046,18 @@ class MainActivity : Activity() {
 
     private fun submitPayload(threadId: String, payload: JSONObject, outgoingFiles: List<JSONObject>,
                               outgoingScope: String, sendConnection: Long, sendEndpoint: String, sendToken: String,
-                              onResult: ((Boolean?) -> Unit)? = null) {
+                              onResult: ((Boolean?) -> Unit)? = null, sendImmediately: Boolean = false) {
         if (sendConnection == connectionGeneration) setSendBusy(true)
         io.execute {
             try {
-                val response = RemoteApi(sendEndpoint, sendToken).post("/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}/submit", payload)
+                val api = RemoteApi(sendEndpoint, sendToken)
+                val queuePath = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
+                var response = api.post("$queuePath/submit", payload)
+                if (sendImmediately && !response.optBoolean("sent", false)) {
+                    // An explicit answer must reach an async question during
+                    // the running turn, rather than wait behind that turn.
+                    response = api.post("$queuePath/send-now", JSONObject().put("message_id", payload.optString("id")))
+                }
                 handler.post {
                     val sent = response.optBoolean("sent", false)
                     if (!sent) removePendingUserMessage(outgoingScope, payload.optString("id"))
@@ -9112,7 +9219,7 @@ class MainActivity : Activity() {
 
     private fun flushDeferredMessageRender() {
         if (!messageRenderDeferred) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true) return
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) return
         val scrollToEnd = deferredMessageScrollToEnd
         val incrementalTurnId = deferredMessageTurnIds.singleOrNull().takeUnless { deferredMessageRequiresFullRender }
         messageRenderDeferred = false

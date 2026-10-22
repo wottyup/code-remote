@@ -28,6 +28,33 @@ from codex_remote.codex_history import CodexHistoryStore
 
 
 class CodexHistoryStoreTests(unittest.TestCase):
+    def test_compact_history_keeps_async_questions_before_turn_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            sessions = codex_home / "sessions"
+            sessions.mkdir()
+            questions = [{"title": "选择接下来的处理方式", "options": ["继续修改", "先查看效果"]}]
+            events = [
+                {"type": "session_meta", "payload": {"id": "question-thread"}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "turn", "item": {
+                    "type": "AgentMessage", "id": "call-question", "phase": "final_answer", "delivery": "async",
+                    "questions": questions, "content": [{"type": "Text", "text": "选择接下来的处理方式\n- 继续修改\n- 先查看效果"}],
+                }}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "turn", "item": {
+                    "type": "AgentMessage", "id": "progress", "content": [{"type": "Text", "text": "我继续检查其他模块。"}],
+                }}},
+            ]
+            (sessions / "rollout-question-thread.jsonl").write_text(
+                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8",
+            )
+            thread = CodexHistoryStore(codex_home).read_thread("question-thread", compact=True)
+            self.assertEqual(thread["turns"][0]["status"], "inProgress")
+            question = thread["turns"][0]["items"][0]
+            self.assertEqual(question["questions"], questions)
+            self.assertEqual(question["delivery"], "async")
+            self.assertEqual(question["phase"], "final_answer")
+            self.assertEqual(thread["turns"][0]["items"][1]["id"], "progress")
+
     def test_reads_desktop_state_index_and_keeps_subagent_file_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)

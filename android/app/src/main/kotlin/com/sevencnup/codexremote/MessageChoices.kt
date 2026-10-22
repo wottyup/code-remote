@@ -1,11 +1,45 @@
 package com.sevencnup.codexremote
 
-internal data class MessageChoiceGroup(val question: String, val options: List<String>)
+internal data class MessageChoiceGroup(
+    val question: String,
+    val options: List<String>,
+    val descriptions: List<String> = emptyList(),
+)
 
 /** Mirrors the web quick-choice rules for completed assistant replies. */
 internal object MessageChoices {
     private val optionLine = Regex("""^\s*(?:[-*]\s+|\d{1,2}[.)、]\s+)(.+?)\s*$""")
     private val fenceLine = Regex("""^\s{0,3}(?:```|~~~)""")
+
+    /** Compatibility for servers that flattened an async question into a call_ message. */
+    fun parsePrompt(value: String): List<MessageChoiceGroup> {
+        val groups = mutableListOf<MessageChoiceGroup>()
+        val question = mutableListOf<String>()
+        val options = mutableListOf<String>()
+        fun finishGroup() {
+            if (question.isNotEmpty() && options.isNotEmpty()) {
+                groups += MessageChoiceGroup(question.joinToString("\n"), options.toList())
+            }
+            question.clear()
+            options.clear()
+        }
+        for (line in value.replace("\r\n", "\n").replace('\r', '\n').lines()) {
+            if (line.isBlank()) continue
+            if (fenceLine.containsMatchIn(line)) return emptyList()
+            val option = optionLine.matchEntire(line)?.groupValues?.get(1)?.trim()
+            if (option != null && question.isNotEmpty()) options += option
+            else {
+                if (options.isNotEmpty()) finishGroup()
+                question += plainQuestionLine(line)
+            }
+        }
+        finishGroup()
+        if (groups.isNotEmpty()) return groups
+        // A free-text-only prompt has no option list.
+        val title = value.trim()
+        return if (title.isNotEmpty() && (title.endsWith('?') || title.endsWith('？')))
+            listOf(MessageChoiceGroup(title, emptyList())) else emptyList()
+    }
 
     fun parse(value: String): List<MessageChoiceGroup> {
         val lines = value.replace("\r\n", "\n").replace('\r', '\n').split('\n')

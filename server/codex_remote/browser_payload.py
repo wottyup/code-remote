@@ -97,7 +97,9 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
             # based on the original record, not a previous browser response.
             result["content"] = [dict(part) if isinstance(part, dict) else part for part in result["content"]]
     elif item_type == "agentmessage":
-        result.update(_pick(item, ("text",)))
+        # Async questions are delivered as assistant messages while the turn
+        # remains active. Keep their UI data on both history and live events.
+        result.update(_pick(item, ("text", "phase", "delivery", "questions")))
     elif item_type == "filechange":
         result["changes"] = browser_changes(item.get("changes", []))
     elif item_type == "imageview":
