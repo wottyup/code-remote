@@ -53,6 +53,22 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
         <div className="device-chat-connect__actions"><button type="button" disabled={!inviteCode} onClick={() => void copyValue(inviteCode, 'code')}><Copy size={14} />{copied === 'code' ? '加入码已复制' : '复制加入码'}</button><button type="button" disabled={busy} onClick={() => void createInvite()}><Plus size={14} />{inviteCode ? '重新生成' : '生成加入码'}</button></div>
         </div>
       </section> : null}
+      {!activeSetup && state?.room ? <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
+      <header className="device-chat-room-panel__header"><strong>房间成员</strong></header>
+            <div className="device-chat-members">
+                <div className="device-chat-members__heading"><span><Users size={15} />房间成员</span><small>{state.members.length} 台设备</small></div>
+                <div className="device-chat-members__list">
+                  {state.members.map((member) => (
+                    <span className="device-chat-member" key={member.id}>
+                      <i className={member.online ? 'device-chat-member__dot device-chat-member__dot--online' : 'device-chat-member__dot'} />
+                      <strong>{member.name}</strong>{member.id === state.room?.host_id ? <small>房间设备</small> : null}{member.id === state.node_id ? <small>本机</small> : null}
+                    </span>
+                  ))}
+                </div>
+                {state.role === 'peer' ? <p className="device-chat-peer-note">本机通过房间设备 {state.room.host_name} 同步消息。</p> : null}
+                <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state.role === 'host' ? '解散房间' : '退出群聊'}</button>
+            </div>
+      </div> : null}
     </details>
     {!activeSetup && state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
       <div className="thread-list-heading"><span>本机 Codex 聊天</span><small>{codexThreads.length} 条</small></div>
@@ -65,22 +81,6 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
       </div>
       {state.local_thread_id && !selectedThread ? <p className="device-chat-thread-picker__hint">已选聊天不在当前历史列表中：{state.local_thread_id}</p> : null}
     </section> : null}
-    {!activeSetup && state?.room ? <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
-    <header className="device-chat-room-panel__header"><strong>房间成员</strong></header>
-          <div className="device-chat-members">
-              <div className="device-chat-members__heading"><span><Users size={15} />房间成员</span><small>{state.members.length} 台设备</small></div>
-              <div className="device-chat-members__list">
-                {state.members.map((member) => (
-                  <span className="device-chat-member" key={member.id}>
-                    <i className={member.online ? 'device-chat-member__dot device-chat-member__dot--online' : 'device-chat-member__dot'} />
-                    <strong>{member.name}</strong>{member.id === state.room?.host_id ? <small>房间设备</small> : null}{member.id === state.node_id ? <small>本机</small> : null}
-                  </span>
-                ))}
-              </div>
-              {state.role === 'peer' ? <p className="device-chat-peer-note">本机通过房间设备 {state.room.host_name} 同步消息。</p> : null}
-              <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state.role === 'host' ? '解散房间' : '退出群聊'}</button>
-          </div>
-    </div> : null}
   </div>
 }
 
