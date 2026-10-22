@@ -2206,7 +2206,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           {!deviceChat ? <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button> : null}
           <div className="composer-preferences">
             {deviceChat ? <>
-              <label className="device-chat-recipient"><span>发送给</span><select value={deviceChat.targetId} onChange={(event) => deviceChat.setTargetId(event.currentTarget.value)}><option value="">所有人（只同步）</option>{deviceChat.state?.members.map((member) => <option key={member.id} value={member.id}>@{member.name}（运行该设备 Codex）</option>)}</select></label>
+              <div className="device-chat-recipient" role="group" aria-label="发送给设备">
+                <span>发送给</span>
+                <div className="device-chat-recipient__options">
+                  <button type="button" aria-pressed={!deviceChat.targetId} title="只同步群消息，不运行设备 Codex" onClick={() => deviceChat.setTargetId('')}>所有人</button>
+                  {deviceChat.state?.members.map((member) => <button key={member.id} type="button" aria-pressed={deviceChat.targetId === member.id} title={`运行 ${member.name} 设备上的 Codex`} onClick={() => deviceChat.setTargetId(member.id)}>@{member.name}</button>)}
+                </div>
+              </div>
               <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="目标默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
               <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="目标默认思考" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
               {deviceChat.targetId === deviceChat.state?.node_id && deviceChat.targetId
