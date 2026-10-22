@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import tempfile
 import unittest
 from contextlib import suppress
 from pathlib import Path
 
-from codex_remote.device_chat import MAX_AUTO_HANDOFFS, DeviceChatManager, _can_handoff, _handoff_target
+from codex_remote.device_chat import MAX_AUTO_HANDOFFS, DeviceChatError, DeviceChatManager, _can_handoff, _handoff_target
 
 
 class _FakeCodex:
@@ -15,6 +16,7 @@ class _FakeCodex:
     def __init__(self, workspace: Path, reply: str) -> None:
         self.workspace = workspace
         self.reply = reply
+        self.last_turn: dict[str, object] | None = None
         self.notifications: asyncio.Queue[dict[str, object]] = asyncio.Queue()
 
     async def start_thread(self, *, cwd: Path) -> dict[str, str]:
@@ -29,7 +31,8 @@ class _FakeCodex:
     def unsubscribe(self, queue: asyncio.Queue[dict[str, object]]) -> None:
         return None
 
-    async def start_turn(self, thread_id: str, prompt: str, *, cwd: Path) -> dict[str, object]:
+    async def start_turn(self, thread_id: str, prompt: str, *, cwd: Path, model: str | None = None, effort: str | None = None, approval_policy: str | None = None) -> dict[str, object]:
+        self.last_turn = {"thread_id": thread_id, "cwd": cwd, "model": model, "effort": effort, "approval_policy": approval_policy}
         self.notifications.put_nowait({
             "method": "item/agentMessage/delta",
             "params": {"threadId": thread_id, "turnId": "turn-id", "delta": self.reply},
@@ -47,7 +50,8 @@ class _StreamingCodex(_FakeCodex):
         self.turn_started = asyncio.Event()
         self.unsubscribed = False
 
-    async def start_turn(self, thread_id: str, prompt: str, *, cwd: Path) -> dict[str, object]:
+    async def start_turn(self, thread_id: str, prompt: str, *, cwd: Path, model: str | None = None, effort: str | None = None, approval_policy: str | None = None) -> dict[str, object]:
+        self.last_turn = {"thread_id": thread_id, "cwd": cwd, "model": model, "effort": effort, "approval_policy": approval_policy}
         self.turn_started.set()
         return {"turn": {"id": "turn-id"}}
 
@@ -283,6 +287,75 @@ class DeviceChatAgentSchedulingTests(unittest.TestCase):
         self.manager._schedule_agent(untargeted)
         self.manager._schedule_agent(targeted)
         self.assertEqual(["directed"], [item["id"] for item in self.launched])
+
+    def test_selected_model_effort_and_local_authorization_reach_codex(self) -> None:
+        self.manager.codex = _FakeCodex(Path(self.temp_dir.name), "已处理。")
+        event = {
+            "id": "configured-message", "kind": "user", "sender_id": self.manager.node_id,
+            "sender_name": "Linux", "target_id": self.manager.node_id, "text": "检查项目。",
+            "model": "gpt-6", "effort": "high", "approval_policy": "on-request",
+        }
+
+        asyncio.run(self.manager._execute_agent(event))
+
+        self.assertEqual("gpt-6", self.manager.codex.last_turn["model"])
+        self.assertEqual("high", self.manager.codex.last_turn["effort"])
+        self.assertEqual("on-request", self.manager.codex.last_turn["approval_policy"])
+
+    def test_remote_message_cannot_override_local_authorization(self) -> None:
+        self.manager.codex = _FakeCodex(Path(self.temp_dir.name), "已处理。")
+        event = {
+            "id": "remote-message", "kind": "user", "sender_id": "windows-id",
+            "sender_name": "Windows", "target_id": self.manager.node_id, "text": "检查项目。",
+            "approval_policy": "never",
+        }
+
+        asyncio.run(self.manager._execute_agent(event))
+
+        self.assertIsNone(self.manager.codex.last_turn["approval_policy"])
+
+    def test_workspace_binding_uses_group_thread_without_changing_other_thread(self) -> None:
+        bound_directory = Path(self.temp_dir.name) / "project"
+        bound_directory.mkdir()
+        self.manager.codex = _FakeCodex(Path(self.temp_dir.name), "已处理。")
+        self.manager.thread_workspace = lambda thread_id: str(bound_directory) if thread_id == "thread-id" else None
+        thread_id = asyncio.run(self.manager.ensure_local_thread())
+        event = {
+            "id": "bound-message", "kind": "user", "sender_id": "windows-id",
+            "sender_name": "Windows", "target_id": self.manager.node_id, "text": "在本机检查。",
+        }
+
+        asyncio.run(self.manager._execute_agent(event))
+
+        self.assertEqual("thread-id", thread_id)
+        self.assertEqual("thread-id", self.manager.state()["agent_thread_id"])
+        self.assertEqual(str(bound_directory), self.manager.state()["agent_thread_cwd"])
+        self.assertEqual(bound_directory, self.manager.codex.last_turn["cwd"])
+
+    def test_remote_target_cannot_receive_local_authorization(self) -> None:
+        with self.assertRaises(DeviceChatError):
+            asyncio.run(self.manager.send_message("请检查。", "windows-id", approval_policy="never"))
+
+    def test_host_relay_preserves_peer_model_and_rejects_remote_authorization(self) -> None:
+        token = "peer-token"
+        self.manager.connection.execute(
+            "UPDATE device_chat_members SET token_hash = ? WHERE id = ?",
+            (hashlib.sha256(token.encode()).hexdigest(), "windows-id"),
+        )
+        event = {
+            "id": "peer-configured", "kind": "user", "target_id": self.manager.node_id,
+            "text": "请检查。", "model": "gpt-6", "effort": "high",
+        }
+
+        saved = asyncio.run(self.manager.host_peer_event("windows-id", token, event))
+
+        self.assertEqual("gpt-6", saved["model"])
+        self.assertEqual("high", saved["effort"])
+        self.assertEqual(["peer-configured"], [item["id"] for item in self.launched])
+        with self.assertRaises(DeviceChatError):
+            asyncio.run(self.manager.host_peer_event("windows-id", token, {
+                **event, "id": "peer-unauthorized", "approval_policy": "never",
+            }))
 
     def test_completed_codex_reply_persists_a_routed_handoff(self) -> None:
         self.manager.codex = _FakeCodex(Path(self.temp_dir.name), "Windows 需要检查一下。\n@Windows")

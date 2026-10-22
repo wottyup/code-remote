@@ -1503,12 +1503,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   const canCompose = !sending && (deviceChat ? Boolean(deviceChat.state?.room) && !deviceChat.busy && (deviceChat.state?.connected || deviceChat.state?.role === 'host') : !writerConflict && connection === 'connected')
   const canConfigure = canCompose
-  const canSend = (draft.trim().length > 0 || (!deviceChat && (attachedImages.length > 0 || attachedDocuments.length > 0)))
+  const canSend = (draft.trim().length > 0 || attachedDocuments.length > 0 || (!deviceChat && attachedImages.length > 0))
     && !readingDocuments
     && !readingImages
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
-  const canAttachFiles = !deviceChat && (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
+  const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
   const stopWithSendButton = !deviceChat && isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
   const continueWithSendButton = !deviceChat && continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
@@ -1646,6 +1646,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         try {
           if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
           if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
+          if (deviceChat && (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf')) {
+            throw new Error('群聊暂不支持原始 PDF 和表格文件传输，请先转换为文本。')
+          }
           if (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf') {
             const uploaded = await onUploadPdf(file)
             parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
@@ -1691,7 +1694,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   async function attachSelectedFiles(files: File[]) {
-    if (!mobileLayout) {
+    if (deviceChat || !mobileLayout) {
       await attachDocuments(files)
       return
     }
@@ -1713,12 +1716,27 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   async function send(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (deviceChat) {
-      if (!draft.trim() || sendingRef.current || !canCompose) return
+      if ((!draft.trim() && attachedDocuments.length === 0) || sendingRef.current || !canCompose || readingDocuments) return
+      if (attachedDocuments.some((document) => document.sourceFileId || !document.content)) {
+        setAttachmentError('群聊只能发送已提取文字的文档，原始文件暂不能跨设备传输。')
+        return
+      }
+      const documentText = attachedDocuments.map((document) => `[附件文档：${document.name}]\n${document.content}\n[/附件文档]`).join('\n\n')
+      const groupText = [draft.trim(), documentText].filter(Boolean).join('\n\n')
+      if (groupText.length > 12_000) {
+        setAttachmentError('群聊消息和文档合计不能超过 12000 个字符，请缩短后重试。')
+        return
+      }
       sendingRef.current = true
       setSending(true)
       const submittedDraft = draft
-      const sent = await deviceChat.sendMessage(submittedDraft)
-      if (sent) updateDraft((current) => current === submittedDraft ? '' : current)
+      const sent = await deviceChat.sendMessage(groupText)
+      if (sent) {
+        updateDraft((current) => current === submittedDraft ? '' : current)
+        attachedDocumentsRef.current = []
+        setAttachedDocuments([])
+        setAttachmentError(null)
+      }
       sendingRef.current = false
       setSending(false)
       return
@@ -1946,6 +1964,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
     if (images.length > 0) {
       event.preventDefault()
+      if (deviceChat) {
+        setAttachmentError('群聊暂不支持图片跨设备传输。')
+        return
+      }
       void attachImages(images)
       const labels = embeddedImages.map((image) => `[图片：${image.name}]`).join('\n\n')
       const text = labels && pastedText === labels
@@ -2150,7 +2172,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             if (inputIsComposing.current && event.key === 'Escape') event.stopPropagation()
           }}
           onKeyDown={handleInputKey}
-          onPaste={deviceChat ? undefined : handlePaste}
+          onPaste={handlePaste}
           onFocus={requestComposerKeyboard}
           onPointerDown={(event) => {
             if (document.activeElement === event.currentTarget) {
@@ -2167,7 +2189,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <div className="composer-footer-start">
           {!deviceChat ? <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button> : null}
           <div className="composer-preferences">
-            {deviceChat ? <label className="device-chat-recipient"><span>发送给</span><select value={deviceChat.targetId} onChange={(event) => deviceChat.setTargetId(event.currentTarget.value)}><option value="">所有人（只同步）</option>{deviceChat.state?.members.map((member) => <option key={member.id} value={member.id}>@{member.name}（运行本机 Codex）</option>)}</select></label> : showCodexPreferences ? <>
+            {deviceChat ? <>
+              <label className="device-chat-recipient"><span>发送给</span><select value={deviceChat.targetId} onChange={(event) => deviceChat.setTargetId(event.currentTarget.value)}><option value="">所有人（只同步）</option>{deviceChat.state?.members.map((member) => <option key={member.id} value={member.id}>@{member.name}（运行该设备 Codex）</option>)}</select></label>
+              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="目标默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
+              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="目标默认思考" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
+              {deviceChat.targetId === deviceChat.state?.node_id && deviceChat.targetId
+                ? <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(value) => onApprovalPolicyChange(value as CodexApprovalPolicy)} />
+                : <span className="composer-hint" title="远端设备的授权设置由其本机控制">授权由目标设备控制</span>}
+            </> : showCodexPreferences ? <>
               <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
               <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
               <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
@@ -2180,10 +2209,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </div>
         </div>
         <div className="composer-actions">
-          {!deviceChat ? <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
+          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : deviceChat ? '附加文本或源码文件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
-            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
-          </span> : null}
+            <input className="image-input" type="file" accept={attachmentAcceptForLayout(deviceChat ? false : mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={deviceChat ? '附加文本或源码文件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
+          </span>
           {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
@@ -2208,6 +2237,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
 interface WorkspaceExplorerProps {
   token: string
+  eyebrow?: string
   theme: AppTheme
   themePreferences: ThemePreferences
   engine: ChatEngine
@@ -2369,7 +2399,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : 5
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -3154,7 +3184,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themeP
   const contextMenuMissingDraftPaths = contextMenu
     ? workspacePathsMissingFromDraft(draft, contextMenu.paths.map((path) => workspaceAbsolutePath(browsingRoot, path)))
     : []
-  const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && threadId)
+  const contextMenuCanBind = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && canBindThreadWorkspace)
   const contextMenuCanOpenTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && !contextMenu.root && contextMenu.paths.length === 1)
   const contextMenuCanRunInTerminal = Boolean(contextMenu && contextMenu.entry.kind === 'file' && contextMenu.paths.length === 1 && isRunnableScriptPath(contextMenu.entry.path))
   const contextMenuCanCreate = contextMenu?.entry.kind === 'directory'
@@ -3169,7 +3199,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themeP
     <>
       <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <header className="workspace-explorer__header">
-          <div><span className="workspace-explorer__eyebrow">当前窗口</span><strong>文件</strong></div>
+          <div><span className="workspace-explorer__eyebrow">{eyebrow}</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
             <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
             <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
@@ -3753,6 +3783,7 @@ function RemoteChatPane({
           >
             <EngineBrandIcon engine={targetEngine} />
           </button>
+          </> : null}
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
             type="button"
@@ -3775,13 +3806,12 @@ function RemoteChatPane({
           </button>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
-          </> : null}
         </div>
       </header>
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
         <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {deviceChat ? (deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => message.kind === 'status'
+          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => message.kind === 'status'
             ? <div className="device-chat-status" key={message.id}>{message.text}</div>
             : <MessageBubble
                 key={message.id}
@@ -3796,7 +3826,17 @@ function RemoteChatPane({
                 onCopy={onCopy}
                 onOpenFile={openChangedFilePreview}
                 onOpenImage={openViewedImagePreview}
-              />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>) : <>
+              />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
+          {deviceChat.approval ? <div className="approval-card" role="alert">
+            <div className="approval-card__heading"><AlertTriangle size={17} /><strong>本机群聊 Codex 需要你的批准</strong></div>
+            <p>{typeof deviceChat.approval.params.reason === 'string' ? deviceChat.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
+            {typeof deviceChat.approval.params.command === 'string' ? <code>{deviceChat.approval.params.command}</code> : null}
+            {typeof deviceChat.approval.params.cwd === 'string' ? <small>目录：{deviceChat.approval.params.cwd}</small> : null}
+            <div className="approval-card__actions">
+              <button type="button" onClick={() => deviceChat.respondToApproval('decline')}><X size={14} />拒绝</button>
+              <button className="approval-card__accept" type="button" onClick={() => deviceChat.respondToApproval('accept')}><Check size={14} />允许一次</button>
+            </div>
+          </div> : null}</> : <>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
@@ -3886,8 +3926,8 @@ function RemoteChatPane({
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
-      {!deviceChat && terminalOpen ? (
-        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
+      {terminalOpen ? (
+        <TerminalRecoveryBoundary key={deviceChat ? deviceChat.state?.agent_thread_id ?? 'device-chat' : remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
           <Suspense fallback={(
             <ChatOverlayPanel
               ariaLabel="本机终端"
@@ -3903,9 +3943,9 @@ function RemoteChatPane({
             <TerminalDialog
               key={terminalSessionId}
               token={token}
-              engine={remote.activeEngine}
-              threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
-              cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
+              engine={deviceChat ? 'codex' : remote.activeEngine}
+              threadId={terminalSessionIsolated ? undefined : deviceChat ? deviceChat.state?.agent_thread_id ?? undefined : remote.activeThread?.id}
+              cwd={terminalSessionCwd ?? (deviceChat ? deviceChat.state?.agent_thread_cwd : remote.activeThread?.cwd) ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}
               onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
               runRequest={terminalRunRequest}
@@ -4532,12 +4572,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  const deviceChatDraftScope = `device-chat-${deviceChat.state?.room?.id ?? 'setup'}`
   const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
     ? workspaceDraftSnapshot.draft
     : readComposerDraft(composerDraftScope)
+  const deviceChatWorkspaceDraft = workspaceDraftSnapshot?.scope === deviceChatDraftScope
+    ? workspaceDraftSnapshot.draft
+    : readComposerDraft(deviceChatDraftScope)
   const syncWorkspaceDraft = useCallback((draft: string) => {
     setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
   }, [composerDraftScope])
+  const syncDeviceChatWorkspaceDraft = useCallback((draft: string) => {
+    setWorkspaceDraftSnapshot({ scope: deviceChatDraftScope, draft })
+  }, [deviceChatDraftScope])
   const savedComposerPreferences = useMemo(() => activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences, [activeThreadId, defaultComposerPreferences, threadComposerPreferences])
@@ -5208,6 +5255,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [activeContinuation, canContinue, isClaudeCodeThread, sendComposerMessage, updateContinuation])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
+  const deviceChatThread = remote0.threads.find((thread) => thread.id === deviceChat.state?.agent_thread_id)
+  const deviceChatWorkspaceCwd = deviceChat.state?.agent_thread_cwd || deviceChatThread?.cwd || remote0.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
@@ -5328,6 +5377,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const id = modelIdOf(model)
     return id ? [{ value: id, label: modelLabelOf(model) }] : []
   }), [availableModels])
+  const deviceChatModelOptions = useMemo<ComposerMenuOption[]>(() => [
+    { value: '', label: '目标设备默认模型' }, ...modelOptions,
+  ], [modelOptions])
   const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
@@ -5347,6 +5399,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     return byModel
   }, [availableModels])
+  const deviceChatReasoningOptions = useMemo<ComposerMenuOption[]>(() => [
+    { value: '', label: '目标设备默认思考' },
+    ...(reasoningOptionsByModel[deviceChat.model]?.options ?? []),
+  ], [deviceChat.model, reasoningOptionsByModel])
   const sidebarThreads = useMemo(() => [...remote0.threads]
     .sort((left, right) => {
       const leftPinned = pinnedThreadIds.has(left.id)
@@ -5648,10 +5704,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <MessageComposer
               deviceChat={deviceChatMode ? deviceChat : undefined}
               token={token}
-              key={deviceChatMode ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : composerDraftScope}
+              key={deviceChatMode ? deviceChatDraftScope : composerDraftScope}
               ref={composerHandle}
-              draftScope={deviceChatMode ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : composerDraftScope}
-              onDraftChange={deviceChatMode ? () => undefined : syncWorkspaceDraft}
+              draftScope={deviceChatMode ? deviceChatDraftScope : composerDraftScope}
+              onDraftChange={deviceChatMode ? syncDeviceChatWorkspaceDraft : syncWorkspaceDraft}
               composerHeightMemory={composerHeightMemory}
               connection={deviceChatMode ? 'connected' : activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
               isRunning={!deviceChatMode && activeRemote.isRunning}
@@ -5665,22 +5721,22 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               isInterrupting={!deviceChatMode && activeRemote.isInterrupting}
               writerConflict={!deviceChatMode && activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
-              selectedModel={selectedModel}
-              selectedEffort={selectedEffort}
-              selectedApprovalPolicy={selectedApprovalPolicy}
+              selectedModel={deviceChatMode ? deviceChat.model : selectedModel}
+              selectedEffort={deviceChatMode ? deviceChat.effort : selectedEffort}
+              selectedApprovalPolicy={deviceChatMode ? deviceChat.approvalPolicy : selectedApprovalPolicy}
               selectedClaudePermissionMode={selectedClaudePermissionMode}
-              temporaryPreferences={Boolean(temporaryPreferences)}
+              temporaryPreferences={!deviceChatMode && Boolean(temporaryPreferences)}
               onTemporaryPreferencesChange={changeTemporaryPreferences}
-              modelOptions={modelOptions}
-              reasoningOptions={reasoningOptions}
+              modelOptions={deviceChatMode ? deviceChatModelOptions : modelOptions}
+              reasoningOptions={deviceChatMode ? deviceChatReasoningOptions : reasoningOptions}
               reasoningOptionsByModel={reasoningOptionsByModel}
               authorizationOptions={approvalPolicyOptions}
               claudeModelOptions={claudeModelOptions}
               claudeEffortOptions={claudeEffortOptions}
               claudePermissionModeOptions={claudePermissionModeOptions}
-              onModelChange={changeModel}
-              onEffortChange={changeEffort}
-              onApprovalPolicyChange={changeApprovalPolicy}
+              onModelChange={deviceChatMode ? (model) => { deviceChat.setModel(model); deviceChat.setEffort('') } : changeModel}
+              onEffortChange={deviceChatMode ? deviceChat.setEffort : changeEffort}
+              onApprovalPolicyChange={deviceChatMode ? deviceChat.setApprovalPolicy : changeApprovalPolicy}
               onClaudePermissionModeChange={changeClaudePermissionMode}
               approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
@@ -5701,7 +5757,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               createThreadTitle={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}
             />
           </section>
-          {!deviceChatMode ? <>
           <div
             className="workspace-resize-handle"
             role="separator"
@@ -5741,13 +5796,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
           <WorkspaceExplorer
             token={token}
+            eyebrow={deviceChatMode ? '本机设备' : '当前窗口'}
             theme={themePreferences.theme}
             themePreferences={themePreferences}
-            engine={activeRemote.activeEngine}
-            cwd={activeWorkspaceCwd}
-            threadId={activeRemote.activeThread?.id}
-            canBindThreadWorkspace={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
+            engine={deviceChatMode ? 'codex' : activeRemote.activeEngine}
+            cwd={deviceChatMode ? deviceChatWorkspaceCwd : activeWorkspaceCwd}
+            threadId={deviceChatMode ? deviceChat.state?.agent_thread_id ?? undefined : activeRemote.activeThread?.id}
+            canBindThreadWorkspace={deviceChatMode ? Boolean(deviceChat.state?.room && deviceChat.state.connected && !deviceChat.busy) : activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
             onBindDirectory={async (cwd) => {
+              if (deviceChatMode) {
+                const bound = await deviceChat.bindWorkspace(cwd)
+                if (bound) showPaneNotice('本机群聊聊天已绑定；下一轮使用此目录')
+                return bound
+              }
               const threadId = activeRemote.activeThread?.id
               if (!threadId) return false
               await activeRemote.bindThreadWorkspace(threadId, cwd)
@@ -5757,8 +5818,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             previewRequest={workspacePreviewRequest}
             previewContainerRef={paneGrid}
             onPreviewStateChange={handleWorkspacePreviewStateChange}
-            draft={activeWorkspaceDraft}
-            onInsertPath={insertWorkspacePath}
+            draft={deviceChatMode ? deviceChatWorkspaceDraft : activeWorkspaceDraft}
+            onInsertPath={(path, focus) => {
+              if (deviceChatMode && deviceChat.targetId && deviceChat.targetId !== deviceChat.state?.node_id) {
+                showPaneNotice('这是本机路径，远端设备无法直接读取；请附加文件内容或在目标设备打开文件树。')
+              }
+              insertWorkspacePath(path, focus)
+            }}
             onAddToTerminal={(path) => {
               workspaceTerminalRequestSequence.current += 1
               setWorkspaceTerminalRequest({ id: workspaceTerminalRequestSequence.current, paneIndex: selectedPaneIndex, path, action: 'directory' })
@@ -5776,7 +5842,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             onCloseMobile={() => setWorkspaceOpen(false)}
             panelRef={workspacePanel}
           />
-          </> : null}
         </>
       )}
     </div>
@@ -6686,7 +6751,6 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)
   const deviceDelivery = deviceChatMessage?.delivery_state === 'pending' ? '等待发送' : deviceChatMessage?.delivery_state === 'syncing' ? '等待同步' : deviceChatMessage?.delivery_state === 'error' ? '发送失败' : null
-
   return (
     <article className={`chat-message chat-message--${message.role}${deviceChatMessage ? ' chat-message--device' : ''}${deviceChatMessage?.kind === 'error' ? ' chat-message--device-error' : ''}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
