@@ -1806,14 +1806,16 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .remote-error button:hover:not(:disabled) { background: #f4dada; color: #000; }
 .remote-shell--theme-light .composer-image .composer-image__remove { border-color: #d0d0d0; background: #f5f5f5; color: #000; }
 
-.chat-image-dialog { width: min(960px, calc(100vw - 24px)); max-width: none; max-height: calc(100dvh - 24px); padding: 0; overflow: hidden; border: 1px solid #444b5a; border-radius: 12px; background: #171a20; color: #f0f2f6; box-shadow: 0 24px 70px rgba(0, 0, 0, .6); }
+.chat-image-dialog { width: max-content; min-width: 80px; max-width: calc(100vw - 24px); max-height: calc(100dvh - 24px); padding: 0; overflow: hidden; border: 1px solid #444b5a; border-radius: 12px; background: #171a20; color: #f0f2f6; box-shadow: 0 24px 70px rgba(0, 0, 0, .6); }
 .chat-image-dialog::backdrop { background: rgba(0, 0, 0, .78); }
-.chat-image-dialog__header { display: flex; min-height: 46px; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px 6px 16px; border-bottom: 1px solid #343a46; }
-.chat-image-dialog__header > span { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+/* The filename must not contribute to the image dialog's intrinsic width. */
+.chat-image-dialog__header { display: flex; height: 48px; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px 6px 16px; border-bottom: 1px solid #343a46; contain: inline-size; }
+.chat-image-dialog__header > span { min-width: 0; flex: 1; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .chat-image-dialog__header button { display: grid; width: 34px; height: 34px; flex: 0 0 34px; place-items: center; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #f0f2f6; cursor: pointer; }
 .chat-image-dialog__header button:hover { background: #303744; }
-.chat-image-dialog__body { display: grid; max-height: calc(100dvh - 72px); place-items: center; overflow: auto; padding: 10px; }
-.chat-image-dialog__body img { display: block; max-width: 100%; max-height: calc(100dvh - 92px); object-fit: contain; }
+/* Reserve 24px viewport margin, 2px border, 48px header and 20px image padding. */
+.chat-image-dialog__body { display: grid; max-height: calc(100dvh - 74px); place-items: center; overflow: auto; padding: 10px; }
+.chat-image-dialog__body img { display: block; width: auto; height: auto; max-width: calc(100vw - 46px); max-height: calc(100dvh - 94px); object-fit: contain; }
 .remote-shell--theme-light .composer-document { border-color: #dedede; background: #f5f5f5; color: #000; }
 .remote-shell--theme-light .composer-document > button:hover { background: #e7e7e7; color: #000; }
 .remote-shell--theme-light .composer-edit-cancel:hover:not(:disabled) { border-color: #c8c8c8; background: #ededed; color: #000; }
