@@ -674,13 +674,17 @@ export const codexRemoteClient = {
   unpair(token: string) {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
   },
-  deviceChatState(token: string, afterCursor?: number, afterSequence?: number) {
+  deviceChatState(token: string, afterCursor?: number, afterSequence?: number, waitMs = 0, signal?: AbortSignal) {
     const parameters = new URLSearchParams()
     if (afterCursor !== undefined) parameters.set('after_cursor', String(afterCursor))
     if (afterSequence !== undefined) parameters.set('after_sequence', String(afterSequence))
+    if (waitMs > 0) parameters.set('wait_ms', String(waitMs))
     const encodedParameters = parameters.toString()
     const query = encodedParameters ? `?${encodedParameters}` : ''
-    return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, undefined, { timeoutMs: 8_000, networkRetries: 0 })
+    return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, signal ? { signal } : undefined, {
+      timeoutMs: waitMs > 0 ? waitMs + 10_000 : 8_000,
+      networkRetries: 0,
+    })
   },
   createDeviceChat(token: string, name: string) {
     return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/create', {

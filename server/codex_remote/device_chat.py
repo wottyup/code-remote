@@ -174,6 +174,8 @@ class DeviceChatManager:
         if stored_cursor > current_cursor:
             self._set_metadata("message_cursor", str(stored_cursor))
         self._connections: dict[str, asyncio.Queue[dict[str, Any]]] = {}
+        self._state_waiters: set[asyncio.Queue[None]] = set()
+        self._state_revision = 0
         self._client_task: asyncio.Task[None] | None = None
         self._outbox_task: asyncio.Task[None] | None = None
         self._agent_tasks: set[asyncio.Task[None]] = set()
@@ -206,6 +208,31 @@ class DeviceChatManager:
 
     def _save_config(self, config: dict[str, Any] | None) -> None:
         self._set_metadata("room_config", json.dumps(config, ensure_ascii=False, separators=(",", ":")) if config else "")
+
+    async def wait_for_state_update(self, after_cursor: int, timeout: float) -> None:
+        current_cursor = int(self._get_metadata("message_cursor") or "0")
+        if current_cursor > after_cursor:
+            return
+        revision = self._state_revision
+        waiter: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self._state_waiters.add(waiter)
+        if int(self._get_metadata("message_cursor") or "0") > after_cursor or revision != self._state_revision:
+            waiter.put_nowait(None)
+        try:
+            await asyncio.wait_for(waiter.get(), timeout=max(0.0, timeout))
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self._state_waiters.discard(waiter)
+
+    def _notify_state_waiters(self) -> None:
+        self._state_revision += 1
+        for waiter in tuple(self._state_waiters):
+            if waiter.empty():
+                waiter.put_nowait(None)
+
+    def notify_state_changed(self) -> None:
+        self._notify_state_waiters()
 
     def _schedule_pending_jobs(self) -> None:
         self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'pending' WHERE state = 'running'")
@@ -277,6 +304,7 @@ class DeviceChatManager:
             config["room"]["host_name"] = cleaned_name
             self._save_config(config)
             self.connection.execute("UPDATE device_chat_members SET name = ?, online = 1 WHERE id = ?", (cleaned_name, self.node_id))
+        self._notify_state_waiters()
         code = "".join(secrets.choice(INVITE_ALPHABET) for _ in range(12))
         self.connection.execute("DELETE FROM device_chat_invites WHERE expires_at < ? OR consumed = 1", (time.time(),))
         self.connection.execute(
@@ -305,6 +333,7 @@ class DeviceChatManager:
         self.connection.execute("DELETE FROM device_chat_messages")
         self.connection.execute("DELETE FROM device_chat_outbox")
         self._start_peer_connection()
+        self._notify_state_waiters()
         if not self._outbox_task or self._outbox_task.done():
             self._outbox_task = asyncio.create_task(self._outbox_flush_loop())
         return self.state()
@@ -557,6 +586,7 @@ class DeviceChatManager:
                 "ON CONFLICT(room_id) DO UPDATE SET thread_id = excluded.thread_id, manual = 1, cwd = excluded.cwd",
                 (room_id, thread_id, selected_cwd if isinstance(selected_cwd, str) else None),
             )
+        self._notify_state_waiters()
         return self.state()
 
     async def ensure_local_thread(self) -> str:
@@ -578,6 +608,7 @@ class DeviceChatManager:
             "INSERT INTO device_chat_threads(room_id, thread_id, cwd) VALUES (?, ?, ?) ON CONFLICT(room_id) DO NOTHING",
             (room_id, thread_id, str(self.codex.workspace)),
         )
+        self._notify_state_waiters()
         with suppress(CodexRuntimeError):
             await self.codex.set_thread_name(thread_id, f"设备群聊 · {room.get('name', '群聊')} · {name}")
         return self._thread_for_room(room_id) or thread_id
@@ -595,11 +626,16 @@ class DeviceChatManager:
         device_id, name = member.get("id"), member.get("name")
         if not isinstance(device_id, str) or not isinstance(name, str):
             return
+        next_online = int(bool(member.get("online")))
+        existing = self.connection.execute("SELECT name, online FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+        if existing and str(existing["name"]) == name and int(existing["online"]) == next_online:
+            return
         self.connection.execute(
             "INSERT INTO device_chat_members(id, name, online, joined_at) VALUES (?, ?, ?, ?) "
             "ON CONFLICT(id) DO UPDATE SET name = excluded.name, online = excluded.online",
-            (device_id, name, int(bool(member.get("online"))), _now()),
+            (device_id, name, next_online, _now()),
         )
+        self._notify_state_waiters()
 
     def _set_member_online(self, device_id: str, online: bool) -> None:
         self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
@@ -608,6 +644,7 @@ class DeviceChatManager:
     def _broadcast(self, event: dict[str, Any]) -> None:
         for queue in tuple(self._connections.values()):
             queue.put_nowait(event)
+        self._notify_state_waiters()
 
     def _messages(self, limit: int) -> list[dict[str, Any]]:
         rows = self.connection.execute(
@@ -1027,6 +1064,7 @@ class DeviceChatManager:
             "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, created_at = excluded.created_at, delivered = 0",
             (event["id"], serialized, _now()),
         )
+        self._notify_state_waiters()
         return {**event, "sequence": -1, "delivery_state": "pending"}
 
     async def _outbox_flush_loop(self) -> None:
@@ -1043,11 +1081,13 @@ class DeviceChatManager:
                     if response.get("id") != row["id"]:
                         break
                     self.connection.execute("UPDATE device_chat_outbox SET delivered = 1 WHERE id = ?", (row["id"],))
+                    self._notify_state_waiters()
                 except asyncio.CancelledError:
                     raise
                 except DeviceChatHttpError as error:
                     if 400 <= error.status_code < 500 and error.status_code not in {408, 429}:
                         self.connection.execute("UPDATE device_chat_outbox SET delivered = 2 WHERE id = ?", (row["id"],))
+                        self._notify_state_waiters()
                         continue
                     logger.debug("Device chat outbox is waiting for the host: %s", error)
                     break
@@ -1141,6 +1181,7 @@ class DeviceChatManager:
             if config and isinstance(room, dict):
                 config["room"] = room
                 self._save_config(config)
+                self._notify_state_waiters()
             if isinstance(members, list):
                 for member in members:
                     if isinstance(member, dict):
@@ -1160,6 +1201,8 @@ class DeviceChatManager:
             self.connection.execute("DELETE FROM device_chat_members WHERE id = ?", (device_id,))
             if device_id == self.node_id:
                 self._clear_room()
+            else:
+                self._notify_state_waiters()
         elif kind == "room_closed":
             self._clear_room()
 
@@ -1170,11 +1213,15 @@ class DeviceChatManager:
             cursor=int(event.get("cursor", 0)) or None,
         )
         self.connection.execute("DELETE FROM device_chat_outbox WHERE id = ?", (event["id"],))
+        self._notify_state_waiters()
         self._schedule_agent(saved)
 
     def _set_local_online(self, device_id: str, online: bool) -> None:
         if self._member_exists(device_id):
-            self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+            row = self.connection.execute("SELECT online FROM device_chat_members WHERE id = ?", (device_id,)).fetchone()
+            if row and bool(row["online"]) != online:
+                self.connection.execute("UPDATE device_chat_members SET online = ? WHERE id = ?", (int(online), device_id))
+                self._notify_state_waiters()
 
     def _clear_room(self) -> None:
         self._save_config(None)
@@ -1185,3 +1232,4 @@ class DeviceChatManager:
         self.connection.execute("DELETE FROM device_chat_agent_jobs")
         self.connection.execute("DELETE FROM device_chat_threads")
         self._peer_connected = False
+        self._notify_state_waiters()

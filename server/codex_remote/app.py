@@ -1682,7 +1682,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.71.2-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.71.3-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1768,12 +1768,18 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return {"unpaired": True}
 
     @app.get("/api/v1/device-chat/state")
-    async def device_chat_state(after_cursor: int | None = None, after_sequence: int | None = None) -> dict[str, Any]:
+    async def device_chat_state(
+        after_cursor: int | None = None,
+        after_sequence: int | None = None,
+        wait_ms: int = 0,
+    ) -> dict[str, Any]:
         # A sequence tracks message order, while a cursor also changes when a
         # streaming message body is updated. Older clients only send sequences,
         # so give them a full snapshot instead of silently dropping revisions.
         if after_cursor is None and after_sequence is not None:
             return device_chat.state()
+        if after_cursor is not None and wait_ms > 0:
+            await device_chat.wait_for_state_update(max(0, after_cursor), min(wait_ms, 20_000) / 1000)
         return device_chat.state(after_cursor)
 
     @app.post("/api/v1/device-chat/create")
@@ -1817,6 +1823,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         try:
             thread_id = await device_chat.ensure_local_thread()
             shared_state.set_thread_workspace(thread_id, str(cwd))
+            device_chat.notify_state_changed()
             await app_server.notify_threads_changed()
             return device_chat.state()
         except DeviceChatError as error:
