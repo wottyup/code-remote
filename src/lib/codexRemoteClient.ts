@@ -129,6 +129,7 @@ export interface DeviceChatMessage {
   approval_policy?: CodexApprovalPolicy | null
   created_at: string
   delivery_state?: 'pending' | 'syncing' | 'error'
+  activity?: { state: 'running' | 'completed' | 'failed'; items: Record<string, unknown>[] }
 }
 
 export interface DeviceChatState {

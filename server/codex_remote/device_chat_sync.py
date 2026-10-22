@@ -10,6 +10,7 @@ import logging
 import time
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
+from .device_chat_activity import project_activity
 
 if TYPE_CHECKING:
     from .device_chat import DeviceChatManager
@@ -180,10 +181,16 @@ class DeviceChatThreadSync:
         else:
             since = float(binding["since"])
         self._snapshots = {t["id"]: t for t in turns if isinstance(t.get("id"), str)}
+        workspace_changes = thread.get("codexRemoteWorkspaceChanges") or {}
         for turn in turns:
             if self.binding() != key:
                 return
             turn_id = turn.get("id")
+            if isinstance(workspace_changes, dict) and isinstance(workspace_changes.get(turn_id), list):
+                turn = {**turn, "items": [*turn.get("items", []), {
+                    "id": f"workspace-change-{turn_id}", "type": "fileChange", "status": "completed",
+                    "changes": workspace_changes[turn_id],
+                }]}
             if turn_id in self._live:
                 if turn.get("status") not in FINISHED:
                     continue  # A persisted snapshot can lag live token deltas.
@@ -208,7 +215,7 @@ class DeviceChatThreadSync:
         if self.manager._active_agent_thread_id == key[1]:
             return
         method = notification.get("method")
-        if method not in {"turn/started", "turn/completed", "item/started", "item/completed", "item/agentMessage/delta"}:
+        if method not in {"turn/started", "turn/completed", "item/started", "item/completed", "item/agentMessage/delta", "item/fileChange/patchUpdated", "turn/workspaceChanges"}:
             return
         snapshot = params.get("turn") or {}
         turn_id = params.get("turnId") or snapshot.get("id")
@@ -218,7 +225,7 @@ class DeviceChatThreadSync:
             "id": turn_id, "status": "inProgress", "items": [], "startedAt": datetime.now(timezone.utc).isoformat(),
         })))
         self._eligible.add(turn_id)
-        if method.startswith("turn/"):
+        if method in {"turn/started", "turn/completed"}:
             turn["status"] = snapshot.get("status", "completed" if method == "turn/completed" else "inProgress")
             for item in snapshot.get("items", []):
                 self._put_item(turn, item)
@@ -230,11 +237,15 @@ class DeviceChatThreadSync:
                 turn["items"].append(item)
             item["text"] += params.get("delta", "")
         else:
-            self._put_item(turn, params.get("item"))
+            if method in {"item/fileChange/patchUpdated", "turn/workspaceChanges"}:
+                item_id = params.get("itemId") if method == "item/fileChange/patchUpdated" else f"workspace-change-{turn_id}"
+                self._put_item(turn, {"id": item_id, "type": "fileChange", "status": "inProgress" if method == "item/fileChange/patchUpdated" else "completed", "changes": params.get("changes", [])})
+            else:
+                self._put_item(turn, params.get("item"))
 
     @staticmethod
     def _put_item(turn: dict[str, Any], item: Any) -> None:
-        if not isinstance(item, dict) or item.get("type") not in {"userMessage", "agentMessage"}:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             return
         for index, previous in enumerate(turn["items"]):
             if previous.get("id") == item.get("id") or (previous.get("id") == "anonymous" and item.get("type") == "agentMessage"):
@@ -275,19 +286,22 @@ class DeviceChatThreadSync:
         if row["finished"] and not finished:
             return
         assistant = _text(turn, "agentMessage")
+        activity = project_activity(turn.get("items", []), "completed" if finished else "running")
         target = row["handoff_target"]
         if finished and not row["finished"] and turn.get("status") == "completed" and turn_id in self._eligible:
             member = _handoff_target(assistant, self.manager._members(), self.manager.node_id)
             target = member["id"] if member else None
         digest_id = hashlib.sha256(json.dumps([self.manager.node_id, *key, turn_id]).encode()).hexdigest()[:40]
         for kind, text in (("user", user), ("assistant", assistant)):
-            if not text:
+            if not text and (kind == "user" or (not activity["items"] and finished and not row["assistant_digest"])):
                 continue
             event = {"id": f"thread:{digest_id}:{kind}", "kind": kind, "sender_id": self.manager.node_id,
                      "target_id": target if kind == "assistant" else None, "text": text,
                      "created_at": datetime.fromtimestamp(_timestamp(turn.get("startedAt")), timezone.utc).isoformat()}
             if kind == "assistant" and target:
                 event.update(handoff_root_id=event["id"], handoff_depth=1)
+            if kind == "assistant":
+                event["activity"] = activity
             digest = hashlib.sha256(json.dumps(event, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             if row[f"{kind}_digest"] == digest:
                 continue

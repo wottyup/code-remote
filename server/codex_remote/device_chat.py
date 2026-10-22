@@ -24,6 +24,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 from websockets.asyncio.client import connect as websocket_connect
 
 from .codex_app_server import CodexAppServer, CodexNoActiveTurnError, CodexRuntimeError
+from .device_chat_activity import project_activity, upsert_activity_item
 from .device_chat_sync import DeviceChatThreadSync
 
 logger = logging.getLogger(__name__)
@@ -499,6 +500,13 @@ class DeviceChatManager:
                 raise DeviceChatError("设备接力信息无效。")
             event["handoff_root_id"] = root_id
             event["handoff_depth"] = depth
+        if kind == "assistant" and "activity" in raw_event:
+            activity = raw_event["activity"]
+            if not isinstance(activity, dict) or not isinstance(activity.get("items"), list):
+                raise DeviceChatError("设备活动数据无效。")
+            if len(json.dumps(activity, ensure_ascii=False).encode("utf-8")) > 65_000:
+                raise DeviceChatError("设备活动数据过长。")
+            event["activity"] = project_activity(activity["items"], activity.get("state", "running"))
         if kind in {"assistant", "status", "error"} and target_id is not None:
             target = self.connection.execute("SELECT name FROM device_chat_members WHERE id = ?", (target_id,)).fetchone()
             event["target_name"] = str(target["name"]) if target else None
@@ -839,6 +847,7 @@ class DeviceChatManager:
         target_id: str | None = None,
         handoff_root_id: str | None = None,
         handoff_depth: int | None = None,
+        activity: dict[str, Any] | None = None,
     ) -> None:
         config = self._config()
         if not config:
@@ -850,6 +859,8 @@ class DeviceChatManager:
         if handoff_root_id is not None and handoff_depth is not None:
             event["handoff_root_id"] = handoff_root_id
             event["handoff_depth"] = handoff_depth
+        if kind == "assistant" and activity is not None:
+            event["activity"] = activity
         await self._publish_local_event(event)
 
     async def _publish_local_event(self, event: dict[str, Any]) -> None:
@@ -875,6 +886,7 @@ class DeviceChatManager:
         room = config["room"]
         name = str(config.get("name", "本机 Codex"))
         reply = ""
+        activity_items: list[dict[str, Any]] = []
         turn_id: str | None = None
         thread_id: str | None = None
 
@@ -891,6 +903,7 @@ class DeviceChatManager:
             target_id: str | None = None,
             handoff_root_id: str | None = None,
             handoff_depth: int | None = None,
+            activity: dict[str, Any] | None = None,
         ) -> None:
             await self._publish_local_agent_event(
                 kind,
@@ -899,6 +912,7 @@ class DeviceChatManager:
                 target_id=target_id,
                 handoff_root_id=handoff_root_id,
                 handoff_depth=handoff_depth,
+                activity=activity,
             )
 
         try:
@@ -928,14 +942,19 @@ class DeviceChatManager:
                     self.thread_sync.mark_group_turn(str(room["id"]), thread_id, turn_id)
                 reply_parts: dict[str | None, str] = {}
                 last_published_reply = ""
+                last_published_activity = ""
                 last_publish = time.monotonic() - AGENT_REPLY_FLUSH_INTERVAL_SECONDS
+                await publish("assistant", reply_id, "", activity=project_activity([]))
 
                 async def flush_reply() -> None:
-                    nonlocal last_publish, last_published_reply
-                    if reply and reply != last_published_reply:
+                    nonlocal last_publish, last_published_reply, last_published_activity
+                    snapshot = project_activity(activity_items)
+                    activity_key = json.dumps(snapshot, ensure_ascii=False, sort_keys=True)
+                    if reply != last_published_reply or activity_key != last_published_activity:
                         # Only the final turn publication may carry a handoff.
-                        await publish("assistant", reply_id, reply)
+                        await publish("assistant", reply_id, reply, activity=snapshot)
                         last_published_reply = reply
+                        last_published_activity = activity_key
                         last_publish = time.monotonic()
 
                 def complete_reply_item(item: Any) -> None:
@@ -952,10 +971,12 @@ class DeviceChatManager:
                         reply_parts[item_id] = reply_parts.pop(None)
                     reply_parts[item_id] = text
                     reply = "\n\n".join(part for part in reply_parts.values() if part)
+                    if item_id:
+                        upsert_activity_item(activity_items, item)
 
                 while True:
                     timeout = 1800.0
-                    if reply != last_published_reply:
+                    if reply != last_published_reply or (activity_items and json.dumps(project_activity(activity_items), ensure_ascii=False, sort_keys=True) != last_published_activity):
                         timeout = last_publish + AGENT_REPLY_FLUSH_INTERVAL_SECONDS - time.monotonic()
                         if timeout <= 0:
                             await flush_reply()
@@ -963,7 +984,7 @@ class DeviceChatManager:
                     try:
                         notification = await asyncio.wait_for(queue.get(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        if reply != last_published_reply:
+                        if reply != last_published_reply or (activity_items and json.dumps(project_activity(activity_items), ensure_ascii=False, sort_keys=True) != last_published_activity):
                             # A short burst can end before the throttle window.
                             # Flush its tail even while Codex is busy with tools.
                             await flush_reply()
@@ -988,9 +1009,17 @@ class DeviceChatManager:
                         item_id = params.get("itemId") if isinstance(params.get("itemId"), str) else None
                         reply_parts[item_id] = reply_parts.get(item_id, "") + params["delta"]
                         reply = "\n\n".join(part for part in reply_parts.values() if part)
-                    elif method == "item/completed":
-                        complete_reply_item(params.get("item"))
-                        await flush_reply()
+                        if item_id:
+                            upsert_activity_item(activity_items, {"id": item_id, "type": "agentMessage", "text": reply_parts[item_id]})
+                    elif method in {"item/started", "item/completed"}:
+                        upsert_activity_item(activity_items, params.get("item"))
+                        if method == "item/completed":
+                            complete_reply_item(params.get("item"))
+                            await flush_reply()
+                    elif method in {"item/fileChange/patchUpdated", "turn/workspaceChanges"}:
+                        change_id = params.get("itemId") if method == "item/fileChange/patchUpdated" else f"workspace-change-{turn_id}"
+                        if isinstance(change_id, str):
+                            upsert_activity_item(activity_items, {"id": change_id, "type": "fileChange", "status": "inProgress" if method == "item/fileChange/patchUpdated" else "completed", "changes": params.get("changes", [])})
                     elif method == "turn/completed":
                         status_value = turn.get("status") if isinstance(turn, dict) else None
                         if status_value == "failed":
@@ -1001,6 +1030,7 @@ class DeviceChatManager:
                             ordered_parts: dict[str | None, str] = {}
                             for item in items:
                                 complete_reply_item(item)
+                                upsert_activity_item(activity_items, item)
                                 item_id = item.get("id") if isinstance(item, dict) else None
                                 if isinstance(item_id, str) and item_id in reply_parts:
                                     ordered_parts[item_id] = reply_parts[item_id]
@@ -1026,7 +1056,10 @@ class DeviceChatManager:
                     target_id=handoff["id"] if handoff_id else None,
                     handoff_root_id=handoff_id,
                     handoff_depth=next_depth if handoff_id else None,
+                    activity=project_activity(activity_items, "completed"),
                 )
+            else:
+                await publish("assistant", reply_id, "处理完成，但没有文字回复。", activity=project_activity(activity_items, "completed"))
             await publish("status", status_id, f"{name} 已处理完成。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'complete', updated_at = ? WHERE message_id = ?", (_now(), message_id))
         except asyncio.CancelledError:
@@ -1035,7 +1068,7 @@ class DeviceChatManager:
         except Exception as error:
             logger.info("Device chat Codex turn failed for %s: %s", message_id, error)
             with suppress(Exception):
-                await publish("error", reply_id, f"{name} 执行失败：{str(error)[:600]}")
+                await publish("assistant", reply_id, f"{name} 执行失败：{str(error)[:600]}", activity=project_activity(activity_items, "failed"))
                 await publish("status", status_id, f"{name} 已停止处理。")
             self.connection.execute("UPDATE device_chat_agent_jobs SET state = 'failed', updated_at = ? WHERE message_id = ?", (_now(), message_id))
         finally:

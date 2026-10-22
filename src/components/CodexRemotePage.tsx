@@ -47,7 +47,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { deviceChatActivityFromItems, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
@@ -3840,24 +3840,33 @@ function RemoteChatPane({
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
         <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => message.kind === 'status'
-            ? <div className="device-chat-status" key={message.id}>{message.text}</div>
-            : <MessageBubble
+          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => {
+            if (message.kind === 'status') return <div className="device-chat-status" key={message.id}>{message.text}</div>
+            const activity = message.kind === 'assistant' && message.activity?.items
+              ? deviceChatActivityFromItems(message.activity.items) : null
+            // Room paths belong to the sending device. Keep operation text but
+            // do not offer a local file open action for another machine's path.
+            const displayOperations = activity?.operations.map((operation) => ({
+              ...operation, paths: [], imagePath: undefined,
+              steps: operation.steps?.map((step) => ({ ...step, path: undefined })),
+            })) ?? []
+            return <Fragment key={message.id}><MessageBubble
                 key={message.id}
-                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at }}
+                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at, streaming: message.activity?.state === 'running' }}
                 deviceChatMessage={message}
                 assistantName="Codex"
-                operations={[]}
+                operations={displayOperations}
                 fileChanges={[]}
-                activityTimeline={[]}
-                showOperations={false}
+                activityTimeline={activity?.timeline ?? []}
+                showOperations={message.kind === 'assistant'}
                 choiceEnabled={active && message.kind === 'assistant' && message.id === latestDeviceChatContentId}
                 onUseChoices={fillChoiceReply}
                 copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                 onCopy={onCopy}
                 onOpenFile={openChangedFilePreview}
                 onOpenImage={openViewedImagePreview}
-              />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
+              />{activity?.fileChanges.length ? <FileChangeCard changes={activity.fileChanges} readOnly onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}</Fragment>
+          }) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
           {deviceChat.approval ? <div className="approval-card" role="alert">
             <div className="approval-card__heading"><AlertTriangle size={17} /><strong>本机群聊 Codex 需要你的批准</strong></div>
             <p>{typeof deviceChat.approval.params.reason === 'string' ? deviceChat.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
@@ -6493,7 +6502,7 @@ function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
   }
 }
 
-const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void }) {
+const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile, readOnly = false }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void; readOnly?: boolean }) {
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const { files, additions, deletions } = summarizeFileChanges(changes)
@@ -6528,10 +6537,10 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
         {visibleFiles.map((item) => (
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
-              <button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
-              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
+              {readOnly ? <span className="file-change-card__path-readonly" title={item.path}>{item.path}</span> : <><button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button></>}
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
-              <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button>
+              {!readOnly ? <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button> : null}
             </div>
             {reviewing ? (
               item.diff
@@ -6846,6 +6855,7 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {deviceChatMessage?.kind === 'assistant' && deviceChatMessage.activity?.state === 'running' ? <div className="running-indicator" role="status"><div className="running-indicator__row"><OperationActivityLine className="running-indicator__activity" operation={operations.filter((operation) => operation.status === 'running').at(-1) ?? null} activity={{ label: operations.length ? '正在处理' : '正在思考' }} iconSize={15} /></div></div> : null}
         {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={message.text} groups={choiceGroups} onUse={onUseChoices} /> : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (

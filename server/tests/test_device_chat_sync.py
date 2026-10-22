@@ -121,6 +121,23 @@ class DeviceChatBoundThreadSyncTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["id"], final["id"])
         self.assertEqual("win", final["target_id"])
 
+    async def test_bound_thread_activity_survives_history_and_live_updates(self):
+        self.codex.turns = [turn(reply="", status="inProgress")]
+        self.codex.turns[0]["items"].append({"id": "command", "type": "commandExecution", "command": "pnpm test", "status": "inProgress"})
+        await self.sync.sync_history()
+        first = self.messages("assistant")[0]
+        self.assertEqual("running", first["activity"]["state"])
+        self.assertIn("commandExecution", [item["type"] for item in first["activity"]["items"]])
+        self.notify("turn/workspaceChanges", changes=[{"path": "src/app.ts", "diff": "+fixed"}])
+        await self.sync.flush_live()
+        updated = self.messages("assistant")[0]
+        self.assertEqual(first["id"], updated["id"])
+        self.assertGreater(updated["cursor"], first["cursor"])
+        self.assertEqual("fileChange", updated["activity"]["items"][-1]["type"])
+        self.notify("turn/completed", turn={"id": "turn", "status": "completed"})
+        await self.sync.flush_live()
+        self.assertEqual("completed", self.messages("assistant")[0]["activity"]["state"])
+
     async def test_group_turns_and_unbound_thread_notifications_are_not_duplicated(self):
         self.sync.mark_group_turn("room", "thread", "group")
         self.codex.turns = [turn("group", prompt="无内部前缀的群消息"), turn("legacy", prompt=GROUP_PROMPT_PREFIX)]
@@ -214,8 +231,14 @@ class DeviceChatBoundThreadSyncTests(unittest.IsolatedAsyncioTestCase):
                 return saved
             self.manager._send_peer_http = send
             self.codex.turns = [turn(reply="详细日志" * 4000)]
+            self.codex.turns[0]["items"].extend([
+                {"id": "command", "type": "commandExecution", "command": "pnpm test", "status": "completed"},
+                {"id": "change", "type": "fileChange", "status": "completed", "changes": [{"path": "src/app.ts", "diff": "+fixed"}]},
+            ])
             await self.sync.sync_history()
             self.assertEqual("详细日志" * 4000, host._messages(10)[-1]["text"])
+            self.assertEqual(["commandExecution", "fileChange"], [item["type"] for item in host._messages(10)[-1]["activity"]["items"][-2:]])
+            self.assertEqual("src/app.ts", self.messages("assistant")[0]["activity"]["items"][-1]["changes"][0]["path"])
             self.assertEqual(2, len(self.messages()))
             self.assertEqual([], host.connection.execute("SELECT * FROM device_chat_agent_jobs").fetchall())
             self.assertEqual([], self.manager.connection.execute("SELECT * FROM device_chat_agent_jobs").fetchall())
