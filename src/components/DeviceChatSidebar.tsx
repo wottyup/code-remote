@@ -1,14 +1,17 @@
 import { Copy, LoaderCircle, MessageSquare, Plus, Users, X } from 'lucide-react'
-import type { DeviceChatMessage } from '../lib/codexRemoteClient'
 import type { DeviceChatController } from '../hooks/useDeviceChat'
-import './DeviceChatRoomPanel.css'
+import './DeviceChatSidebar.css'
 
-export function DeviceChatRoomPanel({ chat }: { chat: DeviceChatController }) {
-  const { state, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, leaveRoom, copyValue } = chat
+export function DeviceChatSidebar({ chat, onSelectRoom }: { chat: DeviceChatController; onSelectRoom: () => void }) {
+  const { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, busy, error, setError, copied, createRoom, createInvite, joinRoom, leaveRoom, copyValue } = chat
   const hostAddress = window.location.origin
-  return <aside className="device-chat-room-panel" aria-label="设备群聊房间管理">
+  return <div className="device-chat-sidebar" aria-label="设备群聊侧栏">
+    <div className="thread-list-heading"><span>群聊</span></div>
+    {state?.room ? <button className="thread-row thread-row--active device-chat-sidebar__room" type="button" aria-current="page" onClick={onSelectRoom}><span className="thread-row__icon"><Users size={16} /></span><span className="thread-row__copy"><strong>{state.room.name}</strong><span className="thread-row__meta"><small>{state.members.length} 台设备 · {state.connected || state.role === 'host' ? '已连接' : '重连中'}</small></span></span></button> : null}
+    <div className="device-chat-room-panel" aria-label="设备群聊房间管理">
+    <header className="device-chat-room-panel__header"><strong>{state?.room ? '成员与邀请' : '创建或加入群聊'}</strong></header>
     {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
-        {!state?.room ? (
+        {!state && loading ? <div className="device-chat-sidebar__loading" role="status"><LoaderCircle className="spin" size={15} />正在读取群聊…</div> : !state?.room ? (
           <div className="device-chat-setup">
             <label className="device-chat-field">
               <span>本机在群聊中的名称</span>
@@ -61,23 +64,6 @@ export function DeviceChatRoomPanel({ chat }: { chat: DeviceChatController }) {
               <button className="device-chat-leave" type="button" disabled={busy} onClick={() => void leaveRoom()}>{state.role === 'host' ? '解散房间' : '退出群聊'}</button>
           </div>
         )}
-  </aside>
-}
-
-function messageTime(value: string) {
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-export function DeviceChatMessageItem({ message }: { message: DeviceChatMessage }) {
-  if (message.kind === 'status') {
-    return <div className="device-chat-status" key={`${message.id}-${message.sequence}`}><span className="device-chat-status__pulse" />{message.text}</div>
-  }
-  const kind = message.kind === 'error' ? 'error' : message.kind
-  return (
-    <article className={`device-chat-message device-chat-message--${kind}`}>
-      <header><strong>{message.sender_name}</strong>{message.target_name ? <span>@{message.target_name}</span> : null}{message.delivery_state ? <span className={'device-chat-message__pending' + (message.delivery_state === 'error' ? ' device-chat-message__pending--error' : '')}>{message.delivery_state === 'pending' ? '等待发送' : message.delivery_state === 'error' ? '发送失败' : '等待同步'}</span> : null}<time>{messageTime(message.created_at)}</time></header>
-      <p>{message.text}</p>
-    </article>
-  )
+    </div>
+  </div>
 }

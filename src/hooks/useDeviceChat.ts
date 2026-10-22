@@ -17,6 +17,7 @@ function messageOrder(left: DeviceChatMessage, right: DeviceChatMessage) {
 
 export function useDeviceChat(token: string, enabled: boolean) {
   const [state, setState] = useState<DeviceChatState | null>(null)
+  const [loading, setLoading] = useState(true)
   const [deviceName, setDeviceName] = useState(defaultDeviceName)
   const [hostUrl, setHostUrl] = useState('')
   const [inviteCode, setInviteCode] = useState('')
@@ -47,6 +48,8 @@ export function useDeviceChat(token: string, enabled: boolean) {
       mergeState(next)
     } catch (reason) {
       if (showError) setError(reason instanceof Error ? reason.message : '无法读取设备群聊状态。')
+    } finally {
+      if (showError) setLoading(false)
     }
   }
 
@@ -166,7 +169,7 @@ export function useDeviceChat(token: string, enabled: boolean) {
     }
   }
 
-  return { state, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, leaveRoom, copyValue }
+  return { state, loading, deviceName, setDeviceName, hostUrl, setHostUrl, inviteCode, joinCode, setJoinCode, targetId, setTargetId, busy, error, setError, copied, createRoom, createInvite, joinRoom, sendMessage, leaveRoom, copyValue }
 }
 
 export type DeviceChatController = ReturnType<typeof useDeviceChat>

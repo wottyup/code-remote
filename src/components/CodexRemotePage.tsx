@@ -48,7 +48,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
 import { copyTextToClipboard } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -69,7 +69,7 @@ import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberW
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
-import { DeviceChatMessageItem, DeviceChatRoomPanel } from './DeviceChatRoomPanel'
+import { DeviceChatSidebar } from './DeviceChatSidebar'
 import { useDeviceChat, type DeviceChatController } from '../hooks/useDeviceChat'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
@@ -3392,7 +3392,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, theme, themeP
 
 interface RemoteChatPaneProps {
   deviceChat?: DeviceChatController
-  onToggleDeviceChatPanel?: () => void
   token: string
   remote: CodexRemoteController
   active: boolean
@@ -3418,7 +3417,6 @@ interface RemoteChatPaneProps {
 
 function RemoteChatPane({
   deviceChat,
-  onToggleDeviceChatPanel,
   token,
   remote,
   active,
@@ -3699,7 +3697,6 @@ function RemoteChatPane({
           onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
         ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
-          {deviceChat ? <button className="icon-button" type="button" aria-label="房间与成员" title="房间与成员" onClick={onToggleDeviceChatPanel}><Users size={18} /></button> : null}
           {!deviceChat ? <>
           <button
             className="icon-button engine-switch-button"
@@ -3748,7 +3745,22 @@ function RemoteChatPane({
 
       <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
         <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {deviceChat ? (deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => <DeviceChatMessageItem key={message.id} message={message} />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开“房间与成员”创建或加入设备群聊。'}</span></div>) : <>
+          {deviceChat ? (deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => message.kind === 'status'
+            ? <div className="device-chat-status" key={message.id}>{message.text}</div>
+            : <MessageBubble
+                key={message.id}
+                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at }}
+                deviceChatMessage={message}
+                assistantName="Codex"
+                operations={[]}
+                fileChanges={[]}
+                activityTimeline={[]}
+                showOperations={false}
+                copied={copiedMessageId === message.id}
+                onCopy={onCopy}
+                onOpenFile={openChangedFilePreview}
+                onOpenImage={openViewedImagePreview}
+              />) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>) : <>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
@@ -3968,8 +3980,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
   const [deviceChatMode, setDeviceChatMode] = useState(false)
-  const [deviceChatPanelOpen, setDeviceChatPanelOpen] = useState(true)
   const deviceChat = useDeviceChat(token, deviceChatMode)
+  const deviceChatRoomId = deviceChat.state?.room?.id
+  useEffect(() => {
+    if (deviceChatMode && deviceChatRoomId && !deviceChat.inviteCode && (isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint))) {
+      setSidebarOpen(false)
+    }
+  }, [deviceChatMode, deviceChatRoomId, deviceChat.inviteCode])
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -4056,8 +4073,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSettingsOpen(false)
     setUsageStatsOpen(false)
     setDeviceChatMode(true)
-    setDeviceChatPanelOpen(true)
-    setSidebarOpen(false)
+    setSidebarCollapsed(false)
     setWorkspaceOpen(false)
   }, [])
   const closeSettingsPanel = useCallback(() => {
@@ -5385,7 +5401,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (!deviceChatMode && isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' + (deviceChatPanelOpen ? ' remote-shell--device-panel-open' : '') : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (!deviceChatMode && isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -5402,7 +5418,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
       {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
-      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="聊天记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={deviceChatMode ? '设备群聊' : '聊天记录'} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>代码助手远程工作台</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
@@ -5410,6 +5426,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
+        <div className="remote-sidebar__modes" role="group" aria-label="切换聊天模式">
+          <button type="button" className={!deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={!deviceChatMode} aria-label="普通聊天模式" onClick={() => setDeviceChatMode(false)}><MessagesSquare size={16} /><span>普通聊天</span></button>
+          <button type="button" className={deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={deviceChatMode} aria-label="设备群聊模式" onClick={openDeviceChatMode}><Users size={16} /><span>设备群聊</span></button>
+        </div>
+        {deviceChatMode ? <DeviceChatSidebar chat={deviceChat} onSelectRoom={() => setSidebarOpen(false)} /> : <>
         <div className="sidebar-search">
           <Search size={15} aria-hidden="true" />
           <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />
@@ -5467,9 +5488,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
           {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
+        </>}
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (deviceChatMode ? ' sidebar-settings--active' : '')} type="button" aria-label="设备群聊" title="设备群聊" onClick={openDeviceChatMode}><Users size={16} /><span>设备群聊</span></button>
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
           <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
         </div>
@@ -5546,7 +5567,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-${deviceChatMode ? 'device' : 'thread'}`}>
                   <RemoteChatPane
                     deviceChat={deviceChatMode ? deviceChat : undefined}
-                    onToggleDeviceChatPanel={() => setDeviceChatPanelOpen((open) => !open)}
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
@@ -5636,7 +5656,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               createThreadTitle={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}
             />
           </section>
-          {deviceChatMode ? <div className={`device-chat-room-dock${deviceChatPanelOpen ? ' device-chat-room-dock--open' : ''}`}><DeviceChatRoomPanel chat={deviceChat} /></div> : null}
           {!deviceChatMode ? <>
           <div
             className="workspace-resize-handle"
@@ -6587,8 +6606,9 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, copied, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
+  deviceChatMessage?: DeviceChatMessage
   assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
@@ -6605,13 +6625,15 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
+  const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)
+  const deviceDelivery = deviceChatMessage?.delivery_state === 'pending' ? '等待发送' : deviceChatMessage?.delivery_state === 'syncing' ? '等待同步' : deviceChatMessage?.delivery_state === 'error' ? '发送失败' : null
 
   return (
-    <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
+    <article className={`chat-message chat-message--${message.role}${deviceChatMessage ? ' chat-message--device' : ''}${deviceChatMessage?.kind === 'error' ? ' chat-message--device-error' : ''}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
-          {message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
+          {deviceChatMessage ? <><strong className="chat-message__assistant-name chat-message__assistant-name--codex">{deviceChatMessage.sender_name}{deviceChatMessage.kind === 'assistant' ? ' · Codex' : ''}</strong>{deviceChatMessage.target_name ? <span>@{deviceChatMessage.target_name}</span> : null}{deviceDelivery ? <span>{deviceDelivery}</span> : null}{deviceTime ? <time className="chat-message__timing" dateTime={deviceChatMessage.created_at}>{deviceTime}</time> : null}</> : message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
