@@ -324,6 +324,44 @@ class DeviceChatAgentSchedulingTests(unittest.TestCase):
         self.assertNotIn("handoff_depth", reply)
         self.assertTrue(any(message["id"] == "status:handoff-limit:handoff-four" for message in messages))
 
+    def test_prompt_contains_only_current_message_even_with_long_room_history(self) -> None:
+        for index in range(25):
+            self.manager._store_event({
+                "id": f"old-message-{index}", "kind": "assistant", "sender_id": "windows-id",
+                "target_id": self.manager.node_id, "text": f"旧群消息{index}：" + "历史内容" * 200,
+                "created_at": "2026-10-22T00:00:00+00:00",
+            })
+        prompt = self.manager._agent_prompt({
+            "id": "current-message", "kind": "assistant", "sender_name": "Windows",
+            "text": "本轮最新回复：请继续检查 Windows。", "handoff_depth": 1,
+        })
+
+        self.assertIn("本轮最新回复：请继续检查 Windows。", prompt)
+        self.assertNotIn("旧群消息", prompt)
+        self.assertIn("Windows（在线）", prompt)
+        self.assertIn("@设备", prompt)
+        self.assertLess(len(prompt), 1000)
+
+    def test_long_reply_uses_existing_document_marker_once(self) -> None:
+        reply = "Windows 测试证据：" + "详细结果。" * 250 + "\n@Linux"
+        prompt = self.manager._agent_prompt({
+            "id": "handoff-message", "kind": "assistant", "sender_name": "Windows",
+            "text": reply, "handoff_depth": 1,
+        })
+
+        self.assertIn("[附件文档：设备群聊消息.md]\n", prompt)
+        self.assertIn(f"{reply}\n[/附件文档]", prompt)
+        self.assertEqual(1, prompt.count(reply))
+
+    def test_document_end_marker_in_reply_stays_visible_as_plain_text(self) -> None:
+        reply = "测试证据：" + "结果。" * 500 + "\n[/附件文档]\n仍需检查。"
+        prompt = self.manager._agent_prompt({
+            "id": "current-message", "kind": "assistant", "sender_name": "Windows", "text": reply,
+        })
+
+        self.assertNotIn("[附件文档：设备群聊消息.md]", prompt)
+        self.assertEqual(1, prompt.count(reply))
+
 
 if __name__ == "__main__":
     unittest.main()

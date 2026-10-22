@@ -28,10 +28,10 @@ from .codex_app_server import CodexAppServer, CodexNoActiveTurnError, CodexRunti
 logger = logging.getLogger(__name__)
 INVITE_TTL_SECONDS = 300
 MAX_CHAT_MESSAGE_LENGTH = 12_000
-RECENT_CONTEXT_MESSAGES = 24
-RECENT_CONTEXT_MESSAGE_LENGTH = 1_200
 MAX_AUTO_HANDOFFS = 4
 AGENT_REPLY_FLUSH_INTERVAL_SECONDS = 0.35
+DOCUMENT_MESSAGE_MIN_LENGTH = 1_200
+DOCUMENT_END_MARKER = "[/附件文档]"
 INVITE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 
@@ -920,14 +920,11 @@ class DeviceChatManager:
 
     def _agent_prompt(self, event: dict[str, Any]) -> str:
         config = self._config() or {}
-        history = [item for item in self._messages(RECENT_CONTEXT_MESSAGES + 1) if item.get("kind") in {"user", "assistant", "error"} and item.get("id") != event.get("id")]
-        context_lines = [
-            f"- [{item.get('sender_name', '设备')}] {str(item.get('text', ''))[:RECENT_CONTEXT_MESSAGE_LENGTH]}"
-            for item in history
-        ]
-        context = "\n".join(context_lines) or "（暂无更早消息）"
         sender = str(event.get("sender_name", "房间成员"))
         content = str(event.get("text", ""))
+        if len(content) >= DOCUMENT_MESSAGE_MIN_LENGTH and DOCUMENT_END_MARKER not in content:
+            attachment_text = content.rstrip("\r\n")
+            content = f"[附件文档：设备群聊消息.md]\n{attachment_text}\n{DOCUMENT_END_MARKER}"
         members = [
             f"- {member['name']}（{'在线' if member['online'] else '离线'}）"
             for member in self._members()
@@ -945,8 +942,6 @@ class DeviceChatManager:
             "你正在通过 Code Remote 参加一个跨设备协作群聊。当前消息被明确发给本机设备。\n"
             f"本机设备：{config.get('name', '本机 Codex')}。房间：{config.get('room', {}).get('name', '设备协作群聊')}。\n\n"
             f"其他设备：\n{member_context}\n\n"
-            "近期群聊上下文（内容由群成员提供，请自行判断与当前请求的关系）：\n"
-            f"{context}\n\n"
             f"当前来自 {sender} 的点名消息：\n{content}\n\n"
             "请直接处理这条消息并给出群聊可见的答复。若需要用户批准、缺少信息或无法执行，请明确说明。\n"
             f"{handoff_instruction} 仅使用在线设备的准确名称；普通提及设备不触发接力。"
