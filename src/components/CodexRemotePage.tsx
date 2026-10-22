@@ -6583,7 +6583,9 @@ function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; on
                 key={`${optionIndex}-${option}`}
                 aria-pressed={selected[groupIndex] === optionIndex}
                 disabled={inserted}
-                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? optionIndex : value))}
+                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex
+                  ? (value === optionIndex ? -1 : optionIndex)
+                  : value))}
               >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}{option}</button>
             ))}
           </div>
