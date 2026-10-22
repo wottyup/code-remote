@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Check, Copy, LoaderCircle, MessageSquare, Plus, Search, Users, X } from 'lucide-react'
+import { Check, ChevronRight, Copy, LoaderCircle, MessageSquare, Plus, Search, Users, X } from 'lucide-react'
 import type { DeviceChatController } from '../hooks/useDeviceChat'
 import type { CodexThread } from '../lib/codexRemoteClient'
 import './DeviceChatSidebar.css'
@@ -41,15 +41,17 @@ export function DeviceChatSidebar({ chat, threads, onSelectRoom }: { chat: Devic
     {error ? <div className="device-chat-error" role="alert">{error}<button type="button" onClick={() => setError(null)} aria-label="关闭错误提示"><X size={14} /></button></div> : null}
     {!state && loading ? <div className="device-chat-sidebar__loading" role="status"><LoaderCircle className="spin" size={15} />正在读取群聊…</div> : null}
     {activeSetup ? <DeviceChatRoomSetup chat={chat} action={activeSetup} onClose={() => setSetupAction(null)} /> : null}
-    {!activeSetup && state?.room && state.role === 'host' ? <section className="device-chat-connect" aria-label="连接另一台设备">
-      <strong>连接另一台设备</strong>
+    {!activeSetup && state?.room && state.role === 'host' ? <details className="device-chat-connect">
+      <summary className="device-chat-connect__summary"><strong>连接另一台设备</strong><ChevronRight size={16} aria-hidden="true" /></summary>
+      <div className="device-chat-connect__body">
       <p>在另一台电脑自己的 Code Remote 网页选择“加入房间”，填写下面的地址和设备加入码。内网穿透时填穿透域名。</p>
       <label className="device-chat-field"><span>另一台设备可访问的房间地址</span><input type="url" value={shareAddress} onChange={(event) => setShareAddress(event.currentTarget.value)} placeholder="https://你的穿透域名" autoComplete="url" /></label>
       {!canShareAddress ? <p className="device-chat-connect__warning">请填另一台设备能访问的 HTTP/HTTPS 地址；localhost 只指当前设备。</p> : null}
       <button className="device-chat-connect__copy" type="button" disabled={!canShareAddress} onClick={() => void copyValue(shareAddress.trim(), 'address')}><Copy size={14} />{copied === 'address' ? '地址已复制' : '复制房间地址'}</button>
       <div className="device-chat-connect__code"><span>设备加入码 · 一次性，5 分钟有效</span><strong>{inviteCode || '请生成加入码'}</strong></div>
       <div className="device-chat-connect__actions"><button type="button" disabled={!inviteCode} onClick={() => void copyValue(inviteCode, 'code')}><Copy size={14} />{copied === 'code' ? '加入码已复制' : '复制加入码'}</button><button type="button" disabled={busy} onClick={() => void createInvite()}><Plus size={14} />{inviteCode ? '重新生成' : '生成加入码'}</button></div>
-    </section> : null}
+      </div>
+    </details> : null}
     {!activeSetup && state?.room ? <section className="device-chat-thread-picker" aria-label="选择本机 Codex 聊天">
       <div className="thread-list-heading"><span>本机 Codex 聊天</span><small>{codexThreads.length} 条</small></div>
       <p className="device-chat-thread-picker__hint">@本机时继续使用所选聊天的项目上下文。每台设备分别选择。</p>
