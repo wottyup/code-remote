@@ -10,7 +10,6 @@ import json
 import logging
 import os
 import secrets
-import socket
 import sqlite3
 import time
 import uuid
@@ -72,31 +71,10 @@ def _room_url(value: str) -> str:
     except ValueError:
         is_loopback = parsed.hostname.casefold() == "localhost" or parsed.hostname.casefold().endswith(".localhost")
     if is_loopback:
-        raise DeviceChatError("房间地址不能使用 localhost 或回环 IP；请填房间设备的局域网地址。")
+        raise DeviceChatError("房间地址不能使用 localhost 或回环 IP；请填另一台设备能访问的穿透域名或网络地址。")
     if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise DeviceChatError("地址只填写网页的主机和端口，例如 http://192.168.1.20:4173。")
+        raise DeviceChatError("地址只填写网页的域名或 IP 和端口，例如 https://room.example.com。")
     return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
-
-
-def _local_lan_ips() -> list[str]:
-    candidates: list[str] = []
-    try:
-        for result in socket.getaddrinfo(socket.gethostname(), None, family=socket.AF_INET):
-            candidates.append(result[4][0])
-    except OSError:
-        pass
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 9))
-            candidates.insert(0, probe.getsockname()[0])
-    except OSError:
-        pass
-    result: list[str] = []
-    for value in candidates:
-        address = ipaddress.ip_address(value)
-        if address.is_private and not address.is_loopback and not address.is_link_local and value not in result:
-            result.append(value)
-    return result
 
 
 class DeviceChatManager:
@@ -134,7 +112,6 @@ class DeviceChatManager:
         if "manual" not in thread_columns:
             self.connection.execute("ALTER TABLE device_chat_threads ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
         self.codex = codex
-        self._local_lan_ips = _local_lan_ips()
         self.node_id = self._get_metadata("node_id")
         if not self.node_id:
             self.node_id = str(uuid.uuid4())
@@ -439,7 +416,6 @@ class DeviceChatManager:
             "members": self._members(),
             "messages": self._messages_for_state(after_sequence),
             "local_thread_id": self._manual_thread_for_room(str(config["room"]["id"])),
-            "local_lan_ips": self._local_lan_ips if config.get("role") == "host" else [],
             "connected": config.get("role") == "host" or bool(getattr(self, "_peer_connected", False)),
         }
 

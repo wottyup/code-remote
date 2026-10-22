@@ -134,7 +134,6 @@ export interface DeviceChatState {
   members: DeviceChatMember[]
   messages: DeviceChatMessage[]
   local_thread_id?: string | null
-  local_lan_ips?: string[]
   connected: boolean
 }
 

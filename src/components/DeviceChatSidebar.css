@@ -5,8 +5,6 @@
 .device-chat-connect > strong { color: #dce5ff; font-size: 13px; }
 .device-chat-connect > p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .device-chat-connect .device-chat-field input { font-size: 11px; }
-.device-chat-connect__suggestions { display: flex; flex-wrap: wrap; gap: 5px; }
-.device-chat-connect__suggestions button { padding: 3px 6px; border: 1px solid var(--line); border-radius: 5px; background: transparent; color: var(--muted); cursor: pointer; font-size: 10px; }
 .device-chat-connect .device-chat-connect__warning { color: #e7b58a; }
 .device-chat-connect__code { display: grid; gap: 4px; padding: 8px; border-radius: 7px; background: rgba(31, 42, 74, .4); }
 .device-chat-connect__code span { color: var(--muted); font-size: 10px; }
