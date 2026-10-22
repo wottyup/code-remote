@@ -922,6 +922,7 @@ class MainActivity : Activity() {
     private var attachRequestActive = false
     private var attachmentPickerScope: String? = null
     private var restoreImeAfterAttachment = false
+    private var pendingThreadExport: String? = null
     private val deliveredQueueIds = mutableSetOf<String>()
     private var workspaceCurrentPath = ""
     private var workspaceRootPath = ""
@@ -7156,6 +7157,8 @@ class MainActivity : Activity() {
             MenuAction("打开", "open"),
             MenuAction(if (pinnedThreadIds.contains(thread.optString("id"))) "取消置顶" else "置顶", "pin"),
             MenuAction("重命名", "edit"),
+            MenuAction("导出", "download"),
+            MenuAction("引用", "quote"),
             MenuAction("删除聊天", "delete", destructive = true),
         )
         showActionPopup(anchor, threadTitle(thread), actions) { which ->
@@ -7163,8 +7166,75 @@ class MainActivity : Activity() {
                 0 -> selectThread(thread)
                 1 -> togglePin(thread)
                 2 -> renameThread(thread)
-                3 -> deleteThread(thread)
+                3 -> exportThread(thread)
+                4 -> quoteThread(thread)
+                5 -> deleteThread(thread)
             }
+        }
+    }
+
+    private fun readThreadTranscript(thread: JSONObject, action: (String) -> Unit) {
+        val threadId = thread.optString("id").takeIf { it.isNotBlank() } ?: return
+        val generation = connectionGeneration
+        val requestEndpoint = endpoint
+        val requestToken = token
+        val title = threadTitle(thread)
+        val engine = thread.optString("engine", "codex")
+        showStatus("正在读取完整对话…")
+        runApi({
+            val details = RemoteApi(requestEndpoint, requestToken).get(
+                "/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}?include_images=false",
+            )
+            if (details.optString("id") != threadId) throw IOException("服务器返回了不匹配的聊天记录。")
+            if (details.optBoolean("historyPartial") || details.optBoolean("historyWindowed")) {
+                throw IOException("完整聊天记录暂时不可用，请稍后重试。")
+            }
+            details.put("name", title)
+            details.put("engine", engine)
+            ThreadTranscript.create(details)
+        }, { transcript ->
+            if (generation != connectionGeneration) return@runApi
+            action(transcript)
+        }, { error ->
+            if (generation == connectionGeneration) showStatus(error.message ?: "读取对话记录失败")
+        })
+    }
+
+    private fun exportThread(thread: JSONObject) {
+        readThreadTranscript(thread) { transcript ->
+            val filename = ThreadTranscript.filename(thread, "对话导出")
+            pendingThreadExport = transcript
+            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "text/markdown"
+                putExtra(Intent.EXTRA_TITLE, filename)
+            }
+            try {
+                startActivityForResult(intent, REQUEST_THREAD_EXPORT)
+            } catch (error: Exception) {
+                pendingThreadExport = null
+                showStatus(error.message ?: "无法打开保存文件界面")
+            }
+        }
+    }
+
+    private fun quoteThread(thread: JSONObject) {
+        readThreadTranscript(thread) { transcript ->
+            val name = ThreadTranscript.filename(thread, "对话引用")
+            val existingDocuments = selectedFiles.filter { it.optString("kind") == "document" }
+            if (existingDocuments.any { it.optString("name") == name && it.optString("content") == transcript }) {
+                showStatus("这条对话已经在输入框中")
+                return@readThreadTranscript
+            }
+            if (existingDocuments.size >= 8) {
+                showStatus("单条消息最多附加 8 个文档")
+                return@readThreadTranscript
+            }
+            selectedFiles.add(JSONObject().put("kind", "document").put("name", name).put("content", transcript))
+            draftFilesByScope[draftStorageKey()] = selectedFiles.toMutableList()
+            renderAttachmentStrip()
+            setSidebarVisible(false)
+            showToast("对话引用已加入输入框")
         }
     }
 
@@ -10018,6 +10088,24 @@ class MainActivity : Activity() {
     @Deprecated("Use Activity Result APIs when the Android module adopts AndroidX")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_THREAD_EXPORT) {
+            val transcript = pendingThreadExport
+            pendingThreadExport = null
+            val uri = data?.data
+            if (resultCode == RESULT_OK && uri != null && transcript != null) {
+                io.execute {
+                    try {
+                        contentResolver.openOutputStream(uri, "w")?.use { output ->
+                            output.write(transcript.toByteArray(StandardCharsets.UTF_8))
+                        } ?: throw IOException("无法写入选定的位置")
+                        handler.post { if (!isFinishing && !isDestroyed) showToast("已导出完整对话 Markdown") }
+                    } catch (error: Exception) {
+                        handler.post { if (!isFinishing && !isDestroyed) showStatus(error.message ?: "导出对话失败") }
+                    }
+                }
+            }
+            return
+        }
         if (requestCode == REQUEST_THEME_BACKGROUND) {
             themeBackgroundPickerActive = false
             val uri = data?.data
@@ -10940,7 +11028,7 @@ class MainActivity : Activity() {
         "link", "connection" -> R.drawable.pixel_connection
         "terminal" -> R.drawable.pixel_terminal
         "folder" -> R.drawable.pixel_folder
-        "add", "file_add", "folder_add" -> R.drawable.pixel_file_add
+        "add", "file_add", "folder_add", "quote" -> R.drawable.pixel_file_add
         "arrow_up", "send" -> R.drawable.pixel_send
         "pause" -> R.drawable.pixel_pause
         "edit" -> R.drawable.pixel_edit
@@ -11098,6 +11186,7 @@ class MainActivity : Activity() {
             "settings" -> R.drawable.ic_android1_settings
             "refresh" -> R.drawable.ic_android1_refresh
             "download" -> R.drawable.ic_android1_save
+            "quote" -> R.drawable.ic_android1_file_add
             "arrow_up" -> R.drawable.ic_android1_arrow_up
             "send" -> R.drawable.ic_android1_send
             "file" -> R.drawable.ic_android1_file
@@ -11145,6 +11234,7 @@ class MainActivity : Activity() {
         "settings" -> R.drawable.ic_settings
         "refresh" -> R.drawable.ic_refresh
         "download" -> R.drawable.ic_download
+        "quote" -> R.drawable.ic_insert_conversation
         "arrow_up" -> R.drawable.ic_arrow_up
         "send" -> R.drawable.ic_arrow_up
         "file" -> R.drawable.ic_file
@@ -11446,6 +11536,7 @@ class MainActivity : Activity() {
         private const val REQUEST_NOTIFICATIONS = 4102
         private const val REQUEST_THEME_BACKGROUND = 4103
         private const val REQUEST_WEB_DOWNLOAD_STORAGE = 4104
+        private const val REQUEST_THREAD_EXPORT = 4105
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val EXTRA_CONNECTION_ID = "notification_connection_id"
