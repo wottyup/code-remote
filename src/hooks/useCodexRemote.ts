@@ -1466,6 +1466,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const [queuedMessagesByThread, setQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const [serverQueuedMessagesByThread, setServerQueuedMessagesByThread] = useState<QueuedMessagesByThread>({})
   const [pendingSubmittedByThread, setPendingSubmittedByThread] = useState<QueuedMessagesByThread>({})
+  const [queueRevision, setQueueRevision] = useState(0)
   const serverQueuedMessagesByThreadRef = useRef<QueuedMessagesByThread>({})
   const serverQueueFetchVersion = useRef(new Map<string, number>())
   const pendingServerQueueRemovals = useRef(new Map<string, Set<string>>())
@@ -1579,6 +1580,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const applyServerQueueResponse = useCallback((threadId: string, queue: QueuedTurnPayload[]) => {
     serverQueueFetchVersion.current.set(threadId, (serverQueueFetchVersion.current.get(threadId) ?? 0) + 1)
     publishServerQueue(threadId, queue)
+    setQueueRevision((revision) => revision + 1)
   }, [publishServerQueue])
 
   const refreshServerQueue = useCallback(async (threadId: string) => {
@@ -3320,6 +3322,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const handleEvent = useCallback((event: RemoteEvent) => {
     if (handedOffRef.current && event.type !== 'connection') return
     if (event.type === 'remote.queue.changed') {
+      if (persistActiveThread) setQueueRevision((revision) => revision + 1)
       if (event.threadId && event.threadId === activeThreadId.current) void refreshServerQueue(event.threadId)
       return
     }
@@ -4655,6 +4658,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages,
       pendingSubmittedByThread[activeThread.id] ?? emptyQueuedMessages,
     ) : emptyQueuedMessages,
+    queueRevision,
     pinRevision,
     isRunning,
     runningTurnId,

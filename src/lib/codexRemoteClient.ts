@@ -774,6 +774,9 @@ export const codexRemoteClient = {
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },
+  scheduledThreadIds(token: string) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/queue/scheduled-thread-ids')
+  },
   submitMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/submit`, {
       method: 'POST',

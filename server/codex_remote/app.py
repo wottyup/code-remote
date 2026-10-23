@@ -1992,6 +1992,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
+    @app.get("/api/v1/codex/queue/scheduled-thread-ids")
+    async def read_scheduled_thread_ids() -> dict[str, list[str]]:
+        return {"thread_ids": shared_state.scheduled_thread_ids()}
+
     @app.get("/api/v1/codex/queue/{thread_id}")
     async def read_queued_messages(thread_id: str) -> dict[str, Any]:
         return {"queue": shared_state.queue(thread_id), "paused": shared_state.is_paused(thread_id)}

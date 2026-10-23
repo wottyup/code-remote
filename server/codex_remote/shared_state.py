@@ -152,6 +152,14 @@ class SharedStateStore:
                 result[0]["blockedReason"] = block["reason"]
         return result
 
+    def scheduled_thread_ids(self) -> list[str]:
+        rows = self.connection.execute("SELECT thread_id, payload FROM queued_messages").fetchall()
+        return sorted({
+            row["thread_id"]
+            for row in rows
+            if _scheduled_datetime(json.loads(row["payload"])) is not None
+        })
+
     def next_scheduled_delay(self) -> float | None:
         now = datetime.now(timezone.utc)
         earliest: datetime | None = None
