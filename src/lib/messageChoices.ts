@@ -1,6 +1,7 @@
 export interface MessageChoiceGroup {
   question: string
   options: string[]
+  descriptions?: string[]
 }
 
 export interface MessageChoiceContent {
@@ -10,6 +11,31 @@ export interface MessageChoiceContent {
 
 const optionLine = /^\s*([-*+]|\d{1,2}[.)、])\s+(.+?)\s*$/u
 const fenceLine = /^\s{0,3}(?:```|~~~)/u
+
+export function parseStructuredAssistantQuestions(value: unknown): MessageChoiceGroup[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 3) return []
+  const groups = value.map((entry): MessageChoiceGroup | null => {
+    if (!entry || typeof entry !== 'object') return null
+    const question = entry as Record<string, unknown>
+    const title = typeof question.title === 'string' && question.title.trim()
+      ? question.title.trim()
+      : typeof question.question === 'string' ? question.question.trim() : ''
+    const rawOptions = question.options == null ? [] : question.options
+    if (!title || title.length > 1000 || !Array.isArray(rawOptions) || rawOptions.length > 12) return null
+    const options: string[] = []
+    const descriptions: string[] = []
+    for (const rawOption of rawOptions) {
+      const option = rawOption && typeof rawOption === 'object' ? rawOption as Record<string, unknown> : null
+      const rawLabel = typeof rawOption === 'string' ? rawOption : option?.label
+      const label = typeof rawLabel === 'string' ? rawLabel.trim() : ''
+      if (!label || label.length > 500) return null
+      options.push(label)
+      descriptions.push(typeof option?.description === 'string' ? option.description.trim() : '')
+    }
+    return { question: title, options, ...(descriptions.some(Boolean) ? { descriptions } : {}) }
+  })
+  return groups.every((group): group is MessageChoiceGroup => group !== null) ? groups : []
+}
 
 function plainQuestionLine(value: string) {
   return value.trim()
@@ -71,7 +97,7 @@ export function parseAssistantChoiceContent(value: string): MessageChoiceContent
     const candidate = candidates[index]
     const atEnd = candidate.end === lastContentLine
     const question = candidate.group.question.split(/[?？]/u)[0]
-    const asksReader = /你|您|请选择|选择|选哪|哪(?:个|种|一)|希望|偏好|倾向|\b(?:you|your|which|choose|prefer)\b/iu.test(question)
+    const asksReader = /你|您|请选择|选择|选哪|哪(?:个|种|一)|希望|偏好|倾向|还是|或者|或是|\b(?:you|your|which|choose|prefer)\b/iu.test(question)
     if (!atEnd && !asksReader) continue
     selected.unshift(candidate)
     if (selected.length > 3) return { groups: [], onlyChoices: false }
@@ -98,6 +124,6 @@ export function assistantChoiceStartIndex(messages: readonly { role: 'user' | 'a
   return 0
 }
 
-export function formatAssistantChoiceReply(groups: MessageChoiceGroup[], selected: number[]) {
-  return groups.map((group, index) => `${index + 1}. ${group.question}\n答：${group.options[selected[index]]}`).join('\n\n')
+export function formatAssistantChoiceReply(groups: MessageChoiceGroup[], selected: number[], customAnswers: string[] = []) {
+  return groups.map((group, index) => `${index + 1}. ${group.question}\n答：${selected[index] === -2 ? customAnswers[index].trim() : group.options[selected[index]]}`).join('\n\n')
 }

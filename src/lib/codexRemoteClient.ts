@@ -1,5 +1,6 @@
 import { deleteThreadTransportCache, readThreadTransportCache, writeThreadTransportCache, type ThreadTransportSnapshot } from './threadTransportCache'
 import { eventTimestamp } from './turnTiming'
+import { parseStructuredAssistantQuestions, type MessageChoiceGroup } from './messageChoices'
 
 export interface CodexThread {
   id: string
@@ -62,6 +63,10 @@ export interface CodexMessage {
   streaming?: boolean
   /** Prefix whose agentMessage items have completed, even while the turn continues. */
   completedTextLength?: number
+  questions?: MessageChoiceGroup[]
+  choiceItemId?: string
+  choicePromptText?: string
+  choiceDelivery?: string
 }
 
 export interface CodexImageAttachment {
@@ -412,7 +417,9 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const item = itemValue as Record<string, unknown>
       const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
+      const questions = itemType === 'agentmessage' ? parseStructuredAssistantQuestions(item.questions) : []
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
+        || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
       const originalPdfAttachments = itemType === 'usermessage' ? originalPdfAttachmentsFromText(rawText) : { text: rawText, documents: [] }
       const textDocumentAttachments = itemType === 'usermessage'
         ? textDocumentAttachmentsFromText(originalPdfAttachments.text)
@@ -441,6 +448,12 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
           assistantMessage.completedTextLength = assistantMessage.text.length
         }
         if (!itemComplete) assistantMessage.streaming = true
+        if (questions.length > 0) {
+          assistantMessage.questions = questions
+          assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
+          assistantMessage.choicePromptText = text
+          assistantMessage.choiceDelivery = typeof item.delivery === 'string' ? item.delivery : undefined
+        }
         continue
       }
 
@@ -454,6 +467,12 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
         ...(itemType === 'agentmessage' ? { completedTextLength: itemComplete ? text.length : 0 } : {}),
         ...(itemType === 'agentmessage' && !itemComplete ? { streaming: true } : {}),
+        ...(questions.length > 0 ? {
+          questions,
+          choiceItemId: typeof item.id === 'string' ? item.id : undefined,
+          choicePromptText: text,
+          choiceDelivery: typeof item.delivery === 'string' ? item.delivery : undefined,
+        } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
         ...(documents.length > 0 ? {

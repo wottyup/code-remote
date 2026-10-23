@@ -27,6 +27,7 @@ import { deleteThreadHistoryCache, readThreadHistoryCache, serializedCacheSizeBy
 import { eventTimestamp, latestTurnState, resolveTurnStartedAt } from '../lib/turnTiming'
 import { canAutomaticallyAdvanceQueue, completionReleasesQueueBarrier, reconcileQueueRecoveryBarrier, restoreQueueRecoveryBarriers, type QueueRecoveryBarrier, type QueueRecoveryBarriers } from '../lib/queueRecovery'
 import { mergePendingQueuedMessages, visibleQueuedMessages } from '../lib/sharedQueueVisibility'
+import { parseStructuredAssistantQuestions } from '../lib/messageChoices'
 
 interface ApprovalRequest {
   requestId: string | number
@@ -118,6 +119,7 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 interface SendMessageInput {
   prompt: string
   continuePaused?: boolean
+  sendImmediately?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -289,6 +291,10 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
         ...(typeof message.completedTextLength === 'number' && Number.isFinite(message.completedTextLength)
           ? { completedTextLength: Math.max(0, Math.min(message.text.length, message.completedTextLength)) }
           : {}),
+        ...(Array.isArray(message.questions) ? { questions: message.questions } : {}),
+        ...(typeof message.choiceItemId === 'string' ? { choiceItemId: message.choiceItemId } : {}),
+        ...(typeof message.choicePromptText === 'string' ? { choicePromptText: message.choicePromptText } : {}),
+        ...(typeof message.choiceDelivery === 'string' ? { choiceDelivery: message.choiceDelivery } : {}),
       } as CodexMessage]
     })
     return { threadId, thread: thread as unknown as CodexThread, messages }
@@ -333,6 +339,10 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.completedTextLength !== undefined
           ? { completedTextLength: Math.min(message.completedTextLength, text.length) }
           : {}),
+        ...(message.questions?.length ? { questions: message.questions } : {}),
+        ...(message.choiceItemId ? { choiceItemId: message.choiceItemId } : {}),
+        ...(message.choicePromptText ? { choicePromptText: message.choicePromptText } : {}),
+        ...(message.choiceDelivery ? { choiceDelivery: message.choiceDelivery } : {}),
       } as CodexMessage
       const messageCharacters = text.length + 128
       if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
@@ -675,6 +685,12 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
         ...(message.replyDurationMs === undefined && previous.replyDurationMs !== undefined
           ? { replyDurationMs: previous.replyDurationMs }
           : {}),
+        ...(!message.questions?.length && previous.questions?.length ? {
+          questions: previous.questions,
+          choiceItemId: previous.choiceItemId,
+          choicePromptText: previous.choicePromptText,
+          choiceDelivery: previous.choiceDelivery,
+        } : {}),
       }
     }
     if (message.role !== 'user' || message.images?.length) return nextMessage
@@ -699,6 +715,10 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.replyDurationMs === candidate.replyDurationMs
       && Boolean(message.streaming) === Boolean(candidate.streaming)
       && message.completedTextLength === candidate.completedTextLength
+      && message.choiceItemId === candidate.choiceItemId
+      && message.choicePromptText === candidate.choicePromptText
+      && message.choiceDelivery === candidate.choiceDelivery
+      && (message.questions === candidate.questions || JSON.stringify(message.questions) === JSON.stringify(candidate.questions))
       && sameMessageImages(message.images, candidate.images)
       && sameMessageDocuments(message.documents, candidate.documents)
   })
@@ -1467,6 +1487,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const streamingAssistantMessageId = useRef<string | null>(null)
   const streamingAssistantTurnId = useRef<string | null>(null)
   const streamingAssistantParts = useRef(new Map<string, string>())
+  const streamingAssistantChoice = useRef<Pick<CodexMessage, 'questions' | 'choiceItemId' | 'choicePromptText' | 'choiceDelivery'> | null>(null)
   const streamingCompletedItems = useRef(new Set<string>())
   const streamingRenderTimer = useRef<number | undefined>(undefined)
   const streamingRenderGeneration = useRef(0)
@@ -1739,6 +1760,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     streamingAssistantMessageId.current = null
     streamingAssistantTurnId.current = null
     streamingAssistantParts.current.clear()
+    streamingAssistantChoice.current = null
     streamingCompletedItems.current.clear()
   }, [])
 
@@ -1757,6 +1779,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const messageId = streamingAssistantMessageId.current
     const text = streamingAssistantText(streamingAssistantParts.current)
     const completedText = completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)
+    const choice = streamingAssistantChoice.current
     if (!messageId || !text) return
     const startedAt = turnId ? turnStartedAtById.current.get(turnId) : undefined
     const replyStartedAt = new Date(startedAt ?? Date.now()).toISOString()
@@ -1766,7 +1789,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         // A delayed transition from a previous turn must never recreate an
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
-        const next = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt, completedText)
+        const collapsed = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt, completedText)
+        const next = choice ? collapsed.map((message) => message.id === messageId ? { ...message, ...choice } : message) : collapsed
         const tail = current.at(-1)
         if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) return next
         return sameMessages(current, next) ? current : next
@@ -3754,6 +3778,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       const text = assistantItemText(item?.text)
       if (!itemId) return
+      const questions = parseStructuredAssistantQuestions(item?.questions)
+      if (questions.length > 0) {
+        streamingAssistantChoice.current = {
+          questions,
+          choiceItemId: itemId,
+          choicePromptText: text,
+          choiceDelivery: typeof item?.delivery === 'string' ? item.delivery : undefined,
+        }
+      }
       if (streamingAssistantTurnId.current && turnId && streamingAssistantTurnId.current !== turnId) {
         finalizeVisibleStreamingTurn(streamingAssistantTurnId.current)
       }
@@ -4279,14 +4312,26 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       }
       try {
         const result = await codexRemoteClient.submitMessage(token, thread.id, payload)
+        let queue = result.queue
+        let sent = result.sent
+        if (!sent && !delivery.acknowledged && input.sendImmediately && activeEngine !== 'claude-code') {
+          try {
+            const immediate = await codexRemoteClient.queueAction(token, thread.id, 'send-now', payload.id)
+            queue = immediate.queue
+            sent = Boolean(immediate.sent)
+          } catch (reason) {
+            if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+            void refreshServerQueue(thread.id)
+          }
+        }
         applyServerQueueResponse(thread.id, delivery.acknowledged
-          ? result.queue.filter((message) => message.id !== payload.id)
-          : result.queue)
-        const pendingResult = result.queue.find((message) => message.id === payload.id)
-        setError(!result.sent && !delivery.acknowledged && pendingResult?.sendAttempt
+          ? queue.filter((message) => message.id !== payload.id)
+          : queue)
+        const pendingResult = queue.find((message) => message.id === payload.id)
+        setError(!sent && !delivery.acknowledged && pendingResult?.sendAttempt
           ? '消息送达未确认，请先核对聊天记录和排队消息，避免重复发送。'
           : null)
-        if (result.sent || delivery.acknowledged) {
+        if (sent || delivery.acknowledged) {
           appendQueuedMessageToActiveThread(thread.id, payload, delivery.turnId)
           if (delivery.turnId) applyTurnDelivery(thread.id, payload.id, delivery.turnId)
           // A receipt and streamed events are enough to show our own message.
@@ -4342,7 +4387,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError(null)
       // A failed automatic start leaves the queue intact. A later normal
       // submission is a useful retry that still preserves message order.
-      if (!threadIsReplying) void startNextQueuedMessage(thread.id)
+      if (threadIsReplying && input.sendImmediately && activeEngine !== 'claude-code') void sendQueuedMessageNow(payload.id)
+      else if (!threadIsReplying) void startNextQueuedMessage(thread.id)
       return true
     }
     const localId = payload.id
@@ -4450,7 +4496,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false

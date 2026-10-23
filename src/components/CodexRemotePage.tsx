@@ -3430,6 +3430,10 @@ function RemoteChatPane({
     if (!active || !currentComposer) return false
     return currentComposer.appendReplyDraft(reply)
   }, [active, composerHandle])
+  const sendChoiceReply = useCallback(async (reply: string, immediately: boolean) => {
+    if (!active || !remote.activeThread) return false
+    return remote.sendMessage({ prompt: reply, images: [], documents: [], sendImmediately: immediately })
+  }, [active, remote])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -3745,6 +3749,7 @@ function RemoteChatPane({
                   showOperations={showOperations}
                   choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
                   onUseChoices={fillChoiceReply}
+                  onSendChoices={sendChoiceReply}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
@@ -6447,7 +6452,7 @@ const OperationLog = memo(function OperationLog({
   )
 })
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true }: {
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, choiceItemId, choiceCard }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
@@ -6455,15 +6460,17 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
   showCodeCopy?: boolean
+  choiceItemId?: string
+  choiceCard?: ReactNode
 }) {
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
   // Message lengths can lag behind the already rendered streaming text. When
   // there are no visible operations, splitting on those lengths only creates
   // a second block that makes one sentence appear to reflow between rows.
-  if (!timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
+  if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
     return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
   }
-  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] }> = []
+  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] } | { type: 'choice'; key: string }> = []
   let textOffset = 0
   let messageCount = 0
   let hasTextEntry = false
@@ -6477,6 +6484,10 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
       const segment = text.slice(textOffset, textOffset + entry.length)
       textOffset += segment.length
       messageCount += 1
+      if (choiceCard && entry.itemId === choiceItemId) {
+        blocks.push({ type: 'choice', key: `choice-${entry.itemId}` })
+        continue
+      }
       if (!segment) continue
       const lastBlock = blocks.at(-1)
       if (lastBlock?.type === 'message') lastBlock.text += separator + segment
@@ -6505,6 +6516,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
     <div className="activity-timeline">
       {blocks.map((block) => block.type === 'message'
         ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators showCodeCopy={showCodeCopy} />
+        : block.type === 'choice' ? <Fragment key={block.key}>{choiceCard}</Fragment>
         : <OperationLog
           key={block.key}
           operations={block.operations}
@@ -6563,11 +6575,15 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean }) {
+function MessageChoiceForm({ groups, onUse, onSend }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<boolean> }) {
   const [selected, setSelected] = useState(() => groups.map(() => -1))
+  const [customAnswers, setCustomAnswers] = useState(() => groups.map(() => ''))
   const [inserted, setInserted] = useState(false)
-  const [notice, setNotice] = useState('可在输入框修改后发送')
-  const complete = selected.every((optionIndex) => optionIndex >= 0)
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [notice, setNotice] = useState('选好后可直接发送，也可填入输入框修改')
+  const complete = selected.every((optionIndex, index) => optionIndex >= 0 || optionIndex === -2 && Boolean(customAnswers[index].trim()))
+  const reply = () => formatAssistantChoiceReply(groups, selected, customAnswers)
 
   return (
     <div className="message-choices" aria-label="助手提出的选择题">
@@ -6582,18 +6598,33 @@ function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; on
                 type="button"
                 key={`${optionIndex}-${option}`}
                 aria-pressed={selected[groupIndex] === optionIndex}
-                disabled={inserted}
+                disabled={inserted || sending || sent}
                 onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex
                   ? (value === optionIndex ? -1 : optionIndex)
                   : value))}
-              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}{option}</button>
+              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}<span>{option}{group.descriptions?.[optionIndex] ? <small>{group.descriptions[optionIndex]}</small> : null}</span></button>
             ))}
+            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={inserted || sending || sent} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
           </div>
+          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={inserted || sending || sent} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
         </fieldset>
       ))}
       <div className="message-choices__footer">
-        <button type="button" disabled={!complete || inserted} onClick={() => {
-          if (onUse(formatAssistantChoiceReply(groups, selected))) setInserted(true)
+        <button type="button" disabled={!complete || inserted || sending || sent} onClick={async () => {
+          setSending(true)
+          try {
+            if (await onSend(reply())) {
+              setSent(true)
+              setNotice('答案已提交，AI 会继续回复；忙碌时会显示在排队中')
+            } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+          } catch {
+            setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+          } finally {
+            setSending(false)
+          }
+        }}>{sending ? '正在发送…' : sent ? '答案已提交' : '发送并继续'}</button>
+        <button type="button" disabled={!complete || inserted || sending || sent} onClick={() => {
+          if (onUse(reply())) setInserted(true)
           else setNotice('请先结束当前编辑，再填入回答')
         }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
         <small>{notice}</small>
@@ -6602,7 +6633,7 @@ function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; on
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   assistantName: string
   operations: CodexOperation[]
@@ -6611,6 +6642,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   showOperations: boolean
   choiceEnabled?: boolean
   onUseChoices?: (reply: string) => boolean
+  onSendChoices?: (reply: string, immediately: boolean) => Promise<boolean>
   copyFeedback: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
@@ -6623,10 +6655,23 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
+  const structuredQuestions = choiceEnabled && message.questions?.length ? message.questions : null
   const choiceContent = useMemo(() => choiceEnabled && message.role === 'assistant'
-    ? parseAssistantChoiceContent(choiceText) : null, [choiceEnabled, choiceText, message.role])
+    ? structuredQuestions ? { groups: structuredQuestions, onlyChoices: false } : parseAssistantChoiceContent(choiceText)
+    : null, [choiceEnabled, choiceText, message.role, structuredQuestions])
   const choiceGroups = choiceContent?.groups ?? []
+  const choiceCard = choiceGroups.length > 0 && onUseChoices && onSendChoices
+    ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} onUse={onUseChoices} onSend={(reply) => onSendChoices(reply, message.choiceDelivery?.toLowerCase().startsWith('async') ?? false)} />
+    : null
+  const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
+    && activityTimeline.some((entry) => entry.type === 'message' && entry.itemId === message.choiceItemId && entry.length > 0))
+  const promptStart = choiceCard && structuredQuestions && message.choicePromptText
+    ? message.text.indexOf(message.choicePromptText) : -1
+  const splitStructuredChoice = Boolean(choiceCard && structuredQuestions && !choiceInTimeline && promptStart >= 0
+    && !activityTimeline.some((entry) => entry.type === 'operation'))
   const renderedText = choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
+  const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
 
   return (
     <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
@@ -6639,12 +6684,16 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
-        {message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
+        {splitStructuredChoice ? <>
+          {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+          {choiceCard}
+          {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+        </> : message.role === 'assistant' && activityTimeline.length > 0
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
-        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} onUse={onUseChoices} /> : null}
+        {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">
