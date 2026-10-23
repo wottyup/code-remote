@@ -3747,6 +3747,7 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
+                  choiceVisible={active && message.role === 'assistant'}
                   choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
                   onUseChoices={fillChoiceReply}
                   onSendChoices={sendChoiceReply}
@@ -6575,7 +6576,7 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-function MessageChoiceForm({ groups, onUse, onSend }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<boolean> }) {
+function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: MessageChoiceGroup[]; enabled: boolean; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<boolean> }) {
   const [selected, setSelected] = useState(() => groups.map(() => -1))
   const [customAnswers, setCustomAnswers] = useState(() => groups.map(() => ''))
   const [inserted, setInserted] = useState(false)
@@ -6586,7 +6587,7 @@ function MessageChoiceForm({ groups, onUse, onSend }: { groups: MessageChoiceGro
   const reply = () => formatAssistantChoiceReply(groups, selected, customAnswers)
 
   return (
-    <div className="message-choices" aria-label="助手提出的选择题">
+    <div className="message-choices" aria-label={enabled ? '助手提出的选择题' : '历史选择题，已有后续消息'}>
       <strong className="message-choices__heading">快速选择</strong>
       {groups.map((group, groupIndex) => (
         <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
@@ -6598,18 +6599,18 @@ function MessageChoiceForm({ groups, onUse, onSend }: { groups: MessageChoiceGro
                 type="button"
                 key={`${optionIndex}-${option}`}
                 aria-pressed={selected[groupIndex] === optionIndex}
-                disabled={inserted || sending || sent}
+                disabled={!enabled || inserted || sending || sent}
                 onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex
                   ? (value === optionIndex ? -1 : optionIndex)
                   : value))}
               >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}<span>{option}{group.descriptions?.[optionIndex] ? <small>{group.descriptions[optionIndex]}</small> : null}</span></button>
             ))}
-            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={inserted || sending || sent} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
+            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || sent} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
           </div>
-          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={inserted || sending || sent} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
+          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || sent} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
         </fieldset>
       ))}
-      <div className="message-choices__footer">
+      {enabled ? <div className="message-choices__footer">
         <button type="button" disabled={!complete || inserted || sending || sent} onClick={async () => {
           setSending(true)
           try {
@@ -6628,18 +6629,19 @@ function MessageChoiceForm({ groups, onUse, onSend }: { groups: MessageChoiceGro
           else setNotice('请先结束当前编辑，再填入回答')
         }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
         <small>{notice}</small>
-      </div>
+      </div> : <small className="message-choices__history-notice">该问题已有后续消息</small>}
     </div>
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
+  choiceVisible?: boolean
   choiceEnabled?: boolean
   onUseChoices?: (reply: string) => boolean
   onSendChoices?: (reply: string, immediately: boolean) => Promise<boolean>
@@ -6655,13 +6657,13 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
-  const structuredQuestions = choiceEnabled && message.questions?.length ? message.questions : null
-  const choiceContent = useMemo(() => choiceEnabled && message.role === 'assistant'
+  const structuredQuestions = choiceVisible && message.questions?.length ? message.questions : null
+  const choiceContent = useMemo(() => choiceVisible && message.role === 'assistant'
     ? structuredQuestions ? { groups: structuredQuestions, onlyChoices: false } : parseAssistantChoiceContent(choiceText)
-    : null, [choiceEnabled, choiceText, message.role, structuredQuestions])
+    : null, [choiceVisible, choiceText, message.role, structuredQuestions])
   const choiceGroups = choiceContent?.groups ?? []
   const choiceCard = choiceGroups.length > 0 && onUseChoices && onSendChoices
-    ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} onUse={onUseChoices} onSend={(reply) => onSendChoices(reply, message.choiceDelivery?.toLowerCase().startsWith('async') ?? false)} />
+    ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} enabled={Boolean(choiceEnabled)} onUse={onUseChoices} onSend={(reply) => onSendChoices(reply, message.choiceDelivery?.toLowerCase().startsWith('async') ?? false)} />
     : null
   const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
     && activityTimeline.some((entry) => entry.type === 'message' && entry.itemId === message.choiceItemId && entry.length > 0))

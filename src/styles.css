@@ -749,13 +749,14 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-choices__option:hover:not(:disabled), .message-choices__option--selected { border-color: color-mix(in srgb, currentColor 64%, transparent); background: color-mix(in srgb, currentColor 13%, transparent); }
 .message-choices__option span { display: grid; gap: 2px; min-width: 0; }
 .message-choices__option small { font-size: .88em; opacity: .7; }
-.message-choices__option:disabled { cursor: default; }
+.message-choices__option:disabled { cursor: default; opacity: .58; }
 .message-choices__custom { display: block; width: 100%; min-height: 64px; margin-top: 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, currentColor 27%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 3%, transparent); color: inherit; font: inherit; resize: vertical; }
 .message-choices__custom:focus-visible { outline: 2px solid currentColor; outline-offset: 1px; }
 .message-choices__footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
 .message-choices__footer > button { min-height: 32px; padding: 5px 12px; border: 1px solid color-mix(in srgb, currentColor 55%, transparent); border-radius: 7px; background: color-mix(in srgb, currentColor 17%, transparent); color: inherit; cursor: pointer; font-weight: 600; }
 .message-choices__footer > button:disabled { cursor: default; opacity: .5; }
 .message-choices__footer > small { opacity: .7; }
+.message-choices__history-notice { opacity: .7; }
 @media (max-width: 700px) { .message-choices__option { width: 100%; min-height: 40px; } .message-choices__footer > button { min-height: 40px; } }
 .running-indicator { display: grid; grid-template-columns: minmax(0, 1fr); width: min(100%, 840px); margin: -3px auto 0; }
 .running-indicator__row { display: flex; min-width: 0; align-items: center; justify-content: flex-start; gap: 8px; }
