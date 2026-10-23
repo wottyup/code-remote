@@ -60,7 +60,7 @@ import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
-import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
@@ -599,6 +599,7 @@ function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachm
 }
 
 function isImageAttachmentFile(file: Pick<File, 'name' | 'type'>) {
+  if (isSvgDocumentFile(file)) return false
   return file.type.startsWith('image/') || imageMediaTypeFor(file) !== null
 }
 
@@ -2015,12 +2016,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
       .filter((file): file is File => file !== null)
-    const fileImages = (directFiles.length > 0 ? directFiles : itemFiles).filter((file) => file.type.startsWith('image/'))
+    const clipboardFiles = directFiles.length > 0 ? directFiles : itemFiles
+    const fileImages = clipboardFiles.filter(isImageAttachmentFile)
+    const fileDocuments = clipboardFiles.filter(isSvgDocumentFile)
     const embeddedImages = embeddedImageFilesFromClipboardHtml(html)
     const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
-    if (images.length > 0) {
+    if (images.length > 0 || fileDocuments.length > 0) {
       event.preventDefault()
-      void attachImages(images)
+      if (images.length > 0) void attachImages(images)
+      if (fileDocuments.length > 0) void attachDocuments(fileDocuments)
       const labels = embeddedImages.map((image) => `[图片：${image.name}]`).join('\n\n')
       const text = labels && pastedText === labels
         ? ''

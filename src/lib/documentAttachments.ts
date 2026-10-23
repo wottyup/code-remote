@@ -1,5 +1,5 @@
 import { Unzip, UnzipInflate, UnzipPassThrough } from 'fflate'
-import { documentExtensionOf, isPlainTextDocumentExtension, isSpecialTextDocumentName, isSupportedDocumentFile, maxDocumentFileSize } from './documentAttachmentRules'
+import { documentExtensionOf, isPlainTextDocumentExtension, isSpecialTextDocumentName, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize } from './documentAttachmentRules'
 
 const zipExpandedSizeLimit = 40 * 1024 * 1024
 const builderTruncationMarker = '\n\n[[CODEX_REMOTE_TRUNCATED]]'
@@ -305,7 +305,7 @@ export async function readDocumentAttachment(file: File): Promise<ParsedDocument
   else if (extension === 'odt' || extension === 'odp' || extension === 'ods') content = parseOpenDocument(buffer, extension === 'ods')
   else if (extension === 'fodt' || extension === 'fodp' || extension === 'fods') content = parseOpenDocumentXml(decodeText(buffer), extension === 'fods')
   else if (extension === 'rtf') content = decodeRtf(decodeText(buffer))
-  else if (isPlainTextDocumentExtension(extension) || isSpecialTextDocumentName(file.name) || file.type.startsWith('text/')) content = decodeText(buffer)
+  else if (isPlainTextDocumentExtension(extension) || isSpecialTextDocumentName(file.name) || file.type.startsWith('text/') || isSvgDocumentFile(file)) content = decodeText(buffer)
   else throw new Error('暂不支持这个文件格式。')
 
   if (content.includes('\u0000')) throw new Error('文件内容不是可读取的文本。')

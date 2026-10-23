@@ -41,8 +41,14 @@ export function documentExtensionOf(name: string) {
   return lowerName.split('.').at(-1) ?? ''
 }
 
+export function isSvgDocumentFile(file: Pick<File, 'name' | 'type'>) {
+  return documentExtensionOf(file.name) === 'svg'
+    || file.type.split(';', 1)[0]?.trim().toLowerCase() === 'image/svg+xml'
+}
+
 export function isSupportedDocumentFile(file: Pick<File, 'name' | 'type'>) {
   return specialTextNames.has(file.name.toLowerCase())
+    || isSvgDocumentFile(file)
     || file.type === 'application/pdf'
     || documentExtensions.has(documentExtensionOf(file.name))
     || file.type.startsWith('text/')
