@@ -4581,10 +4581,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
     if (drag?.active) {
       const shouldOpen = shouldOpenMobileSidebarAfterDrag(drag.offset, drag.panelWidth, action)
-      remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
       if (shouldOpen) openSidebarPanel()
       else setSidebarOpen(false)
-      window.requestAnimationFrame(() => setSidebarDragging(false))
+      window.requestAnimationFrame(() => {
+        setSidebarDragging(false)
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      })
       if (event.cancelable) event.preventDefault()
       return
     }
@@ -5549,6 +5551,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadDeleteProgress(0)
   }
 
+  const sidebarBackdropVisible = sidebarOpen || sidebarDragging
+
   return (
     <div
       ref={remoteShell}
@@ -5653,7 +5657,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </footer>
       </aside>
 
-      {sidebarOpen || sidebarDragging ? <button className={'sidebar-backdrop' + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
