@@ -1419,7 +1419,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
         return
       }
-      const separator = current && !/\s$/.test(current) ? '\n' : ''
+      const separator = current && !/\s$/.test(current) ? '  ' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
