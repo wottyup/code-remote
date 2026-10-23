@@ -940,7 +940,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .composer-preferences__mobile-panel .composer-preferences__controls { display: grid; min-width: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 6px; }
 .composer-preferences__mobile-panel .composer-menu { min-width: 0; }
 .composer-preferences__mobile-panel .composer-menu__trigger { display: flex; width: 100%; min-width: 0; max-width: none; min-height: 44px; height: auto; align-items: center; justify-content: center; padding: 6px 4px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 7px; text-align: center; }
-.composer-preferences__mobile-panel .composer-menu__value { width: 100%; text-align: center; font-size: calc(11px + var(--mobile-font-offset)); }
+.composer-preferences__mobile-panel .composer-menu__value { width: 100%; text-align: center; font-size: calc(14px + var(--mobile-font-offset)); }
 .composer-preferences__mobile-panel .composer-menu__trigger:hover:not(:disabled), .composer-preferences__mobile-panel .composer-menu--open .composer-menu__trigger { border-color: rgba(146, 157, 184, .5); background: rgba(117, 135, 177, .12); }
 .composer-menu__popover.composer-schedule-panel { box-sizing: border-box; display: grid; width: min(284px, calc(100vw - 24px)); min-width: min(240px, calc(100vw - 24px)); max-width: calc(100vw - 24px); gap: 5px; padding: 8px; color: #d8dbe1; }
 .composer-schedule-panel__label { color: #aeb5c2; font-size: 11px; }
@@ -1016,7 +1016,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .composer-menu { min-width: 0; }
   .composer-menu__trigger { width: auto; min-width: 0; max-width: 145px; gap: 4px; padding-inline: 5px; }
   .composer-menu__label, .composer-hint { display: none; }
-  .composer-actions { min-width: 0; gap: 4px; }
+  .composer-actions { min-width: 0; gap: 8px; }
 }
 @container remote-workspace (max-width: 360px) {
   .message-composer__footer { display: grid; grid-template-columns: minmax(0, 1fr); }
@@ -1143,7 +1143,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-light .composer-menu--open .composer-menu__trigger,
   .remote-shell--theme-warm .composer-menu--open .composer-menu__trigger,
   .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { background: transparent; }
-  .composer-actions { min-width: 0; gap: 4px; }
+  .composer-actions { min-width: 0; gap: 8px; }
   .send-button, .stop-button, .attach-button { padding-inline: 6px; }
   .composer-hint { display: none; }
   .remote-error { width: auto; max-width: none; margin-right: 16px; margin-left: 16px; }
@@ -3872,4 +3872,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 ) { background-position: center; background-repeat: no-repeat; background-size: contain; color: transparent !important; stroke: transparent !important; }
 
 @media (min-width: 701px) {
+}
+
+@media (max-width: 700px), (pointer: coarse) {
+  .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .message-composer__footer .attach-button.attach-button--native {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+    border-radius: 9px;
+  }
 }
