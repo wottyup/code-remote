@@ -819,6 +819,9 @@ class MainActivity : Activity() {
     private val threadReadsInFlight = mutableSetOf<String>()
     private val pendingThreadReads = mutableSetOf<String>()
     private val pinnedThreadIds = mutableSetOf<String>()
+    private val scheduledThreadIds = mutableSetOf<String>()
+    private var scheduledThreadIdsRefreshInFlight = false
+    private var scheduledThreadIdsRefreshAgain = false
     private val selectedSidebarThreadIds = mutableSetOf<String>()
     private var sidebarSelectionMode = false
     private var sidebarSelectionBusy = false
@@ -1460,6 +1463,7 @@ class MainActivity : Activity() {
         activeThread = null
         runtime = JSONObject()
         threads = JSONArray()
+        scheduledThreadIds.clear()
         models = JSONArray()
         queuedMessages = JSONArray()
         remoteUserMessageOverlays.clear()
@@ -2916,11 +2920,22 @@ class MainActivity : Activity() {
             if (pixelTheme) icon.setPadding(dp(2), dp(2), dp(2), dp(2))
             row.addView(icon, LinearLayout.LayoutParams(dp(threadIconSize), dp(threadIconSize)).apply { rightMargin = dp(if (pixelTheme) 8 else 9) })
             val title = threadTitle(thread)
+            val hasScheduledMessage = id in scheduledThreadIds
             val titleView = label(title, if (pixelTheme) 14 else 13, if (selected) TEXT else SUBTLE, selected, translateUi = false).apply {
                 maxLines = 1
                 ellipsize = android.text.TextUtils.TruncateAt.END
+                contentDescription = if (hasScheduledMessage) "$title，有定时发送" else title
             }
             row.addView(titleView, LinearLayout.LayoutParams(0, WRAP, 1f))
+            if (hasScheduledMessage) row.addView(ImageView(this).apply {
+                setPixelAwareImageResource(iconResource("schedule"))
+                imageTintList = if (retroTheme && !pixelTheme) null else ColorStateList.valueOf(iconTint("schedule"))
+                contentDescription = "有定时发送"
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+            }, LinearLayout.LayoutParams(dp(15), dp(15)).apply {
+                leftMargin = dp(4)
+                rightMargin = dp(2)
+            })
             val choose = {
                 if (id in selectedSidebarThreadIds) selectedSidebarThreadIds.remove(id) else selectedSidebarThreadIds.add(id)
                 renderSidebar(force = true)
@@ -3246,6 +3261,35 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun refreshScheduledThreadIds() {
+        if (token.isBlank()) return
+        if (scheduledThreadIdsRefreshInFlight) {
+            scheduledThreadIdsRefreshAgain = true
+            return
+        }
+        scheduledThreadIdsRefreshInFlight = true
+        val generation = connectionGeneration
+        val api = RemoteApi(endpoint, token)
+        io.execute {
+            val result = runCatching { api.get("/api/v1/codex/queue/scheduled-thread-ids").optJSONArray("thread_ids") }.getOrNull()
+            handler.post {
+                scheduledThreadIdsRefreshInFlight = false
+                if (generation == connectionGeneration && result != null) {
+                    val next = (0 until result.length()).mapTo(mutableSetOf()) { result.optString(it) }
+                    if (next != scheduledThreadIds) {
+                        scheduledThreadIds.clear()
+                        scheduledThreadIds.addAll(next)
+                        renderSidebar(force = true)
+                    }
+                }
+                if (scheduledThreadIdsRefreshAgain) {
+                    scheduledThreadIdsRefreshAgain = false
+                    refreshScheduledThreadIds()
+                }
+            }
+        }
+    }
+
     private fun refreshClaudeStatus() {
         val generation = connectionGeneration
         val api = RemoteApi(endpoint, token)
@@ -3268,6 +3312,7 @@ class MainActivity : Activity() {
 
     private fun refreshThreads(showErrors: Boolean) {
         if (token.isBlank()) return
+        refreshScheduledThreadIds()
         lastThreadListRefreshAt = android.os.SystemClock.uptimeMillis()
         val generation = connectionGeneration
         val api = RemoteApi(endpoint, token)
@@ -3758,6 +3803,7 @@ class MainActivity : Activity() {
                     else pausedThreadKeys.remove(threadTitleKey(threadId))
                     renderQueue()
                     updateSendButton()
+                    refreshScheduledThreadIds()
                 }
             } catch (error: Exception) {
                 if (showErrors) handler.post { if (connection == connectionGeneration) showStatus(error.message ?: "读取排队消息失败") }
@@ -7688,6 +7734,7 @@ class MainActivity : Activity() {
                     }
                     renderQueue()
                     updateSendButton()
+                    refreshScheduledThreadIds()
                     if (result.optBoolean("sent", false)) refreshActiveThread(false)
                     if (action == "send-now" && !result.optBoolean("sent", false)) {
                         val first = queuedMessages.optJSONObject(0)
@@ -10916,6 +10963,7 @@ class MainActivity : Activity() {
                     if (foreground) handler.post { refreshQueue(false) }
                     else backgroundQueueDirty = true
                 }
+                if (foreground) refreshScheduledThreadIds() else backgroundListDirty = true
             }
             "notification" -> handleNotificationEvent(event)
         }
