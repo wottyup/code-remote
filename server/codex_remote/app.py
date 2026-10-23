@@ -981,6 +981,10 @@ def detect_image_media_type(content: bytes) -> str | None:
         return "image/webp"
     if content.startswith((b"GIF87a", b"GIF89a")):
         return "image/gif"
+    if content.startswith(b"BM"):
+        return "image/bmp"
+    if content.startswith((b"\x00\x00\x01\x00", b"\x00\x00\x02\x00")):
+        return "image/x-icon"
     if len(content) >= 12 and content[4:8] == b"ftyp":
         brands = {content[index:index + 4] for index in range(8, min(len(content), 64), 4)}
         if brands & {b"avif", b"avis"}:
@@ -989,6 +993,9 @@ def detect_image_media_type(content: bytes) -> str | None:
             return "image/heic"
         if brands & {b"mif1", b"msf1"}:
             return "image/heif"
+    svg_header = content[:4096].decode("utf-8-sig", errors="ignore").lstrip()
+    if re.match(r"(?:<\?xml[^?]*\?>\s*)?(?:(?:<!--[\s\S]*?-->|<!DOCTYPE\s+svg[^>]*>)\s*)*<svg(?:\s|>)", svg_header, re.IGNORECASE):
+        return "image/svg+xml"
     return None
 
 

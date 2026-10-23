@@ -141,7 +141,7 @@ export interface CodexWorkspaceFile {
 
 export interface CodexWorkspaceImage {
   path: string
-  mediaType: CodexImageAttachment['mediaType']
+  mediaType: CodexImageAttachment['mediaType'] | 'image/avif' | 'image/heic' | 'image/heif' | 'image/bmp' | 'image/x-icon' | 'image/svg+xml'
   data: string
   size: number
 }

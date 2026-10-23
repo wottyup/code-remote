@@ -69,6 +69,7 @@ import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBa
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
+import { workspaceFileType } from '../lib/workspaceFileTypes'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
@@ -3148,7 +3149,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = 'å½
     }
     setSelectedPaths([entry.path])
     if (entry.kind === 'directory') toggleDirectory(entry.path)
-    else void loadPreview(entry.path, browsingRoot)
+    else void loadPreview(entry.path, browsingRoot, undefined, workspaceFileType(entry.path).tone === 'image' ? 'image' : 'text')
   }
 
   async function copyPreview() {
