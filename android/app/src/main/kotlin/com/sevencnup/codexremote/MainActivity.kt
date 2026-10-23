@@ -6391,7 +6391,7 @@ class MainActivity : Activity() {
     private fun decodeSampledBitmap(bytes: ByteArray, maximumDimension: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return decodeImageDecoderSampled(bytes, maximumDimension)
         val sourceMaximumDimension = maxOf(bounds.outWidth, bounds.outHeight)
         val targetFloor = (maximumDimension * 0.8f).toInt().coerceAtLeast(1)
         var sampleSize = 1
@@ -6401,7 +6401,20 @@ class MainActivity : Activity() {
         return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply {
             inSampleSize = sampleSize
             inPreferredConfig = Bitmap.Config.ARGB_8888
-        })
+        }) ?: decodeImageDecoderSampled(bytes, maximumDimension)
+    }
+
+    private fun decodeImageDecoderSampled(bytes: ByteArray, maximumDimension: Int): Bitmap? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+        return runCatching {
+            val source = android.graphics.ImageDecoder.createSource(java.nio.ByteBuffer.wrap(bytes))
+            android.graphics.ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                val sourceMaximum = maxOf(info.size.width, info.size.height)
+                val sample = (sourceMaximum / maximumDimension.coerceAtLeast(1)).coerceAtLeast(1)
+                decoder.setTargetSampleSize(sample)
+                decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+            }
+        }.getOrNull()
     }
 
     private fun naturalTextBlockWidth(textView: TextView, value: String, maxWidth: Int): Int {
@@ -10613,16 +10626,28 @@ class MainActivity : Activity() {
         } ?: "attachment"
         val mime = resolver.getType(uri).orEmpty().lowercase(Locale.ROOT)
         val bytes = resolver.openInputStream(uri)?.use(InputStream::readAll) ?: throw IllegalStateException("无法读取文件：$name")
-        if (mime.startsWith("image/") || name.substringAfterLast('.', "").lowercase() in setOf("png", "jpg", "jpeg", "webp", "gif")) {
-            val mediaType = when {
-                mime == "image/jpeg" || name.endsWith(".jpg", true) || name.endsWith(".jpeg", true) -> "image/jpeg"
-                mime == "image/webp" || name.endsWith(".webp", true) -> "image/webp"
-                mime == "image/gif" || name.endsWith(".gif", true) -> "image/gif"
-                else -> "image/png"
+        if (mime.startsWith("image/") || name.substringAfterLast('.', "").lowercase(Locale.ROOT) in
+            setOf("png", "jpg", "jpeg", "webp", "gif", "heic", "heif", "avif", "bmp", "tif", "tiff")) {
+            var uploadBytes = bytes
+            var mediaType = ImageMediaType.detect(bytes)
+            if (mediaType !in ImageMediaType.uploadSupported) {
+                val bitmap = decodeSampledBitmap(bytes, 2048)
+                    ?: throw IllegalArgumentException("不支持该图片格式，或手机无法解码：$name")
+                try {
+                    val output = ByteArrayOutputStream()
+                    if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                        throw IllegalArgumentException("无法转换图片格式：$name")
+                    }
+                    uploadBytes = output.toByteArray()
+                    mediaType = "image/png"
+                } finally {
+                    bitmap.recycle()
+                }
             }
-            return JSONObject().put("kind", "image").put("name", name).put("mediaType", mediaType)
-                .put("data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP))
-                .put("thumbnail", createAttachmentThumbnail(bytes))
+            val detectedType = mediaType ?: throw IllegalArgumentException("无法识别图片格式：$name")
+            return JSONObject().put("kind", "image").put("name", name).put("mediaType", detectedType)
+                .put("data", android.util.Base64.encodeToString(uploadBytes, android.util.Base64.NO_WRAP))
+                .put("thumbnail", createAttachmentThumbnail(uploadBytes))
         }
         if (mime == "application/pdf" || name.endsWith(".pdf", true) || name.endsWith(".xlsx", true) || name.endsWith(".xls", true)) {
             val contentType = if (mime.startsWith("application/") && mime != "application/octet-stream") mime else if (name.endsWith(".pdf", true)) "application/pdf" else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

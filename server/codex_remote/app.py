@@ -929,9 +929,6 @@ def codex_viewed_image_preview(
 
 
 def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path | None) -> dict[str, str | int]:
-    media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
-    if media_type is None:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
     if managed_image_root is not None and is_expired_managed_message_image(candidate, managed_image_root):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片已过期")
     try:
@@ -948,13 +945,8 @@ def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该图片") from error
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
-    signatures = {
-        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
-        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
-        "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
-    }
-    if not signatures.get(media_type, False):
+    media_type = detect_image_media_type(content)
+    if media_type is None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件内容不是有效的受支持图片")
     return {
         "path": candidate.relative_to(base).as_posix() if candidate.is_relative_to(base) else candidate.name,
@@ -962,6 +954,27 @@ def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path
         "data": base64.b64encode(content).decode("ascii"),
         "size": len(content),
     }
+
+
+def detect_image_media_type(content: bytes) -> str | None:
+    """Identify preview image bytes independently of a possibly stale filename suffix."""
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        brands = {content[index:index + 4] for index in range(8, min(len(content), 64), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "image/avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx"}:
+            return "image/heic"
+        if brands & {b"mif1", b"msf1"}:
+            return "image/heif"
+    return None
 
 
 def workspace_file_save(base: Path, relative_path: str, content: str, expected_revision: str) -> dict[str, str | int | bool]:
