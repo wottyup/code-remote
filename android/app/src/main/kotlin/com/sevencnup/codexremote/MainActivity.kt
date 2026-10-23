@@ -4602,19 +4602,111 @@ class MainActivity : Activity() {
             }
             val markdown = part.markdown.orEmpty()
             if (markdown.isBlank()) return@forEach
-            val content = label("", 14, TEXT, translateUi = false).apply {
-                setTextIsSelectable(true)
-                setLineSpacing(dp(3).toFloat(), 1.3f)
-                typeface = themedTypeface()
-                setHorizontallyScrolling(false)
-                breakStrategy = android.text.Layout.BREAK_STRATEGY_SIMPLE
-                hyphenationFrequency = android.text.Layout.HYPHENATION_FREQUENCY_NONE
-                maxWidth = maximumWidth
-            }
-            assistantMarkdown.setMarkdown(content, displayLocalInstallerPaths(markdown))
+            addSelectableMarkdown(container, markdown, maximumWidth)
+        }
+    }
+
+    private fun selectableMarkdownText(maximumWidth: Int): TextView =
+        label("", 14, TEXT, translateUi = false).apply {
+            setTextIsSelectable(true)
+            setLineSpacing(dp(3).toFloat(), 1.3f)
+            typeface = themedTypeface()
+            setHorizontallyScrolling(false)
+            breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+            hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+            maxWidth = maximumWidth
+        }
+
+    private fun addSelectableMarkdown(container: LinearLayout, markdown: String, maximumWidth: Int) {
+        val document = assistantMarkdown.parse(displayLocalInstallerPaths(markdown))
+        var pending = org.commonmark.node.Document()
+        fun flush() {
+            if (pending.firstChild == null) return
+            val content = selectableMarkdownText(maximumWidth)
+            assistantMarkdown.setParsedMarkdown(content, assistantMarkdown.render(pending))
             enableChatLinkClicks(content)
             container.addView(content, LinearLayout.LayoutParams(WRAP, WRAP))
+            pending = org.commonmark.node.Document()
         }
+        var node = document.firstChild
+        while (node != null) {
+            val next = node.next
+            if (node is org.commonmark.ext.gfm.tables.TableBlock) {
+                flush()
+                container.addView(selectableTable(node, maximumWidth),
+                    LinearLayout.LayoutParams(maximumWidth, WRAP).apply {
+                        topMargin = dp(4)
+                        bottomMargin = dp(6)
+                    })
+            } else {
+                pending.appendChild(node)
+            }
+            node = next
+        }
+        flush()
+    }
+
+    private fun selectableTable(table: org.commonmark.ext.gfm.tables.TableBlock, maximumWidth: Int): View {
+        val rows = mutableListOf<List<Pair<Spanned, org.commonmark.ext.gfm.tables.TableCell>>>()
+        var section = table.firstChild
+        while (section != null) {
+            var row = section.firstChild
+            while (row != null) {
+                val cells = mutableListOf<Pair<Spanned, org.commonmark.ext.gfm.tables.TableCell>>()
+                var cell = row.firstChild
+                while (cell != null) {
+                    val nextCell = cell.next
+                    if (cell is org.commonmark.ext.gfm.tables.TableCell) {
+                        // Render inline text without the atomic TableRowSpan replacement.
+                        val paragraph = org.commonmark.node.Paragraph()
+                        while (cell.firstChild != null) paragraph.appendChild(cell.firstChild)
+                        cells += assistantMarkdown.render(paragraph) to cell
+                    }
+                    cell = nextCell
+                }
+                rows += cells
+                row = row.next
+            }
+            section = section.next
+        }
+        val columnCount = maxOf(1, rows.maxOfOrNull { it.size } ?: 1)
+        val cellWidth = maxOf(dp(120), (maximumWidth - dp(1)) / columnCount)
+        val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val copyText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.first.toString() } }
+        card.addView(copyActionButton("复制表格", "表格", copyText),
+            LinearLayout.LayoutParams(WRAP, dp(30)).apply { gravity = Gravity.END })
+        val grid = android.widget.TableLayout(this).apply {
+            setPadding(dp(1), dp(1), 0, 0)
+            setBackgroundColor(BORDER)
+        }
+        rows.forEachIndexed { index, cells ->
+            val row = android.widget.TableRow(this)
+            repeat(columnCount) { column ->
+                val entry = cells.getOrNull(column)
+                val content = selectableMarkdownText(cellWidth).apply {
+                    setPadding(dp(7), dp(7), dp(7), dp(7))
+                    setBackgroundColor(if (index % 2 == 0) PANEL_INSET else PANEL)
+                    gravity = Gravity.TOP or when (entry?.second?.alignment) {
+                        org.commonmark.ext.gfm.tables.TableCell.Alignment.CENTER -> Gravity.CENTER_HORIZONTAL
+                        org.commonmark.ext.gfm.tables.TableCell.Alignment.RIGHT -> Gravity.RIGHT
+                        else -> Gravity.LEFT
+                    }
+                    if (entry?.second?.isHeader == true) setTypeface(typeface, Typeface.BOLD)
+                }
+                assistantMarkdown.setParsedMarkdown(content, entry?.first ?: SpannableString(""))
+                enableChatLinkClicks(content)
+                row.addView(content, android.widget.TableRow.LayoutParams(cellWidth, MATCH).apply {
+                    rightMargin = dp(1)
+                    bottomMargin = dp(1)
+                })
+            }
+            grid.addView(row)
+        }
+        card.addView(HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(grid, FrameLayout.LayoutParams(WRAP, WRAP))
+        }, LinearLayout.LayoutParams(MATCH, WRAP))
+        return card
     }
 
     private fun splitAssistantMarkdown(text: String): List<AssistantMarkdownPart> {
