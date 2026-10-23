@@ -16,6 +16,21 @@ from codex_remote.browser_payload import browser_event, browser_item, browser_th
 
 
 class BrowserPayloadTests(unittest.TestCase):
+    def test_async_questions_survive_history_and_live_projection(self) -> None:
+        questions = [
+            {"title": "希望使用哪个主题？", "options": ["像素", "旧经典"]},
+            {"title": "还有哪些需要补充？"},
+        ]
+        item = {"id": "call-question", "type": "agentMessage", "text": "希望使用哪个主题？\n- 像素\n- 旧经典",
+                "phase": "final_answer", "delivery": "async", "questions": questions}
+        thread = {"id": "thread", "turns": [{"id": "turn", "status": "inProgress", "items": [item]}]}
+        self.assertEqual(browser_thread(thread)["turns"][0]["items"][0], item)
+        event = {"type": "notification", "method": "item/completed", "params": {
+            "threadId": "thread", "turnId": "turn", "item": item,
+        }}
+        self.assertEqual(browser_event(event, thread_id="thread", filter_thread=True), event)
+        self.assertIsNone(browser_event(event, thread_id="other", filter_thread=True))
+
     def test_history_discards_duplicate_tool_output_but_keeps_visible_content(self) -> None:
         output = "tool output\n" * 100_000
         message = {"id": "user", "type": "userMessage", "content": [

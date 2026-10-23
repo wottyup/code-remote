@@ -1,8 +1,8 @@
 import type { CodexImageAttachment } from './codexRemoteClient'
+import { maxImagesPerTurn } from './imageAttachmentRules'
 
 const databaseName = 'codex-remote-composer-drafts'
 const storeName = 'image-drafts'
-const maxImagesPerDraft = 4
 const maxEncodedImageLength = Math.ceil((8 * 1024 * 1024 * 4) / 3) + 8
 const supportedImageTypes = new Set<CodexImageAttachment['mediaType']>([
   'image/png',
@@ -79,7 +79,7 @@ function transactionComplete(transaction: IDBTransaction) {
 
 function validImages(value: unknown): CodexImageAttachment[] {
   if (!Array.isArray(value)) return []
-  return value.slice(0, maxImagesPerDraft).filter((image): image is CodexImageAttachment => {
+  return value.slice(0, maxImagesPerTurn).filter((image): image is CodexImageAttachment => {
     if (!image || typeof image !== 'object') return false
     const candidate = image as Partial<CodexImageAttachment>
     return typeof candidate.name === 'string'
@@ -132,7 +132,7 @@ export function moveComposerImageDraft(sourceScope: string, targetScope: string)
     const existingTargetImages = await readRecord(targetScope)
     const mergedImages = [...images, ...existingTargetImages]
       .filter((image, index, all) => all.findIndex((candidate) => candidate.name === image.name && candidate.data === image.data) === index)
-      .slice(0, maxImagesPerDraft)
+      .slice(0, maxImagesPerTurn)
     await saveComposerImageDraft(targetScope, mergedImages)
     await saveComposerImageDraft(sourceScope, [])
     publishImageDraft(targetScope, mergedImages)

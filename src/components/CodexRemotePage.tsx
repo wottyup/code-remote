@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
@@ -7,6 +7,7 @@ import {
   Bell,
   BellOff,
   BookOpen,
+  CalendarClock,
   ChartNoAxesColumnIncreasing,
   Check,
   ChevronDown,
@@ -44,25 +45,26 @@ import {
   Square,
   Terminal as TerminalIcon,
   Trash2,
-  Users,
   X,
 } from 'lucide-react'
-import { deviceChatActivityFromItems, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type DeviceChatMessage } from '../lib/codexRemoteClient'
+import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { codexRemoteClient, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
-import { formatAssistantChoiceReply, parseAssistantChoiceGroups, type MessageChoiceGroup } from '../lib/messageChoices'
+import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantChoiceContent, type MessageChoiceGroup } from '../lib/messageChoices'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
+import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
+import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
 import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
@@ -70,8 +72,6 @@ import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberW
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
-import { DeviceChatSidebar } from './DeviceChatSidebar'
-import { useDeviceChat, type DeviceChatController } from '../hooks/useDeviceChat'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
@@ -207,7 +207,6 @@ const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType
 const maxImageSize = 8 * 1024 * 1024
 const maxThemeImageUploadSize = 20 * 1024 * 1024
 const maxThemeImageEdge = 1_920
-const maxImagesPerTurn = 4
 const longPasteThreshold = 4_000
 
 function formatMessageTimestamp(value: string | undefined) {
@@ -229,8 +228,6 @@ const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
-const paneLayoutStorageKey = 'codex-remote.pane-layout'
-const deviceChatModeStorageKey = 'codex-remote.device-chat-mode'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
@@ -250,79 +247,6 @@ const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
-
-interface PersistedPaneLayout {
-  openPaneIndexes: number[]
-  selectedPaneIndex: number
-  threadIdsByPane: Record<string, string>
-  enginesByPane: Record<string, ChatEngine>
-}
-
-function readPersistedPaneLayout(): PersistedPaneLayout {
-  const fallback: PersistedPaneLayout = { openPaneIndexes: [0], selectedPaneIndex: 0, threadIdsByPane: {}, enginesByPane: {} }
-  if (typeof window === 'undefined') return fallback
-  try {
-    const value = window.localStorage.getItem(paneLayoutStorageKey)
-    if (!value) return fallback
-    const parsed = JSON.parse(value) as Record<string, unknown>
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return fallback
-    const paneLimit = concurrentPaneLimit()
-    const openPaneIndexes = Array.isArray(parsed.openPaneIndexes)
-      ? [...new Set(parsed.openPaneIndexes.filter((index): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0 && index < paneLimit))]
-      : []
-    if (openPaneIndexes.length === 0) openPaneIndexes.push(0)
-    const requestedSelection = parsed.selectedPaneIndex
-    const selectedPaneIndex = typeof requestedSelection === 'number'
-      && Number.isInteger(requestedSelection)
-      && openPaneIndexes.includes(requestedSelection)
-      ? requestedSelection
-      : openPaneIndexes[0]
-    const savedThreads = parsed.threadIdsByPane && typeof parsed.threadIdsByPane === 'object' && !Array.isArray(parsed.threadIdsByPane)
-      ? parsed.threadIdsByPane as Record<string, unknown>
-      : {}
-    const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((index) => {
-      const threadId = savedThreads[String(index)]
-      return typeof threadId === 'string' && threadId.trim().length > 0 && threadId.length <= 512
-        ? [[String(index), threadId.trim()]]
-        : []
-    }))
-    const savedEngines = parsed.enginesByPane && typeof parsed.enginesByPane === 'object' && !Array.isArray(parsed.enginesByPane)
-      ? parsed.enginesByPane as Record<string, unknown>
-      : {}
-    const enginesByPane: Record<string, ChatEngine> = {}
-    for (const index of openPaneIndexes) {
-      const engine = savedEngines[String(index)]
-      if (engine === 'codex' || engine === 'claude-code') enginesByPane[String(index)] = engine
-    }
-    return { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
-  } catch {
-    return fallback
-  }
-}
-
-function savePersistedPaneLayout(layout: PersistedPaneLayout) {
-  try {
-    window.localStorage.setItem(paneLayoutStorageKey, JSON.stringify(layout))
-  } catch {
-    // Open panes still work for the current page when storage is unavailable.
-  }
-}
-
-function readPersistedDeviceChatMode() {
-  try {
-    return window.localStorage.getItem(deviceChatModeStorageKey) === 'true'
-  } catch {
-    return false
-  }
-}
-
-function savePersistedDeviceChatMode(enabled: boolean) {
-  try {
-    window.localStorage.setItem(deviceChatModeStorageKey, String(enabled))
-  } catch {
-    // The selected mode still works for the current page when storage is unavailable.
-  }
-}
 
 function readPinnedThreadIds() {
   if (typeof window === 'undefined') return new Set<string>()
@@ -795,6 +719,18 @@ function timeOf(thread: CodexThread) {
     : threadDateFormatter.format(date)
 }
 
+function localDateTimeInputValue(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return localDate.toISOString().slice(0, 16)
+}
+
+function scheduledTimeLabel(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
 interface ComposerMenuOption {
   value: string
   label: string
@@ -803,6 +739,67 @@ interface ComposerMenuOption {
 interface ModelReasoningOptions {
   options: ComposerMenuOption[]
   defaultEffort?: string
+}
+
+function useComposerFloatingPosition<TAnchor extends HTMLElement, TPopover extends HTMLElement>(
+  open: boolean,
+  anchorRef: RefObject<TAnchor | null>,
+  popoverRef: RefObject<TPopover | null>,
+) {
+  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      if (!anchorRef.current || !popoverRef.current) return
+      const viewport = window.visualViewport
+      const rect = popoverRef.current.getBoundingClientRect()
+      const next = composerMenuPosition(anchorRef.current.getBoundingClientRect(), {
+        width: rect.width,
+        height: Math.min(340, popoverRef.current.scrollHeight + 2),
+      }, {
+        left: viewport?.offsetLeft ?? 0,
+        top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? window.innerWidth,
+        height: viewport?.height ?? window.innerHeight,
+      })
+      setPosition((current) => current && current.left === next.left && current.top === next.top
+        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
+    }
+    const handleScroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !popoverRef.current?.contains(event.target)) updatePosition()
+    }
+    updatePosition()
+    const settleStartedAt = window.performance.now()
+    let settleFrame: number | undefined
+    const trackAnchorWhileViewportSettles = () => {
+      updatePosition()
+      if (window.performance.now() - settleStartedAt < 600) {
+        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+      }
+    }
+    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+    const observer = new ResizeObserver(updatePosition)
+    if (anchorRef.current) observer.observe(anchorRef.current)
+    if (popoverRef.current) observer.observe(popoverRef.current)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', handleScroll, true)
+    window.visualViewport?.addEventListener('resize', updatePosition)
+    window.visualViewport?.addEventListener('scroll', updatePosition)
+    return () => {
+      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
+      observer.disconnect()
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.visualViewport?.removeEventListener('resize', updatePosition)
+      window.visualViewport?.removeEventListener('scroll', updatePosition)
+    }
+  }, [anchorRef, open, popoverRef])
+
+  return position
 }
 
 function ComposerMenu({
@@ -816,6 +813,9 @@ function ComposerMenu({
   onChange,
   footer,
   temporary = false,
+  mobileSettingsOwner,
+  portalTheme,
+  portalThemeStyle,
 }: {
   label: string
   value: string
@@ -827,63 +827,15 @@ function ComposerMenu({
   onChange: (value: string) => void
   footer?: ReactNode
   temporary?: boolean
+  mobileSettingsOwner?: string
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
   const composerFocusBeforeOpen = useRef<HTMLElement | null>(null)
-  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
+  const position = useComposerFloatingPosition(open, root, popover)
   const selected = options.find((option) => option.value === value)
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null)
-      return
-    }
-    const updatePosition = () => {
-      if (!root.current || !popover.current) return
-      const viewport = window.visualViewport
-      const rect = popover.current.getBoundingClientRect()
-      const next = composerMenuPosition(root.current.getBoundingClientRect(), {
-        width: rect.width,
-        height: Math.min(340, popover.current.scrollHeight + 2),
-      }, {
-        left: viewport?.offsetLeft ?? 0,
-        top: viewport?.offsetTop ?? 0,
-        width: viewport?.width ?? window.innerWidth,
-        height: viewport?.height ?? window.innerHeight,
-      })
-      setPosition((current) => current && current.left === next.left && current.top === next.top
-        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
-    }
-    const handleScroll = (event: Event) => {
-      if (!(event.target instanceof Node) || !popover.current?.contains(event.target)) updatePosition()
-    }
-    updatePosition()
-    const settleStartedAt = window.performance.now()
-    let settleFrame: number | undefined
-    const trackAnchorWhileViewportSettles = () => {
-      updatePosition()
-      if (window.performance.now() - settleStartedAt < 600) {
-        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
-      }
-    }
-    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
-    const observer = new ResizeObserver(updatePosition)
-    if (root.current) observer.observe(root.current)
-    if (popover.current) observer.observe(popover.current)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', handleScroll, true)
-    window.visualViewport?.addEventListener('resize', updatePosition)
-    window.visualViewport?.addEventListener('scroll', updatePosition)
-    return () => {
-      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
-      observer.disconnect()
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', handleScroll, true)
-      window.visualViewport?.removeEventListener('resize', updatePosition)
-      window.visualViewport?.removeEventListener('scroll', updatePosition)
-    }
-  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -909,7 +861,8 @@ function ComposerMenu({
         className="composer-menu__trigger"
         type="button"
         disabled={disabled}
-        aria-label={label}
+        aria-label={`${label}，当前值：${selected?.label ?? emptyLabel}${temporary ? '，仅本次' : ''}`}
+        title={`${selected?.label ?? emptyLabel}${temporary ? ' · 本次' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         onPointerDown={(event) => {
@@ -926,43 +879,46 @@ function ComposerMenu({
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
       </button>
       {open ? createPortal(
-        <div
-          ref={popover}
-          className="composer-menu__popover composer-menu__popover--floating"
-          style={position ?? { visibility: 'hidden' }}
-        >
-          {footer}
-          <div className="composer-menu__options" role="listbox" aria-label={label}>
-            {options.length > 0 ? options.map((option) => (
-              <button
-                className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={option.value === value}
-                disabled={disabled}
-                onPointerDown={(event) => {
-                  if (composerFocusBeforeOpen.current) event.preventDefault()
-                }}
-                onClick={() => {
-                  onChange(option.value)
-                  onOpenChange(false)
-                  const focusTarget = composerFocusBeforeOpen.current
-                  composerFocusBeforeOpen.current = null
-                  if (focusTarget?.isConnected) {
-                    window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
-                  }
-                }}
-              >
-                <span className="composer-menu__option-copy">
-                  <strong>{option.label}</strong>
-                </span>
-                {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
-              </button>
-            )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div
+            ref={popover}
+            className="composer-menu__popover composer-menu__popover--floating"
+            data-mobile-settings-owner={mobileSettingsOwner}
+            style={position ?? { visibility: 'hidden' }}
+          >
+            {footer}
+            <div className="composer-menu__options" role="listbox" aria-label={label}>
+              {options.length > 0 ? options.map((option) => (
+                <button
+                  className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  disabled={disabled}
+                  onPointerDown={(event) => {
+                    if (composerFocusBeforeOpen.current) event.preventDefault()
+                  }}
+                  onClick={() => {
+                    onChange(option.value)
+                    onOpenChange(false)
+                    const focusTarget = composerFocusBeforeOpen.current
+                    composerFocusBeforeOpen.current = null
+                    if (focusTarget?.isConnected) {
+                      window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                    }
+                  }}
+                >
+                  <span className="composer-menu__option-copy">
+                    <strong>{option.label}</strong>
+                  </span>
+                  {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+                </button>
+              )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+            </div>
           </div>
         </div>,
-        root.current?.closest('.remote-shell') ?? document.body,
+        document.body,
       ) : null}
     </div>
   )
@@ -981,6 +937,7 @@ interface ComposerSendInput {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
+  scheduledAt?: string
 }
 
 type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
@@ -998,8 +955,9 @@ interface ComposerHandle {
 }
 
 interface MessageComposerProps {
-  deviceChat?: DeviceChatController
   token: string
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
   draftScope: string
   onDraftChange: (draft: string) => void
   composerHeightMemory: RefObject<ComposerHeightMemory | null>
@@ -1036,7 +994,7 @@ interface MessageComposerProps {
   onUploadPdf: (file: File) => Promise<{ attachment_id: string; name: string; size: number }>
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
-  onSendQueuedNow: (messageId: string) => Promise<boolean>
+  onSendQueuedNow: (messageId: string, mode: QueuedMessageSendMode) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
   onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
@@ -1052,8 +1010,9 @@ interface MessageComposerProps {
 }
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
-  deviceChat,
   token,
+  portalTheme,
+  portalThemeStyle,
   draftScope,
   onDraftChange,
   composerHeightMemory,
@@ -1130,6 +1089,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
+  const [mobileSettingsExpanded, setMobileSettingsExpanded] = useState(false)
+  const mobileSettingsExpandedRef = useRef(false)
+  const mobileSettingsRoot = useRef<HTMLDivElement>(null)
+  const mobileSettingsToggle = useRef<HTMLButtonElement>(null)
+  const mobileSettingsPanel = useRef<HTMLDivElement>(null)
+  const mobileSettingsPosition = useComposerFloatingPosition(mobileLayout && mobileSettingsExpanded, mobileSettingsToggle, mobileSettingsPanel)
+  const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
+  const [scheduleDateTime, setScheduleDateTime] = useState('')
+  const scheduleButton = useRef<HTMLButtonElement>(null)
+  const schedulePanel = useRef<HTMLDivElement>(null)
+  const schedulePanelPosition = useComposerFloatingPosition(schedulePanelOpen, scheduleButton, schedulePanel)
+  const mobileSettingsOwner = useId()
+  const scheduleDateTimeInputId = useId()
+  mobileSettingsExpandedRef.current = mobileSettingsExpanded
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
@@ -1256,6 +1229,75 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     openMenuRef.current = next
     setOpenMenu(next)
   }, [])
+  const closeMobileSettings = useCallback(() => {
+    mobileSettingsExpandedRef.current = false
+    setMobileSettingsExpanded(false)
+    changeOpenMenu(null)
+  }, [changeOpenMenu])
+  const toggleMobileSettings = useCallback(() => {
+    setSchedulePanelOpen(false)
+    if (mobileSettingsExpandedRef.current) closeMobileSettings()
+    else {
+      mobileSettingsExpandedRef.current = true
+      setMobileSettingsExpanded(true)
+    }
+  }, [closeMobileSettings])
+
+  const toggleSchedulePanel = useCallback(() => {
+    closeMobileSettings()
+    if (schedulePanelOpen) {
+      setSchedulePanelOpen(false)
+      return
+    }
+    setScheduleDateTime((current) => current || localDateTimeInputValue(new Date(Date.now() + 5 * 60_000)))
+    setSchedulePanelOpen(true)
+  }, [closeMobileSettings, schedulePanelOpen])
+
+  useEffect(() => {
+    if (!schedulePanelOpen) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || schedulePanel.current?.contains(target) || scheduleButton.current?.contains(target)) return
+      setSchedulePanelOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      setSchedulePanelOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [schedulePanelOpen])
+
+  useEffect(() => {
+    if (!mobileLayout || !mobileSettingsExpanded) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || mobileSettingsRoot.current?.contains(target)) return
+      const ownMenuPopover = Array.from(document.querySelectorAll<HTMLElement>('[data-mobile-settings-owner]'))
+        .some((popover) => popover.dataset.mobileSettingsOwner === mobileSettingsOwner && popover.contains(target))
+      if (!ownMenuPopover) closeMobileSettings()
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || openMenuRef.current) return
+      event.preventDefault()
+      closeMobileSettings()
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [closeMobileSettings, mobileLayout, mobileSettingsExpanded, mobileSettingsOwner])
+
+  useEffect(() => {
+    if (!mobileLayout && mobileSettingsExpandedRef.current) closeMobileSettings()
+  }, [closeMobileSettings, mobileLayout])
 
   const updateDraft = useCallback((next: string | ((current: string) => string)) => {
     const value = typeof next === 'function' ? next(draftRef.current) : next
@@ -1377,7 +1419,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
         return
       }
-      const separator = current && !/\s$/.test(current) ? '\n' : ''
+      const separator = current && !/\s$/.test(current) ? '  ' : ''
       updateDraft(`${current}${separator}${additions.join('\n')}`)
       if (focus) window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
     },
@@ -1436,8 +1478,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (draftScope === targetScope) updateDraft(unassignedDraft)
     },
     closeOpenMenu() {
-      if (!openMenuRef.current) return false
-      changeOpenMenu(null)
+      if (!openMenuRef.current && !mobileSettingsExpandedRef.current && !schedulePanelOpen) return false
+      setSchedulePanelOpen(false)
+      closeMobileSettings()
       return true
     },
     cancelQueuedEdit() {
@@ -1445,7 +1488,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (!sendingRef.current) void finishQueuedEdit()
       return true
     },
-  }), [changeOpenMenu, draftScope, onEndQueuedEdit, updateAttachedImages, updateDraft])
+  }), [closeMobileSettings, draftScope, onEndQueuedEdit, schedulePanelOpen, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -1517,16 +1560,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }, [])
 
-  const canCompose = !sending && (deviceChat ? Boolean(deviceChat.state?.room) && !deviceChat.busy && (deviceChat.state?.connected || deviceChat.state?.role === 'host') : !writerConflict && connection === 'connected')
+  const canCompose = !sending && !writerConflict && connection === 'connected'
   const canConfigure = canCompose
-  const canSend = (draft.trim().length > 0 || attachedDocuments.length > 0 || (!deviceChat && attachedImages.length > 0))
+  const canSend = (draft.trim().length > 0 || attachedDocuments.length > 0 || attachedImages.length > 0)
     && !readingDocuments
     && !readingImages
     && imagesReady
     && (editingQueuedMessageId ? !sending : canCompose)
   const canAttachFiles = (editingQueuedMessageId ? !sending : canCompose) && !readingDocuments && !readingImages
-  const stopWithSendButton = !deviceChat && isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
-  const continueWithSendButton = !deviceChat && continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
+  const stopWithSendButton = isRunning && canInterrupt && !writerConflict && !editingQueuedMessageId
+  const continueWithSendButton = continuationPending && !isRunning && !writerConflict && !editingQueuedMessageId
   const temporaryPreferencesToggle = (
     <button className="composer-menu__option composer-menu__temporary" type="button" role="switch"
       aria-checked={temporaryPreferences} disabled={!canConfigure}
@@ -1617,7 +1660,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     const remaining = maxImagesPerTurn - attachedImagesRef.current.length
     if (remaining <= 0) {
-      const message = '单条消息最多附加 4 张图片。'
+      const message = `单条消息最多附加 ${maxImagesPerTurn} 张图片。`
       setAttachmentError(message)
       return message
     }
@@ -1626,7 +1669,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     try {
       const next = await Promise.all(chosen.map(readImage))
       updateAttachedImages([...attachedImagesRef.current, ...next])
-      const message = files.length > remaining ? '单条消息最多附加 4 张图片，其余图片未添加。' : null
+      const message = files.length > remaining ? `单条消息最多附加 ${maxImagesPerTurn} 张图片，其余图片未添加。` : null
       setAttachmentError(message)
       return message
     } catch (reason) {
@@ -1662,9 +1705,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         try {
           if (!isSupportedDocumentFile(file)) throw new Error('暂不支持这个文件格式。')
           if (file.size > maxDocumentFileSize) throw new Error('单个文档不能超过 20 MB。')
-          if (deviceChat && (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf')) {
-            throw new Error('群聊暂不支持原始 PDF 和表格文件传输，请先转换为文本。')
-          }
           if (['pdf', 'xls', 'xlsx', 'xlsm'].includes(documentExtensionOf(file.name)) || file.type === 'application/pdf') {
             const uploaded = await onUploadPdf(file)
             parsed.push({ name: uploaded.name, content: '', sourceFileId: uploaded.attachment_id })
@@ -1710,7 +1750,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   async function attachSelectedFiles(files: File[]) {
-    if (deviceChat || !mobileLayout) {
+    if (!mobileLayout) {
       await attachDocuments(files)
       return
     }
@@ -1729,36 +1769,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
   }
 
-  async function send(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (deviceChat) {
-      if ((!draft.trim() && attachedDocuments.length === 0) || sendingRef.current || !canCompose || readingDocuments) return
-      if (attachedDocuments.some((document) => document.sourceFileId || !document.content)) {
-        setAttachmentError('群聊只能发送已提取文字的文档，原始文件暂不能跨设备传输。')
-        return
-      }
-      const documentText = attachedDocuments.map((document) => `[附件文档：${document.name}]\n${document.content}\n[/附件文档]`).join('\n\n')
-      const groupText = [draft.trim(), documentText].filter(Boolean).join('\n\n')
-      if (groupText.length > 12_000) {
-        setAttachmentError('群聊消息和文档合计不能超过 12000 个字符，请缩短后重试。')
-        return
-      }
-      sendingRef.current = true
-      setSending(true)
-      const submittedDraft = draft
-      const sent = await deviceChat.sendMessage(groupText)
-      if (sent) {
-        updateDraft((current) => current === submittedDraft ? '' : current)
-        attachedDocumentsRef.current = []
-        setAttachedDocuments([])
-        setAttachmentError(null)
-      }
-      sendingRef.current = false
-      setSending(false)
-      return
-    }
+  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string) {
+    event?.preventDefault()
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
+    if (scheduledAt && (!Number.isFinite(Date.parse(scheduledAt)) || Date.parse(scheduledAt) <= Date.now())) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    if (!scheduledAt) setSchedulePanelOpen(false)
     if (editingQueuedMessageId) {
       void confirmQueuedEdit()
       return
@@ -1793,6 +1812,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
         claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
         claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
+        scheduledAt,
       })
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
@@ -1822,6 +1842,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError((current) => current ?? previousAttachmentError)
     } else {
       forgetComposerImageDraftTarget(draftScope)
+      if (scheduledAt) {
+        setSchedulePanelOpen(false)
+        setScheduleDateTime('')
+        setQueuedMessagesExpanded(true)
+      }
       try {
         await saveComposerImageDraft(draftScope, [])
       } catch (reason) {
@@ -1834,6 +1859,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     sendingRef.current = false
     setSending(false)
+  }
+
+  function submitScheduledMessage() {
+    const scheduledTime = new Date(scheduleDateTime)
+    if (!scheduleDateTime || Number.isNaN(scheduledTime.getTime()) || scheduledTime.getTime() <= Date.now()) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    setSchedulePanelOpen(false)
+    void send(undefined, scheduledTime.toISOString())
   }
 
   function restoreDraftAfterQueuedEdit() {
@@ -1928,12 +1963,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     void finishQueuedEdit()
   }
 
-  async function sendQueuedNow(messageId: string) {
+  async function sendQueuedNow(messageId: string, mode: QueuedMessageSendMode) {
     if (sendingQueuedId) return
     setSendingQueuedId(messageId)
     try {
-      if (!await onSendQueuedNow(messageId)) {
-        setAttachmentError('消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
+      if (await onSendQueuedNow(messageId, mode)) {
+        setAttachmentError(null)
+      } else {
+        setAttachmentError(mode === 'steer'
+          ? '插队发送未确认成功，消息仍在队列中；请查看错误提示或核对聊天记录。'
+          : '消息仍在队列中，将在前面的回复结束后按它保存的模型和思考等级发送。')
       }
     } finally {
       setSendingQueuedId((current) => current === messageId ? null : current)
@@ -1980,10 +2019,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
     if (images.length > 0) {
       event.preventDefault()
-      if (deviceChat) {
-        setAttachmentError('群聊暂不支持图片跨设备传输。')
-        return
-      }
       void attachImages(images)
       const labels = embeddedImages.map((image) => `[图片：${image.name}]`).join('\n\n')
       const text = labels && pastedText === labels
@@ -2049,6 +2084,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(null)
     return true
   }
+
+  const preferenceMenus = showCodexPreferences ? <>
+    <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+  </> : <>
+    <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+  </>
 
   return (
     <div className="composer-dock">
@@ -2133,7 +2178,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在插入当前回复' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? '当前回复结束后会依次发送' : '等待电脑端自动发送')}</small> : null}
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在发送排队消息' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? '回复结束后依次发送；点“插队”沿用当前轮次设置立即发送' : 'Claude 当前不支持运行中插队，回复结束后依次发送' : '等待电脑端自动发送')}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
@@ -2148,21 +2193,36 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
               const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
-              const needsSeparateTurn = Boolean(message.model || message.effort || message.claudeModel || message.claudeEffort)
+              const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
+              const waitingForClaude = isRunning && !showCodexPreferences
+              const sendTitle = isSubmitting ? '消息正在提交，请稍候'
+                : deliveryUnverified ? '请先核对这条消息是否已发送'
+                  : waitingForClaude ? 'Claude 当前不支持运行中插队，请等待回复结束，或暂停后发送'
+                    : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
+                      : index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中'
+                        : '按消息保存的模型和思考等级开始新一轮'
               const attachmentSummary = [
                 message.images.length > 0 ? `${message.images.length} 张图片` : '',
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
               ].filter(Boolean).join(' · ')
               const summary = [message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
+              const queueStatus = isSubmitting ? '正在确认送达'
+                : isEditing ? '正在输入框中编辑'
+                  : message.editing ? '另一设备正在编辑 · 暂停发送'
+                    : sendingNow ? '正在确认送达'
+                      : deliveryUnverified ? '可能已发送 · 请核对聊天记录'
+                        : scheduledLabel ? `定于 ${scheduledLabel} 发送`
+                          : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isSubmitting ? '正在确认送达' : isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || (needsSeparateTurn && isRunning)} onClick={() => void sendQueuedNow(message.id)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : needsSeparateTurn && isRunning ? '当前回复结束后才能按这条消息保存的模型和思考等级开始新一轮' : needsSeparateTurn && index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中' : needsSeparateTurn ? '按消息保存的模型和思考等级开始新一轮' : `发送给当前${showCodexPreferences ? ' Codex' : ' Claude Code'} 回复`}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>发送</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || waitingForClaude} onClick={() => void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{sendMode === 'steer' ? '插队' : '发送'}</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
                 </div>
@@ -2195,45 +2255,39 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               requestComposerKeyboard()
             }
           }}
-          placeholder={deviceChat ? '发送群聊消息…' : editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
-          aria-label={deviceChat ? '发送设备群聊消息' : editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
+          placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
+          aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
           inputMode="text"
           enterKeyHint="send"
         />
       </div>
       <div className="message-composer__footer">
         <div className="composer-footer-start">
-          {!deviceChat ? <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button> : null}
-          <div className="composer-preferences">
-            {deviceChat ? <>
-              <div className="device-chat-recipient" role="group" aria-label="发送给设备">
-                <span>发送给</span>
-                <div className="device-chat-recipient__options">
-                  <button type="button" aria-pressed={!deviceChat.targetId} title="只同步群消息，不运行设备 Codex" onClick={() => deviceChat.setTargetId('')}>所有人</button>
-                  {deviceChat.state?.members.map((member) => <button key={member.id} type="button" aria-pressed={deviceChat.targetId === member.id} title={`运行 ${member.name} 设备上的 Codex`} onClick={() => deviceChat.setTargetId(member.id)}>@{member.name}</button>)}
-                </div>
-              </div>
-              <ComposerMenu label="模型" value={selectedModel} options={modelOptions} emptyLabel="目标默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={onModelChange} />
-              <ComposerMenu label="思考" value={selectedEffort} options={reasoningOptions} emptyLabel="目标默认思考" disabled={!canConfigure} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={onEffortChange} />
-              {deviceChat.targetId === deviceChat.state?.node_id && deviceChat.targetId
-                ? <ComposerMenu label="授权" value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canConfigure} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(value) => onApprovalPolicyChange(value as CodexApprovalPolicy)} />
-                : <span className="composer-hint" title="远端设备的授权设置由其本机控制">授权由目标设备控制</span>}
-            </> : showCodexPreferences ? <>
-              <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-            </> : <>
-              <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
-            </>}
+          <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
+          <div className={`composer-preferences${mobileLayout ? ' composer-preferences--mobile' : ''}`} ref={mobileSettingsRoot}>
+            {mobileLayout ? <>
+              <button ref={mobileSettingsToggle} className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} aria-expanded={mobileSettingsExpanded}>
+                {mobileSettingsExpanded ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+              </button>
+              {mobileSettingsExpanded ? createPortal(
+                <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+                  <div ref={mobileSettingsPanel} className="composer-menu__popover composer-menu__popover--floating composer-preferences__mobile-panel" role="group" aria-label="对话设置" data-mobile-settings-owner={mobileSettingsOwner} style={mobileSettingsPosition ?? { visibility: 'hidden' }}>
+                    <div className="composer-preferences__controls">{preferenceMenus}</div>
+                  </div>
+                </div>,
+                document.body,
+              ) : null}
+            </> : <div className="composer-preferences__controls">{preferenceMenus}</div>}
             <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
           </div>
         </div>
         <div className="composer-actions">
-          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : deviceChat ? '附加文本或源码文件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
+          <button ref={scheduleButton} className="composer-new-thread-button composer-schedule-toggle" type="button" onClick={toggleSchedulePanel} disabled={!canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} aria-label="定时发送" title="定时发送">
+            <CalendarClock size={16} aria-hidden="true" />
+          </button>
+          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
-            <input className="image-input" type="file" accept={attachmentAcceptForLayout(deviceChat ? false : mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={deviceChat ? '附加文本或源码文件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
+            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
           </span>
           {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
@@ -2252,6 +2306,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ) : null}
         </div>
       </div>
+      {schedulePanelOpen ? createPortal(
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label="定时发送" style={schedulePanelPosition ?? { visibility: 'hidden' }}>
+            <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>发送时间</label>
+            <input id={scheduleDateTimeInputId} className="composer-schedule-panel__input" type="datetime-local" min={localDateTimeInputValue(new Date())} value={scheduleDateTime} onChange={(event) => setScheduleDateTime(event.currentTarget.value)} />
+            <small>本地时间；无会话时先创建，到点自动发送。</small>
+            <div className="composer-schedule-panel__actions">
+              <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>取消</button>
+              <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>加入排队</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
       </form>
     </div>
   )
@@ -2416,9 +2484,9 @@ function desktopWorkspacePreviewAvailable() {
 }
 
 function concurrentPaneLimit() {
-  if (typeof window === 'undefined') return 5
+  if (typeof window === 'undefined') return maxConcurrentPaneCount
   const mobileLayout = isMobileLayout() || Boolean(window.CodexRemoteAndroid?.changeEndpoint)
-  return mobileLayout ? 3 : 5
+  return mobileLayout ? 3 : maxConcurrentPaneCount
 }
 
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
@@ -3479,7 +3547,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 })
 
 interface RemoteChatPaneProps {
-  deviceChat?: DeviceChatController
   token: string
   remote: CodexRemoteController
   active: boolean
@@ -3492,8 +3559,6 @@ interface RemoteChatPaneProps {
   onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
-  onRefreshThreads: () => void
-  refreshThreadsDisabled: boolean
   onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => void
   onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => void
   directoryRequest: WorkspaceTerminalRequest | null
@@ -3504,7 +3569,6 @@ interface RemoteChatPaneProps {
 }
 
 function RemoteChatPane({
-  deviceChat,
   token,
   remote,
   active,
@@ -3517,8 +3581,6 @@ function RemoteChatPane({
   onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
-  onRefreshThreads,
-  refreshThreadsDisabled,
   onOpenWorkspaceFile,
   onOpenWorkspaceImage,
   directoryRequest,
@@ -3550,6 +3612,10 @@ function RemoteChatPane({
     if (!active || !currentComposer) return false
     return currentComposer.appendReplyDraft(reply)
   }, [active, composerHandle])
+  const sendChoiceReply = useCallback(async (reply: string, immediately: boolean) => {
+    if (!active || !remote.activeThread) return false
+    return remote.sendMessage({ prompt: reply, images: [], documents: [], sendImmediately: immediately })
+  }, [active, remote])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -3572,7 +3638,7 @@ function RemoteChatPane({
     onDirectoryRequestHandled(directoryRequest.id)
   }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
 
-  const activeThreadId = deviceChat ? `device-chat-${deviceChat.state?.room?.id ?? 'setup'}` : remote.activeThread?.id
+  const activeThreadId = remote.activeThread?.id
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
     ? remote.approval.params.threadId
     : null
@@ -3584,8 +3650,6 @@ function RemoteChatPane({
   const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
   const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
   const visibleMessages = remote.messages.slice(visibleStartIndex)
-  const latestDeviceChatContentId = [...(deviceChat?.state?.messages ?? [])]
-    .reverse().find((message) => message.kind === 'user' || message.kind === 'assistant')?.id
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -3710,7 +3774,7 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [active, activeThreadId, deviceChat?.state?.messages, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
+  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
 
   useLayoutEffect(() => {
     const anchor = olderMessageScrollAnchor.current
@@ -3743,7 +3807,7 @@ function RemoteChatPane({
     if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
   }, [])
 
-  const activeTitle = deviceChat ? deviceChat.state?.room?.name ?? '设备群聊' : remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
   const currentConnectionLabel = remote.handedOff
     ? '已交还给本机'
     : connectionLabel[remote.connection]
@@ -3776,23 +3840,15 @@ function RemoteChatPane({
     })
     return indexes
   }, [remote.messages])
+  const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
   return (
-    <main className={`remote-chat conversation-pane${!deviceChat && remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
-      <header className={`remote-chat__header${active ? ' remote-chat__header--with-history-refresh' : ''}`}>
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+      <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{deviceChat ? '设备群聊 · 共享消息' : `${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={deviceChat ? undefined : remote.activeThread?.cwd || remote.runtime.workspace}>{deviceChat ? deviceChat.state?.room ? `${deviceChat.state.members.length} 台设备 · ${deviceChat.state.connected || deviceChat.state.role === 'host' ? '已连接' : '重连中'} · 群消息监听中` : '创建或加入房间后开始对话' : remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{`${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
         </div>
-        {active && !deviceChat ? <button
-          className="icon-button chat-history-refresh-button"
-          type="button"
-          aria-label="刷新对话记录"
-          title="刷新对话记录"
-          disabled={refreshThreadsDisabled}
-          onClick={(event) => { event.stopPropagation(); onRefreshThreads() }}
-        ><RefreshCw size={15} /></button> : null}
         <div className="remote-chat__controls">
-          {!deviceChat ? <>
           <button
             className="icon-button engine-switch-button"
             type="button"
@@ -3812,7 +3868,6 @@ function RemoteChatPane({
           >
             <EngineBrandIcon engine={targetEngine} />
           </button>
-          </> : null}
           <button
             className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
             type="button"
@@ -3838,45 +3893,8 @@ function RemoteChatPane({
         </div>
       </header>
 
-      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={deviceChat ? '设备群聊共享消息' : `${activeTitle} ${activeEngineLabel} 对话`}>
-        <div className={`message-stream__content${!deviceChat && remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${!deviceChat && remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {deviceChat ? <>{deviceChat.state?.messages.length ? deviceChat.state.messages.map((message) => {
-            if (message.kind === 'status') return <div className="device-chat-status" key={message.id}>{message.text}</div>
-            const activity = message.kind === 'assistant' && message.activity?.items
-              ? deviceChatActivityFromItems(message.activity.items) : null
-            // Room paths belong to the sending device. Keep operation text but
-            // do not offer a local file open action for another machine's path.
-            const displayOperations = activity?.operations.map((operation) => ({
-              ...operation, paths: [], imagePath: undefined,
-              steps: operation.steps?.map((step) => ({ ...step, path: undefined })),
-            })) ?? []
-            return <Fragment key={message.id}><MessageBubble
-                key={message.id}
-                message={{ id: message.id, role: message.kind === 'user' ? 'user' : 'assistant', text: message.text, createdAt: message.created_at, streaming: message.activity?.state === 'running' }}
-                deviceChatMessage={message}
-                assistantName="Codex"
-                operations={displayOperations}
-                fileChanges={[]}
-                activityTimeline={activity?.timeline ?? []}
-                showOperations={message.kind === 'assistant'}
-                choiceEnabled={active && message.kind === 'assistant' && message.id === latestDeviceChatContentId}
-                onUseChoices={fillChoiceReply}
-                copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
-                onCopy={onCopy}
-                onOpenFile={openChangedFilePreview}
-                onOpenImage={openViewedImagePreview}
-              />{activity?.fileChanges.length ? <FileChangeCard changes={activity.fileChanges} readOnly onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}</Fragment>
-          }) : <div className="welcome-state"><span>{deviceChat.state?.room ? '房间已准备好，选择设备并发送消息。' : '打开左侧栏创建或加入设备群聊。'}</span></div>}
-          {deviceChat.approval ? <div className="approval-card" role="alert">
-            <div className="approval-card__heading"><AlertTriangle size={17} /><strong>本机群聊 Codex 需要你的批准</strong></div>
-            <p>{typeof deviceChat.approval.params.reason === 'string' ? deviceChat.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
-            {typeof deviceChat.approval.params.command === 'string' ? <code>{deviceChat.approval.params.command}</code> : null}
-            {typeof deviceChat.approval.params.cwd === 'string' ? <small>目录：{deviceChat.approval.params.cwd}</small> : null}
-            <div className="approval-card__actions">
-              <button type="button" onClick={() => deviceChat.respondToApproval('decline')}><X size={14} />拒绝</button>
-              <button className="approval-card__accept" type="button" onClick={() => deviceChat.respondToApproval('accept')}><Check size={14} />允许一次</button>
-            </div>
-          </div> : null}</> : <>
+      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
+        <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
@@ -3911,8 +3929,10 @@ function RemoteChatPane({
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
-                  choiceEnabled={active && message.role === 'assistant' && turnComplete && index === remote.messages.length - 1}
+                  choiceVisible={active && message.role === 'assistant'}
+                  choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
                   onUseChoices={fillChoiceReply}
+                  onSendChoices={sendChoiceReply}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
@@ -3958,18 +3978,17 @@ function RemoteChatPane({
               ) : null}
             </div>
           ) : null}
-          </>}
         </div>
       </section>
       {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
-      {!deviceChat && remote.error ? (
+      {remote.error ? (
         <div className="remote-error" role="alert">
           <AlertTriangle size={15} /><span>{remote.error}</span>
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
       {terminalOpen ? (
-        <TerminalRecoveryBoundary key={deviceChat ? deviceChat.state?.agent_thread_id ?? 'device-chat' : remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
+        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
           <Suspense fallback={(
             <ChatOverlayPanel
               ariaLabel="本机终端"
@@ -3985,9 +4004,9 @@ function RemoteChatPane({
             <TerminalDialog
               key={terminalSessionId}
               token={token}
-              engine={deviceChat ? 'codex' : remote.activeEngine}
-              threadId={terminalSessionIsolated ? undefined : deviceChat ? deviceChat.state?.agent_thread_id ?? undefined : remote.activeThread?.id}
-              cwd={terminalSessionCwd ?? (deviceChat ? deviceChat.state?.agent_thread_cwd : remote.activeThread?.cwd) ?? remote.runtime.workspace ?? undefined}
+              engine={remote.activeEngine}
+              threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
+              cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}
               onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
               runRequest={terminalRunRequest}
@@ -4010,16 +4029,17 @@ function RemoteChatPane({
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
-  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout.openPaneIndexes)
-  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout.selectedPaneIndex)
+  const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
+  const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout?.selectedPaneIndex ?? 0)
+  const paneLayoutRef = useRef(initialPaneLayout)
   const [workspaceTerminalRequest, setWorkspaceTerminalRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const workspaceTerminalRequestSequence = useRef(0)
   const composerHeightMemory = useRef<ComposerHeightMemory | null>(null)
-  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialEngine: initialPaneLayout.enginesByPane['0'], enabled: true })
-  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['1'], initialEngine: initialPaneLayout.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['2'], initialEngine: initialPaneLayout.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['3'], initialEngine: initialPaneLayout.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
-  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout.threadIdsByPane['4'], initialEngine: initialPaneLayout.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote0 = useCodexRemote(token, onUnauthorized, { persistActiveThread: true, initialThreadId: initialPaneLayout ? initialPaneLayout.threadIdsByPane['0'] ?? null : undefined, initialEngine: initialPaneLayout?.enginesByPane['0'], enabled: true })
+  const remote1 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['1'], initialEngine: initialPaneLayout?.enginesByPane['1'], enabled: openPaneIndexes.includes(1), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote2 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['2'], initialEngine: initialPaneLayout?.enginesByPane['2'], enabled: openPaneIndexes.includes(2), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote3 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['3'], initialEngine: initialPaneLayout?.enginesByPane['3'], enabled: openPaneIndexes.includes(3), loadThreads: false, loadModels: false, prefetchHistory: false })
+  const remote4 = useCodexRemote(token, onUnauthorized, { persistActiveThread: false, initialThreadId: initialPaneLayout?.threadIdsByPane['4'], initialEngine: initialPaneLayout?.enginesByPane['4'], enabled: openPaneIndexes.includes(4), loadThreads: false, loadModels: false, prefetchHistory: false })
   const remotes = [remote0, remote1, remote2, remote3, remote4]
   const remotesRef = useRef(remotes)
   remotesRef.current = remotes
@@ -4060,14 +4080,27 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
   }, [activeContinuation, activeRemote.isInterrupting, activeRemote.isRunning, activeRemote.runningTurnId, updateContinuation])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const threadIdsByPane = Object.fromEntries(openPaneIndexes.flatMap((paneIndex) => {
       const threadId = remotes[paneIndex]?.activeThread?.id
       return threadId ? [[String(paneIndex), threadId]] : []
     }))
     const enginesByPane = Object.fromEntries(openPaneIndexes.map((paneIndex) => [String(paneIndex), remotes[paneIndex].activeEngine]))
-    savePersistedPaneLayout({ openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane })
+    const layout = { openPaneIndexes, selectedPaneIndex, threadIdsByPane, enginesByPane }
+    paneLayoutRef.current = layout
+    savePersistedPaneLayout(layout)
   }, [openPaneIndexes, selectedPaneIndex, remote0.activeThread?.id, remote1.activeThread?.id, remote2.activeThread?.id, remote3.activeThread?.id, remote4.activeThread?.id, remote0.activeEngine, remote1.activeEngine, remote2.activeEngine, remote3.activeEngine, remote4.activeEngine])
+
+  useLayoutEffect(() => {
+    const persistLayout = () => {
+      if (paneLayoutRef.current) savePersistedPaneLayout(paneLayoutRef.current)
+    }
+    window.addEventListener('pagehide', persistLayout)
+    return () => {
+      window.removeEventListener('pagehide', persistLayout)
+      persistLayout()
+    }
+  }, [])
 
   const hasRunningFileChangesInOpenPanes = openPaneIndexes.some((paneIndex) => {
     const remote = remotes[paneIndex]
@@ -4097,9 +4130,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarDragging, setSidebarDragging] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
-  const [deviceChatMode, setDeviceChatMode] = useState(readPersistedDeviceChatMode)
-  useEffect(() => savePersistedDeviceChatMode(deviceChatMode), [deviceChatMode])
-  const deviceChat = useDeviceChat(token, deviceChatMode)
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
@@ -4108,6 +4138,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
+  const [scheduledThreadIds, setScheduledThreadIds] = useState<Set<string>>(() => new Set())
   const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
   const [threadRenameTarget, setThreadRenameTarget] = useState<CodexThread | null>(null)
   const [threadRenameDraft, setThreadRenameDraft] = useState('')
@@ -4156,7 +4187,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [token])
   const openSettingsPanel = useCallback(() => {
     openPanelHistoryEntry('settings')
-    setDeviceChatMode(false)
     setWorkspacePreviewRequest(null)
     setUsageStatsOpen(false)
     setSettingsOpen(true)
@@ -4165,7 +4195,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const openUsageStatsPanel = useCallback(() => {
     openPanelHistoryEntry('usage-stats')
-    setDeviceChatMode(false)
     setWorkspacePreviewRequest(null)
     setSettingsOpen(false)
     setUsageStatsOpen(true)
@@ -4182,14 +4211,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(false)
     setWorkspaceOpen(true)
   }, [])
-  const openDeviceChatMode = useCallback(() => {
-    setSettingsOpen(false)
-    setUsageStatsOpen(false)
-    setDeviceChatMode(true)
-    setSidebarCollapsed(false)
-    setWorkspaceOpen(false)
-    void remote0.refreshThreads(true)
-  }, [remote0.refreshThreads])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
     setUsageStatsOpen(false)
@@ -4560,10 +4581,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const action = resolveMobilePanelGesture(start, touch.clientX, touch.clientY)
     if (drag?.active) {
       const shouldOpen = shouldOpenMobileSidebarAfterDrag(drag.offset, drag.panelWidth, action)
-      remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
       if (shouldOpen) openSidebarPanel()
       else setSidebarOpen(false)
-      window.requestAnimationFrame(() => setSidebarDragging(false))
+      window.requestAnimationFrame(() => {
+        setSidebarDragging(false)
+        remoteShell.current?.style.removeProperty('--sidebar-backdrop-opacity')
+      })
       if (event.cancelable) event.preventDefault()
       return
     }
@@ -4614,19 +4637,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
-  const deviceChatDraftScope = `device-chat-${deviceChat.state?.room?.id ?? 'setup'}`
   const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
     ? workspaceDraftSnapshot.draft
     : readComposerDraft(composerDraftScope)
-  const deviceChatWorkspaceDraft = workspaceDraftSnapshot?.scope === deviceChatDraftScope
-    ? workspaceDraftSnapshot.draft
-    : readComposerDraft(deviceChatDraftScope)
   const syncWorkspaceDraft = useCallback((draft: string) => {
     setWorkspaceDraftSnapshot({ scope: composerDraftScope, draft })
   }, [composerDraftScope])
-  const syncDeviceChatWorkspaceDraft = useCallback((draft: string) => {
-    setWorkspaceDraftSnapshot({ scope: deviceChatDraftScope, draft })
-  }, [deviceChatDraftScope])
   const savedComposerPreferences = useMemo(() => activeThreadId
     ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[activeThreadId])
     : defaultComposerPreferences, [activeThreadId, defaultComposerPreferences, threadComposerPreferences])
@@ -4811,17 +4827,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         setSidebarOpen(false)
         return true
       }
-      if (deviceChatMode) {
-        setDeviceChatMode(false)
-        return true
-      }
       return false
     }
     window.CodexRemoteHandleBack = handleBack
     return () => {
       if (window.CodexRemoteHandleBack === handleBack) delete window.CodexRemoteHandleBack
     }
-  }, [closeSettingsPanel, deviceChatMode, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
+  }, [closeSettingsPanel, settingsOpen, sidebarOpen, threadContextMenu, threadDeleteSaving, threadDeleteTargets, threadRenameTarget, usageStatsOpen, workspaceOpen, threadRenameSaving])
 
   useEffect(() => {
     const interruptOnEscape = (event: globalThis.KeyboardEvent) => {
@@ -5002,6 +5014,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => { cancelled = true }
   }, [remote0.pinRevision, token])
 
+  useEffect(() => {
+    let cancelled = false
+    void codexRemoteClient.scheduledThreadIds(token).then((result) => {
+      if (!cancelled) setScheduledThreadIds(new Set(result.thread_ids))
+    }).catch((reason: unknown) => {
+      if (!cancelled && reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+    })
+    return () => { cancelled = true }
+  }, [onUnauthorized, remote0.queueRevision, token])
+
   function showPaneNotice(message: string) {
     setPaneNotice(message)
     if (paneNoticeTimer.current !== undefined) window.clearTimeout(paneNoticeTimer.current)
@@ -5128,7 +5150,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       targetThreads = threadsForEngine(refreshedThreads ?? remote0.threads)
     }
     const targetThread = openTargetThread ?? targetThreads.find((thread) => cwd && thread.cwd === cwd) ?? targetThreads[0]
-    setDeviceChatMode(false)
     setSidebarOpen(false)
     if (targetThread) {
       const existingPane = paneIndexForThread(targetThread.id)
@@ -5145,13 +5166,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
 
   async function createThread() {
-    setDeviceChatMode(false)
     setSidebarOpen(false)
     await createThreadForPane(selectedPaneIndex)
   }
 
   async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
-    setDeviceChatMode(false)
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
@@ -5198,7 +5217,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     const paneLimit = concurrentPaneLimit()
     const freePane = Array.from({ length: paneLimit }, (_, index) => index).find((index) => !openPaneIndexes.includes(index))
-    if (freePane === undefined) {
+    if (openPaneIndexes.length >= paneLimit || freePane === undefined) {
       showPaneNotice(`最多同时打开 ${paneLimit} 个对话窗口`)
       return
     }
@@ -5297,8 +5316,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [activeContinuation, canContinue, isClaudeCodeThread, sendComposerMessage, updateContinuation])
 
   const activeWorkspaceCwd = activeRemote.activeThread?.cwd || activeRemote.runtime.workspace || undefined
-  const deviceChatThread = remote0.threads.find((thread) => thread.id === deviceChat.state?.agent_thread_id)
-  const deviceChatWorkspaceCwd = deviceChat.state?.agent_thread_cwd || deviceChatThread?.cwd || remote0.runtime.workspace || undefined
   const insertWorkspacePath = useCallback((path: string, focus = true) => {
     composerHandle.current?.appendDraft(path, focus)
   }, [])
@@ -5419,9 +5436,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const id = modelIdOf(model)
     return id ? [{ value: id, label: modelLabelOf(model) }] : []
   }), [availableModels])
-  const deviceChatModelOptions = useMemo<ComposerMenuOption[]>(() => [
-    { value: '', label: '目标设备默认模型' }, ...modelOptions,
-  ], [modelOptions])
   const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
     value: option.reasoningEffort,
     label: effortLabelOf(option.reasoningEffort),
@@ -5441,10 +5455,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     }
     return byModel
   }, [availableModels])
-  const deviceChatReasoningOptions = useMemo<ComposerMenuOption[]>(() => [
-    { value: '', label: '目标设备默认思考' },
-    ...(reasoningOptionsByModel[deviceChat.model]?.options ?? []),
-  ], [deviceChat.model, reasoningOptionsByModel])
   const sidebarThreads = useMemo(() => [...remote0.threads]
     .sort((left, right) => {
       const leftPinned = pinnedThreadIds.has(left.id)
@@ -5541,10 +5551,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadDeleteProgress(0)
   }
 
+  const sidebarBackdropVisible = sidebarOpen || sidebarDragging
+
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (!deviceChatMode && isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (deviceChatMode ? ' remote-shell--device-chat' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -5561,7 +5573,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </div>
       ) : null}
       {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
-      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={deviceChatMode ? '设备群聊' : '聊天记录'} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="聊天记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
           <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.webp" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>代码助手远程工作台</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
@@ -5569,11 +5581,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        <div className="remote-sidebar__modes" role="group" aria-label="切换聊天模式">
-          <button type="button" className={!deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={!deviceChatMode} aria-label="普通聊天模式" onClick={() => setDeviceChatMode(false)}><MessagesSquare size={16} /><span>普通聊天</span></button>
-          <button type="button" className={deviceChatMode ? 'remote-sidebar__mode remote-sidebar__mode--active' : 'remote-sidebar__mode'} aria-pressed={deviceChatMode} aria-label="设备群聊模式" onClick={openDeviceChatMode}><Users size={16} /><span>设备群聊</span></button>
-        </div>
-        {deviceChatMode ? <DeviceChatSidebar chat={deviceChat} threads={remote0.threads} onSelectRoom={() => setSidebarOpen(false)} /> : <>
         <div className="sidebar-search">
           <Search size={15} aria-hidden="true" />
           <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />
@@ -5607,6 +5614,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
               const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
               const isPinned = pinnedThreadIds.has(thread.id)
+              const hasScheduledMessage = scheduledThreadIds.has(thread.id)
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
@@ -5622,7 +5630,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   else void selectThread(thread)
                 }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
                   <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
-                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label="有定时发送" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                   {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
                 </button>
               )
@@ -5631,7 +5639,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
           {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
         </nav>
-        </>}
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
@@ -5650,7 +5657,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </footer>
       </aside>
 
-      {sidebarOpen || sidebarDragging ? <button className={'sidebar-backdrop' + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" onClick={() => setSidebarOpen(false)} /> : null}
+      <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
@@ -5705,16 +5712,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : (
         <>
           <section className="remote-workspace">
-            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': deviceChatMode ? 1 : openPaneIndexes.length } as CSSProperties}>
-              {(deviceChatMode ? [selectedPaneIndex] : openPaneIndexes).map((paneIndex) => (
-                <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-${deviceChatMode ? 'device' : 'thread'}`}>
+            <div className="remote-pane-grid" ref={paneGrid} style={{ '--pane-count': openPaneIndexes.length } as CSSProperties}>
+              {openPaneIndexes.map((paneIndex) => (
+                <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-thread`}>
                   <RemoteChatPane
-                    deviceChat={deviceChatMode ? deviceChat : undefined}
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
-                    showActiveFrame={!deviceChatMode && openPaneIndexes.length > 1}
-                    showPaneClose={!deviceChatMode && openPaneIndexes.length > 1}
+                    showActiveFrame={openPaneIndexes.length > 1}
+                    showPaneClose={openPaneIndexes.length > 1}
                     onActivate={() => activatePane(paneIndex)}
                     onClose={() => closePane(paneIndex)}
                     onCreateThread={() => void createThreadForPane(paneIndex)}
@@ -5722,8 +5728,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
-                    onRefreshThreads={() => { void remote0.refreshThreads(true) }}
-                    refreshThreadsDisabled={remote0.handedOff}
                     onOpenWorkspaceFile={(path, cwd, diff) => {
                       activatePane(paneIndex)
                       workspacePreviewSequence.current += 1
@@ -5744,46 +5748,47 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               ))}
             </div>
             <MessageComposer
-              deviceChat={deviceChatMode ? deviceChat : undefined}
               token={token}
-              key={deviceChatMode ? deviceChatDraftScope : composerDraftScope}
+              portalTheme={themePreferences.theme}
+              portalThemeStyle={themeRootStyle(themePreferences)}
+              key={composerDraftScope}
               ref={composerHandle}
-              draftScope={deviceChatMode ? deviceChatDraftScope : composerDraftScope}
-              onDraftChange={deviceChatMode ? syncDeviceChatWorkspaceDraft : syncWorkspaceDraft}
+              draftScope={composerDraftScope}
+              onDraftChange={syncWorkspaceDraft}
               composerHeightMemory={composerHeightMemory}
-              connection={deviceChatMode ? 'connected' : activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
-              isRunning={!deviceChatMode && activeRemote.isRunning}
-              isReplying={!deviceChatMode && (activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true)}
+              connection={activeRemote.handedOff ? 'disconnected' : activeRemote.connection}
+              isRunning={activeRemote.isRunning}
+              isReplying={activeRemote.isRunning || activeRemote.runningTurnId !== null || activeRemote.messages[activeRemote.messages.length - 1]?.streaming === true}
               canInterrupt={activeRemote.activeEngine === 'claude-code' || activeRemote.activeThread?.canInterrupt !== false}
-              fileChangeSummary={deviceChatMode ? null : runningFileChangeSummary}
+              fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
-              reserveFileChangeSummarySpace={!deviceChatMode && openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
-              reserveQueuedMessageSpace={!deviceChatMode && openPaneIndexes.length > 1}
-              showCodexPreferences={deviceChatMode || !isClaudeCodeThread}
-              isInterrupting={!deviceChatMode && activeRemote.isInterrupting}
-              writerConflict={!deviceChatMode && activeRemote.writerConflict}
+              reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
+              reserveQueuedMessageSpace={openPaneIndexes.length > 1}
+              showCodexPreferences={!isClaudeCodeThread}
+              isInterrupting={activeRemote.isInterrupting}
+              writerConflict={activeRemote.writerConflict}
               modelSupportsImages={modelSupportsImages}
-              selectedModel={deviceChatMode ? deviceChat.model : selectedModel}
-              selectedEffort={deviceChatMode ? deviceChat.effort : selectedEffort}
-              selectedApprovalPolicy={deviceChatMode ? deviceChat.approvalPolicy : selectedApprovalPolicy}
+              selectedModel={selectedModel}
+              selectedEffort={selectedEffort}
+              selectedApprovalPolicy={selectedApprovalPolicy}
               selectedClaudePermissionMode={selectedClaudePermissionMode}
-              temporaryPreferences={!deviceChatMode && Boolean(temporaryPreferences)}
+              temporaryPreferences={Boolean(temporaryPreferences)}
               onTemporaryPreferencesChange={changeTemporaryPreferences}
-              modelOptions={deviceChatMode ? deviceChatModelOptions : modelOptions}
-              reasoningOptions={deviceChatMode ? deviceChatReasoningOptions : reasoningOptions}
+              modelOptions={modelOptions}
+              reasoningOptions={reasoningOptions}
               reasoningOptionsByModel={reasoningOptionsByModel}
               authorizationOptions={approvalPolicyOptions}
               claudeModelOptions={claudeModelOptions}
               claudeEffortOptions={claudeEffortOptions}
               claudePermissionModeOptions={claudePermissionModeOptions}
-              onModelChange={deviceChatMode ? (model) => { deviceChat.setModel(model); deviceChat.setEffort('') } : changeModel}
-              onEffortChange={deviceChatMode ? deviceChat.setEffort : changeEffort}
-              onApprovalPolicyChange={deviceChatMode ? deviceChat.setApprovalPolicy : changeApprovalPolicy}
+              onModelChange={changeModel}
+              onEffortChange={changeEffort}
+              onApprovalPolicyChange={changeApprovalPolicy}
               onClaudePermissionModeChange={changeClaudePermissionMode}
               approvalPolicyUpdating={activeRemote.updatingApprovalPolicy}
               onUploadPdf={activeRemote.uploadPdfAttachment}
               onSend={sendComposerMessage}
-              queuedMessages={deviceChatMode ? [] : activeRemote.queuedMessages}
+              queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
@@ -5791,8 +5796,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onRemoveQueued={activeRemote.removeQueuedMessage}
               onInterrupt={pauseCurrentReply}
               onContinue={continueInterruptedReply}
-              canContinue={!deviceChatMode && canContinue}
-              continuationPending={!deviceChatMode && Boolean(activeContinuation)}
+              canContinue={canContinue}
+              continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
               onCreateThread={() => { void createThread() }}
               createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)}
@@ -5838,19 +5843,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           />
           <WorkspaceExplorer
             token={token}
-            eyebrow={deviceChatMode ? '本机设备' : '当前窗口'}
+            eyebrow="当前窗口"
             theme={themePreferences.theme}
             themePreferences={themePreferences}
-            engine={deviceChatMode ? 'codex' : activeRemote.activeEngine}
-            cwd={deviceChatMode ? deviceChatWorkspaceCwd : activeWorkspaceCwd}
-            threadId={deviceChatMode ? deviceChat.state?.agent_thread_id ?? undefined : activeRemote.activeThread?.id}
-            canBindThreadWorkspace={deviceChatMode ? Boolean(deviceChat.state?.room && deviceChat.state.connected && !deviceChat.busy) : activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
+            engine={activeRemote.activeEngine}
+            cwd={activeWorkspaceCwd}
+            threadId={activeRemote.activeThread?.id}
+            canBindThreadWorkspace={activeRemote.connection === 'connected' && !activeRemote.loadingHistory && !activeRemote.handedOff && Boolean(activeRemote.activeThread?.id)}
             onBindDirectory={async (cwd) => {
-              if (deviceChatMode) {
-                const bound = await deviceChat.bindWorkspace(cwd)
-                if (bound) showPaneNotice('本机群聊聊天已绑定；下一轮使用此目录')
-                return bound
-              }
               const threadId = activeRemote.activeThread?.id
               if (!threadId) return false
               await activeRemote.bindThreadWorkspace(threadId, cwd)
@@ -5860,11 +5860,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             previewRequest={workspacePreviewRequest}
             previewContainerRef={paneGrid}
             onPreviewStateChange={handleWorkspacePreviewStateChange}
-            draft={deviceChatMode ? deviceChatWorkspaceDraft : activeWorkspaceDraft}
+            draft={activeWorkspaceDraft}
             onInsertPath={(path, focus) => {
-              if (deviceChatMode && deviceChat.targetId && deviceChat.targetId !== deviceChat.state?.node_id) {
-                showPaneNotice('这是本机路径，远端设备无法直接读取；请附加文件内容或在目标设备打开文件树。')
-              }
               insertWorkspacePath(path, focus)
             }}
             onAddToTerminal={(path) => {
@@ -6656,7 +6653,7 @@ const OperationLog = memo(function OperationLog({
   )
 })
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true }: {
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, choiceItemId, choiceCard }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
@@ -6664,15 +6661,17 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
   showCodeCopy?: boolean
+  choiceItemId?: string
+  choiceCard?: ReactNode
 }) {
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
   // Message lengths can lag behind the already rendered streaming text. When
   // there are no visible operations, splitting on those lengths only creates
   // a second block that makes one sentence appear to reflow between rows.
-  if (!timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
+  if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
     return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
   }
-  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] }> = []
+  const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] } | { type: 'choice'; key: string }> = []
   let textOffset = 0
   let messageCount = 0
   let hasTextEntry = false
@@ -6686,6 +6685,10 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
       const segment = text.slice(textOffset, textOffset + entry.length)
       textOffset += segment.length
       messageCount += 1
+      if (choiceCard && entry.itemId === choiceItemId) {
+        blocks.push({ type: 'choice', key: `choice-${entry.itemId}` })
+        continue
+      }
       if (!segment) continue
       const lastBlock = blocks.at(-1)
       if (lastBlock?.type === 'message') lastBlock.text += separator + segment
@@ -6714,6 +6717,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
     <div className="activity-timeline">
       {blocks.map((block) => block.type === 'message'
         ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators showCodeCopy={showCodeCopy} />
+        : block.type === 'choice' ? <Fragment key={block.key}>{choiceCard}</Fragment>
         : <OperationLog
           key={block.key}
           operations={block.operations}
@@ -6772,14 +6776,18 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
   return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
 })
 
-function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; onUse: (reply: string) => boolean }) {
+function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: MessageChoiceGroup[]; enabled: boolean; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<boolean> }) {
   const [selected, setSelected] = useState(() => groups.map(() => -1))
+  const [customAnswers, setCustomAnswers] = useState(() => groups.map(() => ''))
   const [inserted, setInserted] = useState(false)
-  const [notice, setNotice] = useState('可在输入框修改后发送')
-  const complete = selected.every((optionIndex) => optionIndex >= 0)
+  const [sending, setSending] = useState(false)
+  const [sent, setSent] = useState(false)
+  const [notice, setNotice] = useState('选好后可直接发送，也可填入输入框修改')
+  const complete = selected.every((optionIndex, index) => optionIndex >= 0 || optionIndex === -2 && Boolean(customAnswers[index].trim()))
+  const reply = () => formatAssistantChoiceReply(groups, selected, customAnswers)
 
   return (
-    <div className="message-choices" aria-label="助手提出的选择题">
+    <div className="message-choices" aria-label={enabled ? '助手提出的选择题' : '历史选择题，已有后续消息'}>
       <strong className="message-choices__heading">快速选择</strong>
       {groups.map((group, groupIndex) => (
         <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
@@ -6791,34 +6799,52 @@ function MessageChoiceForm({ groups, onUse }: { groups: MessageChoiceGroup[]; on
                 type="button"
                 key={`${optionIndex}-${option}`}
                 aria-pressed={selected[groupIndex] === optionIndex}
-                disabled={inserted}
-                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? optionIndex : value))}
-              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}{option}</button>
+                disabled={!enabled || inserted || sending || sent}
+                onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex
+                  ? (value === optionIndex ? -1 : optionIndex)
+                  : value))}
+              >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}<span>{option}{group.descriptions?.[optionIndex] ? <small>{group.descriptions[optionIndex]}</small> : null}</span></button>
             ))}
+            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || sent} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
           </div>
+          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || sent} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
         </fieldset>
       ))}
-      <div className="message-choices__footer">
-        <button type="button" disabled={!complete || inserted} onClick={() => {
-          if (onUse(formatAssistantChoiceReply(groups, selected))) setInserted(true)
+      {enabled ? <div className="message-choices__footer">
+        <button type="button" disabled={!complete || inserted || sending || sent} onClick={async () => {
+          setSending(true)
+          try {
+            if (await onSend(reply())) {
+              setSent(true)
+              setNotice('答案已提交，AI 会继续回复；忙碌时会显示在排队中')
+            } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+          } catch {
+            setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+          } finally {
+            setSending(false)
+          }
+        }}>{sending ? '正在发送…' : sent ? '答案已提交' : '发送并继续'}</button>
+        <button type="button" disabled={!complete || inserted || sending || sent} onClick={() => {
+          if (onUse(reply())) setInserted(true)
           else setNotice('请先结束当前编辑，再填入回答')
         }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
         <small>{notice}</small>
-      </div>
+      </div> : <small className="message-choices__history-notice">该问题已有后续消息</small>}
     </div>
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceEnabled, onUseChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
-  deviceChatMessage?: DeviceChatMessage
   assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
+  choiceVisible?: boolean
   choiceEnabled?: boolean
   onUseChoices?: (reply: string) => boolean
+  onSendChoices?: (reply: string, immediately: boolean) => Promise<boolean>
   copyFeedback: string | null
   onCopy: (message: CodexMessage) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
@@ -6830,33 +6856,46 @@ const MessageBubble = memo(function MessageBubble({ message, deviceChatMessage, 
   const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
-  const deviceTime = formatMessageTimestamp(deviceChatMessage?.created_at)
-  const deviceDelivery = deviceChatMessage?.delivery_state === 'pending' ? '等待发送' : deviceChatMessage?.delivery_state === 'syncing' ? '等待同步' : deviceChatMessage?.delivery_state === 'error' ? '发送失败' : null
-  const choiceGroups = choiceEnabled && message.role === 'assistant' && message.text
-    ? parseAssistantChoiceGroups(message.text) : []
-  const firstChoiceQuestionOffset = choiceGroups.length > 0 ? message.text.indexOf(choiceGroups[0].question) : -1
-  const showChoiceFormInsteadOfText = firstChoiceQuestionOffset >= 0
-    && !message.text.slice(0, firstChoiceQuestionOffset).replace(/[\s#>*_\d.)、-]/gu, '')
-  const renderedText = showChoiceFormInsteadOfText ? '' : message.text
+  const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
+  const structuredQuestions = choiceVisible && message.questions?.length ? message.questions : null
+  const choiceContent = useMemo(() => choiceVisible && message.role === 'assistant'
+    ? structuredQuestions ? { groups: structuredQuestions, onlyChoices: false } : parseAssistantChoiceContent(choiceText)
+    : null, [choiceVisible, choiceText, message.role, structuredQuestions])
+  const choiceGroups = choiceContent?.groups ?? []
+  const choiceCard = choiceGroups.length > 0 && onUseChoices && onSendChoices
+    ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} enabled={Boolean(choiceEnabled)} onUse={onUseChoices} onSend={(reply) => onSendChoices(reply, message.choiceDelivery?.toLowerCase().startsWith('async') ?? false)} />
+    : null
+  const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
+    && activityTimeline.some((entry) => entry.type === 'message' && entry.itemId === message.choiceItemId && entry.length > 0))
+  const promptStart = choiceCard && structuredQuestions && message.choicePromptText
+    ? message.text.indexOf(message.choicePromptText) : -1
+  const splitStructuredChoice = Boolean(choiceCard && structuredQuestions && !choiceInTimeline && promptStart >= 0
+    && !activityTimeline.some((entry) => entry.type === 'operation'))
+  const renderedText = choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
+  const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
 
   return (
-    <article className={`chat-message chat-message--${message.role}${deviceChatMessage ? ' chat-message--device' : ''}${deviceChatMessage?.kind === 'error' ? ' chat-message--device-error' : ''}`} data-message-id={message.id}>
+    <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
-          {deviceChatMessage ? <><strong className="chat-message__assistant-name chat-message__assistant-name--codex">{deviceChatMessage.sender_name}{deviceChatMessage.kind === 'assistant' ? ' · Codex' : ''}</strong>{deviceChatMessage.target_name ? <span>@{deviceChatMessage.target_name}</span> : null}{deviceDelivery ? <span>{deviceDelivery}</span> : null}{deviceTime ? <time className="chat-message__timing" dateTime={deviceChatMessage.created_at}>{deviceTime}</time> : null}</> : message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
+          {message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
           {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
-        {message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} />
+        {splitStructuredChoice ? <>
+          {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+          {choiceCard}
+          {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+        </> : message.role === 'assistant' && activityTimeline.length > 0
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
-        {deviceChatMessage?.kind === 'assistant' && deviceChatMessage.activity?.state === 'running' ? <div className="running-indicator" role="status"><div className="running-indicator__row"><OperationActivityLine className="running-indicator__activity" operation={operations.filter((operation) => operation.status === 'running').at(-1) ?? null} activity={{ label: operations.length ? '正在处理' : '正在思考' }} iconSize={15} /></div></div> : null}
-        {choiceGroups.length > 0 && onUseChoices ? <MessageChoiceForm key={message.text} groups={choiceGroups} onUse={onUseChoices} /> : null}
+        {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
         <div className="chat-message__footer">

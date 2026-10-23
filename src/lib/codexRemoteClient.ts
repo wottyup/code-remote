@@ -1,5 +1,6 @@
 import { deleteThreadTransportCache, readThreadTransportCache, writeThreadTransportCache, type ThreadTransportSnapshot } from './threadTransportCache'
 import { eventTimestamp } from './turnTiming'
+import { parseStructuredAssistantQuestions, type MessageChoiceGroup } from './messageChoices'
 
 export interface CodexThread {
   id: string
@@ -60,6 +61,12 @@ export interface CodexMessage {
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
   streaming?: boolean
+  /** Prefix whose agentMessage items have completed, even while the turn continues. */
+  completedTextLength?: number
+  questions?: MessageChoiceGroup[]
+  choiceItemId?: string
+  choicePromptText?: string
+  choiceDelivery?: string
 }
 
 export interface CodexImageAttachment {
@@ -75,6 +82,7 @@ export interface CodexQueuedMessage {
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   createdAt: string
+  scheduledAt?: string
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
@@ -106,42 +114,6 @@ export interface CodexRuntime {
   runtimeMessage?: string | null
   fallbackReason?: string | null
   error: string | null
-}
-
-export interface DeviceChatMember {
-  id: string
-  name: string
-  online: boolean
-}
-
-export interface DeviceChatMessage {
-  id: string
-  sequence: number
-  cursor?: number
-  kind: 'user' | 'assistant' | 'status' | 'error'
-  sender_id: string
-  sender_name: string
-  target_id?: string | null
-  target_name?: string | null
-  text: string
-  model?: string | null
-  effort?: string | null
-  approval_policy?: CodexApprovalPolicy | null
-  created_at: string
-  delivery_state?: 'pending' | 'syncing' | 'error'
-  activity?: { state: 'running' | 'completed' | 'failed'; items: Record<string, unknown>[] }
-}
-
-export interface DeviceChatState {
-  node_id: string
-  role?: 'host' | 'peer'
-  room: { id: string; name: string; host_id: string; host_name: string } | null
-  members: DeviceChatMember[]
-  messages: DeviceChatMessage[]
-  local_thread_id?: string | null
-  agent_thread_id?: string | null
-  agent_thread_cwd?: string | null
-  connected: boolean
 }
 
 export interface CodexWorkspaceEntry {
@@ -446,7 +418,9 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const item = itemValue as Record<string, unknown>
       const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
+      const questions = itemType === 'agentmessage' ? parseStructuredAssistantQuestions(item.questions) : []
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
+        || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
       const originalPdfAttachments = itemType === 'usermessage' ? originalPdfAttachmentsFromText(rawText) : { text: rawText, documents: [] }
       const textDocumentAttachments = itemType === 'usermessage'
         ? textDocumentAttachmentsFromText(originalPdfAttachments.text)
@@ -460,11 +434,27 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         'createdAt', 'created_at', 'sentAt', 'sent_at', 'timestamp', 'timestampMs', 'timestamp_ms',
       )
       const replyStartedAt = itemType === 'agentmessage' ? turnStartedAt ?? itemCreatedAt : undefined
+      // Stored messages are complete unless the snapshot explicitly includes
+      // a live item (for example, Claude's current partial reply).
+      const itemComplete = !['active', 'inprogress', 'running', 'started', 'streaming'].includes(
+        typeof item.status === 'string' ? item.status.replace(/[-_]/g, '').toLowerCase() : '',
+      )
 
       if (itemType === 'agentmessage' && assistantMessage) {
+        const previousLength = assistantMessage.text.length
         assistantMessage.text = assistantMessage.text
           ? `${assistantMessage.text}\n\n${text}`
           : text
+        if (itemComplete && assistantMessage.completedTextLength === previousLength) {
+          assistantMessage.completedTextLength = assistantMessage.text.length
+        }
+        if (!itemComplete) assistantMessage.streaming = true
+        if (questions.length > 0) {
+          assistantMessage.questions = questions
+          assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
+          assistantMessage.choicePromptText = text
+          assistantMessage.choiceDelivery = typeof item.delivery === 'string' ? item.delivery : undefined
+        }
         continue
       }
 
@@ -476,6 +466,14 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),
         ...(itemType === 'agentmessage' && replyDurationMs !== undefined ? { replyDurationMs } : {}),
+        ...(itemType === 'agentmessage' ? { completedTextLength: itemComplete ? text.length : 0 } : {}),
+        ...(itemType === 'agentmessage' && !itemComplete ? { streaming: true } : {}),
+        ...(questions.length > 0 ? {
+          questions,
+          choiceItemId: typeof item.id === 'string' ? item.id : undefined,
+          choicePromptText: text,
+          choiceDelivery: typeof item.delivery === 'string' ? item.delivery : undefined,
+        } : {}),
         ...(turnId ? { turnId } : {}),
         ...(images.length > 0 ? { images } : {}),
         ...(documents.length > 0 ? {
@@ -675,51 +673,6 @@ export const codexRemoteClient = {
   unpair(token: string) {
     return request<{ unpaired: boolean }>(token, '/api/v1/unpair', { method: 'POST' })
   },
-  deviceChatState(token: string, afterCursor?: number, afterSequence?: number, waitMs = 0, signal?: AbortSignal) {
-    const parameters = new URLSearchParams()
-    if (afterCursor !== undefined) parameters.set('after_cursor', String(afterCursor))
-    if (afterSequence !== undefined) parameters.set('after_sequence', String(afterSequence))
-    if (waitMs > 0) parameters.set('wait_ms', String(waitMs))
-    const encodedParameters = parameters.toString()
-    const query = encodedParameters ? `?${encodedParameters}` : ''
-    return request<DeviceChatState>(token, `/api/v1/device-chat/state${query}`, signal ? { signal } : undefined, {
-      timeoutMs: waitMs > 0 ? waitMs + 10_000 : 8_000,
-      networkRetries: 0,
-    })
-  },
-  createDeviceChat(token: string, name: string) {
-    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/create', {
-      method: 'POST', body: JSON.stringify({ name }),
-    })
-  },
-  inviteDeviceChat(token: string, name: string) {
-    return request<{ state: DeviceChatState; invite_code: string; expires_in: number }>(token, '/api/v1/device-chat/invite', {
-      method: 'POST', body: JSON.stringify({ name }),
-    })
-  },
-  joinDeviceChat(token: string, hostUrl: string, code: string, name: string) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/join', {
-      method: 'POST', body: JSON.stringify({ host_url: hostUrl, code, name }),
-    }, { timeoutMs: 20_000, networkRetries: 0 })
-  },
-  sendDeviceChatMessage(token: string, text: string, targetId: string | null, model?: string, effort?: string, approvalPolicy?: CodexApprovalPolicy) {
-    return request<DeviceChatMessage>(token, '/api/v1/device-chat/message', {
-      method: 'POST', body: JSON.stringify({ text, target_id: targetId, model: model || null, effort: effort || null, approval_policy: approvalPolicy || null }),
-    }, { timeoutMs: 15_000, networkRetries: 0 })
-  },
-  bindDeviceChatWorkspace(token: string, cwd: string) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/workspace', {
-      method: 'PUT', body: JSON.stringify({ cwd }),
-    })
-  },
-  selectDeviceChatThread(token: string, threadId: string | null) {
-    return request<DeviceChatState>(token, '/api/v1/device-chat/thread', {
-      method: 'PUT', body: JSON.stringify({ thread_id: threadId }),
-    })
-  },
-  leaveDeviceChat(token: string) {
-    return request<{ left: boolean }>(token, '/api/v1/device-chat/leave', { method: 'POST' }, { timeoutMs: 10_000, networkRetries: 0 })
-  },
   status(token: string) {
     return request<CodexRuntime>(token, '/api/v1/codex/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
@@ -821,6 +774,9 @@ export const codexRemoteClient = {
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },
+  scheduledThreadIds(token: string) {
+    return request<{ thread_ids: string[] }>(token, '/api/v1/codex/queue/scheduled-thread-ids')
+  },
   submitMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[]; sent: boolean }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/submit`, {
       method: 'POST',
@@ -840,6 +796,12 @@ export const codexRemoteClient = {
   },
   enqueueMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  scheduleMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/schedule`, {
       method: 'POST',
       body: JSON.stringify(message),
     }, { networkRetries: 3 })

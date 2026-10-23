@@ -1,3 +1,5 @@
+import { maxImagesPerTurn } from './imageAttachmentRules'
+
 interface ClipboardBridgeWindow extends Window {
   CodexRemoteAndroid?: {
     copyToClipboard?: (text: string) => boolean
@@ -96,7 +98,7 @@ export function embeddedImageFilesFromClipboardHtml(html: string): File[] {
   if (!html.includes('data:image/')) return []
   try {
     const document = new DOMParser().parseFromString(html, 'text/html')
-    return Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, 4)
+    return Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, maxImagesPerTurn)
       .flatMap((image, index) => {
         const file = embeddedImageFile(image.getAttribute('src') ?? '', image.getAttribute('alt') || `image-${index + 1}`)
         return file ? [file] : []

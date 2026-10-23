@@ -18,6 +18,7 @@ from codex_remote.app import (
     TurnImage,
     MESSAGE_IMAGE_RETENTION_SECONDS,
     cleanup_expired_message_images,
+    detect_image_media_type,
     enrich_thread_images,
     enrich_user_message_item,
     prepare_message_image_directory,
@@ -28,6 +29,33 @@ from codex_remote.codex_history import CodexHistoryStore
 
 
 class CodexHistoryStoreTests(unittest.TestCase):
+    def test_compact_history_keeps_async_questions_before_turn_finishes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex_home = Path(directory)
+            sessions = codex_home / "sessions"
+            sessions.mkdir()
+            questions = [{"title": "选择接下来的处理方式", "options": ["继续修改", "先查看效果"]}]
+            events = [
+                {"type": "session_meta", "payload": {"id": "question-thread"}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "turn", "item": {
+                    "type": "AgentMessage", "id": "call-question", "phase": "final_answer", "delivery": "async",
+                    "questions": questions, "content": [{"type": "Text", "text": "选择接下来的处理方式\n- 继续修改\n- 先查看效果"}],
+                }}},
+                {"type": "event_msg", "payload": {"type": "item_completed", "turn_id": "turn", "item": {
+                    "type": "AgentMessage", "id": "progress", "content": [{"type": "Text", "text": "我继续检查其他模块。"}],
+                }}},
+            ]
+            (sessions / "rollout-question-thread.jsonl").write_text(
+                "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in events), encoding="utf-8",
+            )
+            thread = CodexHistoryStore(codex_home).read_thread("question-thread", compact=True)
+            self.assertEqual(thread["turns"][0]["status"], "inProgress")
+            question = thread["turns"][0]["items"][0]
+            self.assertEqual(question["questions"], questions)
+            self.assertEqual(question["delivery"], "async")
+            self.assertEqual(question["phase"], "final_answer")
+            self.assertEqual(thread["turns"][0]["items"][1]["id"], "progress")
+
     def test_reads_desktop_state_index_and_keeps_subagent_file_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)
@@ -305,6 +333,24 @@ class CodexHistoryStoreTests(unittest.TestCase):
 
             self.assertEqual("image/png", preview["mediaType"])
             self.assertEqual("iVBORw0KGgpwcmV2aWV3", preview["data"])
+
+    def test_image_preview_uses_file_signature_when_suffix_is_stale(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            image = workspace / "copied-from-phone.png"
+            content = b"\xff\xd8\xff" + b"jpeg-payload"
+            image.write_bytes(content)
+
+            preview = workspace_image_preview(workspace, image.name)
+
+            self.assertEqual("image/jpeg", preview["mediaType"])
+            self.assertEqual(base64.b64encode(content).decode("ascii"), preview["data"])
+
+    def test_detects_heif_family_images_for_android_preview(self) -> None:
+        self.assertEqual("image/heic", detect_image_media_type(b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00heic"))
+        self.assertEqual("image/avif", detect_image_media_type(b"\x00\x00\x00\x18ftypavif\x00\x00\x00\x00avif"))
 
     def test_expired_persistent_images_are_not_embedded_or_previewed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

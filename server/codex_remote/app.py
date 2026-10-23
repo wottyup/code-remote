@@ -20,6 +20,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -28,7 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
@@ -50,7 +51,6 @@ from .codex_app_server import (
     CodexThreadBusyError,
     CodexThreadNotFoundError,
 )
-from .device_chat import DeviceChatError, DeviceChatManager
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
@@ -126,38 +126,6 @@ class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
 
 
-class DeviceChatCreateRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=80)
-
-
-class DeviceChatJoinRequest(BaseModel):
-    host_url: str = Field(min_length=8, max_length=300)
-    code: str = Field(min_length=6, max_length=24)
-    name: str = Field(min_length=1, max_length=80)
-
-
-class DeviceChatMessageRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=12_000)
-    target_id: str | None = Field(default=None, max_length=80)
-    model: str | None = Field(default=None, max_length=200)
-    effort: str | None = Field(default=None, max_length=50)
-    approval_policy: ApprovalPolicy | None = None
-
-
-class DeviceChatThreadRequest(BaseModel):
-    thread_id: str | None = Field(default=None, max_length=512)
-
-
-class DeviceChatPeerJoinRequest(BaseModel):
-    code: str = Field(min_length=6, max_length=24)
-    device_id: str = Field(min_length=1, max_length=80)
-    name: str = Field(min_length=1, max_length=80)
-
-
-class DeviceChatPeerEventRequest(BaseModel):
-    event: dict[str, Any]
-
-
 class PairingStateError(RuntimeError):
     """The local trusted-device state could not be safely updated."""
 
@@ -175,7 +143,7 @@ IMAGE_EXTENSIONS = {
     "image/gif": ".gif",
 }
 IMAGE_MEDIA_TYPES = {extension: media_type for media_type, extension in IMAGE_EXTENSIONS.items()}
-MAX_IMAGES_PER_TURN = 4
+MAX_IMAGES_PER_TURN = 8
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
 MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
@@ -345,6 +313,7 @@ class QueuedMessageRequest(BaseModel):
     images: list[QueuedImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     documents: list[QueuedDocument] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     createdAt: str = Field(min_length=1, max_length=128)
+    scheduledAt: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approvalPolicy: ApprovalPolicy | None = None
@@ -352,6 +321,19 @@ class QueuedMessageRequest(BaseModel):
     claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
+
+    @field_validator("scheduledAt")
+    @classmethod
+    def validate_scheduled_at(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("定时发送时间格式无效。") from error
+        if parsed.tzinfo is None or parsed <= datetime.now(timezone.utc):
+            raise ValueError("定时发送时间必须是带时区的未来时间。")
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class QueueMessageIdRequest(BaseModel):
@@ -962,9 +944,6 @@ def codex_viewed_image_preview(
 
 
 def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path | None) -> dict[str, str | int]:
-    media_type = IMAGE_MEDIA_TYPES.get(candidate.suffix.lower())
-    if media_type is None:
-        raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="仅支持 PNG、JPEG、WebP 和 GIF 图片")
     if managed_image_root is not None and is_expired_managed_message_image(candidate, managed_image_root):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片已过期")
     try:
@@ -981,13 +960,8 @@ def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该图片") from error
     if len(content) > MAX_IMAGE_BYTES:
         raise HTTPException(status_code=413, detail="图片超过 8 MB，暂不支持预览")
-    signatures = {
-        "image/png": content.startswith(b"\x89PNG\r\n\x1a\n"),
-        "image/jpeg": content.startswith(b"\xff\xd8\xff"),
-        "image/webp": len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP",
-        "image/gif": content.startswith((b"GIF87a", b"GIF89a")),
-    }
-    if not signatures.get(media_type, False):
+    media_type = detect_image_media_type(content)
+    if media_type is None:
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="文件内容不是有效的受支持图片")
     return {
         "path": candidate.relative_to(base).as_posix() if candidate.is_relative_to(base) else candidate.name,
@@ -995,6 +969,27 @@ def _image_preview_payload(base: Path, candidate: Path, managed_image_root: Path
         "data": base64.b64encode(content).decode("ascii"),
         "size": len(content),
     }
+
+
+def detect_image_media_type(content: bytes) -> str | None:
+    """Identify preview image bytes independently of a possibly stale filename suffix."""
+    if content.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if content.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+        return "image/webp"
+    if content.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        brands = {content[index:index + 4] for index in range(8, min(len(content), 64), 4)}
+        if brands & {b"avif", b"avis"}:
+            return "image/avif"
+        if brands & {b"heic", b"heix", b"hevc", b"hevx"}:
+            return "image/heic"
+        if brands & {b"mif1", b"msf1"}:
+            return "image/heif"
+    return None
 
 
 def workspace_file_save(base: Path, relative_path: str, content: str, expected_revision: str) -> dict[str, str | int | bool]:
@@ -1528,7 +1523,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     shared_state = SharedStateStore(state_path)
-    device_chat = DeviceChatManager(state_path.parent / "device-chat.sqlite3", app_server, shared_state.thread_workspace)
     claude_code = ClaudeCodeServer(
         os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
         configured_workspace,
@@ -1653,7 +1647,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             logger.exception("Could not clean expired chat images at startup")
         history_watcher = asyncio.create_task(watch_codex_history(app_server))
         claude_history_watcher = asyncio.create_task(watch_claude_history(claude_code))
-        await device_chat.start()
         claude_code.schedule_native_refresh()
         image_reaper = asyncio.create_task(reap_expired_message_images())
         terminal_reaper = asyncio.create_task(reap_tmux_terminal_sessions())
@@ -1668,7 +1661,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await terminal_reaper
             await shared_queue.close()
-            await device_chat.close()
             await claude_code.close()
             for terminal_session in tuple(terminal_sessions):
                 await terminal_session.close()
@@ -1682,7 +1674,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.72.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.74.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1691,7 +1683,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
-    app.state.device_chat = device_chat
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1705,12 +1696,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
-        public_device_routes = {
-            "/api/v1/device-chat/join-peer",
-            "/api/v1/device-chat/peer-event",
-            "/api/v1/device-chat/leave-peer",
-        }
-        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair" and request.url.path not in public_device_routes:
+        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair":
             authorization = request.headers.get("authorization", "")
             token = authorization.removeprefix("Bearer ").strip()
             if not auth.accepts(token):
@@ -1766,162 +1752,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except PairingStateError as error:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(error)) from error
         return {"unpaired": True}
-
-    @app.get("/api/v1/device-chat/state")
-    async def device_chat_state(
-        after_cursor: int | None = None,
-        after_sequence: int | None = None,
-        wait_ms: int = 0,
-    ) -> dict[str, Any]:
-        # A sequence tracks message order, while a cursor also changes when a
-        # streaming message body is updated. Older clients only send sequences,
-        # so give them a full snapshot instead of silently dropping revisions.
-        if after_cursor is None and after_sequence is not None:
-            return device_chat.state()
-        if after_cursor is not None and wait_ms > 0:
-            await device_chat.wait_for_state_update(max(0, after_cursor), min(wait_ms, 20_000) / 1000)
-        return device_chat.state(after_cursor)
-
-    @app.post("/api/v1/device-chat/create")
-    async def device_chat_create(body: DeviceChatCreateRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.create_or_invite(body.name)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/invite")
-    async def device_chat_invite(body: DeviceChatCreateRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.create_invite(body.name)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/join")
-    async def device_chat_join(body: DeviceChatJoinRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.join_room(body.host_url, body.code, body.name)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/message")
-    async def device_chat_message(body: DeviceChatMessageRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.send_message(body.text, body.target_id, body.model, body.effort, body.approval_policy)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-
-    @app.put("/api/v1/device-chat/thread")
-    async def device_chat_select_thread(body: DeviceChatThreadRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.select_local_thread(body.thread_id)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-
-    @app.put("/api/v1/device-chat/workspace")
-    async def device_chat_bind_workspace(body: ThreadWorkspaceRequest) -> dict[str, Any]:
-        cwd = workspace_base_for_cwd(app_server.workspace, body.cwd)
-        try:
-            thread_id = await device_chat.ensure_local_thread()
-            shared_state.set_thread_workspace(thread_id, str(cwd))
-            device_chat.notify_state_changed()
-            await app_server.notify_threads_changed()
-            return device_chat.state()
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-        except CodexRuntimeError as error:
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/leave")
-    async def device_chat_leave() -> dict[str, bool]:
-        try:
-            await device_chat.leave()
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
-        return {"left": True}
-
-    @app.post("/api/v1/device-chat/join-peer")
-    async def device_chat_join_peer(body: DeviceChatPeerJoinRequest) -> dict[str, Any]:
-        try:
-            return await device_chat.accept_join(body.code, body.device_id, body.name)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/peer-event")
-    async def device_chat_peer_event(body: DeviceChatPeerEventRequest, request: Request) -> dict[str, Any]:
-        device_id = request.headers.get("x-code-remote-node", "")
-        node_token = request.headers.get("x-code-remote-token", "")
-        if not device_chat.authenticate_peer(device_id, node_token):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="设备节点授权无效。")
-        try:
-            return await device_chat.host_peer_event(device_id, node_token, body.event)
-        except DeviceChatError as error:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
-
-    @app.post("/api/v1/device-chat/leave-peer")
-    async def device_chat_leave_peer(request: Request) -> dict[str, bool]:
-        device_id = request.headers.get("x-code-remote-node", "")
-        node_token = request.headers.get("x-code-remote-token", "")
-        if not device_chat.authenticate_peer(device_id, node_token):
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="设备节点授权无效。")
-        await device_chat.leave_peer(device_id, node_token)
-        return {"left": True}
-
-    @app.websocket("/api/v1/device-chat/node")
-    async def device_chat_node(websocket: WebSocket) -> None:
-        await websocket.accept()
-        queue: asyncio.Queue[dict[str, Any]] | None = None
-        device_id = ""
-        outgoing: asyncio.Task[dict[str, Any]] | None = None
-        incoming: asyncio.Task[dict[str, Any]] | None = None
-        try:
-            try:
-                hello = await asyncio.wait_for(websocket.receive_json(), timeout=8)
-            except (TimeoutError, WebSocketDisconnect):
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="device hello required")
-                return
-            if not isinstance(hello, dict) or hello.get("type") != "hello":
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="invalid device hello")
-                return
-            device_id = str(hello.get("device_id", ""))
-            node_token = str(hello.get("token", ""))
-            try:
-                # Older peers only know chronological message sequences. Ask for
-                # a full snapshot so they cannot skip updates to existing rows.
-                last_cursor = max(0, int(hello.get("last_cursor", 0))) if "last_cursor" in hello else 0
-            except (TypeError, ValueError):
-                last_cursor = 0
-            try:
-                queue, snapshot = await device_chat.connect_peer(device_id, node_token, last_cursor)
-            except DeviceChatError as error:
-                await websocket.send_json({"type": "error", "message": str(error)})
-                await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
-                return
-            await websocket.send_json(snapshot)
-            outgoing = asyncio.create_task(queue.get())
-            incoming = asyncio.create_task(websocket.receive())
-            while True:
-                done, _ = await asyncio.wait((outgoing, incoming), return_when=asyncio.FIRST_COMPLETED)
-                if outgoing in done:
-                    event = outgoing.result()
-                    await websocket.send_json(event)
-                    if event.get("type") == "room_closed" or (event.get("type") == "member_removed" and event.get("device_id") == device_id):
-                        break
-                    outgoing = asyncio.create_task(queue.get())
-                if incoming in done:
-                    message = incoming.result()
-                    if message.get("type") == "websocket.disconnect":
-                        break
-                    incoming = asyncio.create_task(websocket.receive())
-        except (WebSocketDisconnect, OSError, RuntimeError, ValueError):
-            pass
-        finally:
-            for task in (outgoing, incoming):
-                if task and not task.done():
-                    task.cancel()
-            if queue is not None:
-                device_chat.disconnect_peer(device_id, queue)
-            with suppress(WebSocketDisconnect, RuntimeError, OSError):
-                await websocket.close()
 
     @app.get("/api/v1/codex/status")
     async def codex_status() -> dict[str, Any]:
@@ -2162,6 +1992,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
+    @app.get("/api/v1/codex/queue/scheduled-thread-ids")
+    async def read_scheduled_thread_ids() -> dict[str, list[str]]:
+        return {"thread_ids": shared_state.scheduled_thread_ids()}
+
     @app.get("/api/v1/codex/queue/{thread_id}")
     async def read_queued_messages(thread_id: str) -> dict[str, Any]:
         return {"queue": shared_state.queue(thread_id), "paused": shared_state.is_paused(thread_id)}
@@ -2180,6 +2014,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def enqueue_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
         if not body.requestText.strip() and not body.images and not body.documents:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        if inserted:
+            await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/schedule")
+    async def schedule_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if not body.scheduledAt:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="定时发送需要设置发送时间。")
+        if not body.requestText.strip() and not body.images and not body.documents:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="排队消息不能为空。")
         try:
             inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
         except QueueConflictError as error:
