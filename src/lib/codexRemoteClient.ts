@@ -82,6 +82,7 @@ export interface CodexQueuedMessage {
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   createdAt: string
+  scheduledAt?: string
   model?: string
   effort?: string
   approvalPolicy?: CodexApprovalPolicy
@@ -792,6 +793,12 @@ export const codexRemoteClient = {
   },
   enqueueMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  scheduleMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/schedule`, {
       method: 'POST',
       body: JSON.stringify(message),
     }, { networkRetries: 3 })

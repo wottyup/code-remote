@@ -7,6 +7,7 @@ import {
   Bell,
   BellOff,
   BookOpen,
+  CalendarClock,
   ChartNoAxesColumnIncreasing,
   Check,
   ChevronDown,
@@ -718,6 +719,18 @@ function timeOf(thread: CodexThread) {
     : threadDateFormatter.format(date)
 }
 
+function localDateTimeInputValue(date: Date) {
+  const localDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
+  return localDate.toISOString().slice(0, 16)
+}
+
+function scheduledTimeLabel(value?: string) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+}
+
 interface ComposerMenuOption {
   value: string
   label: string
@@ -726,6 +739,67 @@ interface ComposerMenuOption {
 interface ModelReasoningOptions {
   options: ComposerMenuOption[]
   defaultEffort?: string
+}
+
+function useComposerFloatingPosition<TAnchor extends HTMLElement, TPopover extends HTMLElement>(
+  open: boolean,
+  anchorRef: RefObject<TAnchor | null>,
+  popoverRef: RefObject<TPopover | null>,
+) {
+  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      if (!anchorRef.current || !popoverRef.current) return
+      const viewport = window.visualViewport
+      const rect = popoverRef.current.getBoundingClientRect()
+      const next = composerMenuPosition(anchorRef.current.getBoundingClientRect(), {
+        width: rect.width,
+        height: Math.min(340, popoverRef.current.scrollHeight + 2),
+      }, {
+        left: viewport?.offsetLeft ?? 0,
+        top: viewport?.offsetTop ?? 0,
+        width: viewport?.width ?? window.innerWidth,
+        height: viewport?.height ?? window.innerHeight,
+      })
+      setPosition((current) => current && current.left === next.left && current.top === next.top
+        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
+    }
+    const handleScroll = (event: Event) => {
+      if (!(event.target instanceof Node) || !popoverRef.current?.contains(event.target)) updatePosition()
+    }
+    updatePosition()
+    const settleStartedAt = window.performance.now()
+    let settleFrame: number | undefined
+    const trackAnchorWhileViewportSettles = () => {
+      updatePosition()
+      if (window.performance.now() - settleStartedAt < 600) {
+        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+      }
+    }
+    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
+    const observer = new ResizeObserver(updatePosition)
+    if (anchorRef.current) observer.observe(anchorRef.current)
+    if (popoverRef.current) observer.observe(popoverRef.current)
+    window.addEventListener('resize', updatePosition)
+    window.addEventListener('scroll', handleScroll, true)
+    window.visualViewport?.addEventListener('resize', updatePosition)
+    window.visualViewport?.addEventListener('scroll', updatePosition)
+    return () => {
+      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
+      observer.disconnect()
+      window.removeEventListener('resize', updatePosition)
+      window.removeEventListener('scroll', handleScroll, true)
+      window.visualViewport?.removeEventListener('resize', updatePosition)
+      window.visualViewport?.removeEventListener('scroll', updatePosition)
+    }
+  }, [anchorRef, open, popoverRef])
+
+  return position
 }
 
 function ComposerMenu({
@@ -739,9 +813,9 @@ function ComposerMenu({
   onChange,
   footer,
   temporary = false,
-  showLabel = false,
-  mobileLabel,
   mobileSettingsOwner,
+  portalTheme,
+  portalThemeStyle,
 }: {
   label: string
   value: string
@@ -753,66 +827,15 @@ function ComposerMenu({
   onChange: (value: string) => void
   footer?: ReactNode
   temporary?: boolean
-  showLabel?: boolean
-  mobileLabel?: string
   mobileSettingsOwner?: string
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
   const composerFocusBeforeOpen = useRef<HTMLElement | null>(null)
-  const [position, setPosition] = useState<ReturnType<typeof composerMenuPosition> | null>(null)
+  const position = useComposerFloatingPosition(open, root, popover)
   const selected = options.find((option) => option.value === value)
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setPosition(null)
-      return
-    }
-    const updatePosition = () => {
-      if (!root.current || !popover.current) return
-      const viewport = window.visualViewport
-      const rect = popover.current.getBoundingClientRect()
-      const next = composerMenuPosition(root.current.getBoundingClientRect(), {
-        width: rect.width,
-        height: Math.min(340, popover.current.scrollHeight + 2),
-      }, {
-        left: viewport?.offsetLeft ?? 0,
-        top: viewport?.offsetTop ?? 0,
-        width: viewport?.width ?? window.innerWidth,
-        height: viewport?.height ?? window.innerHeight,
-      })
-      setPosition((current) => current && current.left === next.left && current.top === next.top
-        && current.maxWidth === next.maxWidth && current.maxHeight === next.maxHeight ? current : next)
-    }
-    const handleScroll = (event: Event) => {
-      if (!(event.target instanceof Node) || !popover.current?.contains(event.target)) updatePosition()
-    }
-    updatePosition()
-    const settleStartedAt = window.performance.now()
-    let settleFrame: number | undefined
-    const trackAnchorWhileViewportSettles = () => {
-      updatePosition()
-      if (window.performance.now() - settleStartedAt < 600) {
-        settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
-      }
-    }
-    settleFrame = window.requestAnimationFrame(trackAnchorWhileViewportSettles)
-    const observer = new ResizeObserver(updatePosition)
-    if (root.current) observer.observe(root.current)
-    if (popover.current) observer.observe(popover.current)
-    window.addEventListener('resize', updatePosition)
-    window.addEventListener('scroll', handleScroll, true)
-    window.visualViewport?.addEventListener('resize', updatePosition)
-    window.visualViewport?.addEventListener('scroll', updatePosition)
-    return () => {
-      if (settleFrame !== undefined) window.cancelAnimationFrame(settleFrame)
-      observer.disconnect()
-      window.removeEventListener('resize', updatePosition)
-      window.removeEventListener('scroll', handleScroll, true)
-      window.visualViewport?.removeEventListener('resize', updatePosition)
-      window.visualViewport?.removeEventListener('scroll', updatePosition)
-    }
-  }, [open])
 
   useEffect(() => {
     if (!open) return
@@ -839,7 +862,7 @@ function ComposerMenu({
         type="button"
         disabled={disabled}
         aria-label={`${label}，当前值：${selected?.label ?? emptyLabel}${temporary ? '，仅本次' : ''}`}
-        title={`${label}：${selected?.label ?? emptyLabel}${temporary ? ' · 本次' : ''}`}
+        title={`${selected?.label ?? emptyLabel}${temporary ? ' · 本次' : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         onPointerDown={(event) => {
@@ -853,48 +876,49 @@ function ComposerMenu({
         }}
         onClick={() => onOpenChange(!open)}
       >
-        {showLabel ? <span className="composer-menu__label">{mobileLabel ?? label}</span> : null}
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
       </button>
       {open ? createPortal(
-        <div
-          ref={popover}
-          className="composer-menu__popover composer-menu__popover--floating"
-          data-mobile-settings-owner={mobileSettingsOwner}
-          style={position ?? { visibility: 'hidden' }}
-        >
-          {footer}
-          <div className="composer-menu__options" role="listbox" aria-label={label}>
-            {options.length > 0 ? options.map((option) => (
-              <button
-                className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
-                key={option.value}
-                type="button"
-                role="option"
-                aria-selected={option.value === value}
-                disabled={disabled}
-                onPointerDown={(event) => {
-                  if (composerFocusBeforeOpen.current) event.preventDefault()
-                }}
-                onClick={() => {
-                  onChange(option.value)
-                  onOpenChange(false)
-                  const focusTarget = composerFocusBeforeOpen.current
-                  composerFocusBeforeOpen.current = null
-                  if (focusTarget?.isConnected) {
-                    window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
-                  }
-                }}
-              >
-                <span className="composer-menu__option-copy">
-                  <strong>{option.label}</strong>
-                </span>
-                {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
-              </button>
-            )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div
+            ref={popover}
+            className="composer-menu__popover composer-menu__popover--floating"
+            data-mobile-settings-owner={mobileSettingsOwner}
+            style={position ?? { visibility: 'hidden' }}
+          >
+            {footer}
+            <div className="composer-menu__options" role="listbox" aria-label={label}>
+              {options.length > 0 ? options.map((option) => (
+                <button
+                  className={`composer-menu__option${option.value === value ? ' composer-menu__option--selected' : ''}`}
+                  key={option.value}
+                  type="button"
+                  role="option"
+                  aria-selected={option.value === value}
+                  disabled={disabled}
+                  onPointerDown={(event) => {
+                    if (composerFocusBeforeOpen.current) event.preventDefault()
+                  }}
+                  onClick={() => {
+                    onChange(option.value)
+                    onOpenChange(false)
+                    const focusTarget = composerFocusBeforeOpen.current
+                    composerFocusBeforeOpen.current = null
+                    if (focusTarget?.isConnected) {
+                      window.requestAnimationFrame(() => focusTarget.focus({ preventScroll: true }))
+                    }
+                  }}
+                >
+                  <span className="composer-menu__option-copy">
+                    <strong>{option.label}</strong>
+                  </span>
+                  {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
+                </button>
+              )) : <span className="composer-menu__empty">{emptyLabel}</span>}
+            </div>
           </div>
         </div>,
-        root.current?.closest('.remote-shell') ?? document.body,
+        document.body,
       ) : null}
     </div>
   )
@@ -913,6 +937,7 @@ interface ComposerSendInput {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
+  scheduledAt?: string
 }
 
 type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
@@ -931,6 +956,8 @@ interface ComposerHandle {
 
 interface MessageComposerProps {
   token: string
+  portalTheme: AppTheme
+  portalThemeStyle: CSSProperties
   draftScope: string
   onDraftChange: (draft: string) => void
   composerHeightMemory: RefObject<ComposerHeightMemory | null>
@@ -984,6 +1011,8 @@ interface MessageComposerProps {
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   token,
+  portalTheme,
+  portalThemeStyle,
   draftScope,
   onDraftChange,
   composerHeightMemory,
@@ -1063,7 +1092,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [mobileSettingsExpanded, setMobileSettingsExpanded] = useState(false)
   const mobileSettingsExpandedRef = useRef(false)
   const mobileSettingsRoot = useRef<HTMLDivElement>(null)
+  const mobileSettingsToggle = useRef<HTMLButtonElement>(null)
+  const mobileSettingsPanel = useRef<HTMLDivElement>(null)
+  const mobileSettingsPosition = useComposerFloatingPosition(mobileLayout && mobileSettingsExpanded, mobileSettingsToggle, mobileSettingsPanel)
+  const [schedulePanelOpen, setSchedulePanelOpen] = useState(false)
+  const [scheduleDateTime, setScheduleDateTime] = useState('')
+  const scheduleButton = useRef<HTMLButtonElement>(null)
+  const schedulePanel = useRef<HTMLDivElement>(null)
+  const schedulePanelPosition = useComposerFloatingPosition(schedulePanelOpen, scheduleButton, schedulePanel)
   const mobileSettingsOwner = useId()
+  const scheduleDateTimeInputId = useId()
   mobileSettingsExpandedRef.current = mobileSettingsExpanded
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
@@ -1197,12 +1235,43 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     changeOpenMenu(null)
   }, [changeOpenMenu])
   const toggleMobileSettings = useCallback(() => {
+    setSchedulePanelOpen(false)
     if (mobileSettingsExpandedRef.current) closeMobileSettings()
     else {
       mobileSettingsExpandedRef.current = true
       setMobileSettingsExpanded(true)
     }
   }, [closeMobileSettings])
+
+  const toggleSchedulePanel = useCallback(() => {
+    closeMobileSettings()
+    if (schedulePanelOpen) {
+      setSchedulePanelOpen(false)
+      return
+    }
+    setScheduleDateTime((current) => current || localDateTimeInputValue(new Date(Date.now() + 5 * 60_000)))
+    setSchedulePanelOpen(true)
+  }, [closeMobileSettings, schedulePanelOpen])
+
+  useEffect(() => {
+    if (!schedulePanelOpen) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || schedulePanel.current?.contains(target) || scheduleButton.current?.contains(target)) return
+      setSchedulePanelOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      setSchedulePanelOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [schedulePanelOpen])
 
   useEffect(() => {
     if (!mobileLayout || !mobileSettingsExpanded) return
@@ -1409,7 +1478,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (draftScope === targetScope) updateDraft(unassignedDraft)
     },
     closeOpenMenu() {
-      if (!openMenuRef.current && !mobileSettingsExpandedRef.current) return false
+      if (!openMenuRef.current && !mobileSettingsExpandedRef.current && !schedulePanelOpen) return false
+      setSchedulePanelOpen(false)
       closeMobileSettings()
       return true
     },
@@ -1418,7 +1488,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (!sendingRef.current) void finishQueuedEdit()
       return true
     },
-  }), [closeMobileSettings, draftScope, onEndQueuedEdit, updateAttachedImages, updateDraft])
+  }), [closeMobileSettings, draftScope, onEndQueuedEdit, schedulePanelOpen, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -1699,10 +1769,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
   }
 
-  async function send(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string) {
+    event?.preventDefault()
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
+    if (scheduledAt && (!Number.isFinite(Date.parse(scheduledAt)) || Date.parse(scheduledAt) <= Date.now())) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    if (!scheduledAt) setSchedulePanelOpen(false)
     if (editingQueuedMessageId) {
       void confirmQueuedEdit()
       return
@@ -1737,6 +1812,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
         claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
         claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
+        scheduledAt,
       })
     } catch (reason) {
       setAttachmentError(reason instanceof Error ? reason.message : '发送失败，草稿已恢复。')
@@ -1766,6 +1842,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError((current) => current ?? previousAttachmentError)
     } else {
       forgetComposerImageDraftTarget(draftScope)
+      if (scheduledAt) {
+        setSchedulePanelOpen(false)
+        setScheduleDateTime('')
+        setQueuedMessagesExpanded(true)
+      }
       try {
         await saveComposerImageDraft(draftScope, [])
       } catch (reason) {
@@ -1778,6 +1859,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     sendingRef.current = false
     setSending(false)
+  }
+
+  function submitScheduledMessage() {
+    const scheduledTime = new Date(scheduleDateTime)
+    if (!scheduleDateTime || Number.isNaN(scheduledTime.getTime()) || scheduledTime.getTime() <= Date.now()) {
+      setAttachmentError('请选择一个未来的发送时间。')
+      return
+    }
+    setSchedulePanelOpen(false)
+    void send(undefined, scheduledTime.toISOString())
   }
 
   function restoreDraftAfterQueuedEdit() {
@@ -1995,13 +2086,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   const preferenceMenus = showCodexPreferences ? <>
-    <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
-    <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
-    <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </> : <>
-    <ComposerMenu label="Claude 模型" mobileLabel="模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
-    <ComposerMenu label="思考等级" mobileLabel="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
-    <ComposerMenu label="权限模式" mobileLabel="权限" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </>
 
   return (
@@ -2115,10 +2206,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
               ].filter(Boolean).join(' · ')
               const summary = [message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
+              const queueStatus = isSubmitting ? '正在确认送达'
+                : isEditing ? '正在输入框中编辑'
+                  : message.editing ? '另一设备正在编辑 · 暂停发送'
+                    : sendingNow ? '正在确认送达'
+                      : deliveryUnverified ? '可能已发送 · 请核对聊天记录'
+                        : scheduledLabel ? `定于 ${scheduledLabel} 发送`
+                          : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{isSubmitting ? '正在确认送达' : isEditing ? '正在输入框中编辑' : message.editing ? '另一设备正在编辑 · 暂停发送' : sendingNow ? '正在确认送达' : deliveryUnverified ? '可能已发送 · 请核对聊天记录' : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
@@ -2167,20 +2266,25 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
           <div className={`composer-preferences${mobileLayout ? ' composer-preferences--mobile' : ''}`} ref={mobileSettingsRoot}>
             {mobileLayout ? <>
-              <button className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} title={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} aria-expanded={mobileSettingsExpanded}>
+              <button ref={mobileSettingsToggle} className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} aria-expanded={mobileSettingsExpanded}>
                 {mobileSettingsExpanded ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
               </button>
-              {mobileSettingsExpanded ? (
-                <div className="composer-menu__popover composer-preferences__mobile-panel" role="group" aria-label="对话设置">
-                  <strong className="composer-preferences__mobile-heading">对话设置</strong>
-                  <div className="composer-preferences__controls">{preferenceMenus}</div>
-                </div>
+              {mobileSettingsExpanded ? createPortal(
+                <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+                  <div ref={mobileSettingsPanel} className="composer-menu__popover composer-menu__popover--floating composer-preferences__mobile-panel" role="group" aria-label="对话设置" data-mobile-settings-owner={mobileSettingsOwner} style={mobileSettingsPosition ?? { visibility: 'hidden' }}>
+                    <div className="composer-preferences__controls">{preferenceMenus}</div>
+                  </div>
+                </div>,
+                document.body,
               ) : null}
             </> : <div className="composer-preferences__controls">{preferenceMenus}</div>}
             <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
           </div>
         </div>
         <div className="composer-actions">
+          <button ref={scheduleButton} className="composer-new-thread-button composer-schedule-toggle" type="button" onClick={toggleSchedulePanel} disabled={!canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} aria-label="定时发送" title="定时发送">
+            <CalendarClock size={16} aria-hidden="true" />
+          </button>
           <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
             <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
@@ -2202,6 +2306,20 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ) : null}
         </div>
       </div>
+      {schedulePanelOpen ? createPortal(
+        <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
+          <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label="定时发送" style={schedulePanelPosition ?? { visibility: 'hidden' }}>
+            <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>发送时间</label>
+            <input id={scheduleDateTimeInputId} className="composer-schedule-panel__input" type="datetime-local" min={localDateTimeInputValue(new Date())} value={scheduleDateTime} onChange={(event) => setScheduleDateTime(event.currentTarget.value)} />
+            <small>使用本地时间。没有当前对话时会先新建对话，到点后自动发送。</small>
+            <div className="composer-schedule-panel__actions">
+              <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>取消</button>
+              <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>加入排队</button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      ) : null}
       </form>
     </div>
   )
@@ -5615,6 +5733,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             </div>
             <MessageComposer
               token={token}
+              portalTheme={themePreferences.theme}
+              portalThemeStyle={themeRootStyle(themePreferences)}
               key={composerDraftScope}
               ref={composerHandle}
               draftScope={composerDraftScope}

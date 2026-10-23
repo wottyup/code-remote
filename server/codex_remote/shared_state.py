@@ -26,6 +26,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _scheduled_datetime(payload: dict[str, Any]) -> datetime | None:
+    value = payload.get("scheduledAt")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        scheduled = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if scheduled.tzinfo is None:
+        return None
+    return scheduled.astimezone(timezone.utc)
+
+
 class QueueConflictError(RuntimeError):
     pass
 
@@ -139,6 +152,18 @@ class SharedStateStore:
                 result[0]["blockedReason"] = block["reason"]
         return result
 
+    def next_scheduled_delay(self) -> float | None:
+        now = datetime.now(timezone.utc)
+        earliest: datetime | None = None
+        rows = self.connection.execute(
+            "SELECT payload FROM queued_messages WHERE state = 'pending' AND editing = 0"
+        ).fetchall()
+        for row in rows:
+            scheduled = _scheduled_datetime(json.loads(row["payload"]))
+            if scheduled is not None and scheduled > now and (earliest is None or scheduled < earliest):
+                earliest = scheduled
+        return (earliest - now).total_seconds() if earliest is not None else None
+
     def enqueue(self, thread_id: str, payload: dict[str, Any], *, submitting: bool = False) -> bool:
         serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         existing = self.connection.execute("SELECT thread_id, payload FROM queued_messages WHERE id = ?", (payload["id"],)).fetchone()
@@ -175,6 +200,8 @@ class SharedStateStore:
         original = json.loads(row["payload"])
         payload["id"] = message_id
         payload["createdAt"] = original["createdAt"]
+        if original.get("scheduledAt") and not payload.get("scheduledAt"):
+            payload["scheduledAt"] = original["scheduledAt"]
         self.connection.execute(
             "UPDATE queued_messages SET payload = ? WHERE id = ?",
             (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), message_id),
@@ -584,7 +611,11 @@ class SharedQueueService:
                 except Exception:
                     logger.exception("Could not advance queued thread %s", thread_id)
             try:
-                await asyncio.wait_for(self._wake.wait(), timeout=15)
+                timeout = 15.0
+                scheduled_delay = self.store.next_scheduled_delay()
+                if scheduled_delay is not None:
+                    timeout = min(timeout, max(0.05, scheduled_delay))
+                await asyncio.wait_for(self._wake.wait(), timeout=timeout)
             except TimeoutError:
                 pass
 
@@ -593,6 +624,9 @@ class SharedQueueService:
             queue = self.store.queue(thread_id)
             is_claude = is_claude_thread_id(thread_id) and self.claude is not None
             if not queue or self.store.is_paused(thread_id) or queue[0].get("editing") or queue[0].get("sendAttempt") or (self.codex.handed_off and not is_claude):
+                return
+            scheduled = _scheduled_datetime(queue[0])
+            if scheduled is not None and scheduled > datetime.now(timezone.utc):
                 return
             summary = await self._read_thread(thread_id, include_turns=False)
             if await self._active_turn_id(thread_id):
@@ -667,6 +701,9 @@ class SharedQueueService:
         async with self._lock(thread_id):
             self.store.enqueue(thread_id, payload, submitting=True)
             try:
+                scheduled = _scheduled_datetime(payload)
+                if scheduled is not None and scheduled > datetime.now(timezone.utc):
+                    return False
                 if self.store.is_paused(thread_id):
                     is_claude = is_claude_thread_id(thread_id) and self.claude is not None
                     if not is_claude or await self._active_turn_id(thread_id):

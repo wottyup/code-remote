@@ -96,6 +96,7 @@ export interface QueuedTurnMessage {
   effort?: string
   claudeModel?: string
   claudeEffort?: string
+  scheduledAt?: string
   createdAt: string
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
@@ -128,6 +129,7 @@ interface SendMessageInput {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
+  scheduledAt?: string
   onThreadCreated?: (thread: CodexThread) => void
 }
 
@@ -474,6 +476,7 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
     ...(input.claudeModel ? { claudeModel: input.claudeModel } : {}),
     ...(input.claudeEffort ? { claudeEffort: input.claudeEffort } : {}),
     ...(input.claudePermissionMode ? { claudePermissionMode: input.claudePermissionMode } : {}),
+    ...(input.scheduledAt ? { scheduledAt: input.scheduledAt } : {}),
     createdAt: new Date().toISOString(),
   }
 }
@@ -539,6 +542,9 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     || payload.claudePermissionMode === 'dontAsk' || payload.claudePermissionMode === 'plan'
     ? payload.claudePermissionMode
     : undefined
+  const scheduledAt = typeof payload.scheduledAt === 'string' && Number.isFinite(Date.parse(payload.scheduledAt))
+    ? payload.scheduledAt
+    : undefined
   const attempt = payload.sendAttempt && typeof payload.sendAttempt === 'object'
     ? payload.sendAttempt as Record<string, unknown>
     : null
@@ -562,6 +568,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     ...(claudeModel ? { claudeModel } : {}),
     ...(claudeEffort ? { claudeEffort } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
+    ...(scheduledAt ? { scheduledAt } : {}),
     ...(sendAttempt ? { sendAttempt } : {}),
     createdAt,
   }
@@ -2985,6 +2992,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       deferredQueueAdvanceAfterEdit.current.delete(threadId)
       return false
     }
+    if (next.scheduledAt && Date.parse(next.scheduledAt) > Date.now()) return false
     return next ? startQueuedMessage(threadId, next.id) : false
   }, [isBackground, startQueuedMessage])
 
@@ -4248,6 +4256,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError('网页端已交还给本机 Codex，请先重新接管网页端。')
       return false
     }
+    if (input.scheduledAt && (!Number.isFinite(Date.parse(input.scheduledAt)) || Date.parse(input.scheduledAt) <= Date.now())) {
+      setError('请选择一个未来的发送时间。')
+      return false
+    }
     if (input.continuePaused) {
       const threadId = activeThread?.id
       if (!threadId || isRunning || isInterrupting) return false
@@ -4276,10 +4288,25 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
     if (!thread) {
-      thread = await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
+      thread = input.scheduledAt
+        ? await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine)
+        : await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
+    if (input.scheduledAt) {
+      try {
+        const result = await codexRemoteClient.scheduleMessage(token, thread.id, payload)
+        applyServerQueueResponse(thread.id, result.queue)
+        setError(null)
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        setError(reason instanceof Error ? reason.message : '定时消息加入排队失败')
+        void refreshServerQueue(thread.id)
+        return false
+      }
+    }
     if (sharedQueueAuthoritative) {
       const delivery: PendingTurnDelivery = {
         threadId: thread.id,

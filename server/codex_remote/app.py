@@ -20,6 +20,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import quote
@@ -28,7 +29,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
 from .browser_history_sync import BrowserHistorySync
@@ -312,6 +313,7 @@ class QueuedMessageRequest(BaseModel):
     images: list[QueuedImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     documents: list[QueuedDocument] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     createdAt: str = Field(min_length=1, max_length=128)
+    scheduledAt: str | None = Field(default=None, max_length=64)
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=50)
     approvalPolicy: ApprovalPolicy | None = None
@@ -319,6 +321,19 @@ class QueuedMessageRequest(BaseModel):
     claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
+
+    @field_validator("scheduledAt")
+    @classmethod
+    def validate_scheduled_at(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as error:
+            raise ValueError("定时发送时间格式无效。") from error
+        if parsed.tzinfo is None or parsed <= datetime.now(timezone.utc):
+            raise ValueError("定时发送时间必须是带时区的未来时间。")
+        return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 class QueueMessageIdRequest(BaseModel):
@@ -1995,6 +2010,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def enqueue_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
         if not body.requestText.strip() and not body.images and not body.documents:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        if inserted:
+            await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/schedule")
+    async def schedule_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if not body.scheduledAt:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="定时发送需要设置发送时间。")
+        if not body.requestText.strip() and not body.images and not body.documents:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="排队消息不能为空。")
         try:
             inserted = shared_state.enqueue(thread_id, body.model_dump(exclude_none=True))
         except QueueConflictError as error:
