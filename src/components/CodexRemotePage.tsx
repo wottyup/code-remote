@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
@@ -739,6 +739,8 @@ function ComposerMenu({
   onChange,
   footer,
   temporary = false,
+  showLabel = false,
+  mobileSettingsOwner,
 }: {
   label: string
   value: string
@@ -750,6 +752,8 @@ function ComposerMenu({
   onChange: (value: string) => void
   footer?: ReactNode
   temporary?: boolean
+  showLabel?: boolean
+  mobileSettingsOwner?: string
 }) {
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
@@ -846,12 +850,14 @@ function ComposerMenu({
         }}
         onClick={() => onOpenChange(!open)}
       >
+        {showLabel ? <span className="composer-menu__label">{label}</span> : null}
         <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
       </button>
       {open ? createPortal(
         <div
           ref={popover}
           className="composer-menu__popover composer-menu__popover--floating"
+          data-mobile-settings-owner={mobileSettingsOwner}
           style={position ?? { visibility: 'hidden' }}
         >
           {footer}
@@ -1051,6 +1057,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
+  const [mobileSettingsExpanded, setMobileSettingsExpanded] = useState(false)
+  const mobileSettingsExpandedRef = useRef(false)
+  const mobileSettingsRoot = useRef<HTMLDivElement>(null)
+  const mobileSettingsOwner = useId()
+  mobileSettingsExpandedRef.current = mobileSettingsExpanded
   const composer = useRef<HTMLTextAreaElement>(null)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
@@ -1177,6 +1188,44 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     openMenuRef.current = next
     setOpenMenu(next)
   }, [])
+  const closeMobileSettings = useCallback(() => {
+    mobileSettingsExpandedRef.current = false
+    setMobileSettingsExpanded(false)
+    changeOpenMenu(null)
+  }, [changeOpenMenu])
+  const toggleMobileSettings = useCallback(() => {
+    if (mobileSettingsExpandedRef.current) closeMobileSettings()
+    else {
+      mobileSettingsExpandedRef.current = true
+      setMobileSettingsExpanded(true)
+    }
+  }, [closeMobileSettings])
+
+  useEffect(() => {
+    if (!mobileLayout || !mobileSettingsExpanded) return
+    const closeOnOutside = (event: globalThis.PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || mobileSettingsRoot.current?.contains(target)) return
+      const ownMenuPopover = Array.from(document.querySelectorAll<HTMLElement>('[data-mobile-settings-owner]'))
+        .some((popover) => popover.dataset.mobileSettingsOwner === mobileSettingsOwner && popover.contains(target))
+      if (!ownMenuPopover) closeMobileSettings()
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229 || openMenuRef.current) return
+      event.preventDefault()
+      closeMobileSettings()
+    }
+    document.addEventListener('pointerdown', closeOnOutside)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutside)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [closeMobileSettings, mobileLayout, mobileSettingsExpanded, mobileSettingsOwner])
+
+  useEffect(() => {
+    if (!mobileLayout && mobileSettingsExpandedRef.current) closeMobileSettings()
+  }, [closeMobileSettings, mobileLayout])
 
   const updateDraft = useCallback((next: string | ((current: string) => string)) => {
     const value = typeof next === 'function' ? next(draftRef.current) : next
@@ -1357,8 +1406,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (draftScope === targetScope) updateDraft(unassignedDraft)
     },
     closeOpenMenu() {
-      if (!openMenuRef.current) return false
-      changeOpenMenu(null)
+      if (!openMenuRef.current && !mobileSettingsExpandedRef.current) return false
+      closeMobileSettings()
       return true
     },
     cancelQueuedEdit() {
@@ -1366,7 +1415,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (!sendingRef.current) void finishQueuedEdit()
       return true
     },
-  }), [changeOpenMenu, draftScope, onEndQueuedEdit, updateAttachedImages, updateDraft])
+  }), [closeMobileSettings, draftScope, onEndQueuedEdit, updateAttachedImages, updateDraft])
 
   useEffect(() => {
     if (draftSaveTimer.current !== undefined) window.clearTimeout(draftSaveTimer.current)
@@ -1942,6 +1991,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     return true
   }
 
+  const preferenceMenus = showCodexPreferences ? <>
+    <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+  </> : <>
+    <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+    <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} showLabel={mobileLayout} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} />
+  </>
+
   return (
     <div className="composer-dock">
       {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
@@ -2103,16 +2162,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <div className="message-composer__footer">
         <div className="composer-footer-start">
           <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
-          <div className="composer-preferences">
-            {showCodexPreferences ? <>
-              <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} />
-            </> : <>
-              <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} />
-              <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} />
-            </>}
+          <div className={`composer-preferences${mobileLayout ? ' composer-preferences--mobile' : ''}`} ref={mobileSettingsRoot}>
+            {mobileLayout ? <>
+              <button className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} title={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} aria-expanded={mobileSettingsExpanded}>
+                {mobileSettingsExpanded ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
+              </button>
+              {mobileSettingsExpanded ? (
+                <div className="composer-menu__popover composer-preferences__mobile-panel" role="group" aria-label="对话设置">
+                  <strong className="composer-preferences__mobile-heading">对话设置</strong>
+                  <div className="composer-preferences__controls">{preferenceMenus}</div>
+                </div>
+              ) : null}
+            </> : <div className="composer-preferences__controls">{preferenceMenus}</div>}
             <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
           </div>
         </div>

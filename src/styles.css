@@ -933,6 +933,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-composer__footer { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 28px; }
 .composer-footer-start { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 7px; }
 .composer-preferences { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.composer-preferences__controls { display: flex; min-width: 0; align-items: center; gap: 10px; }
+.composer-preferences--mobile { position: relative; flex: 0 0 auto; gap: 0; }
+.composer-preferences--mobile .composer-settings-toggle { width: 36px; height: 36px; flex-basis: 36px; touch-action: manipulation; }
+.composer-preferences__mobile-panel { z-index: 30; bottom: calc(100% + 8px); left: 0; display: grid; width: min(300px, calc(100vw - 24px)); min-width: min(260px, calc(100vw - 24px)); max-height: min(340px, 50vh); gap: 8px; padding: 9px; }
+.composer-preferences__mobile-heading { padding: 2px 5px; color: currentColor; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 650; }
+.composer-preferences__mobile-panel .composer-preferences__controls { display: grid; min-width: 0; gap: 4px; }
+.composer-preferences__mobile-panel .composer-menu { min-width: 0; }
+.composer-preferences__mobile-panel .composer-menu__trigger { width: 100%; max-width: none; height: 36px; justify-content: space-between; padding-inline: 8px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 7px; }
+.composer-preferences__mobile-panel .composer-menu__label { display: inline; color: #9299a7; }
+.composer-preferences__mobile-panel .composer-menu__value { text-align: right; }
+.composer-preferences__mobile-panel .composer-menu__trigger:hover:not(:disabled), .composer-preferences__mobile-panel .composer-menu--open .composer-menu__trigger { border-color: rgba(146, 157, 184, .5); background: rgba(117, 135, 177, .12); }
 .composer-new-thread-button { display: grid; width: 30px; height: 29px; flex: 0 0 30px; place-items: center; padding: 0; border: 1px solid rgba(146, 157, 184, .24); border-radius: 8px; background: rgba(27, 30, 37, .45); color: #aabaff; cursor: pointer; }
 .composer-new-thread-button:hover:not(:disabled) { border-color: rgba(170, 186, 255, .55); background: rgba(83, 106, 166, .22); color: #dbe2ff; }
 .composer-new-thread-button:focus-visible { outline: 2px solid #aabaff; outline-offset: 2px; }
