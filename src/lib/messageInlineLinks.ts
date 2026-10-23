@@ -14,8 +14,14 @@ function safeMessageLinkHref(value: string) {
   }
 }
 
-function trimMessageLinkPunctuation(value: string) {
+function trimMessageLinkPunctuation(value: string, textBeforeUrl: string) {
   let result = value.replace(/[.,!?;:，。！？；：、]+$/u, '')
+  for (const delimiter of ['***', '**', '__', '~~', '*', '_']) {
+    if (result.endsWith(delimiter) && textBeforeUrl.endsWith(delimiter)) {
+      result = result.slice(0, -delimiter.length)
+      break
+    }
+  }
   for (const [opening, closing] of [['(', ')'], ['[', ']']] as const) {
     while (result.endsWith(closing)
       && [...result].filter((character) => character === closing).length > [...result].filter((character) => character === opening).length) {
@@ -36,7 +42,7 @@ export function splitMessageInlineLinks(value: string): MessageInlineLinkPart[] 
     const rawUrl = isMarkdownLink ? match[2] : match[3]
     if (!rawUrl) continue
 
-    const visibleUrl = isMarkdownLink ? rawUrl : trimMessageLinkPunctuation(rawUrl)
+    const visibleUrl = isMarkdownLink ? rawUrl : trimMessageLinkPunctuation(rawUrl, value.slice(0, match.index))
     const href = safeMessageLinkHref(visibleUrl)
     if (!href || !visibleUrl) continue
 
