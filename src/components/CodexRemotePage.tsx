@@ -2311,7 +2311,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label="定时发送" style={schedulePanelPosition ?? { visibility: 'hidden' }}>
             <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>发送时间</label>
             <input id={scheduleDateTimeInputId} className="composer-schedule-panel__input" type="datetime-local" min={localDateTimeInputValue(new Date())} value={scheduleDateTime} onChange={(event) => setScheduleDateTime(event.currentTarget.value)} />
-            <small>使用本地时间。没有当前对话时会先新建对话，到点后自动发送。</small>
+            <small>本地时间；无会话时先创建，到点自动发送。</small>
             <div className="composer-schedule-panel__actions">
               <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>取消</button>
               <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>加入排队</button>
