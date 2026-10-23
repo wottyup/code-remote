@@ -5354,10 +5354,11 @@ class MainActivity : Activity() {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             elevation = dp(12).toFloat()
             isTouchable = true
-            isFocusable = false
+            isFocusable = true
             isOutsideTouchable = false
             isClippingEnabled = true
-            inputMethodMode = PopupWindow.INPUT_METHOD_NOT_NEEDED
+            inputMethodMode = PopupWindow.INPUT_METHOD_NEEDED
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         }
         webPreviewPopup = popup
 
