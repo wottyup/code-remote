@@ -3573,7 +3573,11 @@ interface RemoteChatPaneProps {
   onCopy: (message: CodexMessage) => void | Promise<void>
 }
 
-function RemoteChatPane({
+const emptyOperations: CodexOperation[] = []
+const emptyFileChanges: CodexFileChange[] = []
+const emptyActivityTimeline: CodexActivityTimelineEntry[] = []
+
+const RemoteChatPane = memo(function RemoteChatPane({
   token,
   remote,
   active,
@@ -3612,15 +3616,20 @@ function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const choiceReplyTarget = useRef(remote)
+  useLayoutEffect(() => {
+    choiceReplyTarget.current = remote
+  }, [remote])
   const fillChoiceReply = useCallback((reply: string) => {
     const currentComposer = composerHandle.current
     if (!active || !currentComposer) return false
     return currentComposer.appendReplyDraft(reply)
   }, [active, composerHandle])
   const sendChoiceReply = useCallback(async (reply: string, immediately: boolean) => {
-    if (!active || !remote.activeThread) return false
-    return remote.sendMessage({ prompt: reply, images: [], documents: [], sendImmediately: immediately })
-  }, [active, remote])
+    const target = choiceReplyTarget.current
+    if (!active || !target.activeThread) return false
+    return target.sendMessage({ prompt: reply, images: [], documents: [], sendImmediately: immediately })
+  }, [active])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -3682,6 +3691,10 @@ function RemoteChatPane({
     if (forceMessageStreamBottomTimer.current !== undefined) {
       window.clearTimeout(forceMessageStreamBottomTimer.current)
       forceMessageStreamBottomTimer.current = undefined
+    }
+    if (scrollAnimationFrame.current !== undefined) {
+      window.cancelAnimationFrame(scrollAnimationFrame.current)
+      scrollAnimationFrame.current = undefined
     }
     followMessageStream.current = true
     setShowScrollToBottom(false)
@@ -3762,13 +3775,7 @@ function RemoteChatPane({
     forceMessageStreamToBottom(activeThreadId)
   }, [active, activeThreadId, forceMessageStreamToBottom, remote.loadingHistory, remote.messages])
 
-  useLayoutEffect(() => {
-    const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
-    if (!forceToBottom && !followMessageStream.current) return
-    positionMessageStreamAtBottom()
-    followMessageStream.current = true
-    setShowScrollToBottom(false)
-    if (forceToBottom) settleForcedMessageStreamBottom()
+  const scheduleMessageStreamScroll = useCallback(() => {
     if (scrollAnimationFrame.current !== undefined) return
     scrollAnimationFrame.current = window.requestAnimationFrame(() => {
       scrollAnimationFrame.current = undefined
@@ -3779,7 +3786,11 @@ function RemoteChatPane({
       setShowScrollToBottom(false)
       if (forced) settleForcedMessageStreamBottom()
     })
-  }, [active, activeThreadId, positionMessageStreamAtBottom, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, settleForcedMessageStreamBottom, visibleStartIndex])
+  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+
+  useLayoutEffect(() => {
+    scheduleMessageStreamScroll()
+  }, [active, remote.activity, remote.isRunning, remote.loadingHistory, remote.messages, scheduleMessageStreamScroll, visibleStartIndex])
 
   useLayoutEffect(() => {
     const anchor = olderMessageScrollAnchor.current
@@ -3794,18 +3805,13 @@ function RemoteChatPane({
   useLayoutEffect(() => {
     const content = messageContent.current
     if (!content || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(() => {
-      const forceToBottom = forceMessageStreamBottomFor.current === activeThreadId
-      if (!forceToBottom && !followMessageStream.current) return
-      positionMessageStreamAtBottom()
-      followMessageStream.current = true
-      setShowScrollToBottom(false)
-      if (forceToBottom) settleForcedMessageStreamBottom()
-    })
+    // Streaming commits and image/font resizes share one scroll measurement per
+    // frame, rather than forcing layout from both effects and ResizeObserver.
+    const observer = new ResizeObserver(scheduleMessageStreamScroll)
     observer.observe(content)
     if (messageContainer.current) observer.observe(messageContainer.current)
     return () => observer.disconnect()
-  }, [activeThreadId, positionMessageStreamAtBottom, settleForcedMessageStreamBottom])
+  }, [scheduleMessageStreamScroll])
 
   useEffect(() => () => {
     if (scrollAnimationFrame.current !== undefined) window.cancelAnimationFrame(scrollAnimationFrame.current)
@@ -3827,8 +3833,8 @@ function RemoteChatPane({
   const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
   const activeTurnStartedAt = remote.turnStartedAt ?? (Number.isFinite(streamingStartedAt) ? streamingStartedAt : null)
-  const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? [] : []
-  const runningTimeline = remote.runningTurnId ? remote.activityTimelineByTurn[remote.runningTurnId] ?? [] : []
+  const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? emptyOperations : emptyOperations
+  const runningTimeline = remote.runningTurnId ? remote.activityTimelineByTurn[remote.runningTurnId] ?? emptyActivityTimeline : emptyActivityTimeline
   const runningOperationTimeline = runningTimeline.filter((entry) => entry.type === 'operation')
   const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
@@ -3915,16 +3921,16 @@ function RemoteChatPane({
               ? remote.fileChangesByTurn[message.turnId]
               : undefined
             const operations = message.role === 'assistant' && message.turnId
-              ? remote.operationsByTurn[message.turnId] ?? []
-              : []
+              ? remote.operationsByTurn[message.turnId] ?? emptyOperations
+              : emptyOperations
             const operationFileChanges = message.turnId
-              ? remote.fileChangesByTurn[message.turnId] ?? []
-              : []
+              ? remote.fileChangesByTurn[message.turnId] ?? emptyFileChanges
+              : emptyFileChanges
             const showOperations = message.role === 'assistant'
               && (!message.turnId || lastAssistantMessageIndexByTurn.get(message.turnId) === index)
             const activityTimeline = showOperations && message.turnId
-              ? remote.activityTimelineByTurn[message.turnId] ?? []
-              : []
+              ? remote.activityTimelineByTurn[message.turnId] ?? emptyActivityTimeline
+              : emptyActivityTimeline
             return (
               <Fragment key={message.id}>
                 <MessageBubble
@@ -3978,8 +3984,8 @@ function RemoteChatPane({
               </div>
               {!hasStreamingAssistant && runningOperations.length > 0 ? (
                 runningOperationTimeline.length > 0
-                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? [] : []} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
-                  : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? [] : []} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
+                  ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
+                  : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
               ) : null}
             </div>
           ) : null}
@@ -4030,7 +4036,7 @@ function RemoteChatPane({
       ) : null}
     </main>
   )
-}
+})
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
@@ -4076,7 +4082,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       if (continuationRef.current !== next) return
       updateContinuation(accepted ? { ...next, phase: 'ready' } : null)
     })
-  }, [activeRemote, selectedPaneIndex, updateContinuation])
+  }, [activeRemote.isRunning, activeRemote.isInterrupting, activeRemote.activeThread?.id, activeRemote.runningTurnId, activeRemote.interrupt, selectedPaneIndex, updateContinuation])
 
   useEffect(() => {
     if (activeContinuation?.turnId && activeRemote.isRunning && activeRemote.runningTurnId
@@ -5311,6 +5317,32 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return sent
   }, [preferencesScope, rememberThreadComposerPreferences, savedComposerPreferences, selectedPaneIndex, temporaryPreferences, updateContinuation])
 
+  // Keep pane event handlers stable while reading the latest committed
+  // selection and controller when the user actually performs an action.
+  const currentPaneActions = useRef({ activatePane, closePane, createThreadForPane, switchEngineForPane, createThread })
+  useLayoutEffect(() => {
+    currentPaneActions.current = { activatePane, closePane, createThreadForPane, switchEngineForPane, createThread }
+  })
+  const paneActions = useMemo(() => Array.from({ length: maxConcurrentPaneCount }, (_, paneIndex) => ({
+    onActivate: () => currentPaneActions.current.activatePane(paneIndex),
+    onClose: () => currentPaneActions.current.closePane(paneIndex),
+    onCreateThread: () => { void currentPaneActions.current.createThreadForPane(paneIndex) },
+    onSwitchEngine: (engine: ChatEngine) => currentPaneActions.current.switchEngineForPane(paneIndex, engine),
+    onOpenWorkspaceFile: (path: string, cwd?: string, diff?: string) => {
+      currentPaneActions.current.activatePane(paneIndex)
+      workspacePreviewSequence.current += 1
+      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
+    },
+    onOpenWorkspaceImage: (path: string, cwd?: string, viewedByCodexThreadId?: string) => {
+      currentPaneActions.current.activatePane(paneIndex)
+      workspacePreviewSequence.current += 1
+      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image', viewedByCodexThreadId })
+    },
+    onDirectoryRequestHandled: (id: number) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current),
+  })), [])
+  const createComposerThread = useCallback(() => { void currentPaneActions.current.createThread() }, [])
+  const composerPortalThemeStyle = useMemo(() => themeRootStyle(themePreferences), [themePreferences])
+
   const continueInterruptedReply = useCallback(() => {
     if (!canContinue || !activeContinuation || continuationRef.current !== activeContinuation) return
     const pending = { ...activeContinuation, phase: 'continuing' as const }
@@ -5721,30 +5753,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               {openPaneIndexes.map((paneIndex) => (
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-thread`}>
                   <RemoteChatPane
+                    {...paneActions[paneIndex]}
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
                     showPaneClose={openPaneIndexes.length > 1}
-                    onActivate={() => activatePane(paneIndex)}
-                    onClose={() => closePane(paneIndex)}
-                    onCreateThread={() => void createThreadForPane(paneIndex)}
                     claudeCodeAvailable={claudeCodeAvailable}
-                    onSwitchEngine={(engine) => switchEngineForPane(paneIndex, engine)}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
-                    onOpenWorkspaceFile={(path, cwd, diff) => {
-                      activatePane(paneIndex)
-                      workspacePreviewSequence.current += 1
-                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, diff })
-                    }}
-                    onOpenWorkspaceImage={(path, cwd, viewedByCodexThreadId) => {
-                      activatePane(paneIndex)
-                      workspacePreviewSequence.current += 1
-                      setWorkspacePreviewRequest({ id: workspacePreviewSequence.current, cwd, path, kind: 'image', viewedByCodexThreadId })
-                    }}
                     directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
-                    onDirectoryRequestHandled={(id) => setWorkspaceTerminalRequest((current) => current?.id === id ? null : current)}
                     composerHandle={composerHandle}
                     copyFeedback={copyFeedback}
                     onCopy={copyMessage}
@@ -5755,7 +5773,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <MessageComposer
               token={token}
               portalTheme={themePreferences.theme}
-              portalThemeStyle={themeRootStyle(themePreferences)}
+              portalThemeStyle={composerPortalThemeStyle}
               key={composerDraftScope}
               ref={composerHandle}
               draftScope={composerDraftScope}
@@ -5804,7 +5822,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               canContinue={canContinue}
               continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
-              onCreateThread={() => { void createThread() }}
+              onCreateThread={createComposerThread}
               createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)}
               createThreadTitle={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}
             />
@@ -6343,7 +6361,7 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
   return elements
 }
 
-function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
+const MessageContent = memo(function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
   let cursor = 0
@@ -6365,9 +6383,9 @@ function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy =
       })}
     </div>
   )
-}
+})
 
-function CodeBlock({ value, language, showCopy = true }: { value: string; language?: string; showCopy?: boolean }) {
+const CodeBlock = memo(function CodeBlock({ value, language, showCopy = true }: { value: string; language?: string; showCopy?: boolean }) {
   const [copied, setCopied] = useState(false)
   const [highlighted, setHighlighted] = useState<{
     value: string
@@ -6420,7 +6438,7 @@ function CodeBlock({ value, language, showCopy = true }: { value: string; langua
       </button> : null}
     </pre>
   )
-}
+})
 
 interface NumberedDiffLine {
   line: string

@@ -1,4 +1,4 @@
-import { startTransition, useCallback, useEffect, useReducer, useRef, useState, type SetStateAction } from 'react'
+import { startTransition, useCallback, useEffect, useMemo, useReducer, useRef, useState, type SetStateAction } from 'react'
 import {
   codexRemoteClient,
   isAmbiguousNetworkFailure,
@@ -4646,7 +4646,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [onUnauthorized, token])
 
-  return {
+  const serverQueuedMessages = activeThread ? serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages
+  const pendingSubmittedMessages = activeThread ? pendingSubmittedByThread[activeThread.id] ?? emptyQueuedMessages : emptyQueuedMessages
+  const queuedMessages = useMemo(() => mergePendingQueuedMessages(serverQueuedMessages, pendingSubmittedMessages), [serverQueuedMessages, pendingSubmittedMessages])
+
+  // These hooks share a page component across panes. Preserve the controller
+  // identity when only another pane received a streaming update.
+  return useMemo(() => ({
     connection,
     runtime,
     threads,
@@ -4654,10 +4660,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     activeThread,
     activeEngine,
     messages,
-    queuedMessages: activeThread ? mergePendingQueuedMessages(
-      serverQueuedMessagesByThread[activeThread.id] ?? emptyQueuedMessages,
-      pendingSubmittedByThread[activeThread.id] ?? emptyQueuedMessages,
-    ) : emptyQueuedMessages,
+    queuedMessages,
     queueRevision,
     pinRevision,
     isRunning,
@@ -4700,7 +4703,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     clearThreadCompletion,
     refreshActiveThread,
     updateApprovalPolicy,
-  }
+  }), [
+    connection, runtime, threads, models, activeThread, activeEngine, messages,
+    queuedMessages, queueRevision, pinRevision, isRunning, runningTurnId,
+    isInterrupting, turnStartedAt, activity, fileChangesByTurn, operationsByTurn,
+    activityTimelineByTurn, writerConflict, handedOff, handoffInProgress,
+    loadingHistory, error, updatingApprovalPolicy, approval, completedThreadIds,
+    latestThreadCompletion, refreshThreads, upsertThread, removeDeletedThread,
+    renameThread, bindThreadWorkspace, refreshModels, selectThread, createThread,
+    sendMessage, stopInterruptedThread, uploadPdfAttachment,
+    sharedSendQueuedMessageNow, sendQueuedMessageNow, sharedBeginQueuedEdit,
+    beginEditQueuedMessage, sharedUpdateQueuedMessage, updateQueuedMessage,
+    sharedEndQueuedEdit, endEditQueuedMessage, sharedRemoveQueuedMessage,
+    removeQueuedMessage, interrupt, handoffToLocalCodex, reclaimForRemote,
+    respondToApproval, clearThreadCompletion, refreshActiveThread, updateApprovalPolicy,
+  ])
 }
 
 export type CodexRemoteController = ReturnType<typeof useCodexRemote>
