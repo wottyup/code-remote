@@ -52,7 +52,7 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
-from .remote_ssh import SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh
+from .remote_ssh import SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh, ssh_host_key_offer, trust_ssh_host_key
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
@@ -141,6 +141,13 @@ class SSHServerRequest(BaseModel):
     enabled: bool = True
     allowInspect: bool = True
     allowExecute: bool = False
+
+
+class SSHHostKeyTrustRequest(BaseModel):
+    host: str = Field(min_length=1, max_length=253)
+    port: int = Field(ge=1, le=65535)
+    algorithm: str = Field(min_length=1, max_length=64)
+    fingerprint: str = Field(min_length=10, max_length=128)
 
 
 class PairingStateError(RuntimeError):
@@ -1746,7 +1753,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.82.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.83.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1871,6 +1878,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.post("/api/v1/ssh/servers/{server_id}/test")
     async def test_ssh_server(server_id: str) -> dict[str, Any]:
         try:
+            host_key = await asyncio.to_thread(ssh_host_key_offer, ssh_servers, server_id)
+            if host_key is not None:
+                return {"ok": False, "detail": "首次连接，请确认并信任这台服务器。", "hostKey": host_key}
             # This explicit user action performs only `true`, even when AI permissions are off.
             result = await asyncio.to_thread(run_ssh, ssh_servers, None, "", server_id,
                                              "true", permission="", allow_disabled=True, timeout=12)
@@ -1880,6 +1890,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=422, detail=str(error)) from error
         except OSError as error:
             raise HTTPException(status_code=503, detail=f"无法启动 SSH：{error}") from error
+
+    @app.post("/api/v1/ssh/servers/{server_id}/trust-host-key")
+    async def trust_ssh_server_host_key(server_id: str, body: SSHHostKeyTrustRequest) -> dict[str, bool]:
+        try:
+            await asyncio.to_thread(trust_ssh_host_key, ssh_servers, server_id, **body.model_dump())
+            return {"trusted": True}
+        except SSHConfigurationError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
 
     @app.get("/api/v1/ssh/operations/{thread_id}")
     async def ssh_operations(thread_id: str) -> dict[str, Any]:

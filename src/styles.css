@@ -531,6 +531,11 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .ssh-settings-server__info strong { color: var(--ssh-text); font-size: calc(13px + var(--mobile-font-offset)); }
 .ssh-settings-server__info span { overflow-wrap: anywhere; font-size: calc(12px + var(--mobile-font-offset)); }
 .ssh-settings-server__info small { color: var(--ssh-muted); font-size: calc(11px + var(--mobile-font-offset)); }
+.ssh-settings-host-key { display: grid; gap: 7px; padding: 13px; border: 1px solid var(--ssh-border); border-radius: 10px; background: var(--ssh-surface); }
+.ssh-settings-host-key strong { color: var(--ssh-text); font-size: calc(13px + var(--mobile-font-offset)); }
+.ssh-settings-host-key p { margin: 0; color: var(--ssh-muted); font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; }
+.ssh-settings-host-key span, .ssh-settings-host-key code { color: var(--ssh-text); font-size: calc(12px + var(--mobile-font-offset)); overflow-wrap: anywhere; }
+.ssh-settings-host-key .ssh-settings-actions { margin-top: 4px; }
 .ssh-settings-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
 .ssh-settings-button, .ssh-settings-actions button { display: inline-flex; min-height: 33px; align-items: center; justify-content: center; gap: 5px; padding: 5px 10px; border: 1px solid var(--ssh-border); border-radius: 8px; background: var(--ssh-surface); color: var(--ssh-text); cursor: pointer; font: inherit; font-size: calc(12px + var(--mobile-font-offset)); white-space: nowrap; }
 .ssh-settings-button:hover:not(:disabled), .ssh-settings-actions button:hover:not(:disabled) { background: rgba(126,151,180,.18); }

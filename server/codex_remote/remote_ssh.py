@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import ipaddress
+import base64
+import hashlib
 import os
 import re
 import codecs
@@ -38,6 +40,7 @@ INSPECTIONS = {
     "processes": "ps aux --sort=-%cpu | head -n 20",
     "failed_services": "systemctl --failed --no-pager",
 }
+_HOST_KEY_LOCK = threading.RLock()
 
 
 class SSHConfigurationError(ValueError):
@@ -48,6 +51,98 @@ class _KnownHostRequiredPolicy(paramiko.MissingHostKeyPolicy):
     def missing_host_key(self, client: paramiko.SSHClient, hostname: str,
                          key: paramiko.PKey) -> None:
         raise SSHConfigurationError("主机指纹尚未加入 known_hosts；请先核对并信任该服务器的指纹。")
+
+
+def _known_host_name(server: dict[str, Any]) -> str:
+    host = server["host"]
+    return host if server["port"] == 22 else f"[{host}]:{server['port']}"
+
+
+def _known_hosts_path() -> Path:
+    return Path.home() / ".ssh" / "known_hosts"
+
+
+def _known_host_keys() -> paramiko.HostKeys:
+    keys = paramiko.HostKeys()
+    try:
+        keys.load(str(_known_hosts_path()))
+    except FileNotFoundError:
+        pass
+    except Exception as error:
+        raise SSHConfigurationError("无法读取本机 known_hosts，请检查文件格式和权限。") from error
+    return keys
+
+
+def _host_key_fingerprint(key: paramiko.PKey) -> str:
+    digest = hashlib.sha256(key.asbytes()).digest()
+    return "SHA256:" + base64.b64encode(digest).decode("ascii").rstrip("=")
+
+
+def _probe_host_key(server: dict[str, Any]) -> paramiko.PKey:
+    connection: socket.socket | None = None
+    transport: paramiko.Transport | None = None
+    try:
+        connection = socket.create_connection((server["host"], server["port"]), timeout=8)
+        transport = paramiko.Transport(connection)
+        transport.banner_timeout = 8
+        transport.start_client(timeout=8)
+        return transport.get_remote_server_key()
+    except (socket.timeout, TimeoutError) as error:
+        raise SSHConfigurationError("读取服务器指纹超时，请检查地址和端口。") from error
+    except paramiko.SSHException as error:
+        raise SSHConfigurationError("无法读取服务器指纹，请检查 SSH 服务。") from error
+    except OSError as error:
+        raise SSHConfigurationError("无法连接 SSH 服务器，请检查地址、端口和网络。") from error
+    finally:
+        if transport is not None:
+            transport.close()
+        elif connection is not None:
+            connection.close()
+
+
+def ssh_host_key_offer(store: SSHServerStore, server_id: str) -> dict[str, Any] | None:
+    """Show a first-use host key before attempting password or key authentication."""
+    server = store.get(server_id)
+    alias = _known_host_name(server)
+    with _HOST_KEY_LOCK:
+        if _known_host_keys().lookup(alias):
+            return None
+    key = _probe_host_key(server)
+    return {"host": server["host"], "port": server["port"],
+            "algorithm": key.get_name(), "fingerprint": _host_key_fingerprint(key)}
+
+
+def trust_ssh_host_key(store: SSHServerStore, server_id: str, *, host: str, port: int,
+                       algorithm: str, fingerprint: str) -> None:
+    """Trust the key shown in the UI only if a fresh handshake returns that key."""
+    server = store.get(server_id)
+    if server["host"] != host or server["port"] != port:
+        raise SSHConfigurationError("服务器地址已变化，请重新检查连接。")
+    key = _probe_host_key(server)
+    if key.get_name() != algorithm or _host_key_fingerprint(key) != fingerprint:
+        raise SSHConfigurationError("服务器指纹已变化，请重新检查连接。")
+    alias = _known_host_name(server)
+    with _HOST_KEY_LOCK:
+        known = _known_host_keys().lookup(alias)
+        if known:
+            if any(saved.asbytes() == key.asbytes() for saved in known.values()):
+                return
+            raise SSHConfigurationError("该地址已有不同的主机指纹；为安全起见没有覆盖。")
+        path = _known_hosts_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+            with os.fdopen(fd, "r+b", buffering=0) as file:
+                file.seek(0, os.SEEK_END)
+                if file.tell():
+                    file.seek(-1, os.SEEK_END)
+                    if file.read(1) != b"\n":
+                        file.write(b"\n")
+                file.write(f"{alias} {key.get_name()} {key.get_base64()}\n".encode("ascii"))
+                file.flush()
+                os.fsync(file.fileno())
+        except OSError as error:
+            raise SSHConfigurationError("无法保存服务器指纹，请检查本机 known_hosts 权限。") from error
 
 
 def _now() -> str:

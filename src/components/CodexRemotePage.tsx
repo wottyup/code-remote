@@ -50,7 +50,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type SSHHostKeyOffer, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -6077,6 +6077,7 @@ function SSHSettingsCard({ token }: { token: string }) {
   const [draft, setDraft] = useState<SSHServerInput | null>(null)
   const [busy, setBusy] = useState(false)
   const [testingId, setTestingId] = useState<string | null>(null)
+  const [pendingHostKey, setPendingHostKey] = useState<{ serverId: string; serverName: string; offer: SSHHostKeyOffer } | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const editingServer = servers.find((server) => server.id === editingId)
@@ -6101,6 +6102,7 @@ function SSHSettingsCard({ token }: { token: string }) {
     try {
       const saved = await codexRemoteClient.saveSSHServer(token, draft, editingId ?? undefined)
       setServers((current) => [...current.filter((server) => server.id !== saved.id), saved])
+      setPendingHostKey(null)
       setDraft(null)
       setEditingId(null)
       setMessage('服务器配置已保存。AI 下次调用 SSH 工具时会使用新权限。')
@@ -6119,6 +6121,7 @@ function SSHSettingsCard({ token }: { token: string }) {
     try {
       await codexRemoteClient.deleteSSHServer(token, server.id)
       setServers((current) => current.filter((item) => item.id !== server.id))
+      if (pendingHostKey?.serverId === server.id) setPendingHostKey(null)
       if (editingId === server.id) { setDraft(null); setEditingId(null) }
       setMessage('服务器配置已删除。')
     } catch (reason) {
@@ -6132,11 +6135,33 @@ function SSHSettingsCard({ token }: { token: string }) {
     setTestingId(server.id)
     setError(null)
     setMessage(null)
+    setPendingHostKey(null)
     try {
       const result = await codexRemoteClient.testSSHServer(token, server.id)
-      setMessage(`${server.name}：${result.ok ? '连接成功' : result.detail}`)
+      if (result.hostKey) setPendingHostKey({ serverId: server.id, serverName: server.name, offer: result.hostKey })
+      else setMessage(`${server.name}：${result.ok ? '连接成功' : result.detail}`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '连接检查失败。')
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  async function trustAndRetry() {
+    if (!pendingHostKey || testingId !== null) return
+    const { serverId, serverName, offer } = pendingHostKey
+    setTestingId(serverId)
+    setError(null)
+    setMessage(null)
+    try {
+      await codexRemoteClient.trustSSHHostKey(token, serverId, offer)
+      setPendingHostKey(null)
+      const result = await codexRemoteClient.testSSHServer(token, serverId)
+      if (result.hostKey) setError('指纹已保存，但连接仍需确认；请重新检查连接。')
+      else setMessage(`${serverName}：${result.ok ? '连接成功' : result.detail}`)
+    } catch (reason) {
+      setPendingHostKey(null)
+      setError(reason instanceof Error ? reason.message : '信任服务器失败，请重新检查连接。')
     } finally {
       setTestingId(null)
     }
@@ -6177,6 +6202,16 @@ function SSHSettingsCard({ token }: { token: string }) {
           <button type="button" disabled={busy} onClick={() => void remove(server)}>删除</button>
         </div>
       </div>)}
+      {pendingHostKey ? <div className="ssh-settings-host-key" role="status">
+        <strong>首次连接 {pendingHostKey.serverName}</strong>
+        <p>确认这是你要连接的服务器后，点一次按钮即可。以后连接同一地址会自动识别。</p>
+        <span>{pendingHostKey.offer.host}:{pendingHostKey.offer.port}</span>
+        <code>{pendingHostKey.offer.algorithm} · {pendingHostKey.offer.fingerprint}</code>
+        <div className="ssh-settings-actions">
+          <button type="button" disabled={testingId !== null} onClick={() => void trustAndRetry()}>{testingId === pendingHostKey.serverId ? '连接中…' : '信任并重试'}</button>
+          <button type="button" disabled={testingId !== null} onClick={() => setPendingHostKey(null)}>取消</button>
+        </div>
+      </div> : null}
       {draft ? <form className="ssh-settings-form" onSubmit={(event) => void save(event)}>
         <strong>{editingId ? '编辑服务器' : '添加服务器'}</strong>
         <div className="ssh-settings-fields">
@@ -6208,7 +6243,7 @@ function SSHSettingsCard({ token }: { token: string }) {
           <label><input type="checkbox" checked={draft.allowInspect} onChange={(event) => setDraft({ ...draft, allowInspect: event.target.checked })} />允许只读诊断</label>
           <label><input type="checkbox" checked={draft.allowExecute} onChange={(event) => setDraft({ ...draft, allowExecute: event.target.checked })} />允许执行远程命令</label>
         </div>
-        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。服务器首次连接前，主机指纹须已加入本机 known_hosts。保存的密码、私钥及口令不会在页面回显。</p>
+        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。首次连接时点击“检查连接”，按提示信任服务器。保存的密码、私钥及口令不会在页面回显。</p>
         {window.location.protocol !== 'https:' ? <p className="ssh-settings-note ssh-settings-note--warning">当前页面使用 HTTP，填写的密码或私钥在传输途中没有 HTTPS 加密。建议改用 HTTPS 后再填写。</p> : null}
         <div className="ssh-settings-actions"><button type="button" disabled={busy} onClick={() => { setDraft(null); setEditingId(null) }}>取消</button><button type="submit" disabled={busy}>{busy ? '保存中…' : '保存服务器'}</button></div>
       </form> : null}

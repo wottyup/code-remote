@@ -29,6 +29,13 @@ export interface SSHServerConfig {
   allowExecute: boolean
 }
 
+export interface SSHHostKeyOffer {
+  host: string
+  port: number
+  algorithm: string
+  fingerprint: string
+}
+
 export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential' | 'port'> & {
   port: number | ''
   password?: string
@@ -748,7 +755,12 @@ export const codexRemoteClient = {
     return request<{ deleted: boolean }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
   testSSHServer(token: string, id: string) {
-    return request<{ ok: boolean; detail: string }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, { timeoutMs: 35_000 })
+    return request<{ ok: boolean; detail: string; hostKey?: SSHHostKeyOffer }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, { timeoutMs: 35_000 })
+  },
+  trustSSHHostKey(token: string, id: string, offer: SSHHostKeyOffer) {
+    return request<{ trusted: boolean }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/trust-host-key`, {
+      method: 'POST', body: JSON.stringify(offer),
+    }, { timeoutMs: 35_000 })
   },
   sshOperations(token: string, threadId: string) {
     return request<{ operations: SSHOperation[] }>(token, `/api/v1/ssh/operations/${encodeURIComponent(threadId)}`, undefined, { timeoutMs: 10_000, networkRetries: 0 })
