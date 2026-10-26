@@ -14,6 +14,7 @@ import {
   type CodexModel,
   type CodexApprovalPolicy,
   type CodexRuntime,
+  type MCPApprovalScope,
   type CodexThread,
   type CodexThreadDetails,
   type RemoteEvent,
@@ -33,6 +34,7 @@ interface ApprovalRequest {
   requestId: string | number
   method: string
   params: Record<string, unknown>
+  approvalScope?: MCPApprovalScope | null
 }
 
 export interface CodexActivity {
@@ -3395,7 +3397,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         || requestMethod === 'execCommandApproval'
         || requestMethod === 'applyPatchApproval'
       if (supportedApproval && (typeof event.request_id === 'string' || typeof event.request_id === 'number')) {
-        setApproval({ requestId: event.request_id, method: requestMethod, params: event.params ?? {} })
+        setApproval({ requestId: event.request_id, method: requestMethod, params: event.params ?? {}, approvalScope: event.approvalScope })
       }
       return
     }
@@ -4609,9 +4611,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [handoffInProgress, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
-  const respondToApproval = useCallback((response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>) => {
+  const respondToApproval = useCallback((response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>, remember?: 'tool' | 'server') => {
     if (!approval) return false
-    const sent = socketRef.current?.respondToApproval(approval.requestId, response) ?? false
+    const sent = socketRef.current?.respondToApproval(approval.requestId, response, remember) ?? false
     if (!sent) setError('连接断开，审批没有送达')
     return sent
   }, [approval])

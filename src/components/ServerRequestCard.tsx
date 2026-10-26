@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertTriangle, Check, X } from 'lucide-react'
+import type { MCPApprovalScope } from '../lib/codexRemoteClient'
 
 type Decision = 'accept' | 'decline' | 'cancel'
 type RequestResponse = Decision | Record<string, unknown>
@@ -8,6 +9,7 @@ interface ServerRequest {
   requestId: string | number
   method: string
   params: Record<string, unknown>
+  approvalScope?: MCPApprovalScope | null
 }
 
 interface Props {
@@ -15,7 +17,7 @@ interface Props {
   source: string | null
   sourceIsCurrent: boolean
   onOpenSource: () => void
-  onRespond: (response: RequestResponse) => boolean
+  onRespond: (response: RequestResponse, remember?: 'tool' | 'server') => boolean
 }
 
 interface ToolQuestion {
@@ -102,7 +104,7 @@ function ToolQuestionFields({ questions, onRespond }: { questions: ToolQuestion[
   </>
 }
 
-function McpElicitationFields({ params, onRespond }: { params: Record<string, unknown>; onRespond: Props['onRespond'] }) {
+function McpElicitationFields({ params, approvalScope, onRespond }: { params: Record<string, unknown>; approvalScope?: MCPApprovalScope | null; onRespond: Props['onRespond'] }) {
   const [values, setValues] = useState<Record<string, string | boolean>>({})
   const schema = objectValue(params.requestedSchema)
   const properties = objectValue(schema?.properties)
@@ -157,9 +159,14 @@ function McpElicitationFields({ params, onRespond }: { params: Record<string, un
       </label>
     })}
     {!supported ? <p>当前网页无法确认这种 MCP 验证请求，请取消后改用受支持的验证方式。</p> : null}
+    {approvalScope ? <small>同类型指 {approvalScope.serverName} 的 {approvalScope.toolName}；服务器级授权涵盖它的所有工具{approvalScope.serverName === 'code_remote_ssh' ? '，包括执行远程命令，但仍受 SSH 设置权限限制' : ''}。</small> : null}
     <div className="approval-card__actions">
       <button type="button" onClick={() => onRespond({ action: 'decline' })}><X size={14} />拒绝</button>
       {supported ? <button className="approval-card__accept" type="button" disabled={!complete} onClick={accept}><Check size={14} />允许一次</button> : null}
+      {supported && complete && approvalScope ? <>
+        <button className="approval-card__accept" type="button" onClick={() => onRespond({ action: 'accept', content: {} }, 'tool')}><Check size={14} />此工具始终允许</button>
+        <button className="approval-card__accept" type="button" onClick={() => onRespond({ action: 'accept', content: {} }, 'server')}><Check size={14} />该 MCP 服务器始终允许</button>
+      </> : null}
     </div>
   </>
 }
@@ -171,7 +178,7 @@ export function ServerRequestCard({ request, source, sourceIsCurrent, onOpenSour
   return <div className="approval-card" role="alert">
     <div className="approval-card__heading"><AlertTriangle size={17} /><strong>{title}</strong></div>
     {source ? <button className="approval-card__source" type="button" onClick={onOpenSource} disabled={sourceIsCurrent} title={sourceIsCurrent ? '来自当前对话' : '打开请求审批的对话'}>来自：{source}</button> : null}
-    {isMcp ? <McpElicitationFields params={request.params} onRespond={onRespond} />
+    {isMcp ? <McpElicitationFields params={request.params} approvalScope={request.approvalScope} onRespond={onRespond} />
       : isToolQuestion ? <ToolQuestionFields questions={toolQuestions(request.params.questions)} onRespond={onRespond} />
         : <>
           <p>{typeof request.params.reason === 'string' ? request.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>

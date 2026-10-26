@@ -50,7 +50,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -6219,6 +6219,58 @@ function SSHSettingsCard({ token }: { token: string }) {
   </section>
 }
 
+function MCPApprovalsCard({ token }: { token: string }) {
+  const [approvals, setApprovals] = useState<MCPApprovalGrant[]>([])
+  const [loading, setLoading] = useState(true)
+  const [revokingId, setRevokingId] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void codexRemoteClient.mcpApprovals(token).then(({ approvals: next }) => {
+      if (!cancelled) setApprovals(next)
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : '读取 MCP 授权失败。')
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [token])
+
+  async function revoke(grant: MCPApprovalGrant) {
+    setRevokingId(grant.id)
+    setError(null)
+    setMessage(null)
+    try {
+      await codexRemoteClient.revokeMCPApproval(token, grant.id)
+      setApprovals((current) => current.filter((item) => item.id !== grant.id))
+      setMessage('已撤销；下一次匹配的调用会重新询问。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '撤销失败。')
+    } finally {
+      setRevokingId(null)
+    }
+  }
+
+  return <section className="theme-settings-card ssh-settings-card">
+    <div className="theme-settings-card__heading">
+      <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
+    </div>
+    <div className="ssh-settings-body">
+      {loading ? <p className="ssh-settings-empty">正在读取授权…</p> : approvals.length === 0 ? <p className="ssh-settings-empty">暂无已保存的 MCP 授权。</p> : null}
+      {approvals.map((grant) => <div className="ssh-settings-server" key={grant.id}>
+        <div className="ssh-settings-server__info">
+          <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
+          <small>{grant.scope === 'tool' ? '仅此工具' : '该 MCP 服务器的所有工具'}</small>
+        </div>
+        <div className="ssh-settings-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? '撤销中…' : '撤销授权'}</button></div>
+      </div>)}
+      {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}
+      {error ? <p className="ssh-settings-feedback ssh-settings-feedback--error" role="alert">{error}</p> : null}
+      <p className="ssh-settings-note">自动批准仅跳过 MCP 工具调用确认；远程 SSH 的逐台权限仍会生效。</p>
+    </div>
+  </section>
+}
+
 function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
   token: string
   preferences: ThemePreferences
@@ -6416,6 +6468,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
       <div className="theme-settings-panel__content">
         <SSHSettingsCard token={token} />
+        <MCPApprovalsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
         <section className="theme-settings-card">

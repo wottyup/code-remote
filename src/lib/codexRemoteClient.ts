@@ -36,6 +36,18 @@ export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential' | 'por
   privateKeyPassphrase?: string
 }
 
+export interface MCPApprovalScope {
+  serverName: string
+  toolName: string
+}
+
+export interface MCPApprovalGrant {
+  id: string
+  scope: 'tool' | 'server'
+  serverName: string
+  toolName?: string
+}
+
 export interface SSHOperation {
   id: string
   turn_id: string | null
@@ -208,6 +220,7 @@ export interface RemoteEvent {
   fallbackReason?: string | null
   error?: string | null
   request_id?: string | number
+  approvalScope?: MCPApprovalScope | null
   decision?: 'accept' | 'decline' | 'cancel' | 'answered'
   message?: string
 }
@@ -740,6 +753,12 @@ export const codexRemoteClient = {
   sshOperations(token: string, threadId: string) {
     return request<{ operations: SSHOperation[] }>(token, `/api/v1/ssh/operations/${encodeURIComponent(threadId)}`, undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
+  mcpApprovals(token: string) {
+    return request<{ approvals: MCPApprovalGrant[] }>(token, '/api/v1/mcp/approvals')
+  },
+  revokeMCPApproval(token: string, grantId: string) {
+    return request<{ deleted: boolean }>(token, `/api/v1/mcp/approvals/${encodeURIComponent(grantId)}`, { method: 'DELETE' })
+  },
   workspaceTree(token: string, cwd?: string, path = '', offset = 0) {
     const query = new URLSearchParams()
     if (cwd) query.set('cwd', cwd)
@@ -1188,8 +1207,8 @@ export const codexRemoteClient = {
     return {
       checkConnection,
       subscribeThread,
-      respondToApproval(requestId: string | number, response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>) {
-        return send({ type: 'approval.response', request_id: requestId, ...(typeof response === 'string' ? { decision: response } : { response }) })
+      respondToApproval(requestId: string | number, response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>, remember?: 'tool' | 'server') {
+        return send({ type: 'approval.response', request_id: requestId, ...(typeof response === 'string' ? { decision: response } : { response }), ...(remember ? { remember } : {}) })
       },
       close() {
         stopped = true

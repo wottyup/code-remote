@@ -53,6 +53,7 @@ from .codex_app_server import (
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 from .remote_ssh import SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh
+from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
@@ -1589,7 +1590,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     ssh_servers = SSHServerStore(auth.state_path.parent / "ssh-servers.json")
     ssh_journal = SSHJournal(auth.state_path.parent / "ssh-operations.sqlite3")
+    mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
     app_server.enable_ssh_mcp(ssh_servers.path, ssh_journal)
+    app_server.enable_mcp_approvals(mcp_approvals)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
         os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
@@ -1743,7 +1746,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.81.3-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.82.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1754,6 +1757,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.shared_queue = shared_queue
     app.state.ssh_servers = ssh_servers
     app.state.ssh_journal = ssh_journal
+    app.state.mcp_approvals = mcp_approvals
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1882,6 +1886,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         if not thread_id or len(thread_id) > 512:
             raise HTTPException(status_code=422, detail="聊天编号无效。")
         return {"operations": await asyncio.to_thread(ssh_journal.list_for_thread, thread_id)}
+
+    @app.get("/api/v1/mcp/approvals")
+    async def list_mcp_approvals() -> dict[str, Any]:
+        try:
+            return {"approvals": mcp_approvals.list()}
+        except MCPApprovalError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+    @app.delete("/api/v1/mcp/approvals/{grant_id}")
+    async def revoke_mcp_approval(grant_id: str) -> dict[str, bool]:
+        try:
+            mcp_approvals.revoke(grant_id)
+            return {"deleted": True}
+        except MCPApprovalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except MCPApprovalError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
 
     @app.get("/api/v1/codex/workspace/tree")
     async def workspace_tree(cwd: str | None = None, path: str = "", offset: int = 0) -> dict[str, Any]:
@@ -2548,12 +2569,16 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                     return
                 request_id = payload.get("request_id")
                 response = payload.get("response", payload.get("decision"))
+                remember = payload.get("remember")
                 if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
                     continue
                 if not isinstance(response, (str, dict)):
                     continue
+                if remember is not None and not isinstance(remember, str):
+                    await send_event({"type": "error", "message": "授权范围无效。"})
+                    continue
                 try:
-                    await app_server.answer_server_request(request_id, response)
+                    await app_server.answer_server_request(request_id, response, remember=remember)
                 except CodexRuntimeError as error:
                     await send_event({"type": "error", "message": str(error)})
 

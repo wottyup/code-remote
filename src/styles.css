@@ -831,7 +831,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .approval-card p { margin: 8px 0; color: #b9ad99; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
 .approval-card code { display: block; overflow: auto; padding: 8px; border-radius: 6px; background: #141518; color: #ded5c6; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(12px + var(--mobile-font-offset)); white-space: pre-wrap; overflow-wrap: anywhere; }
 .approval-card small { display: block; margin-top: 6px; color: #968c7a; font-size: calc(11px + var(--mobile-font-offset)); }
-.approval-card__actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 11px; }
+.approval-card__actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
 .approval-card__actions button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 0 9px; border: 1px solid #48453d; border-radius: 6px; background: #1f1e1b; color: #c8bda7; cursor: pointer; font-size: calc(11px + var(--mobile-font-offset)); }
 .approval-card__actions button:hover { border-color: #77705f; }
 .approval-card__actions .approval-card__accept { border-color: #806840; background: #3b301f; color: #eed29f; }
