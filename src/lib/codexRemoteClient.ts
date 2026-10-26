@@ -22,12 +22,18 @@ export interface SSHServerConfig {
   port: number
   user: string
   identityFile: string
+  authMethod: 'agent' | 'password' | 'privateKey'
+  hasCredential: boolean
   enabled: boolean
   allowInspect: boolean
   allowExecute: boolean
 }
 
-export type SSHServerInput = Omit<SSHServerConfig, 'id'>
+export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential'> & {
+  password?: string
+  privateKey?: string
+  privateKeyPassphrase?: string
+}
 
 export interface SSHOperation {
   id: string
@@ -728,7 +734,7 @@ export const codexRemoteClient = {
     return request<{ deleted: boolean }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
   },
   testSSHServer(token: string, id: string) {
-    return request<{ ok: boolean; detail: string }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, { timeoutMs: 20_000 })
+    return request<{ ok: boolean; detail: string }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, { timeoutMs: 35_000 })
   },
   sshOperations(token: string, threadId: string) {
     return request<{ operations: SSHOperation[] }>(token, `/api/v1/ssh/operations/${encodeURIComponent(threadId)}`, undefined, { timeoutMs: 10_000, networkRetries: 0 })

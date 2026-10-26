@@ -540,9 +540,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .ssh-settings-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .ssh-settings-fields label { display: grid; gap: 5px; color: var(--ssh-muted); font-size: calc(12px + var(--mobile-font-offset)); }
 .ssh-settings-fields__wide { grid-column: 1 / -1; }
-.ssh-settings-fields input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--ssh-border); border-radius: 7px; outline: 0; background: var(--ssh-surface); color: var(--ssh-text); font: inherit; }
-.ssh-settings-fields input:focus { border-color: #7aa7d8; }
-.ssh-settings-fields input::placeholder { color: var(--ssh-muted); opacity: .8; }
+.ssh-settings-fields input, .ssh-settings-fields select, .ssh-settings-fields textarea { box-sizing: border-box; width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid var(--ssh-border); border-radius: 7px; outline: 0; background: var(--ssh-surface); color: var(--ssh-text); font: inherit; }
+.ssh-settings-fields textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.ssh-settings-fields select option { background: #222831; color: #e5e8ee; }
+.ssh-settings-fields input:focus, .ssh-settings-fields select:focus, .ssh-settings-fields textarea:focus { border-color: #7aa7d8; }
+.ssh-settings-fields input::placeholder, .ssh-settings-fields textarea::placeholder { color: var(--ssh-muted); opacity: .8; }
+.ssh-settings-note--warning { color: #e9b67c; }
 .ssh-settings-permissions { display: flex; flex-wrap: wrap; gap: 10px 17px; }
 .ssh-settings-permissions label { display: inline-flex; align-items: center; gap: 6px; color: var(--ssh-text); font-size: calc(12px + var(--mobile-font-offset)); cursor: pointer; }
 .ssh-settings-permissions input { accent-color: #73b996; }

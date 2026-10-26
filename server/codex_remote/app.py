@@ -133,6 +133,10 @@ class SSHServerRequest(BaseModel):
     port: int = 22
     user: str
     identityFile: str = ""
+    authMethod: str | None = None
+    password: str = ""
+    privateKey: str = ""
+    privateKeyPassphrase: str = ""
     enabled: bool = True
     allowInspect: bool = True
     allowExecute: bool = False
@@ -1739,7 +1743,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.81.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.81.0-dev.2", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1866,7 +1870,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             # This explicit user action performs only `true`, even when AI permissions are off.
             result = await asyncio.to_thread(run_ssh, ssh_servers, None, "", server_id,
                                              "true", permission="", allow_disabled=True, timeout=12)
-            return {"ok": result["exitCode"] == 0, "detail": result["output"] or
+            return {"ok": result["exitCode"] == 0, "detail": result["error"] or result["output"] or
                     ("连接成功" if result["exitCode"] == 0 else "SSH 连接失败")}
         except SSHConfigurationError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error

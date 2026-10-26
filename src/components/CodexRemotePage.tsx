@@ -6048,7 +6048,17 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
 const blankSSHServer: SSHServerInput = {
   name: '', host: '', port: 22, user: '', identityFile: '',
+  authMethod: 'agent', password: '', privateKey: '', privateKeyPassphrase: '',
   enabled: true, allowInspect: true, allowExecute: false,
+}
+
+function editableSSHServer(server: SSHServerConfig): SSHServerInput {
+  return {
+    name: server.name, host: server.host, port: server.port, user: server.user,
+    identityFile: server.identityFile, authMethod: server.authMethod,
+    password: '', privateKey: '', privateKeyPassphrase: '',
+    enabled: server.enabled, allowInspect: server.allowInspect, allowExecute: server.allowExecute,
+  }
 }
 
 function SSHSettingsCard({ token }: { token: string }) {
@@ -6060,6 +6070,8 @@ function SSHSettingsCard({ token }: { token: string }) {
   const [testingId, setTestingId] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const editingServer = servers.find((server) => server.id === editingId)
+  const credentialSaved = Boolean(editingServer?.hasCredential && editingServer.authMethod === draft?.authMethod)
 
   useEffect(() => {
     let cancelled = false
@@ -6121,6 +6133,23 @@ function SSHSettingsCard({ token }: { token: string }) {
     }
   }
 
+  async function loadPrivateKey(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0]
+    event.currentTarget.value = ''
+    if (!file) return
+    if (file.size > 64 * 1024) {
+      setError('私钥文件不能超过 64 KiB。')
+      return
+    }
+    try {
+      const privateKey = await file.text()
+      setDraft((current) => current?.authMethod === 'privateKey' ? { ...current, privateKey } : current)
+      setError(null)
+    } catch {
+      setError('无法读取私钥文件。')
+    }
+  }
+
   return <section className="theme-settings-card ssh-settings-card">
     <div className="theme-settings-card__heading">
       <div><h2><Server size={17} />远程 SSH</h2><p>目标服务器只需开启 SSH；Codex 和 Claude 可使用这里授权的工具。</p></div>
@@ -6131,11 +6160,11 @@ function SSHSettingsCard({ token }: { token: string }) {
       {servers.map((server) => <div className="ssh-settings-server" key={server.id}>
         <div className="ssh-settings-server__info">
           <strong>{server.name}</strong><span>{server.user}@{server.host}:{server.port}</span>
-          <small>{server.enabled ? '已启用' : '已停用'} · {server.allowInspect ? '允许诊断' : '禁止诊断'} · {server.allowExecute ? '允许执行命令' : '禁止执行命令'}</small>
+          <small>{server.enabled ? '已启用' : '已停用'} · {server.authMethod === 'agent' ? (server.identityFile ? '本机密钥路径' : 'ssh-agent') : server.authMethod === 'password' ? '密码认证' : '私钥认证'}{server.authMethod !== 'agent' ? (server.hasCredential ? '（凭据已保存）' : '（缺少凭据）') : ''} · {server.allowInspect ? '允许诊断' : '禁止诊断'} · {server.allowExecute ? '允许执行命令' : '禁止执行命令'}</small>
         </div>
         <div className="ssh-settings-actions">
           <button type="button" disabled={busy || testingId !== null} onClick={() => void test(server)}>{testingId === server.id ? '检查中…' : '检查连接'}</button>
-          <button type="button" disabled={busy} onClick={() => { setEditingId(server.id); setDraft({ ...server }); setError(null); setMessage(null) }}>编辑</button>
+          <button type="button" disabled={busy} onClick={() => { setEditingId(server.id); setDraft(editableSSHServer(server)); setError(null); setMessage(null) }}>编辑</button>
           <button type="button" disabled={busy} onClick={() => void remove(server)}>删除</button>
         </div>
       </div>)}
@@ -6146,14 +6175,32 @@ function SSHSettingsCard({ token }: { token: string }) {
           <label>主机地址<input required value={draft.host} onChange={(event) => setDraft({ ...draft, host: event.target.value })} placeholder="IP 或域名" autoCapitalize="off" /></label>
           <label>端口<input required type="number" min={1} max={65535} value={draft.port} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} /></label>
           <label>SSH 用户<input required value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} placeholder="例如：ubuntu" autoCapitalize="off" /></label>
-          <label className="ssh-settings-fields__wide">本机私钥路径（可选）<input value={draft.identityFile} onChange={(event) => setDraft({ ...draft, identityFile: event.target.value })} placeholder="例如：/home/user/.ssh/id_ed25519；留空使用 ssh-agent" autoCapitalize="off" /></label>
+          <label className="ssh-settings-fields__wide">认证方式
+            <select value={draft.authMethod} onChange={(event) => setDraft({ ...draft, authMethod: event.target.value as SSHServerInput['authMethod'], password: '', privateKey: '', privateKeyPassphrase: '' })}>
+              <option value="agent">本机密钥路径 / ssh-agent</option>
+              <option value="password">SSH 密码</option>
+              <option value="privateKey">粘贴或上传私钥</option>
+            </select>
+          </label>
+          {draft.authMethod === 'agent' ? <label className="ssh-settings-fields__wide">本机私钥路径（可选）<input value={draft.identityFile} onChange={(event) => setDraft({ ...draft, identityFile: event.target.value })} placeholder="例如：/home/user/.ssh/id_ed25519；留空使用 ssh-agent" autoCapitalize="off" /></label> : null}
+          {draft.authMethod === 'password' ? <label className="ssh-settings-fields__wide">SSH 密码
+            <input type="password" autoComplete="new-password" required={!credentialSaved} value={draft.password ?? ''} onChange={(event) => setDraft({ ...draft, password: event.target.value })} placeholder={credentialSaved ? '已保存；留空保持原密码' : '填写目标服务器的 SSH 密码'} />
+          </label> : null}
+          {draft.authMethod === 'privateKey' ? <>
+            <label className="ssh-settings-fields__wide">私钥内容
+              <textarea rows={5} spellCheck={false} required={!credentialSaved} value={draft.privateKey ?? ''} onChange={(event) => setDraft({ ...draft, privateKey: event.target.value })} placeholder={credentialSaved ? '已保存；留空保持原私钥' : '粘贴以 -----BEGIN OPENSSH PRIVATE KEY----- 开头的私钥'} />
+            </label>
+            <label className="ssh-settings-fields__wide">或选择本机私钥文件<input type="file" onChange={(event) => void loadPrivateKey(event)} /></label>
+            <label className="ssh-settings-fields__wide">私钥口令（加密私钥才需要）<input type="password" autoComplete="new-password" value={draft.privateKeyPassphrase ?? ''} onChange={(event) => setDraft({ ...draft, privateKeyPassphrase: event.target.value })} placeholder={credentialSaved ? '留空保持原口令' : '未加密则留空'} /></label>
+          </> : null}
         </div>
         <div className="ssh-settings-permissions">
           <label><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用服务器</label>
           <label><input type="checkbox" checked={draft.allowInspect} onChange={(event) => setDraft({ ...draft, allowInspect: event.target.checked })} />允许只读诊断</label>
           <label><input type="checkbox" checked={draft.allowExecute} onChange={(event) => setDraft({ ...draft, allowExecute: event.target.checked })} />允许执行远程命令</label>
         </div>
-        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。服务器首次连接前，主机指纹须已加入本机 known_hosts。</p>
+        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。服务器首次连接前，主机指纹须已加入本机 known_hosts。保存的密码、私钥及口令不会在页面回显。</p>
+        {window.location.protocol !== 'https:' ? <p className="ssh-settings-note ssh-settings-note--warning">当前页面使用 HTTP，填写的密码或私钥在传输途中没有 HTTPS 加密。建议改用 HTTPS 后再填写。</p> : null}
         <div className="ssh-settings-actions"><button type="button" disabled={busy} onClick={() => { setDraft(null); setEditingId(null) }}>取消</button><button type="submit" disabled={busy}>{busy ? '保存中…' : '保存服务器'}</button></div>
       </form> : null}
       {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}

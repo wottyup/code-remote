@@ -6,6 +6,8 @@ import json
 import ipaddress
 import os
 import re
+import codecs
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -15,13 +17,18 @@ import time
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from queue import Empty, Queue
 from typing import Any, Iterator
 
+import paramiko
+
 
 MAX_OUTPUT = 64 * 1024
 MAX_COMMAND = 8192
+MAX_PRIVATE_KEY = 64 * 1024
+MAX_SECRET = 4096
 _HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
 _USER = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
 INSPECTIONS = {
@@ -41,11 +48,13 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def validate_server(value: dict[str, Any], *, server_id: str | None = None) -> dict[str, Any]:
+def validate_server(value: dict[str, Any], *, server_id: str | None = None,
+                    current_auth: str = "agent") -> dict[str, Any]:
     name = str(value.get("name", "")).strip()
     host = str(value.get("host", "")).strip()
     user = str(value.get("user", "")).strip()
     identity = str(value.get("identityFile", "") or "").strip()
+    auth_method = value.get("authMethod") or current_auth
     try:
         port = int(value.get("port", 22))
     except (TypeError, ValueError) as error:
@@ -65,9 +74,12 @@ def validate_server(value: dict[str, Any], *, server_id: str | None = None) -> d
         raise SSHConfigurationError("端口必须是 1 到 65535 的整数。")
     if identity and (not Path(identity).is_absolute() or "\x00" in identity or len(identity) > 1024):
         raise SSHConfigurationError("密钥路径必须是本机绝对路径。")
+    if auth_method not in ("agent", "password", "privateKey"):
+        raise SSHConfigurationError("SSH 认证方式无效。")
     return {
         "id": server_id or str(uuid.uuid4()), "name": name, "host": host,
-        "port": port, "user": user, "identityFile": identity,
+        "port": port, "user": user, "identityFile": identity if auth_method == "agent" else "",
+        "authMethod": auth_method,
         "enabled": bool(value.get("enabled", True)),
         "allowInspect": bool(value.get("allowInspect", True)),
         "allowExecute": bool(value.get("allowExecute", False)),
@@ -77,10 +89,15 @@ def validate_server(value: dict[str, Any], *, server_id: str | None = None) -> d
 class SSHServerStore:
     def __init__(self, path: Path) -> None:
         self.path = path
+        self.secrets_path = path.parent / "ssh-secrets"
         self._lock = threading.RLock()
         path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     def list(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return [self._public_server(item) for item in self._read_servers()]
+
+    def _read_servers(self) -> list[dict[str, Any]]:
         with self._lock:
             try:
                 data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -92,6 +109,54 @@ class SSHServerStore:
                 raise SSHConfigurationError("SSH 服务器配置格式无效。")
             return [item for item in data if isinstance(item, dict)]
 
+    def _public_server(self, server: dict[str, Any]) -> dict[str, Any]:
+        auth_method = server.get("authMethod", "agent")
+        return {key: server.get(key) for key in (
+            "id", "name", "host", "port", "user", "identityFile",
+            "enabled", "allowInspect", "allowExecute",
+        )} | {"authMethod": auth_method,
+             "hasCredential": auth_method != "agent" and self._secret_path(server["id"]).is_file()}
+
+    def _secret_path(self, server_id: str) -> Path:
+        try:
+            normalized = str(uuid.UUID(server_id))
+        except (ValueError, AttributeError) as error:
+            raise SSHConfigurationError("服务器 ID 无效。") from error
+        if server_id != normalized:
+            raise SSHConfigurationError("服务器 ID 无效。")
+        return self.secrets_path / f"{normalized}.json"
+
+    def credentials(self, server_id: str) -> dict[str, str]:
+        with self._lock:
+            path = self._secret_path(server_id)
+            try:
+                value = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as error:
+                raise SSHConfigurationError("无法读取已保存的 SSH 凭据，请重新填写并保存。") from error
+            if not isinstance(value, dict) or not isinstance(value.get("method"), str):
+                raise SSHConfigurationError("SSH 凭据格式无效，请重新填写并保存。")
+            field = "password" if value["method"] == "password" else "privateKey"
+            if value["method"] not in ("password", "privateKey") or not isinstance(value.get(field), str) or not value[field]:
+                raise SSHConfigurationError("SSH 凭据格式无效，请重新填写并保存。")
+            return value
+
+    def _write_secret(self, server_id: str, secret: dict[str, str]) -> None:
+        self.secrets_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(self.secrets_path, 0o700)
+        fd, temporary = tempfile.mkstemp(prefix=".ssh-secret-", dir=self.secrets_path)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(secret, file, ensure_ascii=False)
+                file.flush()
+                os.fsync(file.fileno())
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, self._secret_path(server_id))
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+
     def get(self, server_id: str) -> dict[str, Any]:
         server = next((item for item in self.list() if item.get("id") == server_id), None)
         if server is None:
@@ -100,23 +165,75 @@ class SSHServerStore:
 
     def save(self, value: dict[str, Any], server_id: str | None = None) -> dict[str, Any]:
         with self._lock:
-            servers = self.list()
-            if server_id and not any(item.get("id") == server_id for item in servers):
+            servers = self._read_servers()
+            previous = next((item for item in servers if item.get("id") == server_id), None)
+            if server_id and previous is None:
                 raise SSHConfigurationError("找不到这台服务器。")
-            server = validate_server(value, server_id=server_id)
+            server = validate_server(value, server_id=server_id,
+                                     current_auth=previous.get("authMethod", "agent") if previous else "agent")
             if any(item.get("name", "").casefold() == server["name"].casefold() and item.get("id") != server["id"] for item in servers):
                 raise SSHConfigurationError("服务器名称已存在。")
+            auth_method = server["authMethod"]
+            secret: dict[str, str] | None = None
+            if auth_method != "agent":
+                password = str(value.get("password") or "")
+                private_key = str(value.get("privateKey") or "")
+                passphrase = str(value.get("privateKeyPassphrase") or "")
+                if len(password) > MAX_SECRET or len(passphrase) > MAX_SECRET or len(private_key) > MAX_PRIVATE_KEY:
+                    raise SSHConfigurationError("SSH 凭据过长。")
+                if auth_method == "password":
+                    if password:
+                        secret = {"method": "password", "password": password}
+                    elif previous and previous.get("authMethod") == "password":
+                        secret = self.credentials(server["id"])
+                    else:
+                        raise SSHConfigurationError("请填写 SSH 密码。")
+                else:
+                    if private_key:
+                        if "PRIVATE KEY-----" not in private_key:
+                            raise SSHConfigurationError("请粘贴有效的 SSH 私钥内容。")
+                        secret = {"method": "privateKey", "privateKey": private_key,
+                                  "passphrase": passphrase}
+                    elif previous and previous.get("authMethod") == "privateKey":
+                        secret = self.credentials(server["id"])
+                        if passphrase:
+                            secret = {**secret, "passphrase": passphrase}
+                    else:
+                        raise SSHConfigurationError("请粘贴或选择 SSH 私钥文件。")
+                if secret["method"] != auth_method:
+                    raise SSHConfigurationError("SSH 凭据与认证方式不匹配，请重新填写。")
+            old_secret = None
+            secret_path = self._secret_path(server["id"])
+            if secret is not None and secret_path.is_file():
+                try:
+                    old_secret = self.credentials(server["id"])
+                except SSHConfigurationError:
+                    # A newly supplied credential can replace a damaged old file.
+                    pass
+            if secret is not None:
+                self._write_secret(server["id"], secret)
             servers = [item for item in servers if item.get("id") != server["id"]] + [server]
-            self._write(servers)
-            return server
+            try:
+                self._write(servers)
+            except Exception:
+                if secret is not None:
+                    if old_secret is None:
+                        secret_path.unlink(missing_ok=True)
+                    else:
+                        self._write_secret(server["id"], old_secret)
+                raise
+            if auth_method == "agent":
+                secret_path.unlink(missing_ok=True)
+            return self._public_server(server)
 
     def delete(self, server_id: str) -> None:
         with self._lock:
-            servers = self.list()
+            servers = self._read_servers()
             remaining = [item for item in servers if item.get("id") != server_id]
             if len(remaining) == len(servers):
                 raise SSHConfigurationError("找不到这台服务器。")
             self._write(remaining)
+            self._secret_path(server_id).unlink(missing_ok=True)
 
     def _write(self, servers: list[dict[str, Any]]) -> None:
         fd, temporary = tempfile.mkstemp(prefix=".ssh-servers-", dir=self.path.parent)
@@ -224,6 +341,81 @@ def ssh_arguments(server: dict[str, Any], command: str) -> list[str]:
     return args
 
 
+def _parse_private_key(value: str, passphrase: str) -> paramiko.PKey:
+    for key_type in (paramiko.Ed25519Key, paramiko.RSAKey, paramiko.ECDSAKey):
+        try:
+            return key_type.from_private_key(StringIO(value), password=passphrase or None)
+        except paramiko.PasswordRequiredException as error:
+            raise SSHConfigurationError("此私钥已加密，请填写私钥口令。") from error
+        except (paramiko.SSHException, ValueError):
+            continue
+    raise SSHConfigurationError("无法读取私钥，请检查内容、格式和口令。")
+
+
+def _run_paramiko(server: dict[str, Any], secret: dict[str, str], command: str,
+                  timeout: int, journal: SSHJournal | None,
+                  operation_id: str | None) -> tuple[str, int | None, str | None, bool]:
+    client = paramiko.SSHClient()
+    client.load_system_host_keys()
+    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    auth: dict[str, Any] = {"look_for_keys": False, "allow_agent": False}
+    if server["authMethod"] == "password":
+        auth["password"] = secret["password"]
+    else:
+        auth["pkey"] = _parse_private_key(secret["privateKey"], secret.get("passphrase", ""))
+    try:
+        client.connect(server["host"], port=server["port"], username=server["user"],
+                       timeout=8, auth_timeout=8, banner_timeout=8, **auth)
+        transport = client.get_transport()
+        if transport is None:
+            raise SSHConfigurationError("SSH 连接未建立。")
+        channel = transport.open_session(timeout=8)
+        channel.set_combine_stderr(True)
+        channel.exec_command(command)
+        decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        output: list[str] = []
+        output_length = 0
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                while channel.recv_ready():
+                    if time.monotonic() >= deadline:
+                        return "".join(output), None, "执行超时。", output_length >= MAX_OUTPUT
+                    chunk = decoder.decode(channel.recv(2048))
+                    if output_length < MAX_OUTPUT:
+                        kept = chunk[:MAX_OUTPUT - output_length]
+                        output.append(kept)
+                        output_length += len(kept)
+                        if journal and operation_id:
+                            journal.append(operation_id, kept)
+                if channel.exit_status_ready() and not channel.recv_ready():
+                    final_chunk = decoder.decode(b"", final=True)
+                    if final_chunk and output_length < MAX_OUTPUT:
+                        kept = final_chunk[:MAX_OUTPUT - output_length]
+                        output.append(kept)
+                        output_length += len(kept)
+                        if journal and operation_id:
+                            journal.append(operation_id, kept)
+                    return "".join(output), channel.recv_exit_status(), None, output_length >= MAX_OUTPUT
+                if time.monotonic() >= deadline:
+                    return "".join(output), None, "执行超时。", output_length >= MAX_OUTPUT
+                time.sleep(0.05)
+        finally:
+            channel.close()
+    except paramiko.AuthenticationException as error:
+        raise SSHConfigurationError("SSH 认证失败，请检查密码、私钥或口令。") from error
+    except paramiko.BadHostKeyException as error:
+        raise SSHConfigurationError("SSH 主机指纹与 known_hosts 不匹配。") from error
+    except paramiko.SSHException as error:
+        raise SSHConfigurationError("SSH 连接失败，请检查主机指纹和服务端配置。") from error
+    except (socket.timeout, TimeoutError) as error:
+        raise SSHConfigurationError("SSH 连接超时。") from error
+    except OSError as error:
+        raise SSHConfigurationError("无法连接 SSH 服务器，请检查地址、端口和网络。") from error
+    finally:
+        client.close()
+
+
 def run_ssh(store: SSHServerStore, journal: SSHJournal | None, context: str,
             server_id: str, command: str, *, permission: str, turn_id: str | None = None,
             allow_disabled: bool = False,
@@ -235,7 +427,7 @@ def run_ssh(store: SSHServerStore, journal: SSHJournal | None, context: str,
         raise SSHConfigurationError("这台服务器未允许此操作。")
     if not command.strip() or len(command) > MAX_COMMAND or "\x00" in command:
         raise SSHConfigurationError("远程命令不能为空，且不能超过 8192 个字符。")
-    if server["identityFile"] and not Path(server["identityFile"]).is_file():
+    if server["authMethod"] == "agent" and server["identityFile"] and not Path(server["identityFile"]).is_file():
         raise SSHConfigurationError("本机 SSH 密钥文件不存在。")
     operation_id = journal.start(context, server, command, turn_id) if journal else None
     output: list[str] = []
@@ -243,6 +435,17 @@ def run_ssh(store: SSHServerStore, journal: SSHJournal | None, context: str,
     process: subprocess.Popen[bytes] | None = None
     timed_out = False
     try:
+        if server["authMethod"] != "agent":
+            secret = store.credentials(server_id)
+            if secret.get("method") != server["authMethod"]:
+                raise SSHConfigurationError("SSH 凭据与认证方式不匹配，请重新填写。")
+            result_output, exit_code, error, truncated = _run_paramiko(
+                server, secret, command, timeout, journal, operation_id)
+            if journal and operation_id:
+                journal.finish(operation_id, exit_code, error)
+            return {"operationId": operation_id, "server": server["name"], "command": command,
+                    "output": result_output, "exitCode": exit_code,
+                    "error": error, "truncated": truncated}
         process = subprocess.Popen(ssh_arguments(server, command), stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
         chunks: Queue[bytes | None] = Queue()
