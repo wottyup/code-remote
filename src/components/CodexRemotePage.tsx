@@ -6147,6 +6147,9 @@ function MCPApprovalsCard({ token }: { token: string }) {
 
   useEffect(() => {
     let cancelled = false
+    setLoading(true)
+    setError(null)
+    setMessage(null)
     void codexRemoteClient.mcpApprovals(token).then(({ approvals: next }) => {
       if (!cancelled) setApprovals(next)
     }).catch((reason) => {
@@ -6170,12 +6173,13 @@ function MCPApprovalsCard({ token }: { token: string }) {
     }
   }
 
+  if (loading || (approvals.length === 0 && !error)) return null
+
   return <section className="theme-settings-card mcp-approvals-card">
     <div className="theme-settings-card__heading">
       <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
     </div>
     <div className="mcp-approvals-body">
-      {loading ? <p className="mcp-approvals-empty">正在读取授权…</p> : approvals.length === 0 ? <p className="mcp-approvals-empty">暂无已保存的 MCP 授权。</p> : null}
       {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
         <div className="mcp-approvals-grant__info">
           <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
@@ -6380,7 +6384,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>界面偏好保存在当前设备；远程服务器配置保存在服务端。</p>
+          <p>界面偏好保存在当前设备。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>

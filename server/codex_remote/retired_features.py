@@ -10,6 +10,8 @@ from .mcp_approvals import MCPApprovalError, MCPApprovalStore
 
 logger = logging.getLogger(__name__)
 
+_RETIRED_SSH_MCP_SERVERS = frozenset({"code_remote_ssh", "code-remote-ssh", "ssh-mcp", "ssh_mcp"})
+
 
 def remove_retired_ssh_state(state_directory: Path, approvals: MCPApprovalStore) -> None:
     """Delete only the retired built-in SSH feature's files, without reading secrets."""
@@ -27,7 +29,7 @@ def remove_retired_ssh_state(state_directory: Path, approvals: MCPApprovalStore)
 
     try:
         for grant in approvals.list():
-            if grant["serverName"] == "code_remote_ssh":
+            if grant["serverName"] in _RETIRED_SSH_MCP_SERVERS:
                 approvals.revoke(grant["id"])
     except (MCPApprovalError, OSError):
         # An unrelated damaged approval file must not prevent the app from starting.
