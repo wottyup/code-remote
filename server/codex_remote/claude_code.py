@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import suppress
@@ -17,6 +18,7 @@ from typing import Any, Awaitable, Callable
 
 from .claude_native_history import scan_native_sessions
 from .claude_stream import ClaudeReplyText
+from .remote_ssh import SSHJournal
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +77,8 @@ class ClaudeCodeServer:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._interrupts: set[str] = set()
         self._live_replies: dict[str, dict[str, Any]] = {}
+        self._ssh_config_path: Path | None = None
+        self._ssh_journal: SSHJournal | None = None
         self._database_path_parent_ready()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         with suppress(OSError):
@@ -104,6 +108,10 @@ class ClaudeCodeServer:
         )
         self._recover_interrupted_turns()
         self._connection.commit()
+
+    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal) -> None:
+        self._ssh_config_path = config_path
+        self._ssh_journal = journal
 
     def _database_path_parent_ready(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -566,6 +574,22 @@ class ClaudeCodeServer:
                 str(command), "--print", "--output-format", "stream-json", "--include-partial-messages",
                 "--verbose",
             ]
+            if self._ssh_config_path and self._ssh_journal:
+                self._ssh_journal.register_context(thread_id, thread_id)
+                package_parent = str(Path(__file__).resolve().parent.parent)
+                python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+                mcp_config = {"mcpServers": {"code_remote_ssh": {
+                    "command": sys.executable,
+                    "args": ["-m", "codex_remote.remote_ssh"],
+                    "env": {
+                        "PYTHONPATH": python_path,
+                        "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
+                        "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
+                        "CODE_REMOTE_SSH_CONTEXT": thread_id,
+                        "CODE_REMOTE_SSH_TURN_ID": turn_id,
+                    },
+                }}}
+                args.extend(["--mcp-config", json.dumps(mcp_config, ensure_ascii=False)])
             if model and model != "default":
                 args.extend(["--model", model])
             if effort:

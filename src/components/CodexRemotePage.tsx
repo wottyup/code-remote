@@ -39,6 +39,7 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
+  Server,
   Scissors,
   Settings2,
   ShieldCheck,
@@ -49,7 +50,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -3759,6 +3760,30 @@ const RemoteChatPane = memo(function RemoteChatPane({
   }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
 
   const activeThreadId = remote.activeThread?.id
+  const [sshOperations, setSSHOperations] = useState<SSHOperation[]>([])
+  useEffect(() => {
+    if (!activeThreadId) { setSSHOperations([]); return }
+    let cancelled = false
+    const refresh = () => {
+      void codexRemoteClient.sshOperations(token, activeThreadId).then(({ operations }) => {
+        if (!cancelled) setSSHOperations(operations)
+      }).catch(() => { /* Chat remains usable when SSH history is unavailable. */ })
+    }
+    setSSHOperations([])
+    refresh()
+    const timer = remote.isRunning || remote.runningTurnId ? window.setInterval(refresh, 750) : null
+    return () => { cancelled = true; if (timer !== null) window.clearInterval(timer) }
+  }, [activeThreadId, remote.isRunning, remote.runningTurnId, token])
+  const sshOperationsByTurn = useMemo(() => {
+    const grouped = new Map<string, SSHOperation[]>()
+    for (const operation of sshOperations) {
+      const key = operation.turn_id ?? ''
+      const previous = grouped.get(key)
+      if (previous) previous.push(operation)
+      else grouped.set(key, [operation])
+    }
+    return grouped
+  }, [sshOperations])
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
     ? remote.approval.params.threadId
     : null
@@ -4043,6 +4068,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   message={message}
                   assistantName={activeEngineLabel}
                   operations={operations}
+                  sshOperations={showOperations && message.turnId ? sshOperationsByTurn.get(message.turnId) ?? [] : []}
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
@@ -4056,9 +4082,12 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   onOpenImage={openViewedImagePreview}
                 />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
+                {message.role === 'user' && message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index && !lastAssistantMessageIndexByTurn.has(message.turnId)
+                  ? <SSHOperationLog operations={sshOperationsByTurn.get(message.turnId) ?? []} /> : null}
               </Fragment>
             )
           })}
+          <SSHOperationLog operations={sshOperationsByTurn.get('') ?? []} />
           {remote.approval ? (
             <div className="approval-card" role="alert">
               <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
@@ -4093,6 +4122,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
                   : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
               ) : null}
+              {remote.runningTurnId && !hasStreamingAssistant ? <SSHOperationLog operations={sshOperationsByTurn.get(remote.runningTurnId) ?? []} /> : null}
             </div>
           ) : null}
         </div>
@@ -6016,6 +6046,123 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
+const blankSSHServer: SSHServerInput = {
+  name: '', host: '', port: 22, user: '', identityFile: '',
+  enabled: true, allowInspect: true, allowExecute: false,
+}
+
+function SSHSettingsCard({ token }: { token: string }) {
+  const [servers, setServers] = useState<SSHServerConfig[]>([])
+  const [loading, setLoading] = useState(true)
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<SSHServerInput | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [testingId, setTestingId] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    void codexRemoteClient.sshServers(token).then(({ servers: next }) => {
+      if (!cancelled) setServers(next)
+    }).catch((reason) => {
+      if (!cancelled) setError(reason instanceof Error ? reason.message : '读取服务器失败。')
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [token])
+
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!draft || busy) return
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      const saved = await codexRemoteClient.saveSSHServer(token, draft, editingId ?? undefined)
+      setServers((current) => [...current.filter((server) => server.id !== saved.id), saved])
+      setDraft(null)
+      setEditingId(null)
+      setMessage('服务器配置已保存。AI 下次调用 SSH 工具时会使用新权限。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '保存失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function remove(server: SSHServerConfig) {
+    if (!window.confirm(`删除服务器“${server.name}”的配置？`)) return
+    setBusy(true)
+    setError(null)
+    setMessage(null)
+    try {
+      await codexRemoteClient.deleteSSHServer(token, server.id)
+      setServers((current) => current.filter((item) => item.id !== server.id))
+      if (editingId === server.id) { setDraft(null); setEditingId(null) }
+      setMessage('服务器配置已删除。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '删除失败。')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function test(server: SSHServerConfig) {
+    setTestingId(server.id)
+    setError(null)
+    setMessage(null)
+    try {
+      const result = await codexRemoteClient.testSSHServer(token, server.id)
+      setMessage(`${server.name}：${result.ok ? '连接成功' : result.detail}`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '连接检查失败。')
+    } finally {
+      setTestingId(null)
+    }
+  }
+
+  return <section className="theme-settings-card ssh-settings-card">
+    <div className="theme-settings-card__heading">
+      <div><h2><Server size={17} />远程 SSH</h2><p>目标服务器只需开启 SSH；Codex 和 Claude 可使用这里授权的工具。</p></div>
+      <button type="button" className="ssh-settings-button" onClick={() => { setEditingId(null); setDraft({ ...blankSSHServer }); setError(null); setMessage(null) }}><Plus size={14} />添加服务器</button>
+    </div>
+    <div className="ssh-settings-body">
+      {loading ? <p className="ssh-settings-empty">正在读取服务器…</p> : servers.length === 0 ? <p className="ssh-settings-empty">还没有服务器。添加后，在聊天中告诉 AI 使用 Code Remote SSH 工具即可。</p> : null}
+      {servers.map((server) => <div className="ssh-settings-server" key={server.id}>
+        <div className="ssh-settings-server__info">
+          <strong>{server.name}</strong><span>{server.user}@{server.host}:{server.port}</span>
+          <small>{server.enabled ? '已启用' : '已停用'} · {server.allowInspect ? '允许诊断' : '禁止诊断'} · {server.allowExecute ? '允许执行命令' : '禁止执行命令'}</small>
+        </div>
+        <div className="ssh-settings-actions">
+          <button type="button" disabled={busy || testingId !== null} onClick={() => void test(server)}>{testingId === server.id ? '检查中…' : '检查连接'}</button>
+          <button type="button" disabled={busy} onClick={() => { setEditingId(server.id); setDraft({ ...server }); setError(null); setMessage(null) }}>编辑</button>
+          <button type="button" disabled={busy} onClick={() => void remove(server)}>删除</button>
+        </div>
+      </div>)}
+      {draft ? <form className="ssh-settings-form" onSubmit={(event) => void save(event)}>
+        <strong>{editingId ? '编辑服务器' : '添加服务器'}</strong>
+        <div className="ssh-settings-fields">
+          <label>名称<input required maxLength={80} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如：生产服务器" /></label>
+          <label>主机地址<input required value={draft.host} onChange={(event) => setDraft({ ...draft, host: event.target.value })} placeholder="IP 或域名" autoCapitalize="off" /></label>
+          <label>端口<input required type="number" min={1} max={65535} value={draft.port} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} /></label>
+          <label>SSH 用户<input required value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} placeholder="例如：ubuntu" autoCapitalize="off" /></label>
+          <label className="ssh-settings-fields__wide">本机私钥路径（可选）<input value={draft.identityFile} onChange={(event) => setDraft({ ...draft, identityFile: event.target.value })} placeholder="例如：/home/user/.ssh/id_ed25519；留空使用 ssh-agent" autoCapitalize="off" /></label>
+        </div>
+        <div className="ssh-settings-permissions">
+          <label><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用服务器</label>
+          <label><input type="checkbox" checked={draft.allowInspect} onChange={(event) => setDraft({ ...draft, allowInspect: event.target.checked })} />允许只读诊断</label>
+          <label><input type="checkbox" checked={draft.allowExecute} onChange={(event) => setDraft({ ...draft, allowExecute: event.target.checked })} />允许执行远程命令</label>
+        </div>
+        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。服务器首次连接前，主机指纹须已加入本机 known_hosts。</p>
+        <div className="ssh-settings-actions"><button type="button" disabled={busy} onClick={() => { setDraft(null); setEditingId(null) }}>取消</button><button type="submit" disabled={busy}>{busy ? '保存中…' : '保存服务器'}</button></div>
+      </form> : null}
+      {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}
+      {error ? <p className="ssh-settings-feedback ssh-settings-feedback--error" role="alert">{error}</p> : null}
+      <p className="ssh-settings-note">权限勾选约束 Code Remote SSH 工具。当前 AI 仍可能使用本机命令直接调用 SSH；严格隔离需要给 AI 和远端配置受限账户。输出会保存在聊天操作记录中，请勿执行会打印密钥的命令。</p>
+    </div>
+  </section>
+}
+
 function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
   token: string
   preferences: ThemePreferences
@@ -6206,12 +6353,13 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>界面偏好保存在当前设备；百炼语音配置保存在服务端。</p>
+          <p>界面偏好保存在当前设备；远程服务器配置保存在服务端。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
 
       <div className="theme-settings-panel__content">
+        <SSHSettingsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
         <section className="theme-settings-card">
@@ -6963,10 +7111,23 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const SSHOperationLog = memo(function SSHOperationLog({ operations }: { operations: SSHOperation[] }) {
+  if (operations.length === 0) return null
+  return <div className="ssh-operation-log" aria-label="远程 SSH 操作">
+    {operations.map((operation) => <details className={`ssh-operation ssh-operation--${operation.status}`} key={operation.id} open={operation.status !== 'completed'}>
+      <summary><Server size={14} /><strong>{operation.server_name}</strong><span>{operation.status === 'running' ? '执行中' : operation.status === 'failed' ? '失败' : `退出码 ${operation.exit_code ?? '—'}`}</span></summary>
+      <code className="ssh-operation__command">{operation.command}</code>
+      <pre className="ssh-operation__output">{operation.output || (operation.status === 'running' ? '等待远程输出…' : '命令没有输出。')}</pre>
+      {operation.status !== 'running' ? <small>退出码：{operation.exit_code ?? '无'}</small> : null}
+    </details>)}
+  </div>
+})
+
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, sshOperations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   assistantName: string
   operations: CodexOperation[]
+  sshOperations: SSHOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
@@ -7024,6 +7185,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {showOperations ? <SSHOperationLog operations={sshOperations} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (

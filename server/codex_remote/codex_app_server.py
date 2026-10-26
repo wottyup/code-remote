@@ -11,6 +11,7 @@ import sqlite3
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import closing, suppress
@@ -21,6 +22,7 @@ from typing import Any, Literal
 from watchfiles import Change, DefaultFilter, awatch
 from websockets.asyncio.client import connect as websocket_connect
 from .codex_history import CodexHistoryStore
+from .remote_ssh import SSHJournal
 
 logger = logging.getLogger(__name__)
 _APP_SERVER_MAX_MESSAGE_SIZE = 256 * 1024 * 1024
@@ -309,6 +311,8 @@ class CodexAppServer:
         self._pending: dict[str | int, asyncio.Future[dict[str, Any]]] = {}
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
+        self._ssh_config_path: Path | None = None
+        self._ssh_journal: SSHJournal | None = None
         # thread/start creates an in-memory thread before its first rollout
         # exists. Such a thread can accept turn/start but not thread/resume.
         self._fresh_thread_cwds: dict[str, Path] = {}
@@ -338,6 +342,25 @@ class CodexAppServer:
         self._fallback_reason: str | None = None
         self._recent_stderr: list[str] = []
         self._history = CodexHistoryStore(self._history_home)
+
+    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal) -> None:
+        self._ssh_config_path = config_path
+        self._ssh_journal = journal
+
+    def _ssh_mcp_config(self, context: str) -> dict[str, Any]:
+        assert self._ssh_config_path is not None and self._ssh_journal is not None
+        package_parent = str(Path(__file__).resolve().parent.parent)
+        python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+        return {"mcp_servers": {"code_remote_ssh": {
+            "command": sys.executable,
+            "args": ["-m", "codex_remote.remote_ssh"],
+            "env": {
+                "PYTHONPATH": python_path,
+                "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
+                "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
+                "CODE_REMOTE_SSH_CONTEXT": context,
+            },
+        }}}
 
     @property
     def connected(self) -> bool:
@@ -736,6 +759,9 @@ class CodexAppServer:
             "cwd": str(cwd or self.workspace),
             "serviceName": "codex_remote_web",
         }
+        ssh_context = uuid.uuid4().hex if self._ssh_journal else None
+        if ssh_context:
+            params["config"] = self._ssh_mcp_config(ssh_context)
         if model:
             params["model"] = model
         if approval_policy:
@@ -750,6 +776,8 @@ class CodexAppServer:
             thread_cwd = str(cwd or self.workspace)
         self._fresh_thread_cwds[thread["id"]] = Path(thread_cwd)
         self._loaded_thread_workspaces[thread["id"]] = Path(thread_cwd).expanduser().resolve()
+        if ssh_context and self._ssh_journal:
+            self._ssh_journal.register_context(ssh_context, thread["id"])
         return {**thread, "cwd": thread_cwd}
 
     async def resume_thread(self, thread_id: str, cwd: Path | None = None) -> dict[str, Any]:
@@ -759,12 +787,17 @@ class CodexAppServer:
         ):
             raise CodexRuntimeError("本机 Codex 历史数据库没有该对话，无法在隔离运行时中恢复。")
         params: dict[str, Any] = {"threadId": thread_id}
+        ssh_context = uuid.uuid4().hex if self._ssh_journal else None
+        if ssh_context:
+            params["config"] = self._ssh_mcp_config(ssh_context)
         if cwd is not None:
             params["cwd"] = str(cwd)
         result = await self.request("thread/resume", params)
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 无法恢复该对话")
+        if ssh_context and self._ssh_journal:
+            self._ssh_journal.register_context(ssh_context, thread_id)
         thread_cwd = thread.get("cwd")
         if not isinstance(thread_cwd, str) or not thread_cwd.strip():
             thread_cwd = str(cwd or self.workspace)
@@ -934,6 +967,8 @@ class CodexAppServer:
             completed = isinstance(turn, dict) and turn.get("status") in {"completed", "interrupted", "failed"}
             if turn_id and not completed and self._last_completed_turn_ids.get(thread_id) != turn_id:
                 self._active_turn_ids[thread_id] = turn_id
+                if self._ssh_journal:
+                    self._ssh_journal.set_active_turn(thread_id, turn_id)
             if not pending_start.done():
                 pending_start.set_result(turn_id)
             return result
@@ -1816,6 +1851,8 @@ class CodexAppServer:
             completed_turn_id: str | None = turn_id
             if method == "turn/started" and thread_id and turn_id:
                 self._active_turn_ids[thread_id] = turn_id
+                if self._ssh_journal:
+                    self._ssh_journal.set_active_turn(thread_id, turn_id)
                 pending_start = self._pending_turn_starts.get(thread_id)
                 if pending_start and not pending_start.done():
                     pending_start.set_result(turn_id)
@@ -1829,6 +1866,8 @@ class CodexAppServer:
                         completed_thread_id = None
                     if self._active_turn_ids.get(thread_id) == turn_id:
                         self._active_turn_ids.pop(thread_id, None)
+                        if self._ssh_journal:
+                            self._ssh_journal.set_active_turn(thread_id, None)
                 elif thread_id:
                     completed_turn_id = self._active_turn_ids.pop(thread_id, None)
                     if completed_turn_id:
