@@ -208,7 +208,7 @@ export interface RemoteEvent {
   fallbackReason?: string | null
   error?: string | null
   request_id?: string | number
-  decision?: 'accept' | 'decline' | 'cancel'
+  decision?: 'accept' | 'decline' | 'cancel' | 'answered'
   message?: string
 }
 
@@ -1188,8 +1188,8 @@ export const codexRemoteClient = {
     return {
       checkConnection,
       subscribeThread,
-      respondToApproval(requestId: string | number, decision: 'accept' | 'decline' | 'cancel') {
-        return send({ type: 'approval.response', request_id: requestId, decision })
+      respondToApproval(requestId: string | number, response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>) {
+        return send({ type: 'approval.response', request_id: requestId, ...(typeof response === 'string' ? { decision: response } : { response }) })
       },
       close() {
         stopped = true

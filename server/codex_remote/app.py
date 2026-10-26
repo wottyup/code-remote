@@ -1743,7 +1743,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.81.2-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.81.3-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2547,13 +2547,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
                     return
                 request_id = payload.get("request_id")
-                decision = payload.get("decision")
+                response = payload.get("response", payload.get("decision"))
                 if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
                     continue
-                if not isinstance(decision, str) or decision not in {"accept", "decline", "cancel"}:
+                if not isinstance(response, (str, dict)):
                     continue
                 try:
-                    await app_server.answer_server_request(request_id, decision)
+                    await app_server.answer_server_request(request_id, response)
                 except CodexRuntimeError as error:
                     await send_event({"type": "error", "message": str(error)})
 

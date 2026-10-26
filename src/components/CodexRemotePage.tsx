@@ -77,6 +77,7 @@ import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
+import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 
@@ -3714,6 +3715,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const handledDirectoryRequestId = useRef(0)
   const [engineSwitching, setEngineSwitching] = useState(false)
   const messageContainer = useRef<HTMLDivElement>(null)
+  const approvalModal = useRef<HTMLDivElement>(null)
   const messageContent = useRef<HTMLDivElement>(null)
   const scrollAnimationFrame = useRef<number | undefined>(undefined)
   const forceMessageStreamBottomFor = useRef<string | null>(null)
@@ -3760,6 +3762,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
   }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
 
   const activeThreadId = remote.activeThread?.id
+  useEffect(() => {
+    if (active && remote.approval) approvalModal.current?.focus()
+  }, [active, remote.approval?.method, remote.approval?.requestId])
   const [sshOperations, setSSHOperations] = useState<SSHOperation[]>([])
   useEffect(() => {
     if (!activeThreadId) { setSSHOperations([]); return }
@@ -4088,29 +4093,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
             )
           })}
           <SSHOperationLog operations={sshOperationsByTurn.get('') ?? []} />
-          {remote.approval ? (
-            <div className="approval-card" role="alert">
-              <div className="approval-card__heading"><AlertTriangle size={17} /><strong>Codex 需要你的批准</strong></div>
-              {approvalSource ? (
-                <button
-                  className="approval-card__source"
-                  type="button"
-                  onClick={() => {
-                    if (approvalThreadId && approvalThreadId !== activeThreadId) window.CodexRemoteOpenThread?.(approvalThreadId)
-                  }}
-                  disabled={approvalThreadId === activeThreadId}
-                  title={approvalThreadId === activeThreadId ? '来自当前对话' : '打开请求审批的对话'}
-                >来自：{approvalSource}</button>
-              ) : null}
-              <p>{typeof remote.approval.params.reason === 'string' ? remote.approval.params.reason : 'Codex 请求执行一项需要批准的操作。'}</p>
-              {typeof remote.approval.params.command === 'string' ? <code>{remote.approval.params.command}</code> : null}
-              {typeof remote.approval.params.cwd === 'string' ? <small>目录：{remote.approval.params.cwd}</small> : null}
-              <div className="approval-card__actions">
-                <button type="button" onClick={() => remote.respondToApproval('decline')}><X size={14} />拒绝</button>
-                <button className="approval-card__accept" type="button" onClick={() => remote.respondToApproval('accept')}><Check size={14} />允许一次</button>
-              </div>
-            </div>
-          ) : null}
           {!remote.loadingHistory && (remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant) ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
@@ -4127,6 +4109,33 @@ const RemoteChatPane = memo(function RemoteChatPane({
           ) : null}
         </div>
       </section>
+      {active && remote.approval ? <div
+        ref={approvalModal}
+        className="approval-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Codex 授权请求"
+        tabIndex={-1}
+        onKeyDown={(event) => {
+          if (event.key !== 'Escape') return
+          event.preventDefault()
+          event.stopPropagation()
+          if (remote.approval?.method === 'item/tool/requestUserInput') remote.respondToApproval({ answers: {} })
+          else if (remote.approval?.method === 'mcpServer/elicitation/request') remote.respondToApproval({ action: 'decline' })
+          else remote.respondToApproval('decline')
+        }}
+      >
+        <ServerRequestCard
+          key={`${remote.approval.method}:${remote.approval.requestId}`}
+          request={remote.approval}
+          source={approvalSource}
+          sourceIsCurrent={approvalThreadId === activeThreadId}
+          onOpenSource={() => {
+            if (approvalThreadId && approvalThreadId !== activeThreadId) window.CodexRemoteOpenThread?.(approvalThreadId)
+          }}
+          onRespond={remote.respondToApproval}
+        />
+      </div> : null}
       {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
       {remote.error ? (
         <div className="remote-error" role="alert">

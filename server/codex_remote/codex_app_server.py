@@ -1088,23 +1088,65 @@ class CodexAppServer:
         })
         await self.notify_threads_changed()
 
-    async def answer_server_request(self, request_id: str | int, decision: str) -> None:
-        if decision not in {"accept", "decline", "cancel"}:
-            raise CodexRuntimeError("不支持的审批操作")
-        request = self._server_requests.pop(request_id, None)
+    async def answer_server_request(self, request_id: str | int, response: str | dict[str, Any]) -> None:
+        request = self._server_requests.get(request_id)
         if request is None:
             raise CodexRuntimeError("该审批请求已过期或已处理")
+        method = request.get("method")
+        params = request.get("params") if isinstance(request.get("params"), dict) else {}
+        if method == "mcpServer/elicitation/request":
+            action = response.get("action") if isinstance(response, dict) else None
+            if not isinstance(action, str) or action not in {"accept", "decline", "cancel"}:
+                raise CodexRuntimeError("MCP 授权答复无效")
+            if action == "accept":
+                if params.get("mode") not in {"form", "openai/form", "openaiForm"}:
+                    raise CodexRuntimeError("此 MCP 授权类型无法在网页确认")
+                content = response.get("content")
+                if not isinstance(content, dict):
+                    raise CodexRuntimeError("MCP 授权内容无效")
+                result = {"action": action, "content": content}
+            else:
+                result = {"action": action}
+            decision = action
+        elif method == "item/tool/requestUserInput":
+            answers = response.get("answers") if isinstance(response, dict) else None
+            questions = params.get("questions")
+            if not isinstance(answers, dict) or not isinstance(questions, list) or not questions:
+                raise CodexRuntimeError("工具提问答复无效")
+            if not answers:
+                result = {"answers": {}}
+                decision = "cancel"
+            else:
+                for question in questions:
+                    if not isinstance(question, dict) or not isinstance(question.get("id"), str):
+                        raise CodexRuntimeError("工具提问格式无效")
+                    answer = answers.get(question["id"])
+                    values = answer.get("answers") if isinstance(answer, dict) else None
+                    if not isinstance(values, list) or len(values) != 1 or not isinstance(values[0], str) or not values[0].strip():
+                        raise CodexRuntimeError("请回答每个工具问题")
+                    options = question.get("options")
+                    labels = {option["label"] for option in options
+                              if isinstance(option, dict) and isinstance(option.get("label"), str)} if isinstance(options, list) else set()
+                    if labels and values[0] not in labels and question.get("isOther") is not True:
+                        raise CodexRuntimeError("工具问题的选项无效")
+                result = {"answers": {question["id"]: answers[question["id"]] for question in questions}}
+                decision = "answered"
+        else:
+            decision = response if isinstance(response, str) else response.get("decision") if isinstance(response, dict) else None
+            if not isinstance(decision, str) or decision not in {"accept", "decline", "cancel"}:
+                raise CodexRuntimeError("不支持的审批操作")
+            result = {"decision": decision}
+        self._server_requests.pop(request_id, None)
         try:
-            await self._write({"id": request_id, "result": {"decision": decision}})
+            await self._write({"id": request_id, "result": result})
         except Exception:
             self._server_requests.setdefault(request_id, request)
             raise
-        params = request.get("params") if isinstance(request, dict) else None
         await self._emit({
             "type": "server_request.resolved",
             "request_id": request_id,
             "decision": decision,
-            "threadId": params.get("threadId") if isinstance(params, dict) else None,
+            "threadId": params.get("threadId"),
         })
 
     async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -1800,9 +1842,12 @@ class CodexAppServer:
             if method not in {
                 "item/commandExecution/requestApproval",
                 "item/fileChange/requestApproval",
+                "item/tool/requestUserInput",
+                "mcpServer/elicitation/request",
                 "execCommandApproval",
                 "applyPatchApproval",
             }:
+                logger.warning("Unsupported Codex server request: %s", method)
                 await self._write({
                     "id": request_id,
                     "error": {"code": -32601, "message": "This Code Remote client does not support this request."},

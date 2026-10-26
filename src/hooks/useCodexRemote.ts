@@ -3390,6 +3390,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const requestMethod = event.method ?? ''
       const supportedApproval = requestMethod === 'item/commandExecution/requestApproval'
         || requestMethod === 'item/fileChange/requestApproval'
+        || requestMethod === 'item/tool/requestUserInput'
+        || requestMethod === 'mcpServer/elicitation/request'
         || requestMethod === 'execCommandApproval'
         || requestMethod === 'applyPatchApproval'
       if (supportedApproval && (typeof event.request_id === 'string' || typeof event.request_id === 'number')) {
@@ -4607,11 +4609,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [handoffInProgress, onUnauthorized, refreshModels, refreshThreads, restoreActiveThread, setConnectionState, setHandoffState, token])
 
-  const respondToApproval = useCallback((decision: 'accept' | 'decline' | 'cancel') => {
+  const respondToApproval = useCallback((response: 'accept' | 'decline' | 'cancel' | Record<string, unknown>) => {
     if (!approval) return false
-    const sent = socketRef.current?.respondToApproval(approval.requestId, decision) ?? false
-    if (sent) setApproval(null)
-    else setError('连接断开，审批没有送达')
+    const sent = socketRef.current?.respondToApproval(approval.requestId, response) ?? false
+    if (!sent) setError('连接断开，审批没有送达')
     return sent
   }, [approval])
 
