@@ -6,6 +6,7 @@ import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
 import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand, terminalRunScriptCommand } from '../lib/terminalPathCommand'
+import { forgetTerminalScreen, readTerminalScreen, rememberTerminalScreen } from '../lib/terminalScreenMemory'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
@@ -113,6 +114,20 @@ function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clie
   }
   terminal.select(startColumn, row, Math.max(1, endColumn - startColumn))
   return terminal.hasSelection()
+}
+
+function terminalScreenText(terminal: Terminal): string {
+  const buffer = terminal.buffer.normal
+  const lines: string[] = []
+  for (let index = Math.max(0, buffer.length - 2_000); index < buffer.length; index += 1) {
+    const line = buffer.getLine(index)
+    if (!line) continue
+    const text = line.translateToString(true)
+    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text
+    else lines.push(text)
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines.join('\r\n').slice(-500_000)
 }
 
 export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, runRequest, onRunRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
@@ -276,6 +291,8 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(container)
+    const previousScreen = threadId ? readTerminalScreen(threadId) : null
+    if (previousScreen) terminal.write(`${previousScreen}\r\n`)
 
     const socketUrl = new URL('/api/v1/codex/terminal', window.location.origin)
     socketUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -284,6 +301,10 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     let ready = false
     let exited = false
     let disposed = false
+    let receivedLiveOutput = false
+    let snapshotTimer = 0
+    let reconnectRequested = false
+    let autoReconnectAllowed = true
     let fitFrame = 0
     let lastTerminalSelection: TerminalTouchSelection | null = null
     let retainedTouchSelection: TerminalTouchSelection | null = null
@@ -372,6 +393,40 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       window.cancelAnimationFrame(fitFrame)
       fitFrame = window.requestAnimationFrame(fitAndResize)
     }
+    const saveScreen = () => {
+      if (threadId && !exited && receivedLiveOutput) rememberTerminalScreen(threadId, terminalScreenText(terminal))
+    }
+    const writeOutput = (data: Uint8Array) => {
+      if (disposed) return
+      receivedLiveOutput = true
+      terminal.write(data, () => {
+        if (disposed || exited || !threadId) return
+        if (snapshotTimer) window.clearTimeout(snapshotTimer)
+        snapshotTimer = window.setTimeout(() => {
+          snapshotTimer = 0
+          saveScreen()
+        }, 1_500)
+      })
+    }
+    const refreshVisibleScreen = () => {
+      if (disposed || document.visibilityState === 'hidden') return
+      scheduleFit()
+      window.requestAnimationFrame(() => {
+        if (disposed) return
+        terminal.refresh(0, terminal.rows - 1)
+        if (!exited && autoReconnectAllowed && !reconnectRequested && socket.readyState >= WebSocket.CLOSING) {
+          reconnectRequested = true
+          setConnectionRound((value) => value + 1)
+        }
+      })
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveScreen()
+      else refreshVisibleScreen()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', saveScreen)
+    window.addEventListener('pageshow', refreshVisibleScreen)
     const updateFontSize = () => {
       const fontSize = readFontSize()
       if (terminal.options.fontSize === fontSize) return
@@ -587,8 +642,8 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     })
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') {
-        if (event.data instanceof ArrayBuffer) terminal.write(new Uint8Array(event.data))
-        else if (event.data instanceof Blob) void event.data.arrayBuffer().then((data) => terminal.write(new Uint8Array(data)))
+        if (event.data instanceof ArrayBuffer) writeOutput(new Uint8Array(event.data))
+        else if (event.data instanceof Blob) void event.data.arrayBuffer().then((data) => writeOutput(new Uint8Array(data)))
         return
       }
       let payload: { type?: string; cwd?: string; shell?: string; message?: string }
@@ -606,6 +661,7 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
         fitAndResize()
       } else if (payload.type === 'error') {
         ready = false
+        autoReconnectAllowed = false
         stopControlRepeat()
         resetModifier()
         setStatus('disconnected')
@@ -613,6 +669,9 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       } else if (payload.type === 'exit') {
         ready = false
         exited = true
+        if (threadId) forgetTerminalScreen(threadId)
+        if (snapshotTimer) window.clearTimeout(snapshotTimer)
+        snapshotTimer = 0
         stopControlRepeat()
         resetModifier()
         setStatus('exited')
@@ -640,9 +699,14 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     fitFrame = window.requestAnimationFrame(fitAndResize)
 
     return () => {
+      saveScreen()
       disposed = true
+      if (snapshotTimer) window.clearTimeout(snapshotTimer)
       window.cancelAnimationFrame(fitFrame)
       window.removeEventListener('resize', updateFontSize)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', saveScreen)
+      window.removeEventListener('pageshow', refreshVisibleScreen)
       fontPreferenceObserver?.disconnect()
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu, true)

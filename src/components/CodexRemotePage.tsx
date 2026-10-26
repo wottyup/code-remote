@@ -53,6 +53,7 @@ import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, ty
 import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type SSHHostKeyOffer, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
+import { forgetOpenTerminalThread, readOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
@@ -3660,6 +3661,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 })
 
 interface RemoteChatPaneProps {
+  paneIndex: number
   token: string
   remote: CodexRemoteController
   active: boolean
@@ -3686,6 +3688,7 @@ const emptyFileChanges: CodexFileChange[] = []
 const emptyActivityTimeline: CodexActivityTimelineEntry[] = []
 
 const RemoteChatPane = memo(function RemoteChatPane({
+  paneIndex,
   token,
   remote,
   active,
@@ -3707,6 +3710,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const terminalRestoreChecked = useRef(false)
   const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const [terminalRunRequest, setTerminalRunRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const [terminalSessionCwd, setTerminalSessionCwd] = useState<string | undefined>()
@@ -3745,6 +3749,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     handledDirectoryRequestId.current = directoryRequest.id
     onActivate()
     if (directoryRequest.action === 'run') {
+      forgetOpenTerminalThread(paneIndex)
       setTerminalRunRequest(directoryRequest)
       setTerminalDirectoryRequest(null)
       setTerminalSessionCwd(workspaceParentPath(directoryRequest.path))
@@ -3759,9 +3764,25 @@ const RemoteChatPane = memo(function RemoteChatPane({
     }
     setTerminalOpen(true)
     onDirectoryRequestHandled(directoryRequest.id)
-  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, terminalOpen])
+  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalOpen])
 
   const activeThreadId = remote.activeThread?.id
+  useEffect(() => {
+    if (!activeThreadId || terminalRestoreChecked.current) return
+    terminalRestoreChecked.current = true
+    if (readOpenTerminalThread(paneIndex) === activeThreadId) setTerminalOpen(true)
+  }, [activeThreadId, paneIndex])
+
+  useEffect(() => {
+    if (terminalOpen && !terminalSessionIsolated && activeThreadId) {
+      rememberOpenTerminalThread(paneIndex, activeThreadId)
+    }
+  }, [activeThreadId, paneIndex, terminalOpen, terminalSessionIsolated])
+
+  const closeTerminal = () => {
+    forgetOpenTerminalThread(paneIndex)
+    setTerminalOpen(false)
+  }
   useEffect(() => {
     if (active && remote.approval) approvalModal.current?.focus()
   }, [active, remote.approval?.method, remote.approval?.requestId])
@@ -4023,7 +4044,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
             onClick={(event) => {
               event.stopPropagation()
               if (terminalOpen) {
-                setTerminalOpen(false)
+                closeTerminal()
               } else {
                 onActivate()
                 setTerminalSessionCwd(undefined)
@@ -4144,13 +4165,13 @@ const RemoteChatPane = memo(function RemoteChatPane({
         </div>
       ) : null}
       {terminalOpen ? (
-        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={() => setTerminalOpen(false)}>
+        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={closeTerminal}>
           <Suspense fallback={(
             <ChatOverlayPanel
               ariaLabel="本机终端"
               backdropLabel="关闭本机终端"
               className="terminal-dialog"
-              onClose={() => setTerminalOpen(false)}
+              onClose={closeTerminal}
               showCloseButton={false}
               header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
             >
@@ -4167,7 +4188,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
               onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
               runRequest={terminalRunRequest}
               onRunRequestConsumed={(id) => setTerminalRunRequest((current) => current?.id === id ? null : current)}
-              onClose={() => setTerminalOpen(false)}
+              onClose={closeTerminal}
               onInsertText={(value) => {
                 if (value.length >= longPasteThreshold) {
                   composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
@@ -5383,6 +5404,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }
   function closePane(paneIndex: number) {
     if (openPaneIndexes.length <= 1) return
+    forgetOpenTerminalThread(paneIndex)
     const position = openPaneIndexes.indexOf(paneIndex)
     const nextOpen = openPaneIndexes.filter((index) => index !== paneIndex)
     setOpenPaneIndexes(nextOpen)
@@ -5899,6 +5921,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                 <div className="remote-pane-slot" data-pane-index={paneIndex} key={`${paneIndex}-thread`}>
                   <RemoteChatPane
                     {...paneActions[paneIndex]}
+                    paneIndex={paneIndex}
                     token={token}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
