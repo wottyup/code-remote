@@ -6173,7 +6173,7 @@ function SSHSettingsCard({ token }: { token: string }) {
         <div className="ssh-settings-fields">
           <label>名称<input required maxLength={80} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如：生产服务器" /></label>
           <label>主机地址<input required value={draft.host} onChange={(event) => setDraft({ ...draft, host: event.target.value })} placeholder="IP 或域名" autoCapitalize="off" /></label>
-          <label>端口<input required type="number" min={1} max={65535} value={draft.port} onChange={(event) => setDraft({ ...draft, port: Number(event.target.value) })} /></label>
+          <label>端口<input required type="number" min={1} max={65535} value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value === '' ? '' : Number(event.target.value) })} /></label>
           <label>SSH 用户<input required value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} placeholder="例如：ubuntu" autoCapitalize="off" /></label>
           <label className="ssh-settings-fields__wide">认证方式
             <select value={draft.authMethod} onChange={(event) => setDraft({ ...draft, authMethod: event.target.value as SSHServerInput['authMethod'], password: '', privateKey: '', privateKeyPassphrase: '' })}>

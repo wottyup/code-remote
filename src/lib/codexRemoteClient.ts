@@ -29,7 +29,8 @@ export interface SSHServerConfig {
   allowExecute: boolean
 }
 
-export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential'> & {
+export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential' | 'port'> & {
+  port: number | ''
   password?: string
   privateKey?: string
   privateKeyPassphrase?: string
