@@ -6243,13 +6243,13 @@ function SSHSettingsCard({ token }: { token: string }) {
           <label><input type="checkbox" checked={draft.allowInspect} onChange={(event) => setDraft({ ...draft, allowInspect: event.target.checked })} />允许只读诊断</label>
           <label><input type="checkbox" checked={draft.allowExecute} onChange={(event) => setDraft({ ...draft, allowExecute: event.target.checked })} />允许执行远程命令</label>
         </div>
-        <p className="ssh-settings-note">执行命令权限等同目标 SSH 用户；请给目标机使用权限合适的专用账户。首次连接时点击“检查连接”，按提示信任服务器。保存的密码、私钥及口令不会在页面回显。</p>
+        <p className="ssh-settings-note">执行命令使用填写的 SSH 用户权限。首次连接时点击“检查连接”，按提示信任服务器。保存的密码、私钥及口令不会在页面回显。</p>
         {window.location.protocol !== 'https:' ? <p className="ssh-settings-note ssh-settings-note--warning">当前页面使用 HTTP，填写的密码或私钥在传输途中没有 HTTPS 加密。建议改用 HTTPS 后再填写。</p> : null}
         <div className="ssh-settings-actions"><button type="button" disabled={busy} onClick={() => { setDraft(null); setEditingId(null) }}>取消</button><button type="submit" disabled={busy}>{busy ? '保存中…' : '保存服务器'}</button></div>
       </form> : null}
       {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}
       {error ? <p className="ssh-settings-feedback ssh-settings-feedback--error" role="alert">{error}</p> : null}
-      <p className="ssh-settings-note">权限勾选约束 Code Remote SSH 工具。当前 AI 仍可能使用本机命令直接调用 SSH；严格隔离需要给 AI 和远端配置受限账户。输出会保存在聊天操作记录中，请勿执行会打印密钥的命令。</p>
+      <p className="ssh-settings-note">Linux 上，AI 通过 Code Remote SSH 工具连接时只提交服务器编号和命令；保存的凭据由后端使用，AI 运行时无法直接读取凭据目录。逐台权限仍然生效，操作输出显示在聊天记录中。</p>
     </div>
   </section>
 }

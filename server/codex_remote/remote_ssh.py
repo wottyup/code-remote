@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import ipaddress
 import base64
@@ -11,6 +12,7 @@ import re
 import codecs
 import socket
 import sqlite3
+import stat
 import subprocess
 import sys
 import tempfile
@@ -395,6 +397,17 @@ class SSHJournal:
             else:
                 conn.execute("DELETE FROM active_turns WHERE thread_id = ?", (thread_id,))
 
+    def context_is_active(self, context: str, turn_id: str | None) -> bool:
+        with self._connect() as conn:
+            row = conn.execute("""SELECT active_turns.turn_id FROM contexts
+                JOIN active_turns ON active_turns.thread_id = contexts.thread_id
+                WHERE contexts.context = ?""", (context,)).fetchone()
+        return row is not None and (turn_id is None or row[0] == turn_id)
+
+    def clear_active_turns(self) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM active_turns")
+
     def start(self, context: str, server: dict[str, Any], command: str, turn_id: str | None = None) -> str:
         operation_id = str(uuid.uuid4())
         with self._connect() as conn:
@@ -600,9 +613,125 @@ def _mcp_tool_result(value: dict[str, Any], *, is_error: bool = False) -> dict[s
     return {"content": [{"type": "text", "text": json.dumps(value, ensure_ascii=False)}], "isError": is_error}
 
 
+class SSHBroker:
+    """Keep SSH credentials and journal writes in the trusted web process."""
+
+    def __init__(self, store: SSHServerStore, journal: SSHJournal) -> None:
+        self.store = store
+        self.journal = journal
+        self.directory = store.path.parent / "ssh-broker"
+        self.socket_path = self.directory / "broker.sock"
+        self._server: asyncio.AbstractServer | None = None
+
+    async def start(self) -> None:
+        self.journal.clear_active_turns()
+        self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self.directory, 0o700)
+        try:
+            existing = os.lstat(self.socket_path)
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISSOCK(existing.st_mode):
+                raise SSHConfigurationError("SSH 代理 socket 路径已被占用。")
+            self.socket_path.unlink()
+        self._server = await asyncio.start_unix_server(self._handle, path=str(self.socket_path), limit=32768)
+        os.chmod(self.socket_path, 0o600)
+
+    async def close(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+            self._server = None
+        self.socket_path.unlink(missing_ok=True)
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            peer = writer.get_extra_info("socket")
+            if hasattr(socket, "SO_PEERCRED") and peer is not None:
+                import struct
+                _, peer_uid, _ = struct.unpack("3i", peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                if peer_uid != os.getuid():
+                    raise SSHConfigurationError("SSH 代理客户端身份无效。")
+            request = json.loads(await asyncio.wait_for(reader.readline(), timeout=5))
+            if not isinstance(request, dict):
+                raise SSHConfigurationError("SSH 代理请求格式无效。")
+            result = await self._dispatch(request)
+            response = {"result": result}
+        except (SSHConfigurationError, ValueError, asyncio.TimeoutError) as error:
+            response = {"error": str(error)}
+        except Exception:
+            response = {"error": "SSH 代理执行失败，请检查服务端日志。"}
+        try:
+            writer.write((json.dumps(response, ensure_ascii=False) + "\n").encode("utf-8"))
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
+        name = request.get("name")
+        args = request.get("args")
+        context = request.get("context")
+        turn_id = request.get("turn_id")
+        if not isinstance(args, dict) or not isinstance(context, str) or len(context) > 128:
+            raise SSHConfigurationError("SSH 代理请求格式无效。")
+        if turn_id is not None and (not isinstance(turn_id, str) or len(turn_id) > 128):
+            raise SSHConfigurationError("SSH 代理对话编号无效。")
+        if not await asyncio.to_thread(self.journal.context_is_active, context, turn_id):
+            raise SSHConfigurationError("当前对话未在运行，无法使用 SSH 工具。")
+        if name == "list_servers":
+            return {"servers": [
+                {"id": item["id"], "name": item["name"], "allowInspect": item["allowInspect"],
+                 "allowExecute": item["allowExecute"]}
+                for item in self.store.list() if item.get("enabled")
+            ]}
+        server_id = args.get("server_id")
+        if not isinstance(server_id, str):
+            raise SSHConfigurationError("服务器 ID 无效。")
+        if name == "inspect_server":
+            check = args.get("check")
+            if not isinstance(check, str) or check not in INSPECTIONS:
+                raise SSHConfigurationError("不支持该诊断项。")
+            return await asyncio.to_thread(run_ssh, self.store, self.journal, context, server_id,
+                                           INSPECTIONS[check], permission="allowInspect", turn_id=turn_id,
+                                           timeout=30)
+        if name == "execute_command":
+            command = args.get("command")
+            if not isinstance(command, str):
+                raise SSHConfigurationError("远程命令格式无效。")
+            return await asyncio.to_thread(run_ssh, self.store, self.journal, context, server_id,
+                                           command, permission="allowExecute", turn_id=turn_id)
+        raise SSHConfigurationError("未知 SSH 工具。")
+
+
+def _broker_request(name: str, args: dict[str, Any], context: str,
+                    turn_id: str | None) -> dict[str, Any]:
+    path = os.environ["CODE_REMOTE_SSH_BROKER"]
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(135)
+        connection.connect(path)
+        connection.sendall((json.dumps({"name": name, "args": args, "context": context,
+                                        "turn_id": turn_id}, ensure_ascii=False) + "\n").encode("utf-8"))
+        with connection.makefile("rb") as response_file:
+            line = response_file.readline(1_000_000)
+    if not line or len(line) >= 1_000_000:
+        raise SSHConfigurationError("SSH 代理未返回完整结果。")
+    response = json.loads(line)
+    if not isinstance(response, dict):
+        raise SSHConfigurationError("SSH 代理返回格式无效。")
+    if "error" in response:
+        raise SSHConfigurationError(str(response["error"]))
+    result = response.get("result")
+    if not isinstance(result, dict):
+        raise SSHConfigurationError("SSH 代理返回格式无效。")
+    return result
+
+
 def mcp_main() -> None:
-    store = SSHServerStore(Path(os.environ["CODE_REMOTE_SSH_CONFIG"]))
-    journal = SSHJournal(Path(os.environ["CODE_REMOTE_SSH_JOURNAL"]))
+    broker = bool(os.environ.get("CODE_REMOTE_SSH_BROKER"))
+    store = None if broker else SSHServerStore(Path(os.environ["CODE_REMOTE_SSH_CONFIG"]))
+    journal = None if broker else SSHJournal(Path(os.environ["CODE_REMOTE_SSH_JOURNAL"]))
     context = os.environ.get("CODE_REMOTE_SSH_CONTEXT", "")
     turn_id = os.environ.get("CODE_REMOTE_SSH_TURN_ID")
     tools = [
@@ -634,20 +763,23 @@ def mcp_main() -> None:
                 name = params.get("name")
                 args = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
                 if name == "list_servers":
-                    result = _mcp_tool_result({"servers": [
+                    value = _broker_request(name, args, context, turn_id) if broker else {"servers": [
                         {"id": item["id"], "name": item["name"], "allowInspect": item["allowInspect"],
                          "allowExecute": item["allowExecute"]}
-                        for item in store.list() if item.get("enabled")]})
+                        for item in store.list() if item.get("enabled")]}
+                    result = _mcp_tool_result(value)
                 elif name == "inspect_server":
                     check = args.get("check")
                     if check not in INSPECTIONS:
                         raise SSHConfigurationError("不支持该诊断项。")
-                    value = run_ssh(store, journal, context, str(args.get("server_id", "")), INSPECTIONS[check],
-                                    permission="allowInspect", turn_id=turn_id, timeout=30)
+                    value = (_broker_request(name, args, context, turn_id) if broker else
+                             run_ssh(store, journal, context, str(args.get("server_id", "")), INSPECTIONS[check],
+                                     permission="allowInspect", turn_id=turn_id, timeout=30))
                     result = _mcp_tool_result(value, is_error=value["exitCode"] != 0)
                 elif name == "execute_command":
-                    value = run_ssh(store, journal, context, str(args.get("server_id", "")),
-                                    str(args.get("command", "")), permission="allowExecute", turn_id=turn_id)
+                    value = (_broker_request(name, args, context, turn_id) if broker else
+                             run_ssh(store, journal, context, str(args.get("server_id", "")),
+                                     str(args.get("command", "")), permission="allowExecute", turn_id=turn_id))
                     result = _mcp_tool_result(value, is_error=value["exitCode"] != 0)
                 else:
                     raise SSHConfigurationError("未知 SSH 工具。")

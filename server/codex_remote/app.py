@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
+from .agent_sandbox import AgentSandbox, SANDBOX_BROKER_SOCKET
 from .browser_history_sync import BrowserHistorySync
 from .browser_payload import browser_event, browser_thread, browser_thread_summary
 from .claude_code import (
@@ -52,7 +53,7 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
-from .remote_ssh import SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh, ssh_host_key_offer, trust_ssh_host_key
+from .remote_ssh import SSHBroker, SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh, ssh_host_key_offer, trust_ssh_host_key
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
@@ -1597,8 +1598,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     ssh_servers = SSHServerStore(auth.state_path.parent / "ssh-servers.json")
     ssh_journal = SSHJournal(auth.state_path.parent / "ssh-operations.sqlite3")
+    ssh_broker = SSHBroker(ssh_servers, ssh_journal)
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
-    app_server.enable_ssh_mcp(ssh_servers.path, ssh_journal)
     app_server.enable_mcp_approvals(mcp_approvals)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
@@ -1607,12 +1608,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         state_path.parent / "claude-code.sqlite3",
         app_server._emit,
     )
-    claude_code.enable_ssh_mcp(ssh_servers.path, ssh_journal)
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = prepare_message_image_directory(auth.state_path.parent)
     image_storage_lock = threading.Lock()
     runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
+    sandbox = AgentSandbox(
+        configured_workspace, auth.state_path.parent, ssh_broker.directory,
+        (runtime_directory, image_directory),
+        (app_server._history_home, app_server._runtime_home, claude_code._native_home,
+         Path.home() / ".cache", Path.home() / ".config", Path.home() / ".local", Path.home() / ".npm"),
+    )
+    broker_socket = SANDBOX_BROKER_SOCKET if sandbox.linux else None
+    app_server.enable_ssh_mcp(ssh_servers.path, ssh_journal, broker_socket)
+    claude_code.enable_ssh_mcp(ssh_servers.path, ssh_journal, broker_socket)
+    app_server.enable_agent_sandbox(sandbox)
+    claude_code.enable_agent_sandbox(sandbox)
     terminal_sessions: set[TerminalSession] = set()
 
     async def reap_tmux_terminal_sessions() -> None:
@@ -1717,6 +1728,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
+        if sandbox.linux:
+            await ssh_broker.start()
         print(f"\nCode Remote 配对码：{auth.code}\n", flush=True)
         try:
             deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
@@ -1750,10 +1763,12 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await claude_history_watcher
             await app_server.close()
+            if sandbox.linux:
+                await ssh_broker.close()
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.83.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.83.1-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

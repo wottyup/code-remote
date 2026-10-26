@@ -18,6 +18,7 @@ from typing import Any, Awaitable, Callable
 
 from .claude_native_history import scan_native_sessions
 from .claude_stream import ClaudeReplyText
+from .agent_sandbox import AgentSandbox
 from .remote_ssh import SSHJournal
 
 logger = logging.getLogger(__name__)
@@ -78,6 +79,8 @@ class ClaudeCodeServer:
         self._interrupts: set[str] = set()
         self._live_replies: dict[str, dict[str, Any]] = {}
         self._ssh_config_path: Path | None = None
+        self._ssh_broker_socket: str | None = None
+        self._agent_sandbox: AgentSandbox | None = None
         self._ssh_journal: SSHJournal | None = None
         self._database_path_parent_ready()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
@@ -109,9 +112,14 @@ class ClaudeCodeServer:
         self._recover_interrupted_turns()
         self._connection.commit()
 
-    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal) -> None:
+    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal,
+                       broker_socket: str | None = None) -> None:
         self._ssh_config_path = config_path
         self._ssh_journal = journal
+        self._ssh_broker_socket = broker_socket
+
+    def enable_agent_sandbox(self, sandbox: AgentSandbox) -> None:
+        self._agent_sandbox = sandbox
 
     def _database_path_parent_ready(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -502,6 +510,8 @@ class ClaudeCodeServer:
                     WHERE thread_id = ?""",
                     (name, preview, created_at, turn_id, json.dumps(messages, ensure_ascii=False), thread_id),
                 )
+            if self._ssh_journal:
+                self._ssh_journal.set_active_turn(thread_id, turn_id)
             self._live_replies[thread_id] = {
                 "id": f"assistant-{turn_id}", "turnId": turn_id, "text": "", "createdAt": created_at,
             }
@@ -575,17 +585,22 @@ class ClaudeCodeServer:
                 "--verbose",
             ]
             if self._ssh_config_path and self._ssh_journal:
-                self._ssh_journal.register_context(thread_id, thread_id)
+                ssh_context = uuid.uuid4().hex
+                self._ssh_journal.register_context(ssh_context, thread_id)
                 package_parent = str(Path(__file__).resolve().parent.parent)
                 python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+                ssh_environment = ({"CODE_REMOTE_SSH_BROKER": self._ssh_broker_socket}
+                                   if self._ssh_broker_socket else {
+                                       "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
+                                       "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
+                                   })
                 mcp_config = {"mcpServers": {"code_remote_ssh": {
                     "command": sys.executable,
                     "args": ["-m", "codex_remote.remote_ssh"],
                     "env": {
                         "PYTHONPATH": python_path,
-                        "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
-                        "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
-                        "CODE_REMOTE_SSH_CONTEXT": thread_id,
+                        **ssh_environment,
+                        "CODE_REMOTE_SSH_CONTEXT": ssh_context,
                         "CODE_REMOTE_SSH_TURN_ID": turn_id,
                     },
                 }}}
@@ -610,6 +625,8 @@ class ClaudeCodeServer:
             }
             if os.name != "nt":
                 kwargs["start_new_session"] = True
+            if self._agent_sandbox is not None:
+                args = self._agent_sandbox.wrap(args, cwd=cwd)
             process = await asyncio.create_subprocess_exec(*args, **kwargs)
             self._processes[thread_id] = process
             if process.stdin:
@@ -791,6 +808,8 @@ class ClaudeCodeServer:
                 messages_json = ? WHERE thread_id = ?""",
                 (preview, completed_at, json.dumps(messages, ensure_ascii=False), thread_id),
             )
+        if self._ssh_journal:
+            self._ssh_journal.set_active_turn(thread_id, None)
         await self._notify_threads_changed()
         item = {"id": assistant_item_id, "type": "agentMessage", "text": text, "status": status}
         await self.emit({

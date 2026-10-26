@@ -21,6 +21,7 @@ from typing import Any, Literal
 
 from watchfiles import Change, DefaultFilter, awatch
 from websockets.asyncio.client import connect as websocket_connect
+from .agent_sandbox import AgentSandbox
 from .codex_history import CodexHistoryStore
 from .remote_ssh import SSHJournal
 from .mcp_approvals import MCPApprovalError, MCPApprovalStore, mcp_tool_confirmation
@@ -313,6 +314,8 @@ class CodexAppServer:
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
         self._ssh_config_path: Path | None = None
+        self._ssh_broker_socket: str | None = None
+        self._agent_sandbox: AgentSandbox | None = None
         self._ssh_journal: SSHJournal | None = None
         self._mcp_approval_store: MCPApprovalStore | None = None
         # thread/start creates an in-memory thread before its first rollout
@@ -345,9 +348,14 @@ class CodexAppServer:
         self._recent_stderr: list[str] = []
         self._history = CodexHistoryStore(self._history_home)
 
-    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal) -> None:
+    def enable_ssh_mcp(self, config_path: Path, journal: SSHJournal,
+                       broker_socket: str | None = None) -> None:
         self._ssh_config_path = config_path
         self._ssh_journal = journal
+        self._ssh_broker_socket = broker_socket
+
+    def enable_agent_sandbox(self, sandbox: AgentSandbox) -> None:
+        self._agent_sandbox = sandbox
 
     def enable_mcp_approvals(self, store: MCPApprovalStore) -> None:
         self._mcp_approval_store = store
@@ -356,13 +364,17 @@ class CodexAppServer:
         assert self._ssh_config_path is not None and self._ssh_journal is not None
         package_parent = str(Path(__file__).resolve().parent.parent)
         python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+        ssh_environment = ({"CODE_REMOTE_SSH_BROKER": self._ssh_broker_socket}
+                           if self._ssh_broker_socket else {
+                               "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
+                               "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
+                           })
         return {"mcp_servers": {"code_remote_ssh": {
             "command": sys.executable,
             "args": ["-m", "codex_remote.remote_ssh"],
             "env": {
                 "PYTHONPATH": python_path,
-                "CODE_REMOTE_SSH_CONFIG": str(self._ssh_config_path),
-                "CODE_REMOTE_SSH_JOURNAL": str(self._ssh_journal.path),
+                **ssh_environment,
                 "CODE_REMOTE_SSH_CONTEXT": context,
             },
         }}}
@@ -1240,6 +1252,8 @@ class CodexAppServer:
                 ]
             else:
                 arguments = [*self._codex_command_prefix(executable), *self._app_server_arguments("")[1:]]
+            if self._agent_sandbox is not None:
+                arguments = self._agent_sandbox.wrap(arguments, cwd=self.workspace)
             process_options = {
                 "cwd": self.workspace,
                 "env": child_environment,
