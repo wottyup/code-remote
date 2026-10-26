@@ -3710,7 +3710,10 @@ const RemoteChatPane = memo(function RemoteChatPane({
   copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
+  const activeThreadId = remote.activeThread?.id ?? null
   const [terminalOpen, setTerminalOpen] = useState(false)
+  const [terminalMounted, setTerminalMounted] = useState(false)
+  const [terminalMountedThreadId, setTerminalMountedThreadId] = useState<string | null>(null)
   const terminalRestoreChecked = useRef(false)
   const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const [terminalRunRequest, setTerminalRunRequest] = useState<WorkspaceTerminalRequest | null>(null)
@@ -3759,6 +3762,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     onActivate()
     if (directoryRequest.action === 'run') {
       forgetOpenTerminalThread(paneIndex)
+      setTerminalMountedThreadId(activeThreadId)
       setTerminalRunRequest(directoryRequest)
       setTerminalDirectoryRequest(null)
       setTerminalSessionCwd(workspaceParentPath(directoryRequest.path))
@@ -3767,20 +3771,31 @@ const RemoteChatPane = memo(function RemoteChatPane({
     } else {
       setTerminalDirectoryRequest(directoryRequest)
       if (!terminalOpen) {
+        setTerminalMountedThreadId(activeThreadId)
         setTerminalSessionCwd(undefined)
         setTerminalSessionIsolated(false)
       }
     }
+    setTerminalMounted(true)
     setTerminalOpen(true)
     onDirectoryRequestHandled(directoryRequest.id)
-  }, [active, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalOpen])
+  }, [active, activeThreadId, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalOpen])
 
-  const activeThreadId = remote.activeThread?.id
   useEffect(() => {
     if (!activeThreadId || terminalRestoreChecked.current) return
     terminalRestoreChecked.current = true
-    if (readOpenTerminalThread(paneIndex) === activeThreadId) setTerminalOpen(true)
+    if (readOpenTerminalThread(paneIndex) === activeThreadId) {
+      setTerminalMountedThreadId(activeThreadId)
+      setTerminalMounted(true)
+      setTerminalOpen(true)
+    }
   }, [activeThreadId, paneIndex])
+
+  useEffect(() => {
+    if (terminalOpen && !terminalSessionIsolated && terminalMountedThreadId !== activeThreadId) {
+      setTerminalMountedThreadId(activeThreadId)
+    }
+  }, [activeThreadId, terminalMountedThreadId, terminalOpen, terminalSessionIsolated])
 
   useEffect(() => {
     if (terminalOpen && !terminalSessionIsolated && activeThreadId) {
@@ -3788,10 +3803,23 @@ const RemoteChatPane = memo(function RemoteChatPane({
     }
   }, [activeThreadId, paneIndex, terminalOpen, terminalSessionIsolated])
 
-  const closeTerminal = () => {
+  const closeTerminal = useCallback(() => {
     forgetOpenTerminalThread(paneIndex)
     setTerminalOpen(false)
-  }
+  }, [paneIndex])
+  const handleTerminalDirectoryRequestConsumed = useCallback((id: number) => {
+    setTerminalDirectoryRequest((current) => current?.id === id ? null : current)
+  }, [])
+  const handleTerminalRunRequestConsumed = useCallback((id: number) => {
+    setTerminalRunRequest((current) => current?.id === id ? null : current)
+  }, [])
+  const insertTerminalText = useCallback((value: string) => {
+    if (value.length >= longPasteThreshold) {
+      composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
+    } else {
+      composerHandle.current?.insertDraftAtCursor(value, true)
+    }
+  }, [composerHandle])
   useEffect(() => {
     if (active && remote.approval) approvalModal.current?.focus()
   }, [active, remote.approval?.method, remote.approval?.requestId])
@@ -4056,9 +4084,13 @@ const RemoteChatPane = memo(function RemoteChatPane({
                 closeTerminal()
               } else {
                 onActivate()
-                setTerminalSessionCwd(undefined)
-                setTerminalSessionIsolated(false)
-                setTerminalRunRequest(null)
+                if (!terminalMounted || !terminalSessionIsolated && terminalMountedThreadId !== activeThreadId) {
+                  setTerminalMountedThreadId(activeThreadId)
+                  setTerminalSessionCwd(undefined)
+                  setTerminalSessionIsolated(false)
+                  setTerminalRunRequest(null)
+                }
+                setTerminalMounted(true)
                 setTerminalOpen(true)
               }
             }}
@@ -4173,14 +4205,15 @@ const RemoteChatPane = memo(function RemoteChatPane({
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
-      {terminalOpen ? (
-        <TerminalRecoveryBoundary key={remote.activeThread?.id ?? 'no-thread'} onClose={closeTerminal}>
+      {terminalMounted && (terminalOpen || terminalSessionIsolated || terminalMountedThreadId === activeThreadId) ? (
+        <TerminalRecoveryBoundary key={terminalSessionIsolated ? `run-${terminalSessionId}` : activeThreadId ?? 'no-thread'} onClose={closeTerminal} hidden={!terminalOpen}>
           <Suspense fallback={(
             <ChatOverlayPanel
               ariaLabel="本机终端"
               backdropLabel="关闭本机终端"
               className="terminal-dialog"
               onClose={closeTerminal}
+              hidden={!terminalOpen}
               showCloseButton={false}
               header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
             >
@@ -4191,20 +4224,15 @@ const RemoteChatPane = memo(function RemoteChatPane({
               key={terminalSessionId}
               token={token}
               engine={remote.activeEngine}
+              visible={terminalOpen}
               threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
               cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}
-              onDirectoryRequestConsumed={(id) => setTerminalDirectoryRequest((current) => current?.id === id ? null : current)}
+              onDirectoryRequestConsumed={handleTerminalDirectoryRequestConsumed}
               runRequest={terminalRunRequest}
-              onRunRequestConsumed={(id) => setTerminalRunRequest((current) => current?.id === id ? null : current)}
+              onRunRequestConsumed={handleTerminalRunRequestConsumed}
               onClose={closeTerminal}
-              onInsertText={(value) => {
-                if (value.length >= longPasteThreshold) {
-                  composerHandle.current?.addDocumentAttachment({ name: 'terminal-output.md', content: value }, true)
-                } else {
-                  composerHandle.current?.insertDraftAtCursor(value, true)
-                }
-              }}
+              onInsertText={insertTerminalText}
             />
           </Suspense>
         </TerminalRecoveryBoundary>
