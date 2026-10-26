@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
   AlertTriangle,
+  ArrowDown,
   ArrowUp,
   Bell,
   BellOff,
@@ -1006,6 +1007,7 @@ interface MessageComposerProps {
   onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
   onRemoveQueued: (messageId: string) => void | boolean | Promise<boolean>
+  onMoveQueued: (messageId: string, adjacentMessageId: string, direction: 'up' | 'down') => Promise<boolean>
   onInterrupt: () => void
   onContinue: () => void
   canContinue: boolean
@@ -1061,6 +1063,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onUpdateQueuedMessage,
   onEndQueuedEdit,
   onRemoveQueued,
+  onMoveQueued,
   onInterrupt,
   onContinue,
   canContinue,
@@ -1093,6 +1096,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
+  const [movingQueuedId, setMovingQueuedId] = useState<string | null>(null)
+  const movingQueuedRef = useRef(false)
   const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<string | null>(null)
   const [editingQueuedPreferences, setEditingQueuedPreferences] = useState<QueuedMessageEditPreferences | null>(null)
   const [openMenu, setOpenMenu] = useState<'model' | 'effort' | 'approval' | null>(null)
@@ -1986,6 +1991,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
   }
 
+  async function moveQueuedMessage(messageId: string, adjacentMessageId: string, direction: 'up' | 'down') {
+    if (movingQueuedRef.current) return
+    movingQueuedRef.current = true
+    setMovingQueuedId(messageId)
+    try {
+      await onMoveQueued(messageId, adjacentMessageId, direction)
+    } finally {
+      movingQueuedRef.current = false
+      setMovingQueuedId(null)
+    }
+  }
+
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
     if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
@@ -2197,7 +2214,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const isEditing = editingQueuedMessageId === message.id
               const isSubmitting = message.deliveryState === 'submitting'
               const deliveryUnverified = Boolean(message.sendAttempt)
-              const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId)
+              const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId) || Boolean(movingQueuedId)
+              const previousMessage = queuedMessages[index - 1]
+              const nextMessage = queuedMessages[index + 1]
+              const canReorder = (item: QueuedTurnMessage | undefined) => item?.deliveryState === 'pending' && !item.editing && !item.sendAttempt
+              const canMoveUp = !queueLocked && canReorder(message) && canReorder(previousMessage)
+              const canMoveDown = !queueLocked && canReorder(message) && canReorder(nextMessage)
               const queuedModel = showCodexPreferences ? message.model : message.claudeModel
               const queuedEffort = showCodexPreferences ? message.effort : message.claudeEffort
               const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
@@ -2228,6 +2250,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
                   <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__order" role="group" aria-label={`调整第 ${index + 1} 条发送顺序`}>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={`上移第 ${index + 1} 条排队消息`} title="上移一位"><ArrowUp size={14} /></button>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={`下移第 ${index + 1} 条排队消息`} title="下移一位"><ArrowDown size={14} /></button>
+                  </span>
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
@@ -6022,6 +6048,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
               onEndQueuedEdit={activeRemote.endEditQueuedMessage}
               onRemoveQueued={activeRemote.removeQueuedMessage}
+              onMoveQueued={activeRemote.moveQueuedMessage}
               onInterrupt={pauseCurrentReply}
               onContinue={continueInterruptedReply}
               canContinue={canContinue}

@@ -367,6 +367,12 @@ class QueueMessageIdRequest(BaseModel):
     owner_id: str | None = Field(default=None, min_length=8, max_length=128)
 
 
+class QueueMoveRequest(BaseModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    adjacent_message_id: str = Field(min_length=8, max_length=128)
+    direction: Literal["up", "down"]
+
+
 class PinRequest(BaseModel):
     pinned: bool
 
@@ -1768,7 +1774,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.83.4-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.84.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2259,6 +2265,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/move")
+    async def move_queued_message(thread_id: str, body: QueueMoveRequest) -> dict[str, Any]:
+        try:
+            queue = await shared_queue.move(thread_id, body.message_id, body.adjacent_message_id, body.direction)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"queue": queue}
 
     @app.post("/api/v1/codex/queue/{thread_id}/send-now")
     async def send_queued_message_now(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:

@@ -3184,6 +3184,24 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [applyServerQueueResponse, onUnauthorized, publishServerQueue, refreshServerQueue, token])
 
+  const sharedMoveQueuedMessage = useCallback(async (messageId: string, adjacentMessageId: string, direction: 'up' | 'down') => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    try {
+      const result = await codexRemoteClient.moveQueuedMessage(token, threadId, messageId, adjacentMessageId, direction)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof RemoteApiError && reason.status === 404
+        ? '电脑端服务尚未加载排队排序接口，请重启 Code Remote 后端。'
+        : reason instanceof Error ? reason.message : '调整排队顺序失败')
+      await refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
+
   const sharedSendQueuedMessageNow = useCallback(async (messageId: string, mode: QueuedMessageSendMode = 'start') => {
     const threadId = activeThreadId.current
     if (!threadId) return false
@@ -4713,6 +4731,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     updateQueuedMessage: sharedQueueAuthoritative ? sharedUpdateQueuedMessage : updateQueuedMessage,
     endEditQueuedMessage: sharedQueueAuthoritative ? sharedEndQueuedEdit : endEditQueuedMessage,
     removeQueuedMessage: sharedQueueAuthoritative ? sharedRemoveQueuedMessage : removeQueuedMessage,
+    moveQueuedMessage: sharedMoveQueuedMessage,
     interrupt,
     handoffToLocalCodex,
     reclaimForRemote,
@@ -4732,7 +4751,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     sharedSendQueuedMessageNow, sendQueuedMessageNow, sharedBeginQueuedEdit,
     beginEditQueuedMessage, sharedUpdateQueuedMessage, updateQueuedMessage,
     sharedEndQueuedEdit, endEditQueuedMessage, sharedRemoveQueuedMessage,
-    removeQueuedMessage, interrupt, handoffToLocalCodex, reclaimForRemote,
+    removeQueuedMessage, sharedMoveQueuedMessage, interrupt, handoffToLocalCodex, reclaimForRemote,
     respondToApproval, clearThreadCompletion, refreshActiveThread, updateApprovalPolicy,
   ])
 }
