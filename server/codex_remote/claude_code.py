@@ -748,7 +748,7 @@ class ClaudeCodeServer:
             messages = []
         if not isinstance(messages, list):
             messages = []
-        if text:
+        if text or status != "completed":
             messages.append({
                 "id": assistant_item_id,
                 "role": "assistant",
@@ -790,12 +790,28 @@ class ClaudeCodeServer:
             process = self._processes.get(thread_id)
             if process and process.returncode is None:
                 await self._terminate_process(process)
+            task = self._tasks.get(thread_id)
+            if task and not task.done():
+                # A Claude child can keep stdout open after the CLI exits.
+                # Cancel the reader so its finally block publishes completion.
+                task.cancel()
             return True
 
     @staticmethod
     async def _terminate_process(process: asyncio.subprocess.Process) -> None:
         if process.returncode is not None:
             return
+        if os.name == "nt" and getattr(process, "pid", None):
+            try:
+                killer = await asyncio.create_subprocess_exec(
+                    "taskkill.exe", "/PID", str(process.pid), "/T", "/F",
+                    stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
+                )
+                await asyncio.wait_for(killer.wait(), timeout=5)
+                await asyncio.wait_for(process.wait(), timeout=3)
+                return
+            except (OSError, TimeoutError, ProcessLookupError):
+                pass
         try:
             if os.name != "nt":
                 os.killpg(process.pid, signal.SIGTERM)
@@ -812,7 +828,7 @@ class ClaudeCodeServer:
                 else:
                     process.kill()
             with suppress(Exception):
-                await process.wait()
+                await asyncio.wait_for(process.wait(), timeout=3)
 
     async def close(self) -> None:
         if self._native_refresh_task is not None and not self._native_refresh_task.done():

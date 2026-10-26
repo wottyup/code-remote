@@ -8,7 +8,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from codex_remote.claude_code import ClaudeCodeServer
 
@@ -91,6 +91,33 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(history["status"]["type"], "active")
         self.assertEqual(history["turns"][-1]["status"], "inProgress")
         self.assertNotIn("completedAt", history["turns"][-1])
+
+    async def test_interrupt_finishes_when_cli_stdout_never_closes(self) -> None:
+        self.process.pid = 12345
+        with patch.object(self.server, "_terminate_process", AsyncMock()) as terminate:
+            self.assertTrue(await self.server.interrupt(self.thread["id"], self.turn_id))
+            await asyncio.wait_for(asyncio.gather(*self.server._tasks.values(), return_exceptions=True), 1)
+        terminate.assert_awaited()
+        history = await self.server.read_thread(self.thread["id"])
+        self.assertEqual(history["status"]["type"], "idle")
+        self.assertEqual(history["turns"][-1]["status"], "stopped")
+        self.assertTrue(any(
+            event.get("method") == "turn/completed"
+            and event["params"]["turn"]["status"] == "stopped"
+            for event in self.events
+        ))
+
+    async def test_windows_terminate_targets_only_claude_process_tree(self) -> None:
+        process = Mock(pid=12345, returncode=None, wait=AsyncMock(return_value=0))
+        killer = Mock(wait=AsyncMock(return_value=0))
+        with patch("codex_remote.claude_code.os.name", "nt"), patch(
+            "codex_remote.claude_code.asyncio.create_subprocess_exec",
+            AsyncMock(return_value=killer),
+        ) as spawn:
+            await self.server._terminate_process(process)
+        self.assertEqual(spawn.await_args.args[:4], ("taskkill.exe", "/PID", "12345", "/T"))
+        self.assertEqual(spawn.await_args.args[4], "/F")
+        process.wait.assert_awaited_once()
 
     async def test_reconnect_history_contains_received_text_while_cli_is_still_open(self) -> None:
         await self.event({"type": "message_start", "message": {"id": "reply-1"}})
