@@ -150,6 +150,7 @@ MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
 MESSAGE_IMAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60
 MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 MAX_PDF_BYTES = 20 * 1024 * 1024
+MAX_WORKSPACE_UPLOAD_BYTES = 512 * 1024 * 1024
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_PDF_ATTACHMENTS_PER_TURN = 8
@@ -760,6 +761,47 @@ def workspace_paste_entries(
             else:
                 target.unlink()
     raise failure from failure_cause
+
+
+async def workspace_upload_file(base: Path, destination_path: str, name: str, request: Request) -> dict[str, Any]:
+    destination = workspace_mutation_path(base, destination_path, allow_root=True)
+    if not destination.is_dir():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传目标不是文件夹")
+    filename = workspace_entry_name(name)
+    relative_path = f"{destination_path}/{filename}" if destination_path else filename
+    target = workspace_mutation_path(base, relative_path, require_exists=False)
+    if target.exists() or target.is_symlink():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {filename}")
+
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            size = int(declared_length)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件大小无效") from error
+        if size < 0 or size > MAX_WORKSPACE_UPLOAD_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="单个文件不能超过 512 MB")
+
+    created = False
+    received = 0
+    try:
+        with target.open("xb") as output:
+            created = True
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > MAX_WORKSPACE_UPLOAD_BYTES:
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="单个文件不能超过 512 MB")
+                await asyncio.to_thread(output.write, chunk)
+    except BaseException as error:
+        if created:
+            with suppress(OSError):
+                target.unlink()
+        if isinstance(error, FileExistsError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {filename}") from error
+        if isinstance(error, OSError):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="上传失败，请检查工作区写入权限和剩余空间") from error
+        raise
+    return workspace_entry_payload(base, target)
 
 
 def workspace_entry_kind(path: Path) -> str | None:
@@ -1826,6 +1868,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def paste_workspace_entries(request: WorkspaceEntriesPasteRequest) -> dict[str, Any]:
         base = workspace_base_for_cwd(app_server.workspace, request.cwd)
         return workspace_paste_entries(base, request.paths, request.destination, request.mode)
+
+    @app.post("/api/v1/codex/workspace/upload")
+    async def upload_workspace_entry(request: Request, cwd: str | None = None, destination: str = "", name: str = "") -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return await workspace_upload_file(base, destination, name, request)
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:

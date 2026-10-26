@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
@@ -45,10 +45,11 @@ import {
   Square,
   Terminal as TerminalIcon,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -2510,6 +2511,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const [mutationSaving, setMutationSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ completed: number; total: number; name: string } | null>(null)
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
+  const uploadInput = useRef<HTMLInputElement>(null)
+  const uploadTarget = useRef<{ root: string; path: string; scopeKey: string } | null>(null)
+  const uploadInProgress = useRef(false)
   const [previewPath, setPreviewPath] = useState<string | null>(null)
   const [previewCwd, setPreviewCwd] = useState<string | undefined>(undefined)
   const [previewViewedByCodexThreadId, setPreviewViewedByCodexThreadId] = useState<string | null>(null)
@@ -2539,6 +2545,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const browsingRoot = manualRoot || cwd
   const portalThemeStyle = theme === 'custom' ? themeRootStyle(themePreferences) : undefined
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
+  const activeScopeKey = useRef(scopeKey)
+  activeScopeKey.current = scopeKey
   const previewDirty = previewEditContent !== null && previewFile !== null && previewEditContent !== previewFile.content
   const currentViewState = useRef({ directories, expanded, selectedPaths })
   currentViewState.current = { directories, expanded, selectedPaths }
@@ -2770,6 +2778,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
       setMutationDialog(null)
       setMutationError(null)
       setError(null)
+      setUploadNotice(null)
       if (browsingRoot) void loadDirectory('')
       if (previewDirty) pendingPreviewScopeReset.current = true
     }
@@ -2902,6 +2911,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   function openEntryContextMenu(event: ReactMouseEvent<HTMLButtonElement>, entry: CodexWorkspaceEntry) {
     event.preventDefault()
     event.stopPropagation()
+    event.currentTarget.focus({ preventScroll: true })
     const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
     const menuHeight = theme === 'retro'
       ? Math.min(entry.kind === 'directory' ? 480 : 320, Math.max(0, window.innerHeight - 16))
@@ -2932,6 +2942,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     if ((event.target as HTMLElement).closest('.workspace-explorer__entry')) return
     event.preventDefault()
     event.stopPropagation()
+    event.currentTarget.focus({ preventScroll: true })
     openRootContextMenu(event.clientX, event.clientY)
   }
 
@@ -2990,6 +3001,82 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 
   async function refreshWorkspaceDirectories(paths: string[]) {
     await Promise.all([...new Set(paths)].map((path) => loadDirectory(path)))
+  }
+
+  function chooseWorkspaceUpload(path: string) {
+    if (!browsingRoot || uploadInProgress.current) return
+    uploadTarget.current = { root: browsingRoot, path, scopeKey }
+    setContextMenu(null)
+    uploadInput.current?.click()
+  }
+
+  async function uploadLocalFiles(files: File[], target: { root: string; path: string; scopeKey: string }) {
+    if (files.length === 0 || uploadInProgress.current) return
+    uploadInProgress.current = true
+    setUploadNotice(null)
+    setError(null)
+    const uploaded: CodexWorkspaceEntry[] = []
+    const failures: string[] = []
+    try {
+      for (const [index, file] of files.entries()) {
+        setUploadProgress({ completed: index, total: files.length, name: file.name })
+        if (file.size > maxWorkspaceUploadFileSize) {
+          failures.push(`${file.name}：单个文件不能超过 512 MB`)
+          continue
+        }
+        try {
+          uploaded.push(await codexRemoteClient.uploadWorkspaceFile(token, target.root, target.path, file))
+        } catch (reason) {
+          failures.push(`${file.name}：${reason instanceof Error ? reason.message : '上传失败'}`)
+        }
+      }
+      if (target.scopeKey !== activeScopeKey.current) return
+      if (uploaded.length > 0) {
+        if (target.path) setExpanded((current) => ({ ...current, [target.path]: true }))
+        await loadDirectory(target.path)
+        setSelectedPaths(uploaded.map((entry) => entry.path))
+      }
+      const summary = `已上传 ${uploaded.length}/${files.length} 个文件到 ${target.path || '当前根目录'}`
+      setUploadNotice(failures.length > 0 ? `${summary} · ${failures.length} 个失败：${failures[0]}` : summary)
+      if (failures.length > 0) {
+        const shown = failures.slice(0, 3).join('；')
+        setError(failures.length > 3 ? `${shown}；另有 ${failures.length - 3} 个文件上传失败` : shown)
+      }
+    } finally {
+      uploadInProgress.current = false
+      setUploadProgress(null)
+    }
+  }
+
+  function handleWorkspacePaste(event: ClipboardEvent<HTMLDivElement>) {
+    if (!browsingRoot) return
+    const files = Array.from(event.clipboardData.files)
+    if (files.length === 0) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (uploadInProgress.current) {
+      setError('文件正在上传，请等当前上传结束后再粘贴')
+      return
+    }
+    const selectedPath = selectedPaths.at(-1)
+    const selectedEntry = selectedPath
+      ? Object.values(directories).flatMap((tree) => tree.entries).find((entry) => entry.path === selectedPath)
+      : undefined
+    const destination = contextMenu?.entry.kind === 'directory'
+      ? contextMenu.entry.path
+      : selectedPath && selectedEntry?.kind === 'directory'
+        ? selectedPath
+        : selectedPath ? workspaceRelativeParentPath(selectedPath) : ''
+    setContextMenu(null)
+    void uploadLocalFiles(files, { root: browsingRoot, path: destination, scopeKey })
+  }
+
+  function handleWorkspaceUploadSelection(event: ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(event.currentTarget.files ?? [])
+    event.currentTarget.value = ''
+    const target = uploadTarget.current
+    uploadTarget.current = null
+    if (target && files.length > 0) void uploadLocalFiles(files, target)
   }
 
   function refreshVisibleDirectories() {
@@ -3287,16 +3374,19 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
+  const contextMenuCanUpload = contextMenu?.entry.kind === 'directory'
   const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
-  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste
+  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste || contextMenuCanUpload
   return (
     <>
       <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+        <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label="选择要上传到工作区的本机文件" />
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">{eyebrow}</span><strong>文件</strong></div>
           <div className="workspace-explorer__header-actions">
             <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
+            <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={!browsingRoot || Boolean(uploadProgress)} aria-label="上传本机文件到当前根目录" title="上传本机文件到当前根目录"><Upload size={15} /></button>
             <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
@@ -3322,7 +3412,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
           <div
             ref={treeElement}
             className="workspace-explorer__tree"
+            tabIndex={0}
             onContextMenu={handleRootContextMenu}
+            onPaste={handleWorkspacePaste}
             onScroll={(event) => {
               rememberViewState(scopeKey, {
                 ...currentViewState.current,
@@ -3337,7 +3429,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
           </div>
         </div>
-        <footer className="workspace-explorer__footer">{workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : 'Ctrl/⌘ 多选后可批量复制、剪切或删除'}</footer>
+        <footer className="workspace-explorer__footer" aria-live="polite" title={uploadProgress?.name ?? uploadNotice ?? '右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'}>{uploadProgress ? <><LoaderCircle className="spin" size={12} /><span>正在上传 {uploadProgress.completed + 1}/{uploadProgress.total}：{uploadProgress.name}</span></> : <span>{uploadNotice ?? (workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : '右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴')}</span>}</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
@@ -3445,7 +3537,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
         previewPortalTarget,
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
-        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ ...portalThemeStyle, left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()}>
+        <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ ...portalThemeStyle, left: contextMenu.x, top: contextMenu.y }} role="menu" onPointerDown={(event) => event.stopPropagation()} onPaste={handleWorkspacePaste}>
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
             <span className="workspace-file-context-menu__group-label">快捷操作</span>
@@ -3465,6 +3557,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             {contextMenuCanCopy ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
             {contextMenuCanCut ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
             {contextMenuCanPaste ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
+            {contextMenuCanUpload ? <button type="button" role="menuitem" disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />上传本机文件</button> : null}
           </div> : null}
           {contextMenuCanDelete ? <button className="thread-context-menu__danger workspace-file-context-menu__delete" type="button" role="menuitem" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
         </div>,

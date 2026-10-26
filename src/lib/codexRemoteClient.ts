@@ -15,6 +15,8 @@ export interface CodexThread {
   canInterrupt?: boolean
 }
 
+export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
+
 export interface CodexThreadDetails extends CodexThread {
   turns?: unknown[]
   historyContentRevision?: string
@@ -729,6 +731,15 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({ cwd, paths, destination, mode }),
     })
+  },
+  uploadWorkspaceFile(token: string, cwd: string | undefined, destination: string, file: File) {
+    const query = new URLSearchParams({ destination, name: file.name })
+    if (cwd) query.set('cwd', cwd)
+    return request<CodexWorkspaceEntry>(token, `/api/v1/codex/workspace/upload?${query.toString()}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: file,
+    }, { timeoutMs: 10 * 60_000, networkRetries: 0 })
   },
   threads(token: string, force = false) {
     const pending = threadListRequests.get(token)
