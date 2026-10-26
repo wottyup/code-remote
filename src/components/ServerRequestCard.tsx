@@ -159,7 +159,7 @@ function McpElicitationFields({ params, approvalScope, onRespond }: { params: Re
       </label>
     })}
     {!supported ? <p>当前网页无法确认这种 MCP 验证请求，请取消后改用受支持的验证方式。</p> : null}
-    {approvalScope ? <small>同类型指 {approvalScope.serverName} 的 {approvalScope.toolName}；服务器级授权涵盖它的所有工具{approvalScope.serverName === 'code_remote_ssh' ? '，包括执行远程命令，但仍受 SSH 设置权限限制' : ''}。</small> : null}
+    {approvalScope ? <small>同类型指 {approvalScope.serverName} 的 {approvalScope.toolName}；服务器级授权涵盖它的所有工具。</small> : null}
     <div className="approval-card__actions">
       <button type="button" onClick={() => onRespond({ action: 'decline' })}><X size={14} />拒绝</button>
       {supported ? <button className="approval-card__accept" type="button" disabled={!complete} onClick={accept}><Check size={14} />允许一次</button> : null}

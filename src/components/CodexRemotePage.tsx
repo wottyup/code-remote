@@ -40,7 +40,6 @@ import {
   RefreshCw,
   RotateCcw,
   Search,
-  Server,
   Scissors,
   Settings2,
   ShieldCheck,
@@ -51,7 +50,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type SSHHostKeyOffer, type SSHOperation, type SSHServerConfig, type SSHServerInput } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { forgetOpenTerminalThread, readOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
@@ -3875,30 +3874,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
   useEffect(() => {
     if (active && remote.approval) approvalModal.current?.focus()
   }, [active, remote.approval?.method, remote.approval?.requestId])
-  const [sshOperations, setSSHOperations] = useState<SSHOperation[]>([])
-  useEffect(() => {
-    if (!activeThreadId) { setSSHOperations([]); return }
-    let cancelled = false
-    const refresh = () => {
-      void codexRemoteClient.sshOperations(token, activeThreadId).then(({ operations }) => {
-        if (!cancelled) setSSHOperations(operations)
-      }).catch(() => { /* Chat remains usable when SSH history is unavailable. */ })
-    }
-    setSSHOperations([])
-    refresh()
-    const timer = remote.isRunning || remote.runningTurnId ? window.setInterval(refresh, 750) : null
-    return () => { cancelled = true; if (timer !== null) window.clearInterval(timer) }
-  }, [activeThreadId, remote.isRunning, remote.runningTurnId, token])
-  const sshOperationsByTurn = useMemo(() => {
-    const grouped = new Map<string, SSHOperation[]>()
-    for (const operation of sshOperations) {
-      const key = operation.turn_id ?? ''
-      const previous = grouped.get(key)
-      if (previous) previous.push(operation)
-      else grouped.set(key, [operation])
-    }
-    return grouped
-  }, [sshOperations])
   const approvalThreadId = typeof remote.approval?.params.threadId === 'string'
     ? remote.approval.params.threadId
     : null
@@ -4187,7 +4162,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   message={message}
                   assistantName={activeEngineLabel}
                   operations={operations}
-                  sshOperations={showOperations && message.turnId ? sshOperationsByTurn.get(message.turnId) ?? [] : []}
                   fileChanges={operationFileChanges}
                   activityTimeline={activityTimeline}
                   showOperations={showOperations}
@@ -4201,12 +4175,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   onOpenImage={openViewedImagePreview}
                 />
                 {changes?.length ? <FileChangeCard changes={changes} onInsertPath={insertChangedFileIntoConversation} onOpenFile={openChangedFilePreview} /> : null}
-                {message.role === 'user' && message.turnId && message.turnId !== remote.runningTurnId && lastMessageIndexByTurn.get(message.turnId) === index && !lastAssistantMessageIndexByTurn.has(message.turnId)
-                  ? <SSHOperationLog operations={sshOperationsByTurn.get(message.turnId) ?? []} /> : null}
               </Fragment>
             )
           })}
-          <SSHOperationLog operations={sshOperationsByTurn.get('') ?? []} />
           {!remote.loadingHistory && (remote.isRunning || remote.runningTurnId !== null || hasStreamingAssistant) ? (
             <div className="running-indicator" role="status" aria-live="polite">
               <div className="running-indicator__row">
@@ -4218,7 +4189,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   ? <ActivityTimelineContent text="" timeline={runningOperationTimeline} operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
                   : <OperationLog operations={runningOperations} fileChanges={remote.runningTurnId ? remote.fileChangesByTurn[remote.runningTurnId] ?? emptyFileChanges : emptyFileChanges} onOpenFile={openChangedFilePreview} onOpenImage={openViewedImagePreview} />
               ) : null}
-              {remote.runningTurnId && !hasStreamingAssistant ? <SSHOperationLog operations={sshOperationsByTurn.get(remote.runningTurnId) ?? []} /> : null}
             </div>
           ) : null}
         </div>
@@ -6168,205 +6138,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   )
 }
 
-const blankSSHServer: SSHServerInput = {
-  name: '', host: '', port: 22, user: '', identityFile: '',
-  authMethod: 'agent', password: '', privateKey: '', privateKeyPassphrase: '',
-  enabled: true, allowInspect: true, allowExecute: false,
-}
-
-function editableSSHServer(server: SSHServerConfig): SSHServerInput {
-  return {
-    name: server.name, host: server.host, port: server.port, user: server.user,
-    identityFile: server.identityFile, authMethod: server.authMethod,
-    password: '', privateKey: '', privateKeyPassphrase: '',
-    enabled: server.enabled, allowInspect: server.allowInspect, allowExecute: server.allowExecute,
-  }
-}
-
-function SSHSettingsCard({ token }: { token: string }) {
-  const [servers, setServers] = useState<SSHServerConfig[]>([])
-  const [loading, setLoading] = useState(true)
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [draft, setDraft] = useState<SSHServerInput | null>(null)
-  const [busy, setBusy] = useState(false)
-  const [testingId, setTestingId] = useState<string | null>(null)
-  const [pendingHostKey, setPendingHostKey] = useState<{ serverId: string; serverName: string; offer: SSHHostKeyOffer } | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const editingServer = servers.find((server) => server.id === editingId)
-  const credentialSaved = Boolean(editingServer?.hasCredential && editingServer.authMethod === draft?.authMethod)
-
-  useEffect(() => {
-    let cancelled = false
-    void codexRemoteClient.sshServers(token).then(({ servers: next }) => {
-      if (!cancelled) setServers(next)
-    }).catch((reason) => {
-      if (!cancelled) setError(reason instanceof Error ? reason.message : '读取服务器失败。')
-    }).finally(() => { if (!cancelled) setLoading(false) })
-    return () => { cancelled = true }
-  }, [token])
-
-  async function save(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!draft || busy) return
-    setBusy(true)
-    setError(null)
-    setMessage(null)
-    try {
-      const saved = await codexRemoteClient.saveSSHServer(token, draft, editingId ?? undefined)
-      setServers((current) => [...current.filter((server) => server.id !== saved.id), saved])
-      setPendingHostKey(null)
-      setDraft(null)
-      setEditingId(null)
-      setMessage('服务器配置已保存。AI 下次调用 SSH 工具时会使用新权限。')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '保存失败。')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function remove(server: SSHServerConfig) {
-    if (!window.confirm(`删除服务器“${server.name}”的配置？`)) return
-    setBusy(true)
-    setError(null)
-    setMessage(null)
-    try {
-      await codexRemoteClient.deleteSSHServer(token, server.id)
-      setServers((current) => current.filter((item) => item.id !== server.id))
-      if (pendingHostKey?.serverId === server.id) setPendingHostKey(null)
-      if (editingId === server.id) { setDraft(null); setEditingId(null) }
-      setMessage('服务器配置已删除。')
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '删除失败。')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function test(server: SSHServerConfig) {
-    setTestingId(server.id)
-    setError(null)
-    setMessage(null)
-    setPendingHostKey(null)
-    try {
-      const result = await codexRemoteClient.testSSHServer(token, server.id)
-      if (result.hostKey) setPendingHostKey({ serverId: server.id, serverName: server.name, offer: result.hostKey })
-      else setMessage(`${server.name}：${result.ok ? '连接成功' : result.detail}`)
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : '连接检查失败。')
-    } finally {
-      setTestingId(null)
-    }
-  }
-
-  async function trustAndRetry() {
-    if (!pendingHostKey || testingId !== null) return
-    const { serverId, serverName, offer } = pendingHostKey
-    setTestingId(serverId)
-    setError(null)
-    setMessage(null)
-    try {
-      await codexRemoteClient.trustSSHHostKey(token, serverId, offer)
-      setPendingHostKey(null)
-      const result = await codexRemoteClient.testSSHServer(token, serverId)
-      if (result.hostKey) setError('指纹已保存，但连接仍需确认；请重新检查连接。')
-      else setMessage(`${serverName}：${result.ok ? '连接成功' : result.detail}`)
-    } catch (reason) {
-      setPendingHostKey(null)
-      setError(reason instanceof Error ? reason.message : '信任服务器失败，请重新检查连接。')
-    } finally {
-      setTestingId(null)
-    }
-  }
-
-  async function loadPrivateKey(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.currentTarget.files?.[0]
-    event.currentTarget.value = ''
-    if (!file) return
-    if (file.size > 64 * 1024) {
-      setError('私钥文件不能超过 64 KiB。')
-      return
-    }
-    try {
-      const privateKey = await file.text()
-      setDraft((current) => current?.authMethod === 'privateKey' ? { ...current, privateKey } : current)
-      setError(null)
-    } catch {
-      setError('无法读取私钥文件。')
-    }
-  }
-
-  return <section className="theme-settings-card ssh-settings-card">
-    <div className="theme-settings-card__heading">
-      <div><h2><Server size={17} />远程 SSH</h2><p>目标服务器只需开启 SSH；Codex 和 Claude 可使用这里授权的工具。</p></div>
-      <button type="button" className="ssh-settings-button" onClick={() => { setEditingId(null); setDraft({ ...blankSSHServer }); setError(null); setMessage(null) }}><Plus size={14} />添加服务器</button>
-    </div>
-    <div className="ssh-settings-body">
-      {loading ? <p className="ssh-settings-empty">正在读取服务器…</p> : servers.length === 0 ? <p className="ssh-settings-empty">还没有服务器。添加后，在聊天中告诉 AI 使用 Code Remote SSH 工具即可。</p> : null}
-      {servers.map((server) => <div className="ssh-settings-server" key={server.id}>
-        <div className="ssh-settings-server__info">
-          <strong>{server.name}</strong><span>{server.user}@{server.host}:{server.port}</span>
-          <small>{server.enabled ? '已启用' : '已停用'} · {server.authMethod === 'agent' ? (server.identityFile ? '本机密钥路径' : 'ssh-agent') : server.authMethod === 'password' ? '密码认证' : '私钥认证'}{server.authMethod !== 'agent' ? (server.hasCredential ? '（凭据已保存）' : '（缺少凭据）') : ''} · {server.allowInspect ? '允许诊断' : '禁止诊断'} · {server.allowExecute ? '允许执行命令' : '禁止执行命令'}</small>
-        </div>
-        <div className="ssh-settings-actions">
-          <button type="button" disabled={busy || testingId !== null} onClick={() => void test(server)}>{testingId === server.id ? '检查中…' : '检查连接'}</button>
-          <button type="button" disabled={busy} onClick={() => { setEditingId(server.id); setDraft(editableSSHServer(server)); setError(null); setMessage(null) }}>编辑</button>
-          <button type="button" disabled={busy} onClick={() => void remove(server)}>删除</button>
-        </div>
-      </div>)}
-      {pendingHostKey ? <div className="ssh-settings-host-key" role="status">
-        <strong>首次连接 {pendingHostKey.serverName}</strong>
-        <p>确认这是你要连接的服务器后，点一次按钮即可。以后连接同一地址会自动识别。</p>
-        <span>{pendingHostKey.offer.host}:{pendingHostKey.offer.port}</span>
-        <code>{pendingHostKey.offer.algorithm} · {pendingHostKey.offer.fingerprint}</code>
-        <div className="ssh-settings-actions">
-          <button type="button" disabled={testingId !== null} onClick={() => void trustAndRetry()}>{testingId === pendingHostKey.serverId ? '连接中…' : '信任并重试'}</button>
-          <button type="button" disabled={testingId !== null} onClick={() => setPendingHostKey(null)}>取消</button>
-        </div>
-      </div> : null}
-      {draft ? <form className="ssh-settings-form" onSubmit={(event) => void save(event)}>
-        <strong>{editingId ? '编辑服务器' : '添加服务器'}</strong>
-        <div className="ssh-settings-fields">
-          <label>名称<input required maxLength={80} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="例如：生产服务器" /></label>
-          <label>主机地址<input required value={draft.host} onChange={(event) => setDraft({ ...draft, host: event.target.value })} placeholder="IP 或域名" autoCapitalize="off" /></label>
-          <label>端口<input required type="number" min={1} max={65535} value={draft.port} onChange={(event) => setDraft({ ...draft, port: event.target.value === '' ? '' : Number(event.target.value) })} /></label>
-          <label>SSH 用户<input required value={draft.user} onChange={(event) => setDraft({ ...draft, user: event.target.value })} placeholder="例如：ubuntu" autoCapitalize="off" /></label>
-          <label className="ssh-settings-fields__wide">认证方式
-            <select value={draft.authMethod} onChange={(event) => setDraft({ ...draft, authMethod: event.target.value as SSHServerInput['authMethod'], password: '', privateKey: '', privateKeyPassphrase: '' })}>
-              <option value="agent">本机密钥路径 / ssh-agent</option>
-              <option value="password">SSH 密码</option>
-              <option value="privateKey">粘贴或上传私钥</option>
-            </select>
-          </label>
-          {draft.authMethod === 'agent' ? <label className="ssh-settings-fields__wide">本机私钥路径（可选）<input value={draft.identityFile} onChange={(event) => setDraft({ ...draft, identityFile: event.target.value })} placeholder="例如：/home/user/.ssh/id_ed25519；留空使用 ssh-agent" autoCapitalize="off" /></label> : null}
-          {draft.authMethod === 'password' ? <label className="ssh-settings-fields__wide">SSH 密码
-            <input type="password" autoComplete="new-password" required={!credentialSaved} value={draft.password ?? ''} onChange={(event) => setDraft({ ...draft, password: event.target.value })} placeholder={credentialSaved ? '已保存；留空保持原密码' : '填写目标服务器的 SSH 密码'} />
-          </label> : null}
-          {draft.authMethod === 'privateKey' ? <>
-            <label className="ssh-settings-fields__wide">私钥内容
-              <textarea rows={5} spellCheck={false} required={!credentialSaved} value={draft.privateKey ?? ''} onChange={(event) => setDraft({ ...draft, privateKey: event.target.value })} placeholder={credentialSaved ? '已保存；留空保持原私钥' : '粘贴以 -----BEGIN OPENSSH PRIVATE KEY----- 开头的私钥'} />
-            </label>
-            <label className="ssh-settings-fields__wide">或选择本机私钥文件<input type="file" onChange={(event) => void loadPrivateKey(event)} /></label>
-            <label className="ssh-settings-fields__wide">私钥口令（加密私钥才需要）<input type="password" autoComplete="new-password" value={draft.privateKeyPassphrase ?? ''} onChange={(event) => setDraft({ ...draft, privateKeyPassphrase: event.target.value })} placeholder={credentialSaved ? '留空保持原口令' : '未加密则留空'} /></label>
-          </> : null}
-        </div>
-        <div className="ssh-settings-permissions">
-          <label><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} />启用服务器</label>
-          <label><input type="checkbox" checked={draft.allowInspect} onChange={(event) => setDraft({ ...draft, allowInspect: event.target.checked })} />允许只读诊断</label>
-          <label><input type="checkbox" checked={draft.allowExecute} onChange={(event) => setDraft({ ...draft, allowExecute: event.target.checked })} />允许执行远程命令</label>
-        </div>
-        <p className="ssh-settings-note">执行命令使用填写的 SSH 用户权限。首次连接时点击“检查连接”，按提示信任服务器。保存的密码、私钥及口令不会在页面回显。</p>
-        {window.location.protocol !== 'https:' ? <p className="ssh-settings-note ssh-settings-note--warning">当前页面使用 HTTP，填写的密码或私钥在传输途中没有 HTTPS 加密。建议改用 HTTPS 后再填写。</p> : null}
-        <div className="ssh-settings-actions"><button type="button" disabled={busy} onClick={() => { setDraft(null); setEditingId(null) }}>取消</button><button type="submit" disabled={busy}>{busy ? '保存中…' : '保存服务器'}</button></div>
-      </form> : null}
-      {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}
-      {error ? <p className="ssh-settings-feedback ssh-settings-feedback--error" role="alert">{error}</p> : null}
-      <p className="ssh-settings-note">Linux 上，AI 通过 Code Remote SSH 工具连接时只提交服务器编号和命令；保存的凭据由后端使用，AI 运行时无法直接读取凭据目录。逐台权限仍然生效，操作输出显示在聊天记录中。</p>
-    </div>
-  </section>
-}
-
 function MCPApprovalsCard({ token }: { token: string }) {
   const [approvals, setApprovals] = useState<MCPApprovalGrant[]>([])
   const [loading, setLoading] = useState(true)
@@ -6399,22 +6170,22 @@ function MCPApprovalsCard({ token }: { token: string }) {
     }
   }
 
-  return <section className="theme-settings-card ssh-settings-card">
+  return <section className="theme-settings-card mcp-approvals-card">
     <div className="theme-settings-card__heading">
       <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
     </div>
-    <div className="ssh-settings-body">
-      {loading ? <p className="ssh-settings-empty">正在读取授权…</p> : approvals.length === 0 ? <p className="ssh-settings-empty">暂无已保存的 MCP 授权。</p> : null}
-      {approvals.map((grant) => <div className="ssh-settings-server" key={grant.id}>
-        <div className="ssh-settings-server__info">
+    <div className="mcp-approvals-body">
+      {loading ? <p className="mcp-approvals-empty">正在读取授权…</p> : approvals.length === 0 ? <p className="mcp-approvals-empty">暂无已保存的 MCP 授权。</p> : null}
+      {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
+        <div className="mcp-approvals-grant__info">
           <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
           <small>{grant.scope === 'tool' ? '仅此工具' : '该 MCP 服务器的所有工具'}</small>
         </div>
-        <div className="ssh-settings-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? '撤销中…' : '撤销授权'}</button></div>
+        <div className="mcp-approvals-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? '撤销中…' : '撤销授权'}</button></div>
       </div>)}
-      {message ? <p className="ssh-settings-feedback" role="status">{message}</p> : null}
-      {error ? <p className="ssh-settings-feedback ssh-settings-feedback--error" role="alert">{error}</p> : null}
-      <p className="ssh-settings-note">自动批准仅跳过 MCP 工具调用确认；远程 SSH 的逐台权限仍会生效。</p>
+      {message ? <p className="mcp-approvals-feedback" role="status">{message}</p> : null}
+      {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{error}</p> : null}
+      <p className="mcp-approvals-note">自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。</p>
     </div>
   </section>
 }
@@ -6615,7 +6386,6 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       </header>
 
       <div className="theme-settings-panel__content">
-        <SSHSettingsCard token={token} />
         <MCPApprovalsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
@@ -7371,23 +7141,10 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   )
 }
 
-const SSHOperationLog = memo(function SSHOperationLog({ operations }: { operations: SSHOperation[] }) {
-  if (operations.length === 0) return null
-  return <div className="ssh-operation-log" aria-label="远程 SSH 操作">
-    {operations.map((operation) => <details className={`ssh-operation ssh-operation--${operation.status}`} key={operation.id} open={operation.status !== 'completed'}>
-      <summary><Server size={14} /><strong>{operation.server_name}</strong><span>{operation.status === 'running' ? '执行中' : operation.status === 'failed' ? '失败' : `退出码 ${operation.exit_code ?? '—'}`}</span></summary>
-      <code className="ssh-operation__command">{operation.command}</code>
-      <pre className="ssh-operation__output">{operation.output || (operation.status === 'running' ? '等待远程输出…' : '命令没有输出。')}</pre>
-      {operation.status !== 'running' ? <small>退出码：{operation.exit_code ?? '无'}</small> : null}
-    </details>)}
-  </div>
-})
-
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, sshOperations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   message: CodexMessage
   assistantName: string
   operations: CodexOperation[]
-  sshOperations: SSHOperation[]
   fileChanges: CodexFileChange[]
   activityTimeline: CodexActivityTimelineEntry[]
   showOperations: boolean
@@ -7445,7 +7202,6 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
-        {showOperations ? <SSHOperationLog operations={sshOperations} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (

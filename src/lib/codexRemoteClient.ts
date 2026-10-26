@@ -15,34 +15,6 @@ export interface CodexThread {
   canInterrupt?: boolean
 }
 
-export interface SSHServerConfig {
-  id: string
-  name: string
-  host: string
-  port: number
-  user: string
-  identityFile: string
-  authMethod: 'agent' | 'password' | 'privateKey'
-  hasCredential: boolean
-  enabled: boolean
-  allowInspect: boolean
-  allowExecute: boolean
-}
-
-export interface SSHHostKeyOffer {
-  host: string
-  port: number
-  algorithm: string
-  fingerprint: string
-}
-
-export type SSHServerInput = Omit<SSHServerConfig, 'id' | 'hasCredential' | 'port'> & {
-  port: number | ''
-  password?: string
-  privateKey?: string
-  privateKeyPassphrase?: string
-}
-
 export interface MCPApprovalScope {
   serverName: string
   toolName: string
@@ -53,18 +25,6 @@ export interface MCPApprovalGrant {
   scope: 'tool' | 'server'
   serverName: string
   toolName?: string
-}
-
-export interface SSHOperation {
-  id: string
-  turn_id: string | null
-  server_name: string
-  command: string
-  status: 'running' | 'completed' | 'failed'
-  output: string
-  exit_code: number | null
-  started_at: string
-  finished_at: string | null
 }
 
 export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
@@ -742,28 +702,6 @@ export const codexRemoteClient = {
   },
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
-  },
-  sshServers(token: string) {
-    return request<{ servers: SSHServerConfig[] }>(token, '/api/v1/ssh/servers')
-  },
-  saveSSHServer(token: string, value: SSHServerInput, id?: string) {
-    return request<SSHServerConfig>(token, `/api/v1/ssh/servers${id ? `/${encodeURIComponent(id)}` : ''}`, {
-      method: 'POST', body: JSON.stringify(value),
-    })
-  },
-  deleteSSHServer(token: string, id: string) {
-    return request<{ deleted: boolean }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
-  },
-  testSSHServer(token: string, id: string) {
-    return request<{ ok: boolean; detail: string; hostKey?: SSHHostKeyOffer }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/test`, { method: 'POST' }, { timeoutMs: 35_000 })
-  },
-  trustSSHHostKey(token: string, id: string, offer: SSHHostKeyOffer) {
-    return request<{ trusted: boolean }>(token, `/api/v1/ssh/servers/${encodeURIComponent(id)}/trust-host-key`, {
-      method: 'POST', body: JSON.stringify(offer),
-    }, { timeoutMs: 35_000 })
-  },
-  sshOperations(token: string, threadId: string) {
-    return request<{ operations: SSHOperation[] }>(token, `/api/v1/ssh/operations/${encodeURIComponent(threadId)}`, undefined, { timeoutMs: 10_000, networkRetries: 0 })
   },
   mcpApprovals(token: string) {
     return request<{ approvals: MCPApprovalGrant[] }>(token, '/api/v1/mcp/approvals')

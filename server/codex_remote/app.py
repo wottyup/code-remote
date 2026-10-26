@@ -32,7 +32,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
-from .agent_sandbox import AgentSandbox, SANDBOX_BROKER_SOCKET
 from .browser_history_sync import BrowserHistorySync
 from .browser_payload import browser_event, browser_thread, browser_thread_summary
 from .claude_code import (
@@ -53,8 +52,8 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
-from .remote_ssh import SSHBroker, SSHConfigurationError, SSHJournal, SSHServerStore, run_ssh, ssh_host_key_offer, trust_ssh_host_key
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
+from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
@@ -127,28 +126,6 @@ async def watch_claude_history(claude_code: ClaudeCodeServer) -> None:
 
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
-
-
-class SSHServerRequest(BaseModel):
-    name: str
-    host: str
-    port: int = 22
-    user: str
-    identityFile: str = ""
-    authMethod: str | None = None
-    password: str = ""
-    privateKey: str = ""
-    privateKeyPassphrase: str = ""
-    enabled: bool = True
-    allowInspect: bool = True
-    allowExecute: bool = False
-
-
-class SSHHostKeyTrustRequest(BaseModel):
-    host: str = Field(min_length=1, max_length=253)
-    port: int = Field(ge=1, le=65535)
-    algorithm: str = Field(min_length=1, max_length=64)
-    fingerprint: str = Field(min_length=10, max_length=128)
 
 
 class PairingStateError(RuntimeError):
@@ -1621,10 +1598,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     except OSError as error:
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
-    ssh_servers = SSHServerStore(auth.state_path.parent / "ssh-servers.json")
-    ssh_journal = SSHJournal(auth.state_path.parent / "ssh-operations.sqlite3")
-    ssh_broker = SSHBroker(ssh_servers, ssh_journal)
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
+    remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
     app_server.enable_mcp_approvals(mcp_approvals)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
@@ -1638,17 +1613,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     image_storage_lock = threading.Lock()
     runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
-    sandbox = AgentSandbox(
-        configured_workspace, auth.state_path.parent, ssh_broker.directory,
-        (runtime_directory, image_directory),
-        (app_server._history_home, app_server._runtime_home, claude_code._native_home,
-         Path.home() / ".cache", Path.home() / ".config", Path.home() / ".local", Path.home() / ".npm"),
-    )
-    broker_socket = SANDBOX_BROKER_SOCKET if sandbox.linux else None
-    app_server.enable_ssh_mcp(ssh_servers.path, ssh_journal, broker_socket)
-    claude_code.enable_ssh_mcp(ssh_servers.path, ssh_journal, broker_socket)
-    app_server.enable_agent_sandbox(sandbox)
-    claude_code.enable_agent_sandbox(sandbox)
     terminal_sessions: set[TerminalSession] = set()
 
     async def reap_tmux_terminal_sessions() -> None:
@@ -1754,8 +1718,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        if sandbox.linux:
-            await ssh_broker.start()
         print(f"\nCode Remote 配对码：{auth.code}\n", flush=True)
         try:
             deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
@@ -1789,12 +1751,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await claude_history_watcher
             await app_server.close()
-            if sandbox.linux:
-                await ssh_broker.close()
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.85.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.86.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1803,8 +1763,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
-    app.state.ssh_servers = ssh_servers
-    app.state.ssh_journal = ssh_journal
     app.state.mcp_approvals = mcp_approvals
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
@@ -1887,65 +1845,6 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/api/v1/claude/status")
     async def claude_status() -> dict[str, Any]:
         return claude_code.status()
-
-    @app.get("/api/v1/ssh/servers")
-    async def list_ssh_servers() -> dict[str, Any]:
-        try:
-            return {"servers": ssh_servers.list()}
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=500, detail=str(error)) from error
-
-    @app.post("/api/v1/ssh/servers", status_code=status.HTTP_201_CREATED)
-    async def add_ssh_server(body: SSHServerRequest) -> dict[str, Any]:
-        try:
-            return ssh_servers.save(body.model_dump())
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-    @app.post("/api/v1/ssh/servers/{server_id}")
-    async def update_ssh_server(server_id: str, body: SSHServerRequest) -> dict[str, Any]:
-        try:
-            return ssh_servers.save(body.model_dump(), server_id=server_id)
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-
-    @app.delete("/api/v1/ssh/servers/{server_id}")
-    async def delete_ssh_server(server_id: str) -> dict[str, bool]:
-        try:
-            ssh_servers.delete(server_id)
-            return {"deleted": True}
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=404, detail=str(error)) from error
-
-    @app.post("/api/v1/ssh/servers/{server_id}/test")
-    async def test_ssh_server(server_id: str) -> dict[str, Any]:
-        try:
-            host_key = await asyncio.to_thread(ssh_host_key_offer, ssh_servers, server_id)
-            if host_key is not None:
-                return {"ok": False, "detail": "首次连接，请确认并信任这台服务器。", "hostKey": host_key}
-            # This explicit user action performs only `true`, even when AI permissions are off.
-            result = await asyncio.to_thread(run_ssh, ssh_servers, None, "", server_id,
-                                             "true", permission="", allow_disabled=True, timeout=12)
-            return {"ok": result["exitCode"] == 0, "detail": result["error"] or result["output"] or
-                    ("连接成功" if result["exitCode"] == 0 else "SSH 连接失败")}
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from error
-        except OSError as error:
-            raise HTTPException(status_code=503, detail=f"无法启动 SSH：{error}") from error
-
-    @app.post("/api/v1/ssh/servers/{server_id}/trust-host-key")
-    async def trust_ssh_server_host_key(server_id: str, body: SSHHostKeyTrustRequest) -> dict[str, bool]:
-        try:
-            await asyncio.to_thread(trust_ssh_host_key, ssh_servers, server_id, **body.model_dump())
-            return {"trusted": True}
-        except SSHConfigurationError as error:
-            raise HTTPException(status_code=409, detail=str(error)) from error
-
-    @app.get("/api/v1/ssh/operations/{thread_id}")
-    async def ssh_operations(thread_id: str) -> dict[str, Any]:
-        if not thread_id or len(thread_id) > 512:
-            raise HTTPException(status_code=422, detail="聊天编号无效。")
-        return {"operations": await asyncio.to_thread(ssh_journal.list_for_thread, thread_id)}
 
     @app.get("/api/v1/mcp/approvals")
     async def list_mcp_approvals() -> dict[str, Any]:
