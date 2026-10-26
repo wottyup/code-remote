@@ -44,6 +44,12 @@ class SSHConfigurationError(ValueError):
     pass
 
 
+class _KnownHostRequiredPolicy(paramiko.MissingHostKeyPolicy):
+    def missing_host_key(self, client: paramiko.SSHClient, hostname: str,
+                         key: paramiko.PKey) -> None:
+        raise SSHConfigurationError("主机指纹尚未加入 known_hosts；请先核对并信任该服务器的指纹。")
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -357,7 +363,7 @@ def _run_paramiko(server: dict[str, Any], secret: dict[str, str], command: str,
                   operation_id: str | None) -> tuple[str, int | None, str | None, bool]:
     client = paramiko.SSHClient()
     client.load_system_host_keys()
-    client.set_missing_host_key_policy(paramiko.RejectPolicy())
+    client.set_missing_host_key_policy(_KnownHostRequiredPolicy())
     auth: dict[str, Any] = {"look_for_keys": False, "allow_agent": False}
     if server["authMethod"] == "password":
         auth["password"] = secret["password"]
