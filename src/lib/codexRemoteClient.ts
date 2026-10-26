@@ -783,6 +783,12 @@ export const codexRemoteClient = {
     if (cwd) query.set('cwd', cwd)
     return request<CodexWorkspaceFile>(token, `/api/v1/codex/workspace/file?${query.toString()}`)
   },
+  prepareWorkspaceDownload(token: string, cwd: string | undefined, path: string) {
+    return request<{ url: string }>(token, '/api/v1/codex/workspace/download', {
+      method: 'POST',
+      body: JSON.stringify({ cwd, path }),
+    })
+  },
   workspaceImage(token: string, cwd: string | undefined, path: string) {
     const query = new URLSearchParams({ path })
     if (cwd) query.set('cwd', cwd)

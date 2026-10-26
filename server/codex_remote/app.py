@@ -28,7 +28,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
@@ -176,6 +176,8 @@ MESSAGE_IMAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60
 MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 MAX_PDF_BYTES = 20 * 1024 * 1024
 MAX_WORKSPACE_UPLOAD_BYTES = 512 * 1024 * 1024
+WORKSPACE_DOWNLOAD_TICKET_TTL_SECONDS = 60
+MAX_WORKSPACE_DOWNLOAD_TICKETS = 128
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_PDF_ATTACHMENTS_PER_TURN = 8
@@ -527,6 +529,11 @@ class WorkspaceFileSaveRequest(BaseModel):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class WorkspaceFileDownloadRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+
+
 class WorkspaceEntryCreateRequest(BaseModel):
     cwd: str | None = Field(default=None, max_length=4_096)
     path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
@@ -614,6 +621,18 @@ def workspace_mutation_path(base: Path, relative_path: str, *, allow_root: bool 
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="暂不支持修改符号链接")
     if require_exists and not candidate.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件或文件夹不存在")
+    return candidate
+
+
+def workspace_download_path(base: Path, relative_path: str) -> Path:
+    candidate = workspace_mutation_path(base, relative_path)
+    if not candidate.is_file():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能下载文件，不能下载文件夹")
+    try:
+        with candidate.open("rb"):
+            pass
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该文件") from error
     return candidate
 
 
@@ -1698,6 +1717,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return result.get("turn_id")
 
     shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
+    workspace_download_tickets: dict[str, tuple[Path, str, float]] = {}
 
     def paused_thread_view(thread_id: str, thread: dict[str, Any]) -> dict[str, Any]:
         if is_claude_thread_id(thread_id) or not shared_state.is_paused(thread_id):
@@ -1774,7 +1794,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.84.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.85.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1799,7 +1819,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
-        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair":
+        ticket_download = request.method == "GET" and request.url.path.startswith("/api/v1/codex/workspace/download/")
+        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair" and not ticket_download:
             authorization = request.headers.get("authorization", "")
             token = authorization.removeprefix("Bearer ").strip()
             if not auth.accepts(token):
@@ -1952,6 +1973,41 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int | bool]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_file_preview(base, path)
+
+    @app.post("/api/v1/codex/workspace/download")
+    async def prepare_workspace_download(body: WorkspaceFileDownloadRequest) -> dict[str, str]:
+        base = workspace_base_for_cwd(app_server.workspace, body.cwd)
+        workspace_download_path(base, body.path)
+        now = time.monotonic()
+        for ticket, (_, _, expires_at) in tuple(workspace_download_tickets.items()):
+            if expires_at <= now:
+                workspace_download_tickets.pop(ticket, None)
+        while len(workspace_download_tickets) >= MAX_WORKSPACE_DOWNLOAD_TICKETS:
+            workspace_download_tickets.pop(next(iter(workspace_download_tickets)))
+        ticket = secrets.token_urlsafe(32)
+        workspace_download_tickets[ticket] = (base, body.path, now + WORKSPACE_DOWNLOAD_TICKET_TTL_SECONDS)
+        return {"url": f"/api/v1/codex/workspace/download/{ticket}"}
+
+    @app.get("/api/v1/codex/workspace/download/{ticket}")
+    async def download_workspace_file(ticket: str) -> FileResponse:
+        entry = workspace_download_tickets.pop(ticket, None)
+        if entry is None or entry[2] <= time.monotonic():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="下载链接已失效，请重新选择文件下载")
+        base, relative_path, _ = entry
+        candidate = workspace_download_path(base, relative_path)
+        return FileResponse(
+            candidate,
+            filename=candidate.name,
+            media_type="application/octet-stream",
+            content_disposition_type="attachment",
+            # Keep large files in their original form; GZipMiddleware skips responses with Content-Encoding.
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Encoding": "identity",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/v1/codex/workspace/image")
     async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:

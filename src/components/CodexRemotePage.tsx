@@ -2533,6 +2533,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const [loadingPaths, setLoadingPaths] = useState<Record<string, boolean>>({})
   const [selectedPaths, setSelectedPaths] = useState<string[]>([])
   const [contextMenu, setContextMenu] = useState<WorkspaceEntryContextMenu | null>(null)
+  const downloadInProgress = useRef(false)
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
   const contextMenuElement = useRef<HTMLDivElement>(null)
@@ -2944,8 +2945,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     event.currentTarget.focus({ preventScroll: true })
     const menuWidth = Math.min(theme === 'retro' ? 292 : 244, Math.max(0, window.innerWidth - 16))
     const menuHeight = theme === 'retro'
-      ? Math.min(entry.kind === 'directory' ? 480 : 320, Math.max(0, window.innerHeight - 16))
-      : entry.kind === 'directory' ? 390 : 264
+      ? Math.min(entry.kind === 'directory' ? 480 : 352, Math.max(0, window.innerHeight - 16))
+      : entry.kind === 'directory' ? 390 : 296
     const x = Math.max(8, Math.min(event.clientX, window.innerWidth - menuWidth - 8))
     const y = Math.max(8, Math.min(event.clientY, window.innerHeight - menuHeight - 8))
     const paths = selectedPaths.includes(entry.path) ? selectedPaths : [entry.path]
@@ -3001,6 +3002,29 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     setMutationDialog({ action: 'delete', paths: contextMenu.paths })
     setMutationError(null)
     setContextMenu(null)
+  }
+
+  async function downloadWorkspaceFile() {
+    const menu = contextMenu
+    if (!menu || menu.entry.kind !== 'file' || menu.paths.length !== 1 || !browsingRoot || downloadInProgress.current) return
+    downloadInProgress.current = true
+    setContextMenu(null)
+    setError(null)
+    try {
+      const { url } = await codexRemoteClient.prepareWorkspaceDownload(token, browsingRoot, menu.entry.path)
+      if (!url.startsWith('/api/v1/codex/workspace/download/')) throw new Error('下载地址无效')
+      const link = document.createElement('a')
+      link.href = url
+      link.download = menu.entry.name
+      link.hidden = true
+      document.body.append(link)
+      link.click()
+      link.remove()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '文件下载失败')
+    } finally {
+      downloadInProgress.current = false
+    }
   }
 
   function closeWorkspaceMutation() {
@@ -3407,11 +3431,12 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const contextMenuCanRename = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length === 1)
   const contextMenuCanCopy = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuCanCut = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
+  const contextMenuCanDownload = Boolean(contextMenu && contextMenu.entry.kind === 'file' && contextMenu.paths.length === 1)
   const contextMenuCanPaste = Boolean(contextMenu && contextMenu.entry.kind === 'directory' && workspaceClipboard)
   const contextMenuCanUpload = contextMenu?.entry.kind === 'directory'
   const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
-  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste || contextMenuCanUpload
+  const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanDownload || contextMenuCanPaste || contextMenuCanUpload
   const uploadPercent = uploadProgress
     ? uploadProgress.size > 0
       ? Math.min(100, Math.floor(uploadProgress.loaded / uploadProgress.size * 100))
@@ -3599,6 +3624,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             {contextMenuCanRename ? <button type="button" role="menuitem" onClick={startWorkspaceRename}><Pencil size={14} />重命名</button> : null}
             {contextMenuCanCopy ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
             {contextMenuCanCut ? <button type="button" role="menuitem" onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</button> : null}
+            {contextMenuCanDownload ? <button type="button" role="menuitem" onClick={() => void downloadWorkspaceFile()}><Download size={14} />文件下载</button> : null}
             {contextMenuCanPaste ? <button type="button" role="menuitem" onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</button> : null}
             {contextMenuCanUpload ? <button type="button" role="menuitem" disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />上传文件</button> : null}
           </div> : null}
