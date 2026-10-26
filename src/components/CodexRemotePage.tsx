@@ -2511,7 +2511,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const [mutationSaving, setMutationSaving] = useState(false)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [uploadProgress, setUploadProgress] = useState<{ completed: number; total: number; name: string } | null>(null)
+  const [uploadProgress, setUploadProgress] = useState<{ completed: number; total: number; name: string; loaded: number; size: number; confirming: boolean } | null>(null)
   const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const uploadInput = useRef<HTMLInputElement>(null)
   const uploadTarget = useRef<{ root: string; path: string; scopeKey: string } | null>(null)
@@ -3019,13 +3019,17 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     const failures: string[] = []
     try {
       for (const [index, file] of files.entries()) {
-        setUploadProgress({ completed: index, total: files.length, name: file.name })
+        setUploadProgress({ completed: index, total: files.length, name: file.name, loaded: 0, size: file.size, confirming: false })
         if (file.size > maxWorkspaceUploadFileSize) {
           failures.push(`${file.name}：单个文件不能超过 512 MB`)
           continue
         }
         try {
-          uploaded.push(await codexRemoteClient.uploadWorkspaceFile(token, target.root, target.path, file))
+          uploaded.push(await codexRemoteClient.uploadWorkspaceFile(token, target.root, target.path, file, (progress) => {
+            setUploadProgress((current) => current?.completed === index
+              ? { ...current, loaded: progress.loaded, size: progress.total, confirming: progress.confirming }
+              : current)
+          }))
         } catch (reason) {
           failures.push(`${file.name}：${reason instanceof Error ? reason.message : '上传失败'}`)
         }
@@ -3378,9 +3382,14 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const contextMenuCanDelete = Boolean(contextMenu && !contextMenu.root && contextMenu.paths.length > 0)
   const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
   const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanPaste || contextMenuCanUpload
+  const uploadPercent = uploadProgress
+    ? uploadProgress.size > 0
+      ? Math.min(100, Math.floor(uploadProgress.loaded / uploadProgress.size * 100))
+      : uploadProgress.confirming ? 100 : 0
+    : 0
   return (
     <>
-      <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+      <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label="选择要上传到工作区的本机文件" />
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">{eyebrow}</span><strong>文件</strong></div>
@@ -3429,7 +3438,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
           </div>
         </div>
-        <footer className="workspace-explorer__footer" aria-live="polite" title={uploadProgress?.name ?? uploadNotice ?? '右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'}>{uploadProgress ? <><LoaderCircle className="spin" size={12} /><span>正在上传 {uploadProgress.completed + 1}/{uploadProgress.total}：{uploadProgress.name}</span></> : <span>{uploadNotice ?? (workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : '右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴')}</span>}</footer>
+        <footer className={`workspace-explorer__footer${uploadProgress ? ' workspace-explorer__footer--uploading' : ''}`} aria-live={uploadProgress ? 'off' : 'polite'} title={uploadProgress?.name ?? uploadNotice ?? '右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'}>{uploadProgress ? <>
+          <div className="workspace-explorer__upload-heading"><span>上传 {uploadProgress.completed + 1}/{uploadProgress.total} · {uploadProgress.name}</span><strong>{uploadPercent}%</strong></div>
+          <div className="workspace-explorer__upload-detail">{uploadProgress.confirming ? '已发送，等待服务器确认…' : `已发送 ${sizeLabel(uploadProgress.loaded)} / ${sizeLabel(uploadProgress.size)}`}</div>
+          <div className="workspace-explorer__upload-track" role="progressbar" aria-label={`${uploadProgress.name} 上传进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadPercent} aria-valuetext={uploadProgress.confirming ? '已发送，等待服务器确认' : `已发送 ${sizeLabel(uploadProgress.loaded)} / ${sizeLabel(uploadProgress.size)}`}><span style={{ width: `${uploadPercent}%` }} /></div>
+        </> : <span>{uploadNotice ?? (workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : '右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴')}</span>}</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
