@@ -1,5 +1,7 @@
 # Changelog
 
+## [v0.86.3] - 新增 Windows 启动与重启脚本
+
 ## [v0.86.2] - 修复 Codex 已无运行任务时网页停止失败
 
 ## [v0.78.5] - 修复 Windows 网页版 Claude Code 停止回复卡住
