@@ -12,6 +12,7 @@ interface ChatOverlayPanelProps {
   footer?: ReactNode
   onClose: () => void
   onEscape?: () => void
+  hidden?: boolean
   showCloseButton?: boolean
   closeButtonRef?: RefObject<HTMLButtonElement | null>
   ariaModal?: boolean
@@ -74,6 +75,7 @@ export function ChatOverlayPanel({
   footer,
   onClose,
   onEscape,
+  hidden = false,
   showCloseButton = true,
   closeButtonRef,
   ariaModal,
@@ -90,7 +92,7 @@ export function ChatOverlayPanel({
   const [resizing, setResizing] = useState(false)
   escapeHandler.current = onEscape ?? onClose
 
-  useLayoutEffect(() => registerOverlayEscape(() => escapeHandler.current()), [])
+  useLayoutEffect(() => hidden ? undefined : registerOverlayEscape(() => escapeHandler.current()), [hidden])
 
   useLayoutEffect(() => {
     const host = backdrop.current?.parentElement
@@ -179,7 +181,7 @@ export function ChatOverlayPanel({
   }
 
   return (
-    <div ref={backdrop} className={`chat-overlay-backdrop${resizing ? ' chat-overlay-backdrop--resizing' : ''}`}>
+    <div ref={backdrop} className={`chat-overlay-backdrop${resizing ? ' chat-overlay-backdrop--resizing' : ''}`} hidden={hidden} style={hidden ? { display: 'none' } : undefined}>
       <button className="chat-overlay-backdrop__dismiss" type="button" aria-label={backdropLabel} tabIndex={-1} onClick={onClose} />
       <section
         ref={panel}

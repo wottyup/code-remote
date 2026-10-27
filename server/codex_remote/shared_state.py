@@ -102,6 +102,9 @@ class SharedStateStore:
             self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_owner TEXT")
         if "edit_started_at" not in columns:
             self.connection.execute("ALTER TABLE queued_messages ADD COLUMN edit_started_at TEXT")
+        if "sort_order" not in columns:
+            self.connection.execute("ALTER TABLE queued_messages ADD COLUMN sort_order INTEGER")
+        self.connection.execute("UPDATE queued_messages SET sort_order = sequence WHERE sort_order IS NULL")
         # An editor from an older process cannot renew its lock after a restart.
         self.connection.execute(
             "UPDATE queued_messages SET editing = 0, edit_owner = NULL WHERE editing = 1 AND edit_started_at IS NULL"
@@ -135,7 +138,8 @@ class SharedStateStore:
 
     def queue(self, thread_id: str) -> list[dict[str, Any]]:
         rows = self.connection.execute(
-            "SELECT payload, state, editing, attempt_at FROM queued_messages WHERE thread_id = ? ORDER BY sequence",
+            "SELECT payload, state, editing, attempt_at FROM queued_messages WHERE thread_id = ? "
+            "ORDER BY COALESCE(sort_order, sequence), sequence",
             (thread_id,),
         ).fetchall()
         result = []
@@ -280,6 +284,32 @@ class SharedStateStore:
         ).rowcount
         if not changed:
             raise QueueConflictError("这条排队消息正在发送或已不存在。")
+
+    def move(self, thread_id: str, message_id: str, adjacent_message_id: str, direction: str) -> None:
+        if direction not in {"up", "down"}:
+            raise QueueConflictError("排队移动方向无效。")
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            rows = self.connection.execute(
+                "SELECT id, state, editing, COALESCE(sort_order, sequence) AS position "
+                "FROM queued_messages WHERE thread_id = ? ORDER BY position, sequence",
+                (thread_id,),
+            ).fetchall()
+            index = next((index for index, row in enumerate(rows) if row["id"] == message_id), -1)
+            adjacent_index = index + (-1 if direction == "up" else 1)
+            if index < 0 or adjacent_index < 0 or adjacent_index >= len(rows) or rows[adjacent_index]["id"] != adjacent_message_id:
+                raise QueueConflictError("排队顺序已变化，请刷新后重试。")
+            current, adjacent = rows[index], rows[adjacent_index]
+            if any(row["state"] != "pending" or row["editing"] for row in (current, adjacent)):
+                raise QueueConflictError("正在编辑、发送或等待核对的消息不能调整顺序。")
+            self.connection.execute(
+                "UPDATE queued_messages SET sort_order = ? WHERE thread_id = ? AND id = ?",
+                (adjacent["position"], thread_id, message_id),
+            )
+            self.connection.execute(
+                "UPDATE queued_messages SET sort_order = ? WHERE thread_id = ? AND id = ?",
+                (current["position"], thread_id, adjacent_message_id),
+            )
 
     def claim(self, thread_id: str, message_id: str) -> dict[str, Any] | None:
         attempt_at = _now()
@@ -439,6 +469,13 @@ class SharedQueueService:
     async def changed(self, thread_id: str) -> None:
         self._wake.set()
         await self.codex._emit({"type": "remote.queue.changed", "threadId": thread_id})
+
+    async def move(self, thread_id: str, message_id: str, adjacent_message_id: str, direction: str) -> list[dict[str, Any]]:
+        async with self._lock(thread_id):
+            self.store.move(thread_id, message_id, adjacent_message_id, direction)
+            queue = self.store.queue(thread_id)
+            await self.changed(thread_id)
+            return queue
 
     async def delete_thread(self, thread_id: str) -> None:
         async with self._lock(thread_id):

@@ -1,11 +1,12 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
-import { useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { memo, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
 import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand, terminalRunScriptCommand } from '../lib/terminalPathCommand'
+import { forgetTerminalScreen, readTerminalScreen, rememberTerminalScreen } from '../lib/terminalScreenMemory'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
@@ -22,6 +23,7 @@ type TerminalModifier = 'ctrl' | 'alt'
 interface TerminalDialogProps {
   token: string
   engine: 'codex' | 'claude-code'
+  visible: boolean
   threadId?: string
   cwd?: string
   directoryRequest: { id: number; path: string } | null
@@ -115,8 +117,25 @@ function selectTerminalTextAt(terminal: Terminal, xtermScreen: HTMLElement, clie
   return terminal.hasSelection()
 }
 
-export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, runRequest, onRunRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
+function terminalScreenText(terminal: Terminal): string {
+  const buffer = terminal.buffer.active
+  const lines: string[] = []
+  for (let index = Math.max(0, buffer.length - 2_000); index < buffer.length; index += 1) {
+    const line = buffer.getLine(index)
+    if (!line) continue
+    const text = line.translateToString(true)
+    if (line.isWrapped && lines.length > 0) lines[lines.length - 1] += text
+    else lines.push(text)
+  }
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
+  return lines.join('\r\n').slice(-500_000)
+}
+
+export const TerminalDialog = memo(function TerminalDialog({ token, engine, visible, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, runRequest, onRunRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
   const screen = useRef<HTMLDivElement>(null)
+  const visibleRef = useRef(visible)
+  visibleRef.current = visible
+  const updateVisibility = useRef<(open: boolean) => void>(() => {})
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const [shellName, setShellName] = useState('')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
@@ -276,6 +295,8 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     const fitAddon = new FitAddon()
     terminal.loadAddon(fitAddon)
     terminal.open(container)
+    const previousScreen = threadId ? readTerminalScreen(threadId) : null
+    if (previousScreen) terminal.write(`${previousScreen}\r\n`)
 
     const socketUrl = new URL('/api/v1/codex/terminal', window.location.origin)
     socketUrl.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -284,6 +305,10 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     let ready = false
     let exited = false
     let disposed = false
+    let receivedLiveOutput = false
+    let snapshotTimer = 0
+    let reconnectRequested = false
+    let autoReconnectAllowed = true
     let fitFrame = 0
     let lastTerminalSelection: TerminalTouchSelection | null = null
     let retainedTouchSelection: TerminalTouchSelection | null = null
@@ -372,6 +397,53 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       window.cancelAnimationFrame(fitFrame)
       fitFrame = window.requestAnimationFrame(fitAndResize)
     }
+    updateVisibility.current = (open) => {
+      if (!open) {
+        terminal.blur()
+        stopControlRepeat()
+        setContextMenu(null)
+        return
+      }
+      scheduleFit()
+      window.requestAnimationFrame(() => {
+        if (!disposed) terminal.refresh(0, terminal.rows - 1)
+      })
+      if (!window.matchMedia('(pointer: coarse)').matches) terminal.focus()
+    }
+    const saveScreen = () => {
+      if (threadId && !exited && receivedLiveOutput) rememberTerminalScreen(threadId, terminalScreenText(terminal))
+    }
+    const writeOutput = (data: Uint8Array) => {
+      if (disposed) return
+      receivedLiveOutput = true
+      terminal.write(data, () => {
+        if (disposed || exited || !threadId) return
+        if (snapshotTimer) window.clearTimeout(snapshotTimer)
+        snapshotTimer = window.setTimeout(() => {
+          snapshotTimer = 0
+          saveScreen()
+        }, 1_500)
+      })
+    }
+    const refreshVisibleScreen = () => {
+      if (disposed || document.visibilityState === 'hidden') return
+      scheduleFit()
+      window.requestAnimationFrame(() => {
+        if (disposed) return
+        terminal.refresh(0, terminal.rows - 1)
+        if (!exited && autoReconnectAllowed && !reconnectRequested && socket.readyState >= WebSocket.CLOSING) {
+          reconnectRequested = true
+          setConnectionRound((value) => value + 1)
+        }
+      })
+    }
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') saveScreen()
+      else refreshVisibleScreen()
+    }
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('pagehide', saveScreen)
+    window.addEventListener('pageshow', refreshVisibleScreen)
     const updateFontSize = () => {
       const fontSize = readFontSize()
       if (terminal.options.fontSize === fontSize) return
@@ -402,6 +474,7 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       send({ type: 'input', data })
     }
     const dispatchInput = (data: string) => {
+      if (!visibleRef.current) return
       clearSelectionSnapshot()
       const modifier = activeModifierRef.current
       sendInput(applyTerminalModifier(data, modifier))
@@ -410,12 +483,14 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     sendTerminalInput.current = dispatchInput
     terminalActions.current = {
       clear: () => {
+        if (!visibleRef.current) return
         clearSelectionSnapshot()
         terminal.clear()
         terminal.focus()
       },
-      focus: () => terminal.focus(),
+      focus: () => { if (visibleRef.current) terminal.focus() },
       paste: (value) => {
+        if (!visibleRef.current) return
         clearSelectionSnapshot()
         terminal.paste(value)
       },
@@ -587,8 +662,8 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
     })
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') {
-        if (event.data instanceof ArrayBuffer) terminal.write(new Uint8Array(event.data))
-        else if (event.data instanceof Blob) void event.data.arrayBuffer().then((data) => terminal.write(new Uint8Array(data)))
+        if (event.data instanceof ArrayBuffer) writeOutput(new Uint8Array(event.data))
+        else if (event.data instanceof Blob) void event.data.arrayBuffer().then((data) => writeOutput(new Uint8Array(data)))
         return
       }
       let payload: { type?: string; cwd?: string; shell?: string; message?: string }
@@ -606,6 +681,7 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
         fitAndResize()
       } else if (payload.type === 'error') {
         ready = false
+        autoReconnectAllowed = false
         stopControlRepeat()
         resetModifier()
         setStatus('disconnected')
@@ -613,6 +689,9 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       } else if (payload.type === 'exit') {
         ready = false
         exited = true
+        if (threadId) forgetTerminalScreen(threadId)
+        if (snapshotTimer) window.clearTimeout(snapshotTimer)
+        snapshotTimer = 0
         stopControlRepeat()
         resetModifier()
         setStatus('exited')
@@ -636,13 +715,18 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       }
     })
 
-    if (!window.matchMedia('(pointer: coarse)').matches) terminal.focus()
+    if (visible && !window.matchMedia('(pointer: coarse)').matches) terminal.focus()
     fitFrame = window.requestAnimationFrame(fitAndResize)
 
     return () => {
+      saveScreen()
       disposed = true
+      if (snapshotTimer) window.clearTimeout(snapshotTimer)
       window.cancelAnimationFrame(fitFrame)
       window.removeEventListener('resize', updateFontSize)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('pagehide', saveScreen)
+      window.removeEventListener('pageshow', refreshVisibleScreen)
       fontPreferenceObserver?.disconnect()
       resizeObserver?.disconnect()
       container.removeEventListener('contextmenu', handleContextMenu, true)
@@ -662,6 +746,7 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       if (desktopPasteHintTimer.current !== undefined) window.clearTimeout(desktopPasteHintTimer.current)
       desktopPasteHintTimer.current = undefined
       activeModifierRef.current = null
+      updateVisibility.current = () => {}
       sendTerminalInput.current = () => {}
       sendControlInput.current = () => {}
       terminalActions.current = {
@@ -679,7 +764,13 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       socket.close()
       terminal.dispose()
     }
-  }, [connectionRound, cwd, threadId, token])
+    // cwd is the starting directory for this terminal instance. A later
+    // workspace metadata refresh must not destroy its live screen or shell.
+  }, [connectionRound, threadId, token])
+
+  useEffect(() => {
+    updateVisibility.current(visible)
+  }, [visible])
 
   useEffect(() => {
     if (status !== 'connected' || !shellName || !directoryRequest || handledDirectoryRequestId.current === directoryRequest.id) return
@@ -715,6 +806,7 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       ariaLabel="本机终端"
       backdropLabel="关闭本机终端"
       onClose={onClose}
+      hidden={!visible}
       showCloseButton={false}
       className="terminal-dialog"
       onPanelPointerDown={(event) => {
@@ -934,4 +1026,4 @@ export function TerminalDialog({ token, engine, threadId, cwd, directoryRequest,
       ) : null}
     </ChatOverlayPanel>
   )
-}
+})

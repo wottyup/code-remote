@@ -5,6 +5,7 @@ import { ChatOverlayPanel } from './ChatOverlayPanel'
 interface TerminalRecoveryBoundaryProps {
   children: ReactNode
   onClose: () => void
+  hidden?: boolean
 }
 
 interface TerminalRecoveryBoundaryState {
@@ -34,6 +35,7 @@ export class TerminalRecoveryBoundary extends Component<TerminalRecoveryBoundary
           ariaLabel="本机终端"
           backdropLabel="关闭本机终端"
           onClose={this.props.onClose}
+          hidden={this.props.hidden}
           showCloseButton={false}
           className="terminal-dialog"
           header={(

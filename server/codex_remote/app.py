@@ -28,7 +28,7 @@ from urllib.parse import quote
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from watchfiles import awatch
 
@@ -52,6 +52,8 @@ from .codex_app_server import (
     CodexThreadNotFoundError,
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
+from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
+from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 
 logger = logging.getLogger(__name__)
@@ -150,6 +152,9 @@ MAX_STORED_IMAGE_BYTES = 2 * 1024 * 1024 * 1024
 MESSAGE_IMAGE_RETENTION_SECONDS = 90 * 24 * 60 * 60
 MESSAGE_IMAGE_CLEANUP_INTERVAL_SECONDS = 24 * 60 * 60
 MAX_PDF_BYTES = 20 * 1024 * 1024
+MAX_WORKSPACE_UPLOAD_BYTES = 512 * 1024 * 1024
+WORKSPACE_DOWNLOAD_TICKET_TTL_SECONDS = 60
+MAX_WORKSPACE_DOWNLOAD_TICKETS = 128
 MAX_STAGED_PDF_BYTES = 512 * 1024 * 1024
 PDF_ATTACHMENT_TTL_SECONDS = 7 * 24 * 60 * 60
 MAX_PDF_ATTACHMENTS_PER_TURN = 8
@@ -341,6 +346,12 @@ class QueueMessageIdRequest(BaseModel):
     owner_id: str | None = Field(default=None, min_length=8, max_length=128)
 
 
+class QueueMoveRequest(BaseModel):
+    message_id: str = Field(min_length=8, max_length=128)
+    adjacent_message_id: str = Field(min_length=8, max_length=128)
+    direction: Literal["up", "down"]
+
+
 class PinRequest(BaseModel):
     pinned: bool
 
@@ -495,6 +506,11 @@ class WorkspaceFileSaveRequest(BaseModel):
     revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class WorkspaceFileDownloadRequest(BaseModel):
+    cwd: str | None = Field(default=None, max_length=4_096)
+    path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
+
+
 class WorkspaceEntryCreateRequest(BaseModel):
     cwd: str | None = Field(default=None, max_length=4_096)
     path: str = Field(min_length=1, max_length=WORKSPACE_TREE_MAX_PATH_LENGTH)
@@ -582,6 +598,18 @@ def workspace_mutation_path(base: Path, relative_path: str, *, allow_root: bool 
         raise HTTPException(status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="暂不支持修改符号链接")
     if require_exists and not candidate.exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="文件或文件夹不存在")
+    return candidate
+
+
+def workspace_download_path(base: Path, relative_path: str) -> Path:
+    candidate = workspace_mutation_path(base, relative_path)
+    if not candidate.is_file():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="只能下载文件，不能下载文件夹")
+    try:
+        with candidate.open("rb"):
+            pass
+    except OSError as error:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无法读取该文件") from error
     return candidate
 
 
@@ -760,6 +788,47 @@ def workspace_paste_entries(
             else:
                 target.unlink()
     raise failure from failure_cause
+
+
+async def workspace_upload_file(base: Path, destination_path: str, name: str, request: Request) -> dict[str, Any]:
+    destination = workspace_mutation_path(base, destination_path, allow_root=True)
+    if not destination.is_dir():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="上传目标不是文件夹")
+    filename = workspace_entry_name(name)
+    relative_path = f"{destination_path}/{filename}" if destination_path else filename
+    target = workspace_mutation_path(base, relative_path, require_exists=False)
+    if target.exists() or target.is_symlink():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {filename}")
+
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            size = int(declared_length)
+        except ValueError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="文件大小无效") from error
+        if size < 0 or size > MAX_WORKSPACE_UPLOAD_BYTES:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="单个文件不能超过 512 MB")
+
+    created = False
+    received = 0
+    try:
+        with target.open("xb") as output:
+            created = True
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > MAX_WORKSPACE_UPLOAD_BYTES:
+                    raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="单个文件不能超过 512 MB")
+                await asyncio.to_thread(output.write, chunk)
+    except BaseException as error:
+        if created:
+            with suppress(OSError):
+                target.unlink()
+        if isinstance(error, FileExistsError):
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"目标中已存在 {filename}") from error
+        if isinstance(error, OSError):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="上传失败，请检查工作区写入权限和剩余空间") from error
+        raise
+    return workspace_entry_payload(base, target)
 
 
 def workspace_entry_kind(path: Path) -> str | None:
@@ -981,6 +1050,10 @@ def detect_image_media_type(content: bytes) -> str | None:
         return "image/webp"
     if content.startswith((b"GIF87a", b"GIF89a")):
         return "image/gif"
+    if content.startswith(b"BM"):
+        return "image/bmp"
+    if content.startswith((b"\x00\x00\x01\x00", b"\x00\x00\x02\x00")):
+        return "image/x-icon"
     if len(content) >= 12 and content[4:8] == b"ftyp":
         brands = {content[index:index + 4] for index in range(8, min(len(content), 64), 4)}
         if brands & {b"avif", b"avis"}:
@@ -989,6 +1062,9 @@ def detect_image_media_type(content: bytes) -> str | None:
             return "image/heic"
         if brands & {b"mif1", b"msf1"}:
             return "image/heif"
+    svg_header = content[:4096].decode("utf-8-sig", errors="ignore").lstrip()
+    if re.match(r"(?:<\?xml[^?]*\?>\s*)?(?:(?:<!--[\s\S]*?-->|<!DOCTYPE\s+svg[^>]*>)\s*)*<svg(?:\s|>)", svg_header, re.IGNORECASE):
+        return "image/svg+xml"
     return None
 
 
@@ -1522,6 +1598,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     except OSError as error:
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
+    mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
+    remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
+    app_server.enable_mcp_approvals(mcp_approvals)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
         os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
@@ -1602,6 +1681,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         return result.get("turn_id")
 
     shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
+    workspace_download_tickets: dict[str, tuple[Path, str, float]] = {}
 
     def paused_thread_view(thread_id: str, thread: dict[str, Any]) -> dict[str, Any]:
         if is_claude_thread_id(thread_id) or not shared_state.is_paused(thread_id):
@@ -1674,7 +1754,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.74.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.86.1-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1683,6 +1763,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.message_image_directory = image_directory
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
+    app.state.mcp_approvals = mcp_approvals
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1696,7 +1777,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
 
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
-        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair":
+        ticket_download = request.method == "GET" and request.url.path.startswith("/api/v1/codex/workspace/download/")
+        if request.url.path.startswith("/api/v1/") and request.url.path != "/api/v1/pair" and not ticket_download:
             authorization = request.headers.get("authorization", "")
             token = authorization.removeprefix("Bearer ").strip()
             if not auth.accepts(token):
@@ -1764,6 +1846,23 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def claude_status() -> dict[str, Any]:
         return claude_code.status()
 
+    @app.get("/api/v1/mcp/approvals")
+    async def list_mcp_approvals() -> dict[str, Any]:
+        try:
+            return {"approvals": mcp_approvals.list()}
+        except MCPApprovalError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+    @app.delete("/api/v1/mcp/approvals/{grant_id}")
+    async def revoke_mcp_approval(grant_id: str) -> dict[str, bool]:
+        try:
+            mcp_approvals.revoke(grant_id)
+            return {"deleted": True}
+        except MCPApprovalNotFoundError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
+        except MCPApprovalError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
     @app.get("/api/v1/codex/workspace/tree")
     async def workspace_tree(cwd: str | None = None, path: str = "", offset: int = 0) -> dict[str, Any]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
@@ -1773,6 +1872,41 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def workspace_file(cwd: str | None = None, path: str = "") -> dict[str, str | int | bool]:
         base = workspace_base_for_cwd(app_server.workspace, cwd)
         return workspace_file_preview(base, path)
+
+    @app.post("/api/v1/codex/workspace/download")
+    async def prepare_workspace_download(body: WorkspaceFileDownloadRequest) -> dict[str, str]:
+        base = workspace_base_for_cwd(app_server.workspace, body.cwd)
+        workspace_download_path(base, body.path)
+        now = time.monotonic()
+        for ticket, (_, _, expires_at) in tuple(workspace_download_tickets.items()):
+            if expires_at <= now:
+                workspace_download_tickets.pop(ticket, None)
+        while len(workspace_download_tickets) >= MAX_WORKSPACE_DOWNLOAD_TICKETS:
+            workspace_download_tickets.pop(next(iter(workspace_download_tickets)))
+        ticket = secrets.token_urlsafe(32)
+        workspace_download_tickets[ticket] = (base, body.path, now + WORKSPACE_DOWNLOAD_TICKET_TTL_SECONDS)
+        return {"url": f"/api/v1/codex/workspace/download/{ticket}"}
+
+    @app.get("/api/v1/codex/workspace/download/{ticket}")
+    async def download_workspace_file(ticket: str) -> FileResponse:
+        entry = workspace_download_tickets.pop(ticket, None)
+        if entry is None or entry[2] <= time.monotonic():
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="下载链接已失效，请重新选择文件下载")
+        base, relative_path, _ = entry
+        candidate = workspace_download_path(base, relative_path)
+        return FileResponse(
+            candidate,
+            filename=candidate.name,
+            media_type="application/octet-stream",
+            content_disposition_type="attachment",
+            # Keep large files in their original form; GZipMiddleware skips responses with Content-Encoding.
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Encoding": "identity",
+                "Referrer-Policy": "no-referrer",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @app.get("/api/v1/codex/workspace/image")
     async def workspace_image(cwd: str | None = None, path: str = "") -> dict[str, str | int]:
@@ -1819,6 +1953,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def paste_workspace_entries(request: WorkspaceEntriesPasteRequest) -> dict[str, Any]:
         base = workspace_base_for_cwd(app_server.workspace, request.cwd)
         return workspace_paste_entries(base, request.paths, request.destination, request.mode)
+
+    @app.post("/api/v1/codex/workspace/upload")
+    async def upload_workspace_entry(request: Request, cwd: str | None = None, destination: str = "", name: str = "") -> dict[str, Any]:
+        base = workspace_base_for_cwd(app_server.workspace, cwd)
+        return await workspace_upload_file(base, destination, name, request)
 
     @app.get("/api/v1/codex/threads")
     async def list_threads() -> list[dict[str, Any]]:
@@ -2081,6 +2220,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
         await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/move")
+    async def move_queued_message(thread_id: str, body: QueueMoveRequest) -> dict[str, Any]:
+        try:
+            queue = await shared_queue.move(thread_id, body.message_id, body.adjacent_message_id, body.direction)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"queue": queue}
 
     @app.post("/api/v1/codex/queue/{thread_id}/send-now")
     async def send_queued_message_now(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
@@ -2423,13 +2570,17 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                         await websocket.close(code=status.WS_1008_POLICY_VIOLATION, reason="unsupported client message")
                     return
                 request_id = payload.get("request_id")
-                decision = payload.get("decision")
+                response = payload.get("response", payload.get("decision"))
+                remember = payload.get("remember")
                 if not isinstance(request_id, (str, int)) or isinstance(request_id, bool):
                     continue
-                if not isinstance(decision, str) or decision not in {"accept", "decline", "cancel"}:
+                if not isinstance(response, (str, dict)):
+                    continue
+                if remember is not None and not isinstance(remember, str):
+                    await send_event({"type": "error", "message": "授权范围无效。"})
                     continue
                 try:
-                    await app_server.answer_server_request(request_id, decision)
+                    await app_server.answer_server_request(request_id, response, remember=remember)
                 except CodexRuntimeError as error:
                     await send_event({"type": "error", "message": str(error)})
 
