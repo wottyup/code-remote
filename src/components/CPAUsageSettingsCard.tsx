@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { Check, LoaderCircle, Link2, Trash2 } from 'lucide-react'
 import {
   emptyCPAUsageSettings,
-  fetchCPAUsageAnalytics,
   normalizeCPAUsageBaseUrl,
+  probeCPAUsageConnection,
   type CPAUsageSettings,
 } from '../lib/cpaUsageStats'
 
@@ -50,7 +50,7 @@ export function CPAUsageSettingsCard({
 
     setBusy(true)
     try {
-      await fetchCPAUsageAnalytics(nextSettings, 'today')
+      await probeCPAUsageConnection(nextSettings)
       save(nextSettings)
       setMessage({ text: '连接成功，已验证统计接口可读取。', error: false })
     } catch (reason) {

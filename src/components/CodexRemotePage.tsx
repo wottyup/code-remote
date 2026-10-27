@@ -3782,6 +3782,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const forceMessageStreamBottomTimer = useRef<number | undefined>(undefined)
   const olderMessageScrollAnchor = useRef<{ messageId: string; top: number } | null>(null)
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
+  const lastMessageScrollTop = useRef(0)
   const followMessageStream = useRef(true)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const choiceReplyTarget = useRef(remote)
@@ -3903,7 +3904,10 @@ const RemoteChatPane = memo(function RemoteChatPane({
 
   const positionMessageStreamAtBottom = useCallback(() => {
     const container = messageContainer.current
-    if (container) container.scrollTop = container.scrollHeight
+    if (container) {
+      container.scrollTop = container.scrollHeight
+      lastMessageScrollTop.current = container.scrollTop
+    }
   }, [])
 
   const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
@@ -3938,10 +3942,15 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const handleMessageScroll = useCallback(() => {
     const container = messageContainer.current
     if (!container) return
+    const scrollTop = container.scrollTop
+    const movedUp = scrollTop < lastMessageScrollTop.current - 1
+    lastMessageScrollTop.current = scrollTop
     if (forceMessageStreamBottomFor.current === activeThreadId) return
-    const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 72
-    followMessageStream.current = atBottom
-    setShowScrollToBottom((current) => current === !atBottom ? current : !atBottom)
+    const atBottom = container.scrollHeight - scrollTop - container.clientHeight < 72
+    if (atBottom) followMessageStream.current = true
+    else if (movedUp) followMessageStream.current = false
+    const showScrollToBottom = !followMessageStream.current
+    setShowScrollToBottom((current) => current === showScrollToBottom ? current : showScrollToBottom)
     if (atBottom) {
       setMessageWindow((current) => current.threadId === activeThreadId && !current.anchoredToLatest
         ? recentMessageWindow(activeThreadId ?? null, remote.messages.length)

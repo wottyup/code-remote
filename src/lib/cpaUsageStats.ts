@@ -73,6 +73,10 @@ export interface CPAUsageAnalyticsRequestOptions {
   filterSelectorsOnly?: boolean
 }
 
+interface CPAUsageRequestOptions extends CPAUsageAnalyticsRequestOptions {
+  connectionProbe?: boolean
+}
+
 const settingsStorageKey = 'codex-remote.cpa-usage-settings'
 const analyticsPath = '/v0/management/monitoring/analytics'
 
@@ -148,16 +152,21 @@ export async function fetchCPAUsageAnalytics(
   settings: CPAUsageSettings,
   range: CPAUsageRange,
   signal?: AbortSignal,
-  options: CPAUsageAnalyticsRequestOptions = {},
+  options: CPAUsageRequestOptions = {},
 ): Promise<CPAUsageAnalyticsResponse> {
   const baseUrl = normalizeCPAUsageBaseUrl(settings.baseUrl)
   const managementKey = settings.managementKey.trim()
   if (!baseUrl) throw new Error('请先在设置中填写 Manager Server 地址。')
   if (!managementKey) throw new Error('请先在设置中填写 Manager 管理密钥。')
 
-  const { fromMs, toMs } = analyticsRangeBounds(range)
+  const nowMs = Date.now()
+  const { fromMs, toMs } = options.connectionProbe
+    ? { fromMs: Math.max(0, nowMs - 60_000), toMs: nowMs }
+    : analyticsRangeBounds(range)
+  const filterSelectorsOnly = options.connectionProbe || options.filterSelectorsOnly
+  const timeoutMs = options.connectionProbe ? 20_000 : filterSelectorsOnly ? 45_000 : 90_000
   const timeout = new AbortController()
-  const timeoutId = window.setTimeout(() => timeout.abort(), 20_000)
+  const timeoutId = window.setTimeout(() => timeout.abort(), timeoutMs)
   const abortFromCaller = () => timeout.abort(signal?.reason)
   if (signal?.aborted) abortFromCaller()
   else signal?.addEventListener('abort', abortFromCaller, { once: true })
@@ -179,7 +188,7 @@ export async function fetchCPAUsageAnalytics(
         to_ms: toMs,
         time_zone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
         ...(options.apiKeyHashes?.length ? { filters: { api_key_hashes: options.apiKeyHashes } } : {}),
-        include: options.filterSelectorsOnly
+        include: filterSelectorsOnly
           ? { filter_options: true, filter_selectors: true }
           : {
               summary: true,
@@ -201,7 +210,11 @@ export async function fetchCPAUsageAnalytics(
     if (reason instanceof Error && reason.message.startsWith('Manager Server')) throw reason
     if (reason instanceof Error && (reason.name === 'AbortError' || reason.name === 'TimeoutError')) {
       if (signal?.aborted) throw reason
-      throw new Error('连接 Manager Server 超时。')
+      throw new Error(options.connectionProbe
+        ? '连接 Manager Server 超时。'
+        : filterSelectorsOnly
+          ? '读取 Manager 密钥筛选项超时，请稍后重试。'
+          : '读取 Manager 用量统计超时，请缩短时间范围或稍后重试。')
     }
     if (reason instanceof TypeError || (reason instanceof Error && /fetch|network|load failed/i.test(reason.message))) {
       throw new Error('无法连接 Manager Server。请检查地址、HTTPS 和该服务的 CORS 来源设置。')
@@ -211,4 +224,8 @@ export async function fetchCPAUsageAnalytics(
     window.clearTimeout(timeoutId)
     signal?.removeEventListener('abort', abortFromCaller)
   }
+}
+
+export async function probeCPAUsageConnection(settings: CPAUsageSettings): Promise<void> {
+  await fetchCPAUsageAnalytics(settings, 'today', undefined, { connectionProbe: true })
 }
