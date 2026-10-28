@@ -6987,7 +6987,7 @@ function activityTimelineMatchesText(text: string, timeline: CodexActivityTimeli
   return offset === text.length
 }
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, messageId, choiceItemId, choicePromptText, choiceCard }: {
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, streaming = false, messageId, choiceItemId, choicePromptText, choiceCard }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
@@ -6995,21 +6995,16 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
   showCodeCopy?: boolean
+  streaming?: boolean
   messageId?: string
   choiceItemId?: string
   choicePromptText?: string
   choiceCard?: ReactNode
 }) {
+  const keepStreamingLayout = useRef(streaming)
+  if (streaming) keepStreamingLayout.current = true
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
-  // Message lengths can lag behind the already rendered streaming text. When
-  // there are no visible operations, splitting on those lengths only creates
-  // a second block that makes one sentence appear to reflow between rows.
-  if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
-    return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
-  }
-  // A restored or streamed turn can retain message lengths from an older
-  // snapshot. Never use those offsets to cut the current reply mid-sentence.
-  if (text && !activityTimelineMatchesText(text, timeline, messageId)) {
+  const renderStableContent = () => {
     const choiceStart = choiceCard && choicePromptText ? text.indexOf(choicePromptText) : -1
     const beforeChoiceText = choiceStart >= 0 ? text.slice(0, choiceStart).trim() : text
     const afterChoiceText = choiceStart >= 0 ? text.slice(choiceStart + choicePromptText!.length).trim() : ''
@@ -7020,6 +7015,18 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
       <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} />
     </div>
   }
+  // Keep one DOM layout throughout a live reply. Timeline lengths and text
+  // render in separate updates, so switching layouts per chunk makes it jump.
+  if (keepStreamingLayout.current) return renderStableContent()
+  // Message lengths can lag behind the already rendered streaming text. When
+  // there are no visible operations, splitting on those lengths only creates
+  // a second block that makes one sentence appear to reflow between rows.
+  if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
+    return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
+  }
+  // A restored or streamed turn can retain message lengths from an older
+  // snapshot. Never use those offsets to cut the current reply mid-sentence.
+  if (text && !activityTimelineMatchesText(text, timeline, messageId)) return renderStableContent()
   const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] } | { type: 'choice'; key: string }> = []
   let textOffset = 0
   let messageCount = 0
@@ -7242,11 +7249,11 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
           {choiceCard}
           {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
-        </> : message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
+        </> : message.role === 'assistant' && (activityTimeline.length > 0 || message.streaming || message.id.startsWith('streaming-assistant-'))
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
-        {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {showOperations && operations.length > 0 && activityTimeline.length === 0 && !message.streaming && !message.id.startsWith('streaming-assistant-') ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || copyAction) ? (
