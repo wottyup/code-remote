@@ -1177,7 +1177,11 @@ class CodexAppServer:
             await self._stop_process()
             executable = self._resolve_executable()
             if not executable:
-                raise CodexRuntimeError(f"找不到 Codex CLI：{self.command}")
+                raise CodexRuntimeError(
+                    f"找不到可用的 Codex CLI：{self.command}。"
+                    "请将 CODEX_REMOTE_COMMAND 指向完整安装的 Codex CLI；"
+                    "不要使用 .codex/.sandbox-bin 中缺少沙箱辅助程序的内部缓存。"
+                )
             if not self.workspace.is_dir():
                 raise CodexRuntimeError(f"工作目录不存在：{self.workspace}")
             try:
@@ -1666,12 +1670,28 @@ class CodexAppServer:
                 codex_script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
                 if codex_script.is_file():
                     return str(codex_script)
-        candidates = [self.command]
+
+        def is_sandbox_cache(executable: str) -> bool:
+            return self._use_windows_websocket and ".sandbox-bin" in {
+                part.casefold() for part in Path(executable).parts
+            }
+
+        # Desktop command sessions can export their private cached executable.
+        # It is not a standalone CLI installation and may lack sandbox helpers.
+        candidates = [] if is_sandbox_cache(self.command) else [self.command]
+        if self._use_windows_websocket and (not candidates or self.command == "codex"):
+            for directory in os.get_exec_path():
+                for filename in ("codex.cmd", "codex.exe"):
+                    candidate_path = str(Path(directory) / filename)
+                    if not is_sandbox_cache(candidate_path):
+                        candidates.append(candidate_path)
         if os.name == "nt" and not Path(self.command).suffix:
             candidates.extend((f"{self.command}.cmd", f"{self.command}.exe"))
         for candidate in candidates:
             executable = shutil.which(candidate)
             if executable:
+                if is_sandbox_cache(executable):
+                    continue
                 if os.name == "nt" and Path(executable).suffix.casefold() in {".cmd", ".bat"}:
                     shim = Path(executable)
                     codex_script = shim.parent / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
