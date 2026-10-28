@@ -6970,7 +6970,24 @@ const OperationLog = memo(function OperationLog({
   )
 })
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, choiceItemId, choiceCard }: {
+function activityTimelineMatchesText(text: string, timeline: CodexActivityTimelineEntry[], messageId?: string) {
+  const messageEntries = timeline.filter((entry): entry is Extract<CodexActivityTimelineEntry, { type: 'message' }> => entry.type === 'message' && entry.length > 0)
+  if (messageEntries.length === 0) return true
+  if (messageId && !messageId.startsWith('streaming-') && messageEntries[0].itemId !== messageId) return false
+
+  let offset = 0
+  for (const [index, entry] of messageEntries.entries()) {
+    if (index > 0) {
+      if (text.slice(offset, offset + 2) !== '\n\n') return false
+      offset += 2
+    }
+    if (offset + entry.length > text.length) return false
+    offset += entry.length
+  }
+  return offset === text.length
+}
+
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, messageId, choiceItemId, choicePromptText, choiceCard }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
@@ -6978,7 +6995,9 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
   showCodeCopy?: boolean
+  messageId?: string
   choiceItemId?: string
+  choicePromptText?: string
   choiceCard?: ReactNode
 }) {
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
@@ -6987,6 +7006,19 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   // a second block that makes one sentence appear to reflow between rows.
   if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
     return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
+  }
+  // A restored or streamed turn can retain message lengths from an older
+  // snapshot. Never use those offsets to cut the current reply mid-sentence.
+  if (text && !activityTimelineMatchesText(text, timeline, messageId)) {
+    const choiceStart = choiceCard && choicePromptText ? text.indexOf(choicePromptText) : -1
+    const beforeChoiceText = choiceStart >= 0 ? text.slice(0, choiceStart).trim() : text
+    const afterChoiceText = choiceStart >= 0 ? text.slice(choiceStart + choicePromptText!.length).trim() : ''
+    return <div className="activity-timeline">
+      {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null}
+      {choiceCard}
+      {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null}
+      <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} />
+    </div>
   }
   const blocks: Array<{ type: 'message'; key: string; text: string } | { type: 'operations'; key: string; operations: CodexOperation[] } | { type: 'choice'; key: string }> = []
   let textOffset = 0
@@ -7211,7 +7243,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
           {choiceCard}
           {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
         </> : message.role === 'assistant' && activityTimeline.length > 0
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
           : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
