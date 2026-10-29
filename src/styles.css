@@ -755,7 +755,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .operation-log__step > strong { color: #aebbd0; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 500; white-space: nowrap; }
 .operation-log__step > code { min-width: 0; }
 .operation-log__item > small { padding-top: 1px; color: #788295; font-size: calc(14px + var(--mobile-font-offset)); white-space: nowrap; }
-.chat-message__code { position: relative; display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; margin: 9px 0; padding: 12px 13px 42px; border: 1px solid #30343d; border-radius: 9px; background: #171a20; color: #d7e0ef; font: 14px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: calc(14px + var(--mobile-font-offset)); white-space: pre; }
+.chat-message__code-wrap { position: relative; width: 100%; min-width: 0; max-width: 100%; margin: 9px 0; }
+.chat-message__code { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; overflow: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; margin: 0; padding: 12px 13px 42px; border: 1px solid #30343d; border-radius: 9px; background: #171a20; color: #d7e0ef; font: 14px/1.65 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; font-size: calc(14px + var(--mobile-font-offset)); white-space: pre; }
 .chat-message__code code::before { display: block; margin-bottom: 5px; color: #7f8da4; content: attr(data-language); font: 11px/1.2 Inter, ui-sans-serif, sans-serif; font-size: calc(11px + var(--mobile-font-offset)); text-transform: lowercase; }
 .chat-message__code-copy { position: absolute; right: 8px; bottom: 7px; display: inline-flex; align-items: center; gap: 5px; min-height: 25px; padding: 0 7px; border: 1px solid #39404d; border-radius: 6px; background: #20242c; color: #9ba8bd; cursor: pointer; font: 11px/1 Inter, ui-sans-serif, sans-serif; font-size: calc(11px + var(--mobile-font-offset)); }
 .chat-message__code-copy:hover { border-color: #64728b; background: #2a303b; color: #e1e6ef; }
@@ -2605,7 +2606,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro a { color: #00e; text-decoration: underline; }
   .remote-shell--theme-retro .chat-message__content a:visited,
   .remote-shell--theme-retro a:visited { color: #551a8b; }
-  .remote-shell--theme-retro .chat-message__code { overflow: auto; margin: 1em 0; padding: 0; border: 0; border-radius: 0; background: #fff; color: #000; box-shadow: none; font: .8125em/normal monospace; }
+  .remote-shell--theme-retro .chat-message__code-wrap { margin: 1em 0; }
+  .remote-shell--theme-retro .chat-message__code { overflow: auto; margin: 0; padding: 0; border: 0; border-radius: 0; background: #fff; color: #000; box-shadow: none; font: .8125em/normal monospace; }
   .remote-shell--theme-retro .chat-message__code code::before { display: none; }
   .remote-shell--theme-retro .chat-message__code-copy,
   .remote-shell--theme-retro .chat-message__actions button { position: static; display: inline; min-height: 0; margin: 0 .5em 0 0; padding: 0; border: 0; border-radius: 0; background: transparent; color: #00e; font: inherit; text-decoration: underline; }
