@@ -1,4 +1,4 @@
-import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent } from 'react'
+import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
@@ -3784,6 +3784,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const lastObservedUserMessage = useRef<{ threadId: string | null; messageId: string | null }>({ threadId: null, messageId: null })
   const lastMessageScrollTop = useRef(0)
   const followMessageStream = useRef(true)
+  const upwardMessageScrollIntentUntil = useRef(0)
+  const messageTouchY = useRef<number | null>(null)
+  const messageScrollbarPointer = useRef<{ id: number; y: number } | null>(null)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const choiceReplyTarget = useRef(remote)
   useLayoutEffect(() => {
@@ -3910,6 +3913,82 @@ const RemoteChatPane = memo(function RemoteChatPane({
     }
   }, [])
 
+  const markUpwardMessageScrollIntent = useCallback(() => {
+    // Layout changes can also move scrollTop; only recent input may pause following.
+    upwardMessageScrollIntentUntil.current = window.performance.now() + 750
+  }, [])
+
+  const handleMessageWheel = useCallback((event: ReactWheelEvent<HTMLElement>) => {
+    if (event.deltaY < 0) markUpwardMessageScrollIntent()
+    else if (event.deltaY > 0) upwardMessageScrollIntentUntil.current = 0
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessageTouchStart = useCallback((event: ReactTouchEvent<HTMLElement>) => {
+    messageTouchY.current = event.touches.length === 1 ? event.touches[0].clientY : null
+  }, [])
+
+  const handleMessageTouchMove = useCallback((event: ReactTouchEvent<HTMLElement>) => {
+    const y = event.touches.length === 1 ? event.touches[0].clientY : null
+    if (y === null) {
+      messageTouchY.current = null
+      return
+    }
+    const previousY = messageTouchY.current
+    if (previousY !== null && y > previousY + 1) {
+      markUpwardMessageScrollIntent()
+      messageTouchY.current = y
+    } else if (previousY !== null && y < previousY - 1) {
+      upwardMessageScrollIntentUntil.current = 0
+      messageTouchY.current = y
+    } else if (previousY === null) {
+      messageTouchY.current = y
+    }
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessageKeyDown = useCallback((event: KeyboardEvent<HTMLElement>) => {
+    if (event.defaultPrevented || event.altKey
+      || ((event.ctrlKey || event.metaKey) && event.key !== 'Home' && event.key !== 'End')
+      || event.target instanceof Element && event.target.closest('input, textarea, select, [contenteditable]')) return
+    if (event.key === 'ArrowUp' || event.key === 'PageUp' || event.key === 'Home' || (event.key === ' ' && event.shiftKey)) {
+      markUpwardMessageScrollIntent()
+    } else if (event.key === 'ArrowDown' || event.key === 'PageDown' || event.key === 'End' || (event.key === ' ' && !event.shiftKey)) {
+      upwardMessageScrollIntentUntil.current = 0
+    }
+  }, [markUpwardMessageScrollIntent])
+
+  const handleMessagePointerDown = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    if (event.pointerType === 'touch' || event.button !== 0) return
+    const container = event.currentTarget
+    if (container.scrollHeight <= container.clientHeight) return
+    const bounds = container.getBoundingClientRect()
+    const scrollbarWidth = Math.max(container.offsetWidth - container.clientWidth, 12)
+    if (event.clientX < bounds.right - scrollbarWidth || event.clientX > bounds.right) return
+    messageScrollbarPointer.current = { id: event.pointerId, y: event.clientY }
+    markUpwardMessageScrollIntent()
+  }, [markUpwardMessageScrollIntent])
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      const pointer = messageScrollbarPointer.current
+      if (!pointer || pointer.id !== event.pointerId) return
+      if (event.clientY < pointer.y - 1) markUpwardMessageScrollIntent()
+      else if (event.clientY > pointer.y + 1) upwardMessageScrollIntentUntil.current = 0
+      pointer.y = event.clientY
+    }
+    const onPointerEnd = (event: PointerEvent) => {
+      if (messageScrollbarPointer.current?.id === event.pointerId) messageScrollbarPointer.current = null
+    }
+    window.addEventListener('pointermove', onPointerMove, true)
+    window.addEventListener('pointerup', onPointerEnd, true)
+    window.addEventListener('pointercancel', onPointerEnd, true)
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove, true)
+      window.removeEventListener('pointerup', onPointerEnd, true)
+      window.removeEventListener('pointercancel', onPointerEnd, true)
+      messageScrollbarPointer.current = null
+    }
+  }, [markUpwardMessageScrollIntent])
+
   const forceMessageStreamToBottom = useCallback((threadId: string | null | undefined) => {
     forceMessageStreamBottomFor.current = threadId ?? null
     forceMessageStreamBottomVersion.current += 1
@@ -3922,6 +4001,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
       scrollAnimationFrame.current = undefined
     }
     followMessageStream.current = true
+    upwardMessageScrollIntentUntil.current = 0
+    messageTouchY.current = null
+    messageScrollbarPointer.current = null
     setShowScrollToBottom(false)
   }, [])
 
@@ -3948,7 +4030,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     if (forceMessageStreamBottomFor.current === activeThreadId) return
     const atBottom = container.scrollHeight - scrollTop - container.clientHeight < 72
     if (atBottom) followMessageStream.current = true
-    else if (movedUp) followMessageStream.current = false
+    else if (movedUp && window.performance.now() <= upwardMessageScrollIntentUntil.current) followMessageStream.current = false
     const showScrollToBottom = !followMessageStream.current
     setShowScrollToBottom((current) => current === showScrollToBottom ? current : showScrollToBottom)
     if (atBottom) {
@@ -3960,6 +4042,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
 
   const scrollToBottom = useCallback(() => {
     followMessageStream.current = true
+    upwardMessageScrollIntentUntil.current = 0
     setShowScrollToBottom(false)
     setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
     positionMessageStreamAtBottom()
@@ -4138,7 +4221,21 @@ const RemoteChatPane = memo(function RemoteChatPane({
         </div>
       </header>
 
-      <section className="message-stream" ref={messageContainer} onScroll={handleMessageScroll} aria-live="polite" aria-label={`${activeTitle} ${activeEngineLabel} 对话`}>
+      <section
+        className={`message-stream${showScrollToBottom ? '' : ' message-stream--following'}`}
+        ref={messageContainer}
+        tabIndex={0}
+        onScroll={handleMessageScroll}
+        onWheelCapture={handleMessageWheel}
+        onTouchStartCapture={handleMessageTouchStart}
+        onTouchMoveCapture={handleMessageTouchMove}
+        onTouchEndCapture={() => { messageTouchY.current = null }}
+        onTouchCancelCapture={() => { messageTouchY.current = null }}
+        onKeyDownCapture={handleMessageKeyDown}
+        onPointerDownCapture={handleMessagePointerDown}
+        aria-live="polite"
+        aria-label={`${activeTitle} ${activeEngineLabel} 对话`}
+      >
         <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
           {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
