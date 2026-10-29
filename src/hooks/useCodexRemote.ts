@@ -20,7 +20,7 @@ import {
   type RemoteEvent,
 } from '../lib/codexRemoteClient'
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
-import { completedAssistantText, completedAssistantTextLength, streamingAssistantText } from '../lib/assistantTextStream'
+import { completedAssistantText, completedAssistantTextLength, reconcileAssistantStreamSnapshot, streamingAssistantText, type AssistantStreamSnapshotItem } from '../lib/assistantTextStream'
 import { deliveredQueuedMessageIdsFromHistory, insertRemoteUserMessage, legacyDuplicateQueuedMessageId, mightBeLegacyDuplicateQueuedMessage, preserveLocalQueuedMessages, queuedRequestText, reconcileDeliveredLocalMessage, sameMessageDocuments, sameMessageImages, sameQueuedMessageHistoryContent } from '../lib/threadMessageMerge'
 import { canUseCachedThreadHistory, threadHistoryVersionChanged } from '../lib/threadHistoryPolicy'
 import { ThreadLiveHistory } from '../lib/threadLiveHistory'
@@ -1324,6 +1324,39 @@ function assistantItemText(value: unknown) {
   }).join('')
 }
 
+function assistantSnapshotItemsForStreamSegment(thread: CodexThreadDetails, turnId: string) {
+  const turn = thread.turns?.find((candidate) => candidate && typeof candidate === 'object'
+    && (candidate as Record<string, unknown>).id === turnId) as Record<string, unknown> | undefined
+  if (!turn || !Array.isArray(turn.items)) return null
+  const items = turn.items as Record<string, unknown>[]
+  let latestUserIndex = -1
+  items.forEach((item, index) => {
+    if (typeof item?.type === 'string' && item.type.replace(/[-_]/g, '').toLowerCase() === 'usermessage') {
+      latestUserIndex = index
+    }
+  })
+  const snapshotItems: AssistantStreamSnapshotItem[] = []
+  const earlierItemIds = new Set<string>()
+  items.forEach((item, index) => {
+    if (typeof item?.type !== 'string' || item.type.replace(/[-_]/g, '').toLowerCase() !== 'agentmessage'
+      || typeof item.id !== 'string') return
+    if (index < latestUserIndex) {
+      earlierItemIds.add(item.id)
+      return
+    }
+    const questions = parseStructuredAssistantQuestions(item.questions)
+    const text = assistantItemText(item.text)
+      || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
+    const status = typeof item.status === 'string' ? item.status.replace(/[-_]/g, '').toLowerCase() : ''
+    snapshotItems.push({
+      id: item.id,
+      text,
+      complete: !['active', 'inprogress', 'running', 'started', 'streaming'].includes(status),
+    })
+  })
+  return { snapshotItems, earlierItemIds }
+}
+
 function activityTimelineEntryKey(entry: CodexActivityTimelineEntry) {
   return entry.type === 'message' ? `message:${entry.itemId}` : `operation:${entry.operationId}`
 }
@@ -2446,6 +2479,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         streamingAssistantMessageId.current = runningMessageId
       }
       if (runningMessageId) streamingAssistantTurnId.current = latestTurnId
+      if (runningMessageId && latestTurnId) {
+        const snapshot = assistantSnapshotItemsForStreamSegment(thread, latestTurnId)
+        if (snapshot) {
+          const reconciled = reconcileAssistantStreamSnapshot(
+            snapshot.snapshotItems,
+            streamingAssistantParts.current,
+            streamingCompletedItems.current,
+            snapshot.earlierItemIds,
+          )
+          // Ignore transitions that captured the partial text before this read.
+          streamingRenderGeneration.current += 1
+          streamingAssistantParts.current = reconciled.parts
+          streamingCompletedItems.current = reconciled.completed
+        }
+      }
       const streamedText = streamingAssistantText(streamingAssistantParts.current)
       cacheThreadSnapshot(thread, messagesWithLocalTiming, {
         running,
@@ -2465,7 +2513,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
             loaded,
             latestTurnId,
             runningMessageId,
-            mergeStreamingText(assistantTextForTurn(current, latestTurnId, runningMessageId), streamedText),
+            streamedText,
             undefined,
             completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current),
           )
