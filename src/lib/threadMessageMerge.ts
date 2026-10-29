@@ -77,7 +77,7 @@ export function insertRemoteUserMessage(messages: CodexMessage[], incoming: Code
   // when both messages share a turn and payload.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]
-    if (!message.id.startsWith('queued-') || !sameQueuedMessageHistoryContent(incoming, message)) continue
+    if (!message.id.startsWith('queued-') || message.sourceItemId || !sameQueuedMessageHistoryContent(incoming, message)) continue
     const next = [...messages]
     next[index] = {
       ...incoming,
@@ -120,25 +120,63 @@ export function insertRemoteUserMessage(messages: CodexMessage[], incoming: Code
   return [...messages, incoming]
 }
 
+/** Only a new user item splits the reply; an echo of a local send does not. */
+export function startsNewAssistantStreamSegment(messages: CodexMessage[], incoming: CodexMessage) {
+  return Boolean(incoming.turnId
+    && messages.some((message) => message.role === 'user' && message.turnId === incoming.turnId)
+    && insertRemoteUserMessage(messages, incoming).length > messages.length)
+}
+
+/** Include accepted user items whose React updates have not committed yet. */
+export function mergeObservedUserMessages(messages: CodexMessage[], observed: Iterable<CodexMessage>) {
+  let next = messages
+  const knownIds = new Set(messages.flatMap((message) => message.sourceItemId
+    ? [message.id, message.sourceItemId] : [message.id]))
+  for (const message of observed) {
+    if (knownIds.has(message.sourceItemId ?? message.id)) continue
+    if (message.sourceItemId) next = insertRemoteUserMessage(next, message)
+    else next = [...next, message]
+    knownIds.add(message.id)
+    if (message.sourceItemId) knownIds.add(message.sourceItemId)
+  }
+  return next
+}
+
 export function reconcileDeliveredLocalMessage(
   messages: CodexMessage[],
   localMessageId: string,
-  turnId: string,
+  turnId: string | null,
   previousMessageIds: ReadonlySet<string>,
 ) {
   const localIndex = messages.findIndex((message) => message.id === localMessageId && message.role === 'user')
   if (localIndex < 0) return messages
 
-  const localMessage = { ...messages[localIndex], turnId }
+  const localMessage = { ...messages[localIndex], ...(turnId ? { turnId } : {}) }
   const alreadyInHistory = messages.some((message) => message.id !== localMessageId
     && !message.id.startsWith('queued-')
     && !previousMessageIds.has(message.id)
-    && sameQueuedMessageHistoryContent(message, localMessage))
+    && !(message.sourceItemId && previousMessageIds.has(message.sourceItemId))
+    && (localMessage.turnId
+      ? sameQueuedMessageHistoryContent(message, localMessage)
+      : delayedUserEchoDistance(message, localMessage) !== null))
   if (alreadyInHistory) return messages.filter((message) => message.id !== localMessageId)
 
   const next = [...messages]
   next[localIndex] = localMessage
   return next
+}
+
+/** The socket may confirm the user item before the HTTP send returns. */
+export function insertDeliveredLocalMessage(
+  messages: CodexMessage[],
+  localMessage: CodexMessage,
+  previousMessageIds: ReadonlySet<string>,
+) {
+  const existingIndex = messages.findIndex((message) => message.id === localMessage.id)
+  const next = existingIndex < 0
+    ? [...messages, localMessage]
+    : messages.map((message, index) => index === existingIndex ? { ...message, ...localMessage } : message)
+  return reconcileDeliveredLocalMessage(next, localMessage.id, localMessage.turnId ?? null, previousMessageIds)
 }
 
 export interface AttemptedQueuedMessage {
@@ -291,4 +329,12 @@ export function preserveLocalQueuedMessages(next: CodexMessage[], current: Codex
     preserved.splice(insertionIndex, 0, localMessage)
   }
   return preserved
+}
+
+/** A snapshot without an already visible in-turn answer must not hydrate its old reply. */
+export function historyMissingCurrentUserMessages(snapshot: CodexMessage[], current: CodexMessage[], turnId: string | null) {
+  if (!turnId) return false
+  const snapshotIds = new Set(snapshot.map((message) => message.id))
+  return preserveLocalQueuedMessages(snapshot, current).some((message) => message.role === 'user'
+    && (!message.turnId || message.turnId === turnId) && !snapshotIds.has(message.id))
 }
