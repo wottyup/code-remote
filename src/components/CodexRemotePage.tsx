@@ -1793,15 +1793,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       void confirmQueuedEdit()
       return
     }
-    const prompt = draft.trim()
-    if ((!prompt && attachedImagesRef.current.length === 0 && attachedDocuments.length === 0) || !canCompose) return
+    // A second submit can arrive before React commits the cleared draft.
+    // Read the synchronously updated values so it cannot resend stale input.
+    const prompt = draftRef.current.trim()
+    if ((!prompt && attachedImagesRef.current.length === 0 && attachedDocumentsRef.current.length === 0) || !canCompose) return
     if (!modelSupportsImages && attachedImagesRef.current.length > 0) {
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
-    const previousDraft = draft
+    const previousDraft = draftRef.current
     const previousImages = attachedImagesRef.current
-    const previousDocuments = attachedDocuments
+    const previousDocuments = attachedDocumentsRef.current
     const previousAttachmentError = attachmentError
     sendingRef.current = true
     setSending(true)

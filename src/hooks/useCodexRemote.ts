@@ -173,7 +173,8 @@ const maxBackgroundPrefetchThreads = 3
 const backgroundPrefetchDelayMs = 120
 const cachedActiveThreadRefreshDelayMs = 180
 const persistentThreadCacheWriteDelayMs = 600
-const persistentThreadCacheVersion = 1
+// Version 2 preserves original message whitespace and source item identity.
+const persistentThreadCacheVersion = 2
 const threadMetadataFreshnessMs = 30_000
 const streamingRenderIntervalMs = 48
 const maxPersistedQueuedImageCharacters = 12_000_000
@@ -274,6 +275,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
     const value = window.localStorage.getItem(activeThreadCacheStorageKey)
     if (!value) return null
     const parsed = JSON.parse(value) as Record<string, unknown>
+    if (parsed.version !== persistentThreadCacheVersion) return null
     if (parsed.threadId !== threadId || !parsed.thread || typeof parsed.thread !== 'object' || !Array.isArray(parsed.messages)) return null
     const thread = parsed.thread as Record<string, unknown>
     if (thread.id !== threadId) return null
@@ -283,6 +285,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
       if (typeof message.id !== 'string' || (message.role !== 'user' && message.role !== 'assistant') || typeof message.text !== 'string' || typeof message.createdAt !== 'string') return []
       return [{
         id: message.id,
+        ...(typeof message.sourceItemId === 'string' ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text: message.text,
         createdAt: message.createdAt,
@@ -333,6 +336,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         : message.text
       const compactMessage = {
         id: message.id,
+        ...(message.sourceItemId ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text,
         createdAt: message.createdAt,
@@ -355,6 +359,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
       cachedCharacters += messageCharacters
     }
     window.localStorage.setItem(activeThreadCacheStorageKey, JSON.stringify({
+      version: persistentThreadCacheVersion,
       threadId: thread.id,
       thread: compactThread(thread),
       messages: cachedMessages,

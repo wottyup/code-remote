@@ -304,6 +304,8 @@ function plainText(value: unknown): string {
 }
 
 function originalPdfAttachmentsFromText(value: string) {
+  // Preserve body whitespace: the local send and its server echo must keep
+  // the same text, including blank lines pasted from a terminal or document.
   const documents: CodexDocumentAttachment[] = []
   const collectAttachment = (_block: string, sourceFileId: string, encodedName: string) => {
     let name = encodedName
@@ -321,7 +323,7 @@ function originalPdfAttachmentsFromText(value: string) {
   ).replace(
     /\[\[CODEX_REMOTE_PDF_BEGIN id=([A-Za-z0-9_-]{24,64}) name=([^\]\r\n]+)\]\][\s\S]*?\[\[CODEX_REMOTE_PDF_END id=\1\]\]/g,
     collectAttachment,
-  ).replace(/\n{3,}/g, '\n\n').trim()
+  ).trim()
   return { text, documents }
 }
 
@@ -333,7 +335,7 @@ function textDocumentAttachmentsFromText(value: string) {
       documents.push({ name, content })
       return ''
     },
-  ).replace(/\n{3,}/g, '\n\n').trim()
+  ).trim()
   return { text, documents }
 }
 
