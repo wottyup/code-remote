@@ -56,7 +56,7 @@ import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { forgetOpenTerminalThread, readOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
-import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
+import { httpMessageLinks, splitMessageInlineLinks } from '../lib/messageInlineLinks'
 import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantChoiceContent, type MessageChoiceGroup } from '../lib/messageChoices'
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
@@ -6752,7 +6752,13 @@ function renderMessageText(value: string, keyPrefix: string): ReactNode[] {
   return elements
 }
 
-const MessageContent = memo(function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean }) {
+const MessageContent = memo(function MessageContent({ text, hideStandaloneSeparators = false, showCodeCopy = true, showOnlyHttpLinks = false }: { text: string; hideStandaloneSeparators?: boolean; showCodeCopy?: boolean; showOnlyHttpLinks?: boolean }) {
+  if (showOnlyHttpLinks) {
+    const links = httpMessageLinks(text)
+    return links.length > 0 ? <div className="chat-message__content">
+      {links.map((link, index) => <div className="chat-message__text" key={`${link}-${index}`}><a href={link} target="_blank" rel="noopener noreferrer">{link}</a></div>)}
+    </div> : null
+  }
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
   let cursor = 0
@@ -7084,7 +7090,7 @@ function activityTimelineMatchesText(text: string, timeline: CodexActivityTimeli
   return offset === text.length
 }
 
-const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, streaming = false, messageId, choiceItemId, choicePromptText, choiceCard }: {
+const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, timeline, operations, fileChanges = [], onOpenFile, onOpenImage, showCodeCopy = true, showOnlyHttpLinks = false, streaming = false, messageId, choiceItemId, choicePromptText, choiceCard }: {
   text: string
   timeline: CodexActivityTimelineEntry[]
   operations: CodexOperation[]
@@ -7092,6 +7098,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
   showCodeCopy?: boolean
+  showOnlyHttpLinks?: boolean
   streaming?: boolean
   messageId?: string
   choiceItemId?: string
@@ -7106,9 +7113,9 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
     const beforeChoiceText = choiceStart >= 0 ? text.slice(0, choiceStart).trim() : text
     const afterChoiceText = choiceStart >= 0 ? text.slice(choiceStart + choicePromptText!.length).trim() : ''
     return <div className="activity-timeline">
-      {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null}
+      {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} showOnlyHttpLinks={showOnlyHttpLinks} /> : null}
       {choiceCard}
-      {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null}
+      {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={showCodeCopy} showOnlyHttpLinks={showOnlyHttpLinks} /> : null}
       <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} />
     </div>
   }
@@ -7119,7 +7126,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   // there are no visible operations, splitting on those lengths only creates
   // a second block that makes one sentence appear to reflow between rows.
   if (!choiceCard && !timeline.some((entry) => entry.type === 'operation' && operationById.has(entry.operationId))) {
-    return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} /> : null
+    return text ? <MessageContent text={text} hideStandaloneSeparators showCodeCopy={showCodeCopy} showOnlyHttpLinks={showOnlyHttpLinks} /> : null
   }
   // A restored or streamed turn can retain message lengths from an older
   // snapshot. Never use those offsets to cut the current reply mid-sentence.
@@ -7169,7 +7176,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   return (
     <div className="activity-timeline">
       {blocks.map((block) => block.type === 'message'
-        ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators showCodeCopy={showCodeCopy} />
+        ? <MessageContent key={block.key} text={block.text} hideStandaloneSeparators showCodeCopy={showCodeCopy} showOnlyHttpLinks={showOnlyHttpLinks} />
         : block.type === 'choice' ? <Fragment key={block.key}>{choiceCard}</Fragment>
         : <OperationLog
           key={block.key}
@@ -7328,6 +7335,7 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const splitStructuredChoice = Boolean(choiceCard && structuredQuestions && !choiceInTimeline && promptStart >= 0
     && !activityTimeline.some((entry) => entry.type === 'operation'))
   const renderedText = choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const showOnlyHttpLinks = useMemo(() => message.role === 'assistant' && httpMessageLinks(message.text).length > 0, [message.role, message.text])
   const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
   const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
 
@@ -7343,12 +7351,12 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {splitStructuredChoice ? <>
-          {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+          {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} showOnlyHttpLinks={showOnlyHttpLinks} /> : null}
           {choiceCard}
-          {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} /> : null}
+          {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators showCodeCopy={!message.streaming} showOnlyHttpLinks={showOnlyHttpLinks} /> : null}
         </> : message.role === 'assistant' && (activityTimeline.length > 0 || message.streaming || message.id.startsWith('streaming-assistant-'))
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
-          : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} /> : null}
+          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} showCodeCopy={!message.streaming} showOnlyHttpLinks={showOnlyHttpLinks} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
+          : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} showCodeCopy={!message.streaming} showOnlyHttpLinks={showOnlyHttpLinks} /> : null}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 && !message.streaming && !message.id.startsWith('streaming-assistant-') ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
