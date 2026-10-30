@@ -7,9 +7,9 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@drawable/code_remote"
+        android:icon="@mipmap/ic_launcher"
         android:label="Code Remote"
-        android:roundIcon="@drawable/code_remote"
+        android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"
