@@ -116,7 +116,7 @@ function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: num
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
 }
 
-type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification'
+type PixelThemeIconName = 'theme' | 'display' | 'chat' | 'notification' | 'about'
 
 function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppTheme }) {
   if (theme === 'pixel') return <img className="pixel-theme-icon" src={`/pixel-theme/icons/${name}.png`} alt="" aria-hidden="true" />
@@ -6701,6 +6701,23 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
             {notificationError ? <p className="theme-notification-error" role="alert">{notificationError}</p> : null}
           </div>
         </section>
+
+        <details className="theme-settings-card theme-about-card">
+          <summary className="theme-settings-card__heading theme-about-card__summary">
+            <h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2>
+            <ChevronDown size={18} aria-hidden="true" />
+          </summary>
+          <div className="theme-about-card__body">
+            <p className="theme-about-card__intro">项目介绍、源代码与更新。</p>
+            <img className="theme-about-card__logo" src="/code-remote.png" alt="Code Remote Logo" />
+            <strong className="theme-about-card__name">Code Remote</strong>
+            <p className="theme-about-card__description">在浏览器中连接本机的代码助手，查看对话、文件和终端。</p>
+            <a className="theme-about-card__link" href="https://github.com/sevencnup/code-remote" target="_blank" rel="noopener noreferrer">
+              <strong>GitHub 项目地址</strong>
+              <span>https://github.com/sevencnup/code-remote</span>
+            </a>
+          </div>
+        </details>
       </div>
     </main>
   )
