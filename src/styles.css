@@ -669,6 +669,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .theme-display-controls { padding: 0 22px 8px; }
 .theme-display-controls .theme-control-row { border-bottom: 0; }
+.theme-display-controls--typography .theme-control-row + .theme-control-row { border-top: 1px solid rgba(146, 157, 184, .1); }
 .theme-display-controls .theme-range-input output { min-width: 54px; }
 .theme-notification-toggle { display: inline-flex; min-width: 112px; min-height: 34px; flex: 0 0 auto; align-items: center; justify-content: center; gap: 7px; padding: 0 11px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 8px; background: rgba(27, 30, 37, .72); color: #c7ccda; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); }
 .theme-notification-toggle:hover:not(:disabled) { border-color: rgba(170, 186, 255, .5); background: rgba(53, 59, 77, .68); }

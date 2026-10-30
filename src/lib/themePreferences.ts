@@ -11,6 +11,7 @@ export interface ThemePreferences {
   customBackgroundPositionY: number
   customBackgroundZoom: number
   fontSizeAdjustment: number
+  letterSpacingPercent: number
   systemNotificationsEnabled: boolean
   customBackgroundImage?: string
 }
@@ -27,6 +28,7 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundPositionY: 50,
   customBackgroundZoom: 100,
   fontSizeAdjustment: 0,
+  letterSpacingPercent: 2,
   systemNotificationsEnabled: false,
 }
 
@@ -50,6 +52,10 @@ export function normalizeBackgroundZoom(value: unknown) {
 
 export function normalizeFontSizeAdjustment(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(6, Math.max(-3, Math.round(value))) : 0
+}
+
+export function normalizeLetterSpacingPercent(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : 2
 }
 
 function normalizeThemeBackgroundImage(value: unknown) {
@@ -80,6 +86,7 @@ export function readThemePreferences(): ThemePreferences {
       customBackgroundPositionY: normalizeBackgroundPosition(parsed.customBackgroundPositionY),
       customBackgroundZoom: normalizeBackgroundZoom(parsed.customBackgroundZoom),
       fontSizeAdjustment: normalizeFontSizeAdjustment(parsed.fontSizeAdjustment),
+      letterSpacingPercent: normalizeLetterSpacingPercent(parsed.letterSpacingPercent),
       systemNotificationsEnabled: parsed.systemNotificationsEnabled === true,
       ...(customBackgroundImage ? { customBackgroundImage } : {}),
     }
@@ -133,5 +140,6 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
     '--user-font-offset': `${normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)}px`,
+    letterSpacing: `${normalizeLetterSpacingPercent(preferences.letterSpacingPercent) / 100}em`,
   } as CSSProperties
 }

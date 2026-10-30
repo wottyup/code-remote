@@ -68,7 +68,7 @@ import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
-import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
@@ -2575,7 +2575,9 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const viewStateCache = useRef(new Map<string, WorkspaceExplorerViewState>())
   const pendingScrollRestore = useRef<number | null>(null)
   const browsingRoot = manualRoot || cwd
-  const portalThemeStyle = theme === 'custom' ? themeRootStyle(themePreferences) : undefined
+  const portalThemeStyle = theme === 'custom'
+    ? themeRootStyle(themePreferences)
+    : { letterSpacing: `${normalizeLetterSpacingPercent(themePreferences.letterSpacingPercent) / 100}em` }
   const scopeKey = `${threadId ?? 'new'}:${cwd ?? ''}:${browsingRoot ?? ''}`
   const activeScopeKey = useRef(scopeKey)
   activeScopeKey.current = scopeKey
@@ -3634,7 +3636,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
         document.body,
       ) : null}
       {mutationDialog && typeof document !== 'undefined' ? createPortal(
-        <div className={`thread-rename-backdrop remote-shell--theme-${theme}`} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeWorkspaceMutation() }}>
+        <div className={`thread-rename-backdrop remote-shell--theme-${theme}`} style={portalThemeStyle} role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeWorkspaceMutation() }}>
           <form className={`thread-rename-dialog workspace-mutation-dialog${mutationDialog.action === 'delete' ? ' thread-delete-dialog' : ''}`} role="dialog" aria-modal="true" aria-labelledby="workspace-mutation-title" onSubmit={(event) => { void submitWorkspaceMutation(event) }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="thread-rename-dialog__heading">
               {mutationDialog.action === 'delete' ? (
@@ -6328,6 +6330,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     positionY: number
   } | null>(null)
   const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
+  const letterSpacingPercent = normalizeLetterSpacingPercent(preferences.letterSpacingPercent)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
     { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
     { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
@@ -6640,10 +6643,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
         <section className="theme-settings-card">
           <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
-          <div className="theme-display-controls">
+          <div className="theme-display-controls theme-display-controls--typography">
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
               <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label="全局字体大小" /><output>{fontSizeAdjustment === 0 ? '标准' : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
+            </label>
+            <label className="theme-control-row theme-control-row--stacked">
+              <span><strong>字间距</strong><small>调整网页文字之间的距离。</small></span>
+              <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label="全局字间距" /><output>{letterSpacingPercent}%</output></span>
             </label>
           </div>
         </section>
