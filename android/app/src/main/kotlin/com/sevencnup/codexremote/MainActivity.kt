@@ -8311,7 +8311,7 @@ class MainActivity : Activity() {
         updateInsetAwareOverlays()
 
         val settingsAccent = if (retroTheme) LOLLIPOP_PRIMARY else ASSISTANT_NAME_ACCENT
-        fun section(title: String, description: String, centerDescription: Boolean = false): LinearLayout {
+        fun section(title: String, description: String = ""): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(5), dp(12), dp(5))
@@ -8325,7 +8325,7 @@ class MainActivity : Activity() {
                 gravity = Gravity.CENTER_VERTICAL
                 isClickable = true
                 isFocusable = true
-                contentDescription = "$title，${if (expanded) "收起" else "展开"}"
+                contentDescription = "${tr(title)}，${tr(if (expanded) "收起" else "展开")}"
             }
             if (retroTheme) {
                 heading.addView(ImageView(this).apply {
@@ -8344,14 +8344,16 @@ class MainActivity : Activity() {
                 val open = body.visibility != View.VISIBLE
                 body.visibility = if (open) View.VISIBLE else View.GONE
                 arrow.setPixelAwareImageResource(iconResource(if (open) "chevron_up" else "chevron_down"))
-                heading.contentDescription = "$title，${if (open) "收起" else "展开"}"
+                heading.contentDescription = "${tr(title)}，${tr(if (open) "收起" else "展开")}"
                 if (open) expandedSettingsSections += title else expandedSettingsSections -= title
             }
             card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 44)))
-            body.addView(label(description, 11, MUTED).apply {
-                gravity = if (centerDescription) Gravity.CENTER else Gravity.CENTER_VERTICAL
-                setPadding(if (retroTheme && !centerDescription) dp(34) else 0, 0, 0, dp(7))
-            }, widthWrap())
+            if (description.isNotBlank()) {
+                body.addView(label(description, 11, MUTED).apply {
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(if (retroTheme) dp(34) else 0, 0, 0, dp(7))
+                }, widthWrap())
+            }
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             card.addView(body, widthWrap())
             content.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(8) })
@@ -8562,11 +8564,11 @@ class MainActivity : Activity() {
                 })
             }
         }, widthWrap())
-        val about = section("关于", "项目介绍、源代码与更新。", centerDescription = true)
+        val about = section("关于")
         about.addView(ImageView(this).apply {
             setImageResource(R.drawable.code_remote)
             scaleType = ImageView.ScaleType.FIT_CENTER
-            contentDescription = "Code Remote logo"
+            contentDescription = tr("Code Remote 标志")
         }, LinearLayout.LayoutParams(MATCH, dp(82)).apply { topMargin = dp(5); bottomMargin = dp(6) })
         about.addView(label("Code Remote", 13, TEXT, true).apply { gravity = Gravity.CENTER }, widthWrap())
         about.addView(label("在手机上连接本机的代码助手，查看对话、文件和终端。", 11, MUTED).apply {
@@ -8581,7 +8583,7 @@ class MainActivity : Activity() {
             background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
             isClickable = true
             isFocusable = true
-            contentDescription = "打开 GitHub 项目地址"
+            contentDescription = tr("打开 GitHub 项目地址")
             setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(projectUrl))) }
             addView(label("GitHub 项目地址", 12, SUBTLE, true).apply { gravity = Gravity.CENTER }, widthWrap())
             addView(label(projectUrl, 10, MUTED, translateUi = false).apply {
