@@ -31,7 +31,7 @@ function trimMessageLinkPunctuation(value: string, textBeforeUrl: string) {
   return result
 }
 
-export function splitMessageInlineLinks(value: string): MessageInlineLinkPart[] {
+export function splitMessageInlineLinks(value: string, preferWebUrlLabel = false): MessageInlineLinkPart[] {
   const parts: MessageInlineLinkPart[] = []
   const linkPattern = new RegExp(messageInlineLinkPattern.source, messageInlineLinkPattern.flags)
   let cursor = 0
@@ -49,30 +49,9 @@ export function splitMessageInlineLinks(value: string): MessageInlineLinkPart[] 
     const linkStart = match.index
     const linkEnd = isMarkdownLink ? match.index + match[0].length : match.index + visibleUrl.length
     if (linkStart > cursor) parts.push({ type: 'text', value: value.slice(cursor, linkStart) })
-    parts.push({ type: 'link', value: markdownLabel ?? visibleUrl, href })
+    parts.push({ type: 'link', value: isMarkdownLink && preferWebUrlLabel && /^https?:\/\//i.test(href) ? rawUrl : markdownLabel ?? visibleUrl, href })
     cursor = linkEnd
   }
   if (cursor < value.length) parts.push({ type: 'text', value: value.slice(cursor) })
   return parts.length > 0 ? parts : [{ type: 'text', value }]
-}
-
-export function httpMessageLinks(value: string): string[] {
-  if (!/(?:https?:\/\/|www\.)/i.test(value)) return []
-  const links: string[] = []
-  const codePattern = /```[^\n]*(?:\n[\s\S]*?(?:```|$)|$)/g
-  let cursor = 0
-  let match: RegExpExecArray | null
-  const collect = (plainText: string) => {
-    for (const part of splitMessageInlineLinks(plainText)) {
-      if (part.type === 'link' && /^https?:\/\//i.test(part.href)) {
-        links.push(part.href)
-      }
-    }
-  }
-  while ((match = codePattern.exec(value)) !== null) {
-    collect(value.slice(cursor, match.index))
-    cursor = match.index + match[0].length
-  }
-  collect(value.slice(cursor))
-  return links
 }
