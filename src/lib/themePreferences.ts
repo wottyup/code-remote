@@ -18,6 +18,7 @@ export interface ThemePreferences {
 
 const themePreferencesStorageKey = 'codex-remote.theme-preferences'
 const maxThemeImageDataUrlLength = 1_450_000
+const defaultLetterSpacingPercent = 2
 
 const defaultThemePreferences: ThemePreferences = {
   theme: 'dark',
@@ -28,7 +29,7 @@ const defaultThemePreferences: ThemePreferences = {
   customBackgroundPositionY: 50,
   customBackgroundZoom: 100,
   fontSizeAdjustment: 0,
-  letterSpacingPercent: 2,
+  letterSpacingPercent: defaultLetterSpacingPercent,
   systemNotificationsEnabled: false,
 }
 
@@ -55,7 +56,20 @@ export function normalizeFontSizeAdjustment(value: unknown) {
 }
 
 export function normalizeLetterSpacingPercent(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : 2
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(8, Math.max(0, Math.round(value))) : defaultLetterSpacingPercent
+}
+
+interface LetterSpacingCSSProperties extends CSSProperties {
+  letterSpacing: string
+  '--user-letter-spacing-delta': string
+}
+
+export function letterSpacingStyle(preferences: Pick<ThemePreferences, 'letterSpacingPercent'>): LetterSpacingCSSProperties {
+  const percent = normalizeLetterSpacingPercent(preferences.letterSpacingPercent)
+  return {
+    letterSpacing: `${percent / 100}em`,
+    '--user-letter-spacing-delta': `${(percent - defaultLetterSpacingPercent) / 100}em`,
+  }
 }
 
 function normalizeThemeBackgroundImage(value: unknown) {
@@ -140,6 +154,6 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
     '--user-font-offset': `${normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)}px`,
-    letterSpacing: `${normalizeLetterSpacingPercent(preferences.letterSpacingPercent) / 100}em`,
+    ...letterSpacingStyle(preferences),
   } as CSSProperties
 }
