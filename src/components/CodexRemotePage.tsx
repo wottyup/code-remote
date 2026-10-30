@@ -69,6 +69,7 @@ import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBac
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
 import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
@@ -6285,7 +6286,11 @@ function MCPApprovalsCard({ token }: { token: string }) {
 
   if (loading || (approvals.length === 0 && !error)) return null
 
-  return <details className="theme-settings-card theme-settings-card--collapsible mcp-approvals-card">
+  return <details
+    className="theme-settings-card theme-settings-card--collapsible mcp-approvals-card"
+    open={readSettingsSectionOpen('mcp-approvals')}
+    onToggle={(event) => saveSettingsSectionOpen('mcp-approvals', event.currentTarget.open)}
+  >
     <summary className="theme-settings-card__heading theme-settings-card__summary">
       <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
       <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
@@ -6505,7 +6510,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         <MCPApprovalsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
-        <details className="theme-settings-card theme-settings-card--collapsible" open>
+        <details
+          className="theme-settings-card theme-settings-card--collapsible"
+          open={readSettingsSectionOpen('theme', true)}
+          onToggle={(event) => saveSettingsSectionOpen('theme', event.currentTarget.open)}
+        >
           <summary className="theme-settings-card__heading theme-settings-card__summary">
             <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div>
             <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
@@ -6645,7 +6654,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
         </details>
 
-        <details className="theme-settings-card theme-settings-card--collapsible">
+        <details
+          className="theme-settings-card theme-settings-card--collapsible"
+          open={readSettingsSectionOpen('display')}
+          onToggle={(event) => saveSettingsSectionOpen('display', event.currentTarget.open)}
+        >
           <summary className="theme-settings-card__heading theme-settings-card__summary">
             <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div>
             <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
@@ -6664,7 +6677,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
         <details
           className="theme-settings-card theme-settings-card--collapsible"
+          open={readSettingsSectionOpen('chat-shortcuts')}
           onToggle={(event) => {
+            saveSettingsSectionOpen('chat-shortcuts', event.currentTarget.open)
             if (!event.currentTarget.open && recordingShortcut) {
               setRecordingShortcut(null)
               setShortcutMessage('已取消录制。')
@@ -6698,7 +6713,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
         </details>
 
-        <details className="theme-settings-card theme-settings-card--collapsible">
+        <details
+          className="theme-settings-card theme-settings-card--collapsible"
+          open={readSettingsSectionOpen('system-notifications')}
+          onToggle={(event) => saveSettingsSectionOpen('system-notifications', event.currentTarget.open)}
+        >
           <summary className="theme-settings-card__heading theme-settings-card__summary">
             <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div>
             <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
@@ -6721,7 +6740,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           </div>
         </details>
 
-        <details className="theme-settings-card theme-settings-card--collapsible theme-about-card">
+        <details
+          className="theme-settings-card theme-settings-card--collapsible theme-about-card"
+          open={readSettingsSectionOpen('about')}
+          onToggle={(event) => saveSettingsSectionOpen('about', event.currentTarget.open)}
+        >
           <summary className="theme-settings-card__heading theme-settings-card__summary">
             <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2><p>项目介绍、源代码与更新。</p></div>
             <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>

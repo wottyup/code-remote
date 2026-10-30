@@ -6,6 +6,7 @@ import {
   probeCPAUsageConnection,
   type CPAUsageSettings,
 } from '../lib/cpaUsageStats'
+import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
 
 export function CPAUsageSettingsCard({
   settings,
@@ -61,7 +62,11 @@ export function CPAUsageSettingsCard({
   }
 
   return (
-    <details className="theme-settings-card theme-settings-card--collapsible">
+    <details
+      className="theme-settings-card theme-settings-card--collapsible"
+      open={readSettingsSectionOpen('cpa-manager')}
+      onToggle={(event) => saveSettingsSectionOpen('cpa-manager', event.currentTarget.open)}
+    >
       <summary className="theme-settings-card__heading theme-settings-card__summary">
         <div><h2><Link2 size={16} />CPA Manager Server 接入</h2><p>测试 Full Mode 统计接口连通性，并连接 Token 用量数据源。</p></div>
         <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
