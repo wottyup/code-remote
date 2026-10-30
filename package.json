@@ -1,6 +1,6 @@
 {
   "name": "code-remote",
-  "version": "0.88.3-dev.1",
+  "version": "0.89.0-dev.1",
   "private": true,
   "type": "module",
   "scripts": {

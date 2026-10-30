@@ -4,10 +4,13 @@ import android.net.Uri
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
+import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 internal class RemoteApiException(
@@ -24,6 +27,11 @@ internal class RemoteApi(
         .readTimeout(90, TimeUnit.SECONDS)
         .writeTimeout(90, TimeUnit.SECONDS)
         .build()
+    private val uploadClient = client.newBuilder()
+        .callTimeout(10, TimeUnit.MINUTES)
+        .readTimeout(10, TimeUnit.MINUTES)
+        .writeTimeout(10, TimeUnit.MINUTES)
+        .build()
 
     fun get(path: String): JSONObject = request("GET", path)
 
@@ -38,6 +46,30 @@ internal class RemoteApi(
     fun upload(path: String, mimeType: String, bytes: ByteArray): JSONObject {
         val body = bytes.toRequestBody(mimeType.toMediaType())
         return execute("POST", path, body, mimeType)
+    }
+
+    fun uploadStream(path: String, size: Long?, openStream: () -> InputStream, onProgress: (Long) -> Unit): JSONObject {
+        val mediaType = "application/octet-stream".toMediaType()
+        val body = object : RequestBody() {
+            override fun contentType() = mediaType
+            override fun contentLength() = size ?: -1L
+
+            override fun writeTo(sink: BufferedSink) {
+                openStream().use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    var sent = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        if (count == 0) continue
+                        sink.write(buffer, 0, count)
+                        sent += count
+                        onProgress(sent)
+                    }
+                }
+            }
+        }
+        return execute("POST", path, body, "application/octet-stream", uploadClient)
     }
 
     private fun request(method: String, path: String, value: JSONObject? = null): JSONObject {
@@ -58,8 +90,8 @@ internal class RemoteApi(
         }
     }
 
-    private fun execute(method: String, path: String, body: okhttp3.RequestBody?, contentType: String?): JSONObject {
-        val response = executeRaw(method, path, body, contentType)
+    private fun execute(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = client): JSONObject {
+        val response = executeRaw(method, path, body, contentType, networkClient)
         val text = response.body?.string().orEmpty()
         if (!response.isSuccessful) {
             val error = responseError(response.code, text)
@@ -74,7 +106,7 @@ internal class RemoteApi(
         }
     }
 
-    private fun executeRaw(method: String, path: String, body: okhttp3.RequestBody?, contentType: String?): okhttp3.Response {
+    private fun executeRaw(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = client): okhttp3.Response {
         val builder = Request.Builder()
             .url(endpoint.trimEnd('/') + path)
             .header("Accept", "application/json")
@@ -87,7 +119,7 @@ internal class RemoteApi(
             else -> builder.method(method, body ?: ByteArray(0).toRequestBody(null))
         }
         return try {
-            client.newCall(builder.build()).execute()
+            networkClient.newCall(builder.build()).execute()
         } catch (error: IOException) {
             throw IOException("无法连接电脑网页服务，请检查手机网络或远程连接。", error)
         }

@@ -157,6 +157,15 @@ private data class ParsedUserMessageText(
     val documentAttachments: List<TextDocumentAttachmentPreview>,
 )
 
+private data class WorkspaceUploadTarget(
+    val destination: String,
+    val cwd: String?,
+    val connectionGeneration: Long,
+    val endpoint: String,
+    val token: String,
+    val refresh: (String) -> Unit,
+)
+
 private class PixelFrameNineSliceDrawable(
     private val bitmap: Bitmap,
     private val sourceCornerWidth: Int,
@@ -867,6 +876,14 @@ class MainActivity : Activity() {
     private var workspaceScrim: View? = null
     private var workspaceLoader: ((String) -> Unit)? = null
     private var workspaceRefresher: ((String) -> Unit)? = null
+    private var pendingWorkspaceUpload: WorkspaceUploadTarget? = null
+    private var workspaceUploadBusy = false
+    private var workspaceUploadStatusView: TextView? = null
+    private var workspaceUploadBar: ProgressBar? = null
+    private var workspaceUploadButton: ImageButton? = null
+    private var workspaceUploadLabel = ""
+    private var workspaceUploadPercent = 0
+    private var workspaceUploadIndeterminate = false
     private var historyLoadingThreadId: String? = null
     private var historyLoadError: String? = null
     private var historySelectionGeneration = 0L
@@ -1493,6 +1510,9 @@ class MainActivity : Activity() {
         workspaceScrim = null
         workspaceLoader = null
         workspaceRefresher = null
+        workspaceUploadStatusView = null
+        workspaceUploadBar = null
+        workspaceUploadButton = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
         workspaceCurrentPath = ""
@@ -8291,7 +8311,7 @@ class MainActivity : Activity() {
         updateInsetAwareOverlays()
 
         val settingsAccent = if (retroTheme) LOLLIPOP_PRIMARY else ASSISTANT_NAME_ACCENT
-        fun section(title: String, description: String): LinearLayout {
+        fun section(title: String, description: String, centerDescription: Boolean = false): LinearLayout {
             val card = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(12), dp(5), dp(12), dp(5))
@@ -8329,7 +8349,8 @@ class MainActivity : Activity() {
             }
             card.addView(heading, LinearLayout.LayoutParams(MATCH, dp(if (retroTheme) 48 else 44)))
             body.addView(label(description, 11, MUTED).apply {
-                setPadding(if (retroTheme) dp(34) else 0, 0, 0, dp(7))
+                gravity = if (centerDescription) Gravity.CENTER else Gravity.CENTER_VERTICAL
+                setPadding(if (retroTheme && !centerDescription) dp(34) else 0, 0, 0, dp(7))
             }, widthWrap())
             body.visibility = if (expanded) View.VISIBLE else View.GONE
             card.addView(body, widthWrap())
@@ -8541,14 +8562,33 @@ class MainActivity : Activity() {
                 })
             }
         }, widthWrap())
-        val about = section("关于", "项目介绍、源代码与更新。")
-        about.addView(label("Code Remote", 13, TEXT, true), widthWrap())
+        val about = section("关于", "项目介绍、源代码与更新。", centerDescription = true)
+        about.addView(ImageView(this).apply {
+            setImageResource(R.drawable.code_remote)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            contentDescription = "Code Remote logo"
+        }, LinearLayout.LayoutParams(MATCH, dp(82)).apply { topMargin = dp(5); bottomMargin = dp(6) })
+        about.addView(label("Code Remote", 13, TEXT, true).apply { gravity = Gravity.CENTER }, widthWrap())
         about.addView(label("在手机上连接本机的代码助手，查看对话、文件和终端。", 11, MUTED).apply {
+            gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, dp(5))
         }, widthWrap())
         val projectUrl = "https://github.com/sevencnup/code-remote"
-        about.addView(settingsActionRow("GitHub 项目地址", projectUrl) {
-            startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(projectUrl)))
+        about.addView(LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(2), dp(8), dp(2), dp(8))
+            background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "打开 GitHub 项目地址"
+            setOnClickListener { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(projectUrl))) }
+            addView(label("GitHub 项目地址", 12, SUBTLE, true).apply { gravity = Gravity.CENTER }, widthWrap())
+            addView(label(projectUrl, 10, MUTED, translateUi = false).apply {
+                gravity = Gravity.CENTER
+                maxLines = 2
+                ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+            }, widthWrap())
         }, widthWrap())
         about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
         if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
@@ -8855,6 +8895,9 @@ class MainActivity : Activity() {
         workspacePanel = null
         workspaceScrim = null
         workspaceLoader = null
+        workspaceUploadStatusView = null
+        workspaceUploadBar = null
+        workspaceUploadButton = null
         workspaceLoadedPath = null
         workspaceLoadingPath = null
         workspaceGestureActive = false
@@ -9226,6 +9269,18 @@ class MainActivity : Activity() {
             createButton.background = android1SegmentButtonBackground()
         }
         header.addView(createButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
+        val uploadButton = sidebarIconButton("upload", "上传手机文件到当前目录") {
+            val requestWorkspaceKey = workspaceKey()
+            chooseWorkspaceUpload(workspaceCurrentPath, browsingCwd()) { path ->
+                if (workspaceOverlay === overlay && workspaceKey() == requestWorkspaceKey) loadDirectory(path, true)
+            }
+        }
+        if (retroTheme) {
+            uploadButton.imageTintList = null
+            uploadButton.background = android1SegmentButtonBackground()
+        }
+        workspaceUploadButton = uploadButton
+        header.addView(uploadButton, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 32), dp(if (retroTheme) 40 else 32)))
         panel.addView(header, LinearLayout.LayoutParams(MATCH, if (retroTheme) dp(42) else WRAP))
 
         val pathNavigation = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -9267,8 +9322,19 @@ class MainActivity : Activity() {
             addView(entries)
         }
         panel.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(3); bottomMargin = dp(3) })
+        val footerContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        workspaceUploadBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            visibility = View.GONE
+            progressTintList = ColorStateList.valueOf(if (pixelTheme) PIXEL_BLUE else ACCENT)
+        }
+        footerContainer.addView(workspaceUploadBar, LinearLayout.LayoutParams(MATCH, dp(3)).apply { bottomMargin = dp(3) })
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        footer.addView(label("点按文件夹展开 · 长按查看更多操作", 10, MUTED), LinearLayout.LayoutParams(0, WRAP, 1f))
+        workspaceUploadStatusView = label("点按文件夹展开 · 长按查看更多操作", 10, MUTED).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        footer.addView(workspaceUploadStatusView, LinearLayout.LayoutParams(0, WRAP, 1f))
         footer.addView(textIconAction("粘贴", "paste", "粘贴") {
             pasteWorkspaceEntries(workspaceCurrentPath, browsingCwd()) { workspaceRefresher?.invoke(workspaceCurrentPath) }
         }.apply {
@@ -9277,7 +9343,9 @@ class MainActivity : Activity() {
                 setPadding(dp(8), dp(5), dp(8), dp(5))
             }
         })
-        panel.addView(footer, widthWrap())
+        footerContainer.addView(footer, widthWrap())
+        panel.addView(footerContainer, widthWrap())
+        updateWorkspaceUploadUi()
 
         workspaceOverlay = overlay
         workspacePanel = panel
@@ -9344,8 +9412,9 @@ class MainActivity : Activity() {
                     } else showFilePreview(relativePath, browsingCwd())
                 }
                 row.setOnLongClickListener {
+                    val actionWorkspaceKey = workspaceKey()
                     showWorkspaceEntryActions(row, entry, browsingCwd()) { changedDirectory ->
-                        loadDirectory(changedDirectory, true)
+                        if (workspaceOverlay === overlay && workspaceKey() == actionWorkspaceKey) loadDirectory(changedDirectory, true)
                     }
                     true
                 }
@@ -9385,6 +9454,7 @@ class MainActivity : Activity() {
             pathTitle.text = displayedRoot.ifBlank { "工作区" }
             if (currentPath.isNotBlank()) pathTitle.text = "$currentPath · ${pathTitle.text}"
             if (!rootInput.hasFocus()) rootInput.setText(displayedRoot)
+            updateWorkspaceUploadUi()
             parentButton.isEnabled = displayedRoot.isNotBlank() && parentDirectory(displayedRoot) != displayedRoot
             parentButton.alpha = if (parentButton.isEnabled) 1f else .45f
             followChatButton.isEnabled = manualRoot != null
@@ -9676,6 +9746,7 @@ class MainActivity : Activity() {
             MenuAction("剪切", "cut"),
         )
         if (isDirectory && workspaceClipboard.isNotEmpty()) actions += MenuAction("粘贴到此处", "paste")
+        if (isDirectory) actions += MenuAction("上传文件", "upload")
         actions += MenuAction("删除", "delete", destructive = true)
         showActionPopup(anchor, entry.optString("name"), actions) { which ->
             when (actions[which].title) {
@@ -9704,6 +9775,7 @@ class MainActivity : Activity() {
                 }
                 "复制", "剪切" -> { workspaceClipboard.clear(); workspaceClipboard += path; workspaceClipboardMode = if (actions[which].title == "复制") "copy" else "move"; showToast(if (workspaceClipboardMode == "copy") "已复制" else "已剪切") }
                 "粘贴到此处" -> pasteWorkspaceEntries(path, cwd) { refreshed("*") }
+                "上传文件" -> chooseWorkspaceUpload(path, cwd) { refreshed(path) }
                 "删除" -> showConfirmDialog("删除所选内容", "永久删除 ${entry.optString("name")}？非空文件夹也会一并删除，此操作无法恢复。", "删除", destructive = true) {
                     runApi({ RemoteApi(endpoint, token).post("/api/v1/codex/workspace/delete", JSONObject().put("paths", JSONArray().put(path)).putOpt("cwd", cwd)) }, { refreshed(parentPath) })
                 }
@@ -9719,6 +9791,122 @@ class MainActivity : Activity() {
             if (workspaceClipboardMode == "move") workspaceClipboard.clear()
             refreshed()
         })
+    }
+
+    private fun chooseWorkspaceUpload(destination: String, cwd: String?, refresh: (String) -> Unit) {
+        if (workspaceUploadBusy || pendingWorkspaceUpload != null) {
+            showToast("文件正在上传，请等待当前操作完成")
+            return
+        }
+        if (token.isBlank()) { showToast("请先连接电脑"); return }
+        pendingWorkspaceUpload = WorkspaceUploadTarget(destination, cwd, connectionGeneration, endpoint, token, refresh)
+        updateWorkspaceUploadUi()
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivityForResult(intent, REQUEST_WORKSPACE_UPLOAD)
+        } catch (_: Exception) {
+            pendingWorkspaceUpload = null
+            updateWorkspaceUploadUi()
+            showToast("没有可用的文件选择器")
+        }
+    }
+
+    private fun updateWorkspaceUploadUi() {
+        val canUpload = !workspaceUploadBusy && pendingWorkspaceUpload == null && workspaceRootPath.isNotBlank()
+        workspaceUploadButton?.isEnabled = canUpload
+        workspaceUploadButton?.alpha = if (canUpload) 1f else .45f
+        workspaceUploadStatusView?.text = if (workspaceUploadBusy) workspaceUploadLabel else "点按文件夹展开 · 长按查看更多操作"
+        workspaceUploadBar?.apply {
+            visibility = if (workspaceUploadBusy) View.VISIBLE else View.GONE
+            isIndeterminate = workspaceUploadIndeterminate
+            progress = workspaceUploadPercent
+        }
+    }
+
+    private fun showWorkspaceUploadProgress(index: Int, total: Int, name: String, sent: Long, size: Long?, confirming: Boolean) {
+        workspaceUploadPercent = if (confirming) 100 else if (size != null && size > 0) ((sent * 100) / size).toInt().coerceIn(0, 100) else 0
+        workspaceUploadIndeterminate = size == null && !confirming
+        val progress = if (confirming) "等待确认" else if (size == null) formatFileSize(sent) else "${workspaceUploadPercent}%"
+        workspaceUploadLabel = "上传 $index/$total · $progress · $name"
+        updateWorkspaceUploadUi()
+    }
+
+    private fun workspaceUploadMetadata(uri: Uri, index: Int): Pair<String, Long?> {
+        var name = "文件$index"
+        var size: Long? = null
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val nameColumn = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                val sizeColumn = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (nameColumn >= 0 && !cursor.isNull(nameColumn)) name = cursor.getString(nameColumn).takeIf { it.isNotBlank() } ?: name
+                if (sizeColumn >= 0 && !cursor.isNull(sizeColumn)) size = cursor.getLong(sizeColumn).takeIf { it >= 0 }
+            }
+        }
+        return name to size
+    }
+
+    private fun uploadWorkspaceFiles(uris: List<Uri>, target: WorkspaceUploadTarget) {
+        if (uris.isEmpty() || workspaceUploadBusy) return
+        workspaceUploadBusy = true
+        workspaceUploadLabel = "准备上传 ${uris.size} 个文件"
+        workspaceUploadPercent = 0
+        workspaceUploadIndeterminate = true
+        updateWorkspaceUploadUi()
+        io.execute {
+            val api = RemoteApi(target.endpoint, target.token)
+            val failures = mutableListOf<String>()
+            var uploaded = 0
+            uris.forEachIndexed { offset, uri ->
+                val index = offset + 1
+                var name = "文件$index"
+                try {
+                    val metadata = workspaceUploadMetadata(uri, index)
+                    name = metadata.first
+                    val size = metadata.second
+                    if (size != null && size > MAX_WORKSPACE_UPLOAD_BYTES) throw IOException("单个文件不能超过 512 MB")
+                    handler.post {
+                        if (target.connectionGeneration == connectionGeneration && !isDestroyed) {
+                            showWorkspaceUploadProgress(index, uris.size, name, 0, size, false)
+                        }
+                    }
+                    val query = buildString {
+                        append("?destination=${Uri.encode(target.destination)}&name=${Uri.encode(name)}")
+                        target.cwd?.takeIf { it.isNotBlank() }?.let { append("&cwd=${Uri.encode(it)}") }
+                    }
+                    var lastProgressAt = 0L
+                    api.uploadStream("/api/v1/codex/workspace/upload$query", size, {
+                        contentResolver.openInputStream(uri) ?: throw IOException("无法读取文件：$name")
+                    }) { sent ->
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastProgressAt >= 120L || sent == size) {
+                            lastProgressAt = now
+                            handler.post {
+                                if (target.connectionGeneration == connectionGeneration && !isDestroyed) {
+                                    showWorkspaceUploadProgress(index, uris.size, name, sent, size, sent == size)
+                                }
+                            }
+                        }
+                    }
+                    uploaded++
+                } catch (error: Exception) {
+                    failures += "$name：${error.message ?: "上传失败"}"
+                }
+            }
+            handler.post {
+                workspaceUploadBusy = false
+                workspaceUploadLabel = ""
+                updateWorkspaceUploadUi()
+                if (target.connectionGeneration != connectionGeneration || isFinishing || isDestroyed) return@post
+                if (uploaded > 0) target.refresh(target.destination)
+                val summary = "已上传 $uploaded/${uris.size} 个文件到 ${target.destination.ifBlank { "当前根目录" }}"
+                showStatus(if (failures.isEmpty()) summary else "$summary · ${failures.size} 个失败：${failures.first()}")
+            }
+        }
     }
 
     private data class NumberedDiffLine(
@@ -10776,6 +10964,21 @@ class MainActivity : Activity() {
             }
             return
         }
+        if (requestCode == REQUEST_WORKSPACE_UPLOAD) {
+            val target = pendingWorkspaceUpload
+            pendingWorkspaceUpload = null
+            updateWorkspaceUploadUi()
+            if (resultCode != RESULT_OK || data == null || target == null) return
+            if (target.connectionGeneration != connectionGeneration) {
+                showToast("连接已切换，请重新选择上传文件")
+                return
+            }
+            val uris = mutableListOf<Uri>()
+            data.clipData?.let { clip -> for (index in 0 until clip.itemCount) uris += clip.getItemAt(index).uri }
+            if (uris.isEmpty()) data.data?.let(uris::add)
+            uploadWorkspaceFiles(uris.distinct(), target)
+            return
+        }
         if (requestCode != REQUEST_ATTACH) return
         val pickerScope = attachmentPickerScope ?: draftStorageKey()
         attachmentPickerScope = null
@@ -11657,7 +11860,7 @@ class MainActivity : Activity() {
         icon == "codex" -> codexBrandAccent()
         icon == "claude" -> if (themeName == "lollipop") Color.rgb(177, 112, 83) else ACCENT_WARM
         pixelTheme -> when (icon) {
-            "add", "arrow_up", "check", "download", "refresh", "play", "pause", "link", "notifications" -> PIXEL_BLUE
+            "add", "arrow_up", "check", "download", "upload", "refresh", "play", "pause", "link", "notifications" -> PIXEL_BLUE
             "delete", "stop" -> PIXEL_RED
             "folder", "folder_add", "pin", "file", "file_add", "copy", "paste", "open", "display", "language" -> Color.rgb(116, 180, 230)
             "image", "palette" -> Color.rgb(201, 168, 255)
@@ -11665,7 +11868,7 @@ class MainActivity : Activity() {
             else -> PIXEL_TEXT
         }
         retroTheme -> when (icon) {
-            "add", "arrow_up", "check", "download", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
+            "add", "arrow_up", "check", "download", "upload", "refresh", "play", "pause" -> LOLLIPOP_PRIMARY
             "delete", "stop" -> Color.rgb(164, 76, 65)
             "folder", "folder_add", "pin" -> Color.rgb(111, 157, 197)
             "file", "file_add", "copy", "paste", "open", "display", "language", "link" -> Color.rgb(111, 157, 197)
@@ -11700,7 +11903,7 @@ class MainActivity : Activity() {
         "terminal" -> R.drawable.pixel_terminal
         "folder" -> R.drawable.pixel_folder
         "add", "file_add", "folder_add", "quote" -> R.drawable.pixel_file_add
-        "arrow_up", "send" -> R.drawable.pixel_send
+        "arrow_up", "send", "upload" -> R.drawable.pixel_send
         "pause" -> R.drawable.pixel_pause
         "edit" -> R.drawable.pixel_edit
         "check", "checked" -> R.drawable.pixel_check
@@ -11858,6 +12061,7 @@ class MainActivity : Activity() {
             "refresh" -> R.drawable.ic_android1_refresh
             "schedule" -> R.drawable.ic_schedule
             "download" -> R.drawable.ic_android1_save
+            "upload" -> R.drawable.ic_android1_arrow_up
             "quote" -> R.drawable.ic_android1_file_add
             "arrow_up" -> R.drawable.ic_android1_arrow_up
             "send" -> R.drawable.ic_android1_send
@@ -11907,6 +12111,7 @@ class MainActivity : Activity() {
         "refresh" -> R.drawable.ic_refresh
         "schedule" -> R.drawable.ic_schedule
         "download" -> R.drawable.ic_download
+        "upload" -> R.drawable.ic_upload
         "quote" -> R.drawable.ic_insert_conversation
         "arrow_up" -> R.drawable.ic_arrow_up
         "send" -> R.drawable.ic_arrow_up
@@ -12210,6 +12415,8 @@ class MainActivity : Activity() {
         private const val REQUEST_THEME_BACKGROUND = 4103
         private const val REQUEST_WEB_DOWNLOAD_STORAGE = 4104
         private const val REQUEST_THREAD_EXPORT = 4105
+        private const val REQUEST_WORKSPACE_UPLOAD = 4106
+        private const val MAX_WORKSPACE_UPLOAD_BYTES = 512L * 1024 * 1024
         private const val CHANNEL_ID = "codex_remote_native"
         private const val EXTRA_THREAD_ID = "notification_thread_id"
         private const val EXTRA_CONNECTION_ID = "notification_connection_id"
