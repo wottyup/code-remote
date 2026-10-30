@@ -521,16 +521,20 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-background-framing__control input { width: 100%; margin: 0; accent-color: #aabaff; }
 .theme-settings-hint { margin: 0; padding: 0 22px 22px; color: #737b89; font-size: calc(11px + var(--mobile-font-offset)); }
 .theme-settings-card + .theme-settings-card { margin-top: 16px; }
+.theme-settings-card--collapsible { overflow: hidden; }
+.theme-settings-card__summary { align-items: center; cursor: pointer; list-style: none; user-select: none; }
+.theme-settings-card__summary::-webkit-details-marker { display: none; }
+.theme-settings-card__summary > div { min-width: 0; }
+.theme-settings-card__summary h2 { display: flex; align-items: center; gap: 8px; }
+.theme-settings-card__summary-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 10px; }
+.theme-settings-card__chevron { color: #858b95; transition: transform .18s ease; }
+.theme-settings-card--collapsible[open] > .theme-settings-card__summary .theme-settings-card__chevron { transform: rotate(180deg); }
+.theme-settings-card--collapsible:not([open]) > .theme-settings-card__summary { border-bottom-color: transparent; }
+.theme-settings-card__summary:hover { background: rgba(148, 162, 202, .06); }
+.theme-settings-card__summary:focus-visible { outline: 2px solid #8da4d5; outline-offset: -2px; }
 .theme-about-card { --theme-about-primary: #eef0f4; --theme-about-muted: #858b95; --theme-about-link: #c7d0f5; }
-.theme-about-card__summary { align-items: center; padding-block: 18px; cursor: pointer; list-style: none; user-select: none; }
-.theme-about-card:not([open]) > .theme-about-card__summary { border-bottom-color: transparent; }
-.theme-about-card__summary::-webkit-details-marker { display: none; }
-.theme-about-card__summary h2 { display: flex; align-items: center; gap: 8px; margin: 0; }
-.theme-about-card__summary > svg { flex: 0 0 auto; color: var(--theme-about-muted); transition: transform .18s ease; }
-.theme-about-card[open] > .theme-about-card__summary > svg { transform: rotate(180deg); }
-.theme-about-card__summary:hover { background: rgba(148, 162, 202, .06); }
 .theme-about-card__body { display: grid; justify-items: center; gap: 7px; padding: 17px 22px 25px; color: var(--theme-about-primary); text-align: center; }
-.theme-about-card__intro, .theme-about-card__description { margin: 0; color: var(--theme-about-muted); font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
+.theme-about-card__description { margin: 0; color: var(--theme-about-muted); font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
 .theme-about-card__logo { display: block; width: 118px; height: 112px; margin: 3px 0 0; object-fit: contain; }
 .theme-about-card__name { color: var(--theme-about-primary); font-size: calc(21px + var(--mobile-font-offset)); font-weight: 620; }
 .theme-about-card__link { display: grid; justify-items: center; gap: 3px; max-width: 100%; margin-top: 5px; padding: 8px 12px; border-radius: 9px; color: var(--theme-about-link); text-decoration: none; }
@@ -698,6 +702,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-settings-panel .sidebar-chat-shortcut-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; }
 .sidebar-chat-shortcut-row > span:first-child { min-width: 0; }
 .sidebar-chat-shortcut-key { min-width: 58px; padding: 6px 8px; border: 1px solid rgba(146, 157, 184, .22); border-radius: 7px; background: rgba(27, 30, 37, .72); color: #c7ccda; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; white-space: nowrap; }
+.sidebar-chat-shortcut-actions { display: flex; justify-content: flex-end; padding-top: 14px; }
 .sidebar-chat-shortcut-reset { min-width: 0; }
 .sidebar-chat-shortcut-message { padding-top: 0; padding-bottom: 14px; color: #aabaff; }
 .message-stream { grid-column: 1; grid-row: 2; min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: contain; padding: 0 25px 28px; }

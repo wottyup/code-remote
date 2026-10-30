@@ -6285,10 +6285,11 @@ function MCPApprovalsCard({ token }: { token: string }) {
 
   if (loading || (approvals.length === 0 && !error)) return null
 
-  return <section className="theme-settings-card mcp-approvals-card">
-    <div className="theme-settings-card__heading">
+  return <details className="theme-settings-card theme-settings-card--collapsible mcp-approvals-card">
+    <summary className="theme-settings-card__heading theme-settings-card__summary">
       <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
-    </div>
+      <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
+    </summary>
     <div className="mcp-approvals-body">
       {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
         <div className="mcp-approvals-grant__info">
@@ -6301,7 +6302,7 @@ function MCPApprovalsCard({ token }: { token: string }) {
       {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{error}</p> : null}
       <p className="mcp-approvals-note">自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。</p>
     </div>
-  </section>
+  </details>
 }
 
 function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
@@ -6504,8 +6505,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
         <MCPApprovalsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
 
-        <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+        <details className="theme-settings-card theme-settings-card--collapsible" open>
+          <summary className="theme-settings-card__heading theme-settings-card__summary">
+            <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div>
+            <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
+          </summary>
           <div className="theme-options" role="radiogroup" aria-label="界面主题">
             {themeOptions.map((option) => (
               <button
@@ -6639,10 +6643,13 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
-        </section>
+        </details>
 
-        <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div><span className="theme-settings-card__badge">即时预览</span></div>
+        <details className="theme-settings-card theme-settings-card--collapsible">
+          <summary className="theme-settings-card__heading theme-settings-card__summary">
+            <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div>
+            <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
+          </summary>
           <div className="theme-display-controls theme-display-controls--typography">
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
@@ -6653,14 +6660,23 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label="全局字间距" /><output>{letterSpacingPercent}%</output></span>
             </label>
           </div>
-        </section>
+        </details>
 
-        <section className="theme-settings-card">
-          <div className="theme-settings-card__heading">
+        <details
+          className="theme-settings-card theme-settings-card--collapsible"
+          onToggle={(event) => {
+            if (!event.currentTarget.open && recordingShortcut) {
+              setRecordingShortcut(null)
+              setShortcutMessage('已取消录制。')
+            }
+          }}
+        >
+          <summary className="theme-settings-card__heading theme-settings-card__summary">
             <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
-            <button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button>
-          </div>
+            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
+          </summary>
           <div className="theme-display-controls sidebar-chat-shortcut-controls">
+            <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button></div>
             {(['previous', 'next'] as const).map((action) => {
               const label = action === 'previous' ? '上一条聊天' : '下一条聊天'
               const isRecording = recordingShortcut === action
@@ -6680,10 +6696,13 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           </div>
           <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
-        </section>
+        </details>
 
-        <section className="theme-settings-card">
-          <div className="theme-settings-card__heading"><div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div></div>
+        <details className="theme-settings-card theme-settings-card--collapsible">
+          <summary className="theme-settings-card__heading theme-settings-card__summary">
+            <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div>
+            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
+          </summary>
           <div className="theme-display-controls">
             <div className="theme-control-row">
               <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
@@ -6700,15 +6719,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
             </div>
             {notificationError ? <p className="theme-notification-error" role="alert">{notificationError}</p> : null}
           </div>
-        </section>
+        </details>
 
-        <details className="theme-settings-card theme-about-card">
-          <summary className="theme-settings-card__heading theme-about-card__summary">
-            <h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2>
-            <ChevronDown size={18} aria-hidden="true" />
+        <details className="theme-settings-card theme-settings-card--collapsible theme-about-card">
+          <summary className="theme-settings-card__heading theme-settings-card__summary">
+            <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2><p>项目介绍、源代码与更新。</p></div>
+            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
           </summary>
           <div className="theme-about-card__body">
-            <p className="theme-about-card__intro">项目介绍、源代码与更新。</p>
             <img className="theme-about-card__logo" src="/code-remote.png" alt="Code Remote Logo" />
             <strong className="theme-about-card__name">Code Remote</strong>
             <p className="theme-about-card__description">在浏览器中连接本机的代码助手，查看对话、文件和终端。</p>
