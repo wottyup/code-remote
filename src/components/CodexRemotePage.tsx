@@ -986,6 +986,7 @@ type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' |
 type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 interface ComposerHandle {
+  focusInput(): void
   replaceDraft(value: string): void
   appendReplyDraft(value: string): boolean
   appendDraft(value: string, focus?: boolean): void
@@ -1440,6 +1441,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [onEndQueuedEdit])
 
   useImperativeHandle(ref, () => ({
+    focusInput() {
+      const textarea = composer.current
+      if (!textarea) return
+      textarea.focus({ preventScroll: true })
+      const cursor = textarea.value.length
+      textarea.setSelectionRange(cursor, cursor)
+    },
     replaceDraft(value) {
       updateDraft(value)
       window.requestAnimationFrame(() => composer.current?.focus({ preventScroll: true }))
@@ -4615,6 +4623,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setCpaUsageSettings(nextSettings)
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
+  const focusComposerAfterThreadSwitch = useRef<string | null>(null)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
@@ -5027,6 +5036,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  useLayoutEffect(() => {
+    if (!activeThreadId || focusComposerAfterThreadSwitch.current !== activeThreadId) return
+    focusComposerAfterThreadSwitch.current = null
+    composerHandle.current?.focusInput()
+  }, [activeThreadId])
   const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
     ? workspaceDraftSnapshot.draft
     : readComposerDraft(composerDraftScope)
@@ -5560,7 +5574,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     await createThreadForPane(selectedPaneIndex)
   }
 
-  async function selectThread(thread: CodexThread, options?: SelectThreadOptions) {
+  async function selectThread(thread: CodexThread, options?: SelectThreadOptions, focusComposer = false) {
+    focusComposerAfterThreadSwitch.current = focusComposer ? thread.id : null
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
@@ -5909,7 +5924,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       const nextThread = threads[nextIndex]
 
       event.preventDefault()
-      if (nextThread.id !== activeRemote.activeThread?.id) void selectThread(nextThread)
+      if (nextThread.id !== activeRemote.activeThread?.id) void selectThread(nextThread, undefined, true)
     }
 
     document.addEventListener('keydown', switchSidebarThread)
