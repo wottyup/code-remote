@@ -434,7 +434,7 @@ class CodexAppServer:
     async def list_threads(self) -> list[dict[str, Any]]:
         history_items = self._history.list_threads()
         if not self.connected and history_items:
-            return history_items
+            return [item for item in history_items if not self._history.is_internal_thread(item)]
         items: list[dict[str, Any]] = []
         cursor: str | None = None
         app_server_error: CodexRuntimeError | None = None
@@ -477,7 +477,9 @@ class CodexAppServer:
                 continue
             merged[thread_id] = {**merged.get(thread_id, {}), **item}
         if merged:
-            return list(merged.values())
+            # A live page can reintroduce a worker hidden by the history list,
+            # including older runtimes whose summaries omit the source field.
+            return [item for item in merged.values() if not self._history.is_internal_thread(item)]
         if app_server_error is not None:
             raise app_server_error
         return []

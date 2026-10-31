@@ -19,6 +19,27 @@ SUMMARY_SCAN_LINES = 120
 logger = logging.getLogger(__name__)
 
 
+def is_internal_codex_thread(thread: dict[str, Any]) -> bool:
+    """Recognize worker/reviewer threads without hiding ordinary user forks."""
+    thread_source = thread.get("threadSource", thread.get("thread_source"))
+    if isinstance(thread_source, str) and thread_source.lower().replace("_", "") in {
+        "subagent", "guardianreview",
+    }:
+        return True
+    source = thread.get("source")
+    if isinstance(source, str):
+        if source.lower().replace("_", "").startswith("subagent"):
+            return True
+        try:
+            source = json.loads(source)
+        except (ValueError, RecursionError):
+            source = None
+    if isinstance(source, dict) and any(key.lower().replace("_", "") == "subagent" for key in source):
+        return True
+    agent_path = thread.get("agentPath", thread.get("agent_path"))
+    return isinstance(agent_path, str) and agent_path.startswith("/root/")
+
+
 def _short_text(value: str, limit: int = MAX_PREVIEW_LENGTH) -> str:
     text = " ".join(value.split())
     return text if len(text) <= limit else f"{text[: limit - 1]}…"
@@ -113,6 +134,7 @@ class CodexHistoryStore:
         self.history_index = self.codex_home / "thread_history_1.sqlite"
         self._path_index: dict[str, Path] | None = None
         self._index_entries: dict[str, dict[str, Any]] | None = None
+        self._internal_thread_ids: set[str] = set()
         self._projection_lock = threading.RLock()
         self._browser_items: OrderedDict[tuple[str, str, str, int], dict[str, Any]] = OrderedDict()
 
@@ -140,7 +162,10 @@ class CodexHistoryStore:
                 thread["archived"] = True
             threads[file_id] = thread
 
-        return list(threads.values())
+        return [thread for thread in threads.values() if not self.is_internal_thread(thread)]
+
+    def is_internal_thread(self, thread: dict[str, Any]) -> bool:
+        return thread.get("id") in self._internal_thread_ids or is_internal_codex_thread(thread)
 
     def _load_state_threads(self, path_index: dict[str, Path]) -> dict[str, dict[str, Any]]:
         """Read the desktop sidebar index without modifying Codex's database."""
@@ -148,16 +173,31 @@ class CodexHistoryStore:
             return {}
         try:
             with closing(sqlite3.connect(f"file:{self.state_index.as_posix()}?mode=ro", uri=True, timeout=5)) as connection:
+                connection.row_factory = sqlite3.Row
+                columns = {row["name"] for row in connection.execute("PRAGMA table_info(threads)")}
+                source_columns = [name for name in ("source", "thread_source", "agent_path") if name in columns]
+                extra_columns = "".join(f", {name}" for name in source_columns)
                 rows = connection.execute(
-                    "SELECT id, title, name, preview, cwd, created_at_ms, updated_at_ms, archived "
-                    "FROM threads"
+                    "SELECT id, title, name, preview, cwd, created_at_ms, updated_at_ms, archived"
+                    f"{extra_columns} FROM threads"
                 ).fetchall()
+                # Older indexes may have spawn edges but no source fields.
+                try:
+                    self._internal_thread_ids.update(
+                        row[0] for row in connection.execute("SELECT child_thread_id FROM thread_spawn_edges")
+                        if isinstance(row[0], str)
+                    )
+                except sqlite3.Error:
+                    pass
         except sqlite3.Error:
             return {}
         threads: dict[str, dict[str, Any]] = {}
-        for thread_id, title, name, preview, cwd, created_at, updated_at, archived in rows:
+        for row in rows:
+            thread_id, title, name, preview, cwd, created_at, updated_at, archived = tuple(row)[:8]
             if not isinstance(thread_id, str):
                 continue
+            if is_internal_codex_thread(dict(row)):
+                self._internal_thread_ids.add(thread_id)
             path = path_index.get(thread_id)
             if path is None:
                 continue
@@ -179,6 +219,7 @@ class CodexHistoryStore:
     def invalidate(self) -> None:
         self._path_index = None
         self._index_entries = None
+        self._internal_thread_ids = set()
 
     def thread_revision(self, thread_id: str) -> str | None:
         path = self._load_path_index().get(thread_id)
@@ -622,6 +663,7 @@ class CodexHistoryStore:
         if self._path_index is not None:
             return self._path_index
         paths: dict[str, Path] = {}
+        internal_ids: set[str] = set()
         for directory in (self.sessions, self.archived_sessions):
             if not directory.is_dir():
                 continue
@@ -638,6 +680,11 @@ class CodexHistoryStore:
                 file_id = payload.get("id") or payload.get("session_id")
                 if isinstance(file_id, str):
                     paths[file_id] = path
+                    # Spawned rollouts can contain the parent's session_meta
+                    # later on. The first header identifies the actual owner.
+                    if is_internal_codex_thread(payload):
+                        internal_ids.add(file_id)
+        self._internal_thread_ids.update(internal_ids)
         self._path_index = paths
         return paths
 

@@ -25,10 +25,109 @@ from codex_remote.app import (
     save_turn_images,
     workspace_image_preview,
 )
-from codex_remote.codex_history import CodexHistoryStore
+from codex_remote.codex_history import CodexHistoryStore, is_internal_codex_thread
 
 
 class CodexHistoryStoreTests(unittest.TestCase):
+    def test_identifies_internal_sources_without_hiding_user_forks(self) -> None:
+        for metadata in (
+            {"source": {"subagent": {"thread_spawn": {"parent_thread_id": "main"}}}},
+            {"source": {"subAgent": "review"}},
+            {"source": json.dumps({"subagent": "compact"})},
+            {"source": "subAgentThreadSpawn"},
+            {"thread_source": "guardian_review"},
+            {"threadSource": "subagent"},
+            {"agent_path": "/root/inspect_logo_corner"},
+        ):
+            with self.subTest(metadata=metadata):
+                self.assertTrue(is_internal_codex_thread(metadata))
+        for metadata in (
+            {}, {"source": "vscode"}, {"source": "cli"}, {"source": "exec"},
+            {"source": "future_client"}, {"source": "{malformed"},
+            {"source": {"future_client": {"name": "subagent"}}},
+            {"id": "fork", "forked_from_id": "main", "parent_thread_id": "main", "source": "vscode"},
+            {"agentPath": "/root", "thread_source": "user"},
+        ):
+            with self.subTest(metadata=metadata):
+                self.assertFalse(is_internal_codex_thread(metadata))
+
+    def test_hides_file_and_index_subtasks_but_preserves_history(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            main_meta = {"id": "main", "source": "vscode"}
+            fixtures = {
+                "main": main_meta,
+                "fork": {"id": "fork", "source": "vscode", "forked_from_id": "main"},
+                "worker": {"id": "worker", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "main"}}}},
+                "reviewer": {"id": "reviewer", "thread_source": "guardian_review"},
+            }
+            for thread_id, meta in fixtures.items():
+                events = [{"type": "session_meta", "payload": meta}]
+                if thread_id == "worker":
+                    # Child logs inherit a second header belonging to the parent.
+                    events.append({"type": "session_meta", "payload": main_meta})
+                (sessions / f"rollout-{thread_id}.jsonl").write_text(
+                    "".join(json.dumps(event) + "\n" for event in events), encoding="utf-8",
+                )
+            (home / "session_index.jsonl").write_text(json.dumps({
+                "id": "worker", "thread_name": "Named worker",
+            }) + "\n", encoding="utf-8")
+            store = CodexHistoryStore(home)
+            self.assertEqual({"main", "fork"}, {row["id"] for row in store.list_threads()})
+            self.assertEqual("worker", store.read_thread("worker")["id"])
+            self.assertEqual(4, len(list(sessions.glob("*.jsonl"))))
+
+    def test_hides_state_sources_and_spawn_edges_even_without_file_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            for thread_id in ("main", "worker", "reviewer", "edge-only"):
+                (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps({
+                    "type": "session_meta", "payload": {"id": thread_id},
+                }) + "\n", encoding="utf-8")
+            with closing(sqlite3.connect(home / "state_5.sqlite")) as connection, connection:
+                connection.execute(
+                    "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT, name TEXT, "
+                    "preview TEXT, cwd TEXT, created_at_ms INTEGER, updated_at_ms INTEGER, archived INTEGER, "
+                    "source TEXT, thread_source TEXT)"
+                )
+                for thread_id, source, kind in (
+                    ("main", "vscode", "user"),
+                    ("worker", json.dumps({"subagent": "review"}), None),
+                    ("reviewer", None, "guardian_review"),
+                    ("edge-only", None, None),
+                    ("runtime-only", json.dumps({"subagent": "compact"}), None),
+                ):
+                    connection.execute("INSERT INTO threads VALUES (?, ?, NULL, '', '', 1, 2, 0, ?, ?)",
+                                       (thread_id, thread_id, source, kind))
+                connection.execute("CREATE TABLE thread_spawn_edges (parent_thread_id TEXT, child_thread_id TEXT)")
+                connection.execute("INSERT INTO thread_spawn_edges VALUES ('main', 'edge-only')")
+            store = CodexHistoryStore(home)
+            self.assertEqual(["main"], [row["id"] for row in store.list_threads()])
+            self.assertTrue(store.is_internal_thread({"id": "runtime-only"}))
+            with closing(sqlite3.connect(home / "state_5.sqlite")) as connection:
+                self.assertEqual(5, connection.execute("SELECT COUNT(*) FROM threads").fetchone()[0])
+
+    def test_invalidating_history_discovers_new_subtasks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            (sessions / "rollout-main.jsonl").write_text(json.dumps({
+                "type": "session_meta", "payload": {"id": "main"},
+            }) + "\n", encoding="utf-8")
+            store = CodexHistoryStore(home)
+            self.assertEqual(["main"], [row["id"] for row in store.list_threads()])
+            (sessions / "rollout-worker.jsonl").write_text(json.dumps({
+                "type": "session_meta", "payload": {"id": "worker", "agent_path": "/root/worker"},
+            }) + "\n", encoding="utf-8")
+            store.invalidate()
+            self.assertEqual(["main"], [row["id"] for row in store.list_threads()])
+            self.assertTrue(store.is_internal_thread({"id": "worker"}))
+
     def test_compact_history_keeps_async_questions_before_turn_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)
@@ -56,7 +155,7 @@ class CodexHistoryStoreTests(unittest.TestCase):
             self.assertEqual(question["phase"], "final_answer")
             self.assertEqual(thread["turns"][0]["items"][1]["id"], "progress")
 
-    def test_reads_desktop_state_index_and_keeps_subagent_file_ids(self) -> None:
+    def test_reads_legacy_desktop_state_index_and_keeps_fork_file_ids(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             codex_home = Path(directory)
             sessions = codex_home / "sessions" / "2026" / "10" / "12"

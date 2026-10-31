@@ -13,6 +13,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from watchfiles import Change
+from codex_remote.codex_history import CodexHistoryStore
 
 from codex_remote.codex_app_server import (
     CodexAppServer,
@@ -607,6 +608,59 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual({"disk-1", "server-1", "server-2"}, {thread["id"] for thread in threads})
         self.assertEqual("server", next(thread["name"] for thread in threads if thread["id"] == "server-1"))
         self.assertEqual(2, app_server.request.await_count)
+
+    async def test_list_threads_does_not_reintroduce_subtasks_from_live_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            for thread_id, source in (("main", "vscode"), ("worker", {"subagent": "review"})):
+                (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps({
+                    "type": "session_meta", "payload": {"id": thread_id, "source": source},
+                }) + "\n", encoding="utf-8")
+            app_server = CodexAppServer("codex", home)
+            app_server._history = CodexHistoryStore(home)
+            app_server._initialized = True
+            app_server._process = Mock(returncode=None)
+            app_server.request = AsyncMock(side_effect=[
+                {"data": [{"id": "worker", "source": None}], "nextCursor": "page-2"},
+                {"data": [
+                    {"id": "live-worker", "source": {"subAgent": {"threadSpawn": {"parentThreadId": "main"}}}},
+                    {"id": "fork", "forkedFromId": "main", "source": "vscode"},
+                ]},
+            ])
+            threads = await app_server.list_threads()
+            self.assertEqual({"main", "fork"}, {row["id"] for row in threads})
+            self.assertEqual(2, app_server.request.await_count)
+
+    async def test_list_threads_filters_internal_only_live_results(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            app_server = CodexAppServer("codex", Path(directory))
+            app_server._history = CodexHistoryStore(Path(directory))
+            app_server.request = AsyncMock(return_value={"data": [
+                {"id": "reviewer", "source": "subAgentReview"},
+                {"id": "worker", "threadSource": "subagent"},
+            ]})
+            self.assertEqual([], await app_server.list_threads())
+
+    async def test_list_threads_filters_subtasks_during_offline_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            sessions = home / "sessions"
+            sessions.mkdir()
+            for thread_id, source in (("main", "cli"), ("worker", {"subagent": "compact"})):
+                (sessions / f"rollout-{thread_id}.jsonl").write_text(json.dumps({
+                    "type": "session_meta", "payload": {"id": thread_id, "source": source},
+                }) + "\n", encoding="utf-8")
+            app_server = CodexAppServer("codex", home)
+            app_server._history = CodexHistoryStore(home)
+            app_server.request = AsyncMock(side_effect=CodexRuntimeError("offline"))
+            self.assertEqual(["main"], [row["id"] for row in await app_server.list_threads()])
+            app_server.request.assert_not_awaited()
+            app_server._initialized = True
+            app_server._process = Mock(returncode=None)
+            self.assertEqual(["main"], [row["id"] for row in await app_server.list_threads()])
+            self.assertEqual(2, app_server.request.await_count)
 
     async def test_list_threads_falls_back_to_disk_when_app_server_is_unavailable(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
