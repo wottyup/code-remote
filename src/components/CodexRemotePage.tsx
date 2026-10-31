@@ -51,7 +51,7 @@ import {
 } from 'lucide-react'
 import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
-import { copyTextAndImagesToClipboard, copyTextToClipboard, embeddedImageFilesFromClipboardHtml } from '../lib/clipboard'
+import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { forgetOpenTerminalThread, readOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
@@ -2085,21 +2085,28 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const clipboardFiles = directFiles.length > 0 ? directFiles : itemFiles
     const fileImages = clipboardFiles.filter(isImageAttachmentFile)
     const fileDocuments = clipboardFiles.filter(isSvgDocumentFile)
-    const embeddedImages = embeddedImageFilesFromClipboardHtml(html)
+    const { text: copiedMessageText, images: embeddedImages } = richMessageContentFromClipboardHtml(html)
     const images = embeddedImages.length > fileImages.length ? embeddedImages : fileImages
     if (images.length > 0 || fileDocuments.length > 0) {
       event.preventDefault()
       if (images.length > 0) void attachImages(images)
       if (fileDocuments.length > 0) void attachDocuments(fileDocuments)
-      const labels = embeddedImages.map((image) => `[图片：${image.name}]`).join('\n\n')
-      const text = labels && pastedText === labels
+      const labels = images.map((image) => `[图片：${image.name}]`).join('\n\n')
+      const plainText = labels && pastedText === labels
         ? ''
         : labels && pastedText.endsWith(`\n\n${labels}`)
           ? pastedText.slice(0, -(labels.length + 2))
           : pastedText
+      const text = copiedMessageText ?? recoverCopiedMessageTextFromImagePaste(pastedText, images) ?? plainText
       const value = pastedTable ?? text
       if (pastedTable && value.length >= longPasteThreshold) appendDocument({ name: 'pasted-table.md', content: value })
       else if (value) insertPastedText(value, Boolean(pastedTable))
+      return
+    }
+    if (copiedMessageText !== null) {
+      event.preventDefault()
+      if (copiedMessageText.length >= longPasteThreshold) appendDocument({ name: 'pasted-content.md', content: copiedMessageText })
+      else if (copiedMessageText) insertPastedText(copiedMessageText, false)
       return
     }
     if (pastedTable) {

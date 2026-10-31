@@ -27,6 +27,7 @@ export async function readTextFromClipboard(): Promise<string | null> {
 }
 
 export async function copyTextToClipboard(value: string): Promise<boolean> {
+  lastCopiedRichMessage = null
   const androidBridge = (window as ClipboardBridgeWindow).CodexRemoteAndroid
   if (typeof androidBridge?.copyToClipboard === 'function') {
     try {
@@ -69,6 +70,16 @@ export interface ClipboardImageCopyResult {
   imageCount: number
 }
 
+interface CopiedRichMessage {
+  text: string
+  imageNames: string[]
+  copiedAt: number
+}
+
+let lastCopiedRichMessage: CopiedRichMessage | null = null
+const copiedRichMessageMaxAgeMs = 5 * 60 * 1000
+const messageTextAttribute = 'data-code-remote-message-text'
+
 const embeddedImagePattern = /^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+={0,2})$/i
 const maxEmbeddedImageBytes = 8 * 1024 * 1024
 const imageExtension: Record<string, string> = {
@@ -94,18 +105,33 @@ function embeddedImageFile(source: string, name: string): File | null {
   }
 }
 
-export function embeddedImageFilesFromClipboardHtml(html: string): File[] {
-  if (!html.includes('data:image/')) return []
+export function richMessageContentFromClipboardHtml(html: string): { text: string | null; images: File[] } {
+  if (!html.includes('data:image/') && !html.includes(messageTextAttribute)) return { text: null, images: [] }
   try {
     const document = new DOMParser().parseFromString(html, 'text/html')
-    return Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, maxImagesPerTurn)
+    const text = document.querySelector(`[${messageTextAttribute}]`)?.getAttribute(messageTextAttribute) ?? null
+    const images = Array.from(document.querySelectorAll('img[src^="data:image/"]')).slice(0, maxImagesPerTurn)
       .flatMap((image, index) => {
         const file = embeddedImageFile(image.getAttribute('src') ?? '', image.getAttribute('alt') || `image-${index + 1}`)
         return file ? [file] : []
       })
+    return { text, images }
   } catch {
-    return []
+    return { text: null, images: [] }
   }
+}
+
+export function embeddedImageFilesFromClipboardHtml(html: string): File[] {
+  return richMessageContentFromClipboardHtml(html).images
+}
+
+export function recoverCopiedMessageTextFromImagePaste(plainText: string, images: readonly File[]): string | null {
+  const copied = lastCopiedRichMessage
+  if (!copied || images.length === 0 || Date.now() - copied.copiedAt > copiedRichMessageMaxAgeMs) return null
+  if (!images.some((image) => copied.imageNames.includes(image.name))) return null
+  const pasted = plainText.trim()
+  if (pasted && !copied.imageNames.some((name) => pasted === name || pasted === `[图片：${name}]`)) return null
+  return copied.text
 }
 
 function escapeClipboardHtml(value: string) {
@@ -198,13 +224,22 @@ function copyRichClipboardContent(plainText: string, html: string, images: reado
 export async function copyTextAndImagesToClipboard(text: string, images: readonly ClipboardImageContent[]): Promise<ClipboardImageCopyResult> {
   if (images.length === 0) return { copied: await copyTextToClipboard(text), imageCount: 0 }
 
+  lastCopiedRichMessage = null
   const trimmedText = text.trim()
   const plainText = [trimmedText, ...images.map((image) => `[图片：${image.name || '未命名'}]`)].filter(Boolean).join('\n\n')
   const textHtml = trimmedText
     ? trimmedText.split(/\n{2,}/).map((paragraph) => `<p>${escapeClipboardHtml(paragraph).replace(/\n/g, '<br>')}</p>`).join('')
     : ''
   const imageHtml = images.map((image) => `<p><img src="${escapeClipboardHtml(image.previewUrl)}" alt="${escapeClipboardHtml(image.name)}"></p>`).join('')
-  const html = `<div>${textHtml}${imageHtml}</div>`
+  const html = `<div ${messageTextAttribute}="${escapeClipboardHtml(trimmedText)}">${textHtml}${imageHtml}</div>`
+  const rememberCopy = (result: ClipboardImageCopyResult) => {
+    if (result.copied) lastCopiedRichMessage = {
+      text: trimmedText,
+      imageNames: images.map((image) => image.name).filter(Boolean),
+      copiedAt: Date.now(),
+    }
+    return result
+  }
 
   if (navigator.clipboard?.write && typeof ClipboardItem !== 'undefined') {
     const pngPromise = imageAsPngBlob(images[0].previewUrl)
@@ -216,14 +251,14 @@ export async function copyTextAndImagesToClipboard(text: string, images: readonl
         'image/png': pngPromise,
       })
       await navigator.clipboard.write([clipboardItem])
-      return { copied: true, imageCount: 1 }
+      return rememberCopy({ copied: true, imageCount: 1 })
     } catch {
       try {
         await navigator.clipboard.write([new ClipboardItem({
           'text/plain': new Blob([plainText], { type: 'text/plain' }),
           'image/png': pngPromise,
         })])
-        return { copied: true, imageCount: 1 }
+        return rememberCopy({ copied: true, imageCount: 1 })
       } catch {
         // Keep the text and HTML path available if this browser rejects PNG.
       }
@@ -232,12 +267,12 @@ export async function copyTextAndImagesToClipboard(text: string, images: readonl
           'text/plain': new Blob([plainText], { type: 'text/plain' }),
           'text/html': new Blob([html], { type: 'text/html' }),
         })])
-        return { copied: true, imageCount: 0 }
+        return rememberCopy({ copied: true, imageCount: 0 })
       } catch {
         // Fall through to the legacy rich clipboard path used on LAN HTTP pages.
       }
     }
   }
 
-  return copyRichClipboardContent(plainText, html, images)
+  return rememberCopy(copyRichClipboardContent(plainText, html, images))
 }
