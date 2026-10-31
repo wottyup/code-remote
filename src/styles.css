@@ -383,6 +383,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row__pane-dot { width: 6px; height: 6px; flex: 0 0 auto; align-self: center; border: 1px solid rgba(157, 177, 255, .72); border-radius: 50%; background: #8fa7ff; box-shadow: 0 0 8px rgba(115, 142, 255, .55); }
 .thread-context-menu { position: fixed; z-index: 20; display: grid; min-width: 154px; gap: 3px; padding: 5px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 9px; background: rgba(28, 31, 39, .98); box-shadow: 0 15px 38px rgba(0, 0, 0, .35); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
 .thread-context-menu button { display: flex; align-items: center; gap: 8px; min-height: 31px; padding: 0 8px; border: 0; border-radius: 6px; background: transparent; color: #c8cedb; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; }
+.thread-context-menu button .context-menu-shortcut { min-width: 1.6ch; margin-left: auto; padding-left: 14px; color: inherit; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; font-variant-numeric: tabular-nums; opacity: .65; text-align: right; }
 .thread-context-menu button:hover { background: rgba(103, 120, 172, .28); color: #f3f5fa; }
 .thread-context-menu button:disabled { cursor: wait; opacity: .62; }
 .thread-context-menu button.thread-context-menu__danger { margin-top: 3px; border-top: 1px solid rgba(220, 103, 107, .2); color: #ee9296; }
