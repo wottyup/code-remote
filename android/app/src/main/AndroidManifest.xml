@@ -19,6 +19,7 @@
             android:launchMode="singleTop"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize"
             android:windowSoftInputMode="adjustResize"
+            android:theme="@style/AppTheme.Starting"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />

@@ -2270,20 +2270,21 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(2), 0, 0, dp(2))
         }
+        val brandMarkSize = dp(if (retroTheme) 40 else 36)
         sidebarBrandMark = ImageView(this).apply {
             setImageResource(R.drawable.code_remote)
             imageTintList = null
-            background = if (pixelTheme) pixelFrameBackground(R.drawable.pixel_frame_square, PANEL_INSET)
-                else rounded(PANEL_INSET, dp(10))
-            val markPadding = if (pixelTheme) dp(6) else dp(8)
-            setPadding(markPadding, markPadding, markPadding, markPadding)
+            background = null
+            setPadding(0, 0, 0, 0)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
             contentDescription = "Code Remote"
         }
-        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(dp(if (retroTheme) 40 else 36), dp(if (retroTheme) 40 else 36)).apply { rightMargin = dp(10) })
+        brand.addView(sidebarBrandMark, LinearLayout.LayoutParams(brandMarkSize, brandMarkSize).apply { rightMargin = dp(10) })
         val brandCopy = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; gravity = Gravity.CENTER_VERTICAL }
         brandCopy.addView(label("Code Remote", if (retroTheme) 18 else 15, TEXT, true), widthWrap())
         brandCopy.addView(label("对话工作台", if (retroTheme) 12 else 10, MUTED), widthWrap())
-        brand.addView(brandCopy, LinearLayout.LayoutParams(0, WRAP, 1f))
+        brand.addView(brandCopy, LinearLayout.LayoutParams(0, brandMarkSize, 1f))
         drawer.addView(brand, LinearLayout.LayoutParams(MATCH, dp(44)))
 
         val searchBox = LinearLayout(this).apply {
