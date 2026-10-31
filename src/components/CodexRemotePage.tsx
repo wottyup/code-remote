@@ -2042,7 +2042,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
     // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
     if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
-    if (event.key !== 'Enter' || event.shiftKey || !canSend) return
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !canSend) return
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
   }
@@ -2311,6 +2311,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
         <textarea
           ref={composer}
+          data-chat-composer
           value={draft}
           onChange={(event) => updateDraft(event.target.value)}
           onCompositionStart={() => { inputIsComposing.current = true }}
@@ -5894,7 +5895,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
 
       const target = event.target instanceof HTMLElement ? event.target : null
-      if (target?.isContentEditable || target?.closest('input, textarea, select, [contenteditable="true"], [role="textbox"]')) return
+      const editableTarget = target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')
+      if (editableTarget && !editableTarget.matches('textarea[data-chat-composer]')) return
       if (document.querySelector('[role="dialog"], [role="menu"], [role="listbox"]')) return
 
       const threads = groupedSidebarThreads.flatMap((section) => section.threads)
