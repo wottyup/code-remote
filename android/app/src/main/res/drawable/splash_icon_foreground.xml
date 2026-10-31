@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
-    android:drawable="@drawable/code_remote"
-    android:inset="21dp" />
+    android:drawable="@drawable/code_remote_splash_square"
+    android:inset="30dp" />
