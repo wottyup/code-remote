@@ -117,64 +117,35 @@ function EngineBrandIcon({ engine, size = 16 }: { engine: ChatEngine; size?: num
   return <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: size, height: size }} aria-hidden="true" />
 }
 
-function NumberedContextMenuButton({ shortcut, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { shortcut: number }) {
+function ShortcutContextMenuButton({ shortcut, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { shortcut: number | 'Del' }) {
   return <button {...props} type="button" role="menuitem" data-context-menu-key={shortcut}>
     {children}<kbd className="context-menu-shortcut" aria-hidden="true">{shortcut}</kbd>
   </button>
 }
 
-function useNumberedContextMenu(menuRef: RefObject<HTMLDivElement | null>, activeMenu: object | null) {
+function useContextMenuShortcuts(menuRef: RefObject<HTMLDivElement | null>, activeMenu: object | null) {
   useEffect(() => {
     if (!activeMenu) return
     menuRef.current?.focus({ preventScroll: true })
-    let pendingDigit = ''
-    let pendingTimer: number | undefined
-    const clearPending = () => {
-      if (pendingTimer !== undefined) window.clearTimeout(pendingTimer)
-      pendingTimer = undefined
-      pendingDigit = ''
-    }
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.repeat) return
       if (event.defaultPrevented || event.isComposing || event.keyCode === 229
-        || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) {
-        clearPending()
-        return
-      }
+        || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
       const target = event.target instanceof Element ? event.target : null
-      if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')) {
-        clearPending()
-        return
-      }
-      if (!/^[0-9]$/.test(event.key)) {
-        clearPending()
-        return
-      }
+      if (target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')) return
+      const shortcut = event.key === 'Delete' ? 'Del' : /^[0-9]$/.test(event.key) ? event.key : null
+      if (!shortcut) return
       const menu = menuRef.current
       if (!menu?.isConnected) return
-      const buttons = [...menu.querySelectorAll<HTMLButtonElement>('button[data-context-menu-key]')]
-      const requestedShortcut = pendingDigit + event.key
-      const shortcut = buttons.some((button) => button.dataset.contextMenuKey === requestedShortcut)
-        ? requestedShortcut : event.key
-      const button = buttons.find((item) => item.dataset.contextMenuKey === shortcut)
-      const hasLongerShortcut = buttons.some((item) => item.dataset.contextMenuKey?.startsWith(shortcut) && item.dataset.contextMenuKey !== shortcut)
-      clearPending()
-      if (!button && !hasLongerShortcut) return
+      const button = [...menu.querySelectorAll<HTMLButtonElement>('button[data-context-menu-key]')]
+        .find((item) => item.dataset.contextMenuKey === shortcut)
+      if (!button) return
       event.preventDefault()
       event.stopImmediatePropagation()
-      if (hasLongerShortcut) {
-        pendingDigit = shortcut
-        pendingTimer = window.setTimeout(() => {
-          pendingDigit = ''
-          pendingTimer = undefined
-          const currentButton = menuRef.current?.querySelector<HTMLButtonElement>(`button[data-context-menu-key="${shortcut}"]`)
-          if (currentButton && !currentButton.disabled) currentButton.click()
-        }, 400)
-      } else if (button && !button.disabled) button.click()
+      if (!button.disabled) button.click()
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => {
-      clearPending()
       document.removeEventListener('keydown', handleKeyDown, true)
     }
   }, [activeMenu, menuRef])
@@ -2602,7 +2573,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const [selectionContextMenu, setSelectionContextMenu] = useState<WorkspaceSelectionContextMenu | null>(null)
   const selectionContextMenuElement = useRef<HTMLDivElement>(null)
   const contextMenuElement = useRef<HTMLDivElement>(null)
-  useNumberedContextMenu(contextMenuElement, contextMenu)
+  useContextMenuShortcuts(contextMenuElement, contextMenu)
   const [workspaceClipboard, setWorkspaceClipboard] = useState<WorkspaceClipboard | null>(null)
   const [mutationDialog, setMutationDialog] = useState<WorkspaceMutationDialog | null>(null)
   const [mutationSaving, setMutationSaving] = useState(false)
@@ -3506,6 +3477,10 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   const contextMenuHasQuickActions = contextMenuCanBind || contextMenuCanOpenTerminal || contextMenuCanRunInTerminal || contextMenuMissingDraftPaths.length > 0
   const contextMenuHasFileActions = contextMenuCanRename || contextMenuCanCopy || contextMenuCanCut || contextMenuCanDownload || contextMenuCanPaste || contextMenuCanUpload
   let contextMenuShortcut = 0
+  const nextContextMenuShortcut = () => {
+    contextMenuShortcut += 1
+    return contextMenuShortcut === 10 ? 0 : contextMenuShortcut
+  }
   const uploadPercent = uploadProgress
     ? uploadProgress.size > 0
       ? Math.min(100, Math.floor(uploadProgress.loaded / uploadProgress.size * 100))
@@ -3678,26 +3653,26 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
           <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
           {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
             <span className="workspace-file-context-menu__group-label">快捷操作</span>
-            {contextMenuCanBind ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</NumberedContextMenuButton> : null}
-            {contextMenuCanOpenTerminal ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</NumberedContextMenuButton> : null}
-            {contextMenuCanRunInTerminal ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />终端运行</NumberedContextMenuButton> : null}
-            {contextMenuMissingDraftPaths.length > 0 ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</NumberedContextMenuButton> : null}
+            {contextMenuCanBind ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</ShortcutContextMenuButton> : null}
+            {contextMenuCanOpenTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</ShortcutContextMenuButton> : null}
+            {contextMenuCanRunInTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />终端运行</ShortcutContextMenuButton> : null}
+            {contextMenuMissingDraftPaths.length > 0 ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</ShortcutContextMenuButton> : null}
           </div> : null}
           {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
             <span className="workspace-file-context-menu__group-label">新建</span>
-            <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</NumberedContextMenuButton>
-            <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</NumberedContextMenuButton>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</ShortcutContextMenuButton>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</ShortcutContextMenuButton>
           </div> : null}
           {contextMenuHasFileActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--manage">
             <span className="workspace-file-context-menu__group-label">文件操作</span>
-            {contextMenuCanRename ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={startWorkspaceRename}><Pencil size={14} />重命名</NumberedContextMenuButton> : null}
-            {contextMenuCanCopy ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</NumberedContextMenuButton> : null}
-            {contextMenuCanCut ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</NumberedContextMenuButton> : null}
-            {contextMenuCanDownload ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => void downloadWorkspaceFile()}><Download size={14} />文件下载</NumberedContextMenuButton> : null}
-            {contextMenuCanPaste ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</NumberedContextMenuButton> : null}
-            {contextMenuCanUpload ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />上传文件</NumberedContextMenuButton> : null}
+            {contextMenuCanRename ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={startWorkspaceRename}><Pencil size={14} />重命名</ShortcutContextMenuButton> : null}
+            {contextMenuCanCopy ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanCut ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanDownload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void downloadWorkspaceFile()}><Download size={14} />文件下载</ShortcutContextMenuButton> : null}
+            {contextMenuCanPaste ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</ShortcutContextMenuButton> : null}
+            {contextMenuCanUpload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />上传文件</ShortcutContextMenuButton> : null}
           </div> : null}
-          {contextMenuCanDelete ? <NumberedContextMenuButton shortcut={++contextMenuShortcut} className="thread-context-menu__danger workspace-file-context-menu__delete" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</NumberedContextMenuButton> : null}
+          {contextMenuCanDelete ? <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger workspace-file-context-menu__delete" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
         </div>,
         document.body,
       ) : null}
@@ -4550,7 +4525,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [paneNotice, setPaneNotice] = useState<string | null>(null)
   const [threadContextMenu, setThreadContextMenu] = useState<{ thread: CodexThread; x: number; y: number } | null>(null)
   const threadContextMenuElement = useRef<HTMLDivElement>(null)
-  useNumberedContextMenu(threadContextMenuElement, threadContextMenu)
+  useContextMenuShortcuts(threadContextMenuElement, threadContextMenu)
   const [pinnedThreadIds, setPinnedThreadIds] = useState<Set<string>>(readPinnedThreadIds)
   const [scheduledThreadIds, setScheduledThreadIds] = useState<Set<string>>(() => new Set())
   const [threadContextAction, setThreadContextAction] = useState<{ threadId: string; type: 'export' | 'quote' } | null>(null)
@@ -6102,12 +6077,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div ref={threadContextMenuElement} className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
-          <NumberedContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</NumberedContextMenuButton>
-          <NumberedContextMenuButton shortcut={2} onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</NumberedContextMenuButton>
-          <NumberedContextMenuButton shortcut={3} disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</NumberedContextMenuButton>
-          <NumberedContextMenuButton shortcut={4} disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</NumberedContextMenuButton>
-          <NumberedContextMenuButton shortcut={5} onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</NumberedContextMenuButton>
-          <NumberedContextMenuButton shortcut={6} className="thread-context-menu__danger" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />删除聊天</NumberedContextMenuButton>
+          <ShortcutContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={2} onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={3} disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={4} disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={5} onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />删除聊天</ShortcutContextMenuButton>
         </div>
       ) : null}
 
