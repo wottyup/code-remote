@@ -224,21 +224,27 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
     </summary>
     <div className="translation-settings">
-      <div className="translation-settings__option">
-        <label className="translation-settings__switch"><input type="checkbox" aria-describedby={sendHintId} checked={preferences.enabled} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
-        <p id={sendHintId} className="translation-settings__hint">输入中文时预览英文，发送给 AI 的是英文；输入英文则原样发送。</p>
-      </div>
-      <div className="translation-settings__option">
-        <label className="translation-settings__switch"><input type="checkbox" aria-describedby={displayHintId} checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
-        <p id={displayHintId} className="translation-settings__hint">开启后，你的消息显示发送的英文，AI 回复显示中文；关闭后优先显示原文。</p>
-      </div>
-      <label className="translation-settings__field"><span>翻译引擎（选择已有配置）</span><select value={provider} disabled={busyAction !== null} onChange={(event) => selectProvider(event.currentTarget.value as TranslationProvider)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
-      <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
-      <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic' || provider === 'responses'
-        ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
-        : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
+      <section className="translation-settings__group" aria-label="翻译行为">
+        <h3>翻译行为</h3>
+        <div className="translation-settings__option">
+          <label className="translation-settings__switch"><input type="checkbox" aria-describedby={sendHintId} checked={preferences.enabled} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
+          <p id={sendHintId} className="translation-settings__hint">输入中文时预览英文，发送给 AI 的是英文；输入英文则原样发送。</p>
+        </div>
+        <div className="translation-settings__option">
+          <label className="translation-settings__switch"><input type="checkbox" aria-describedby={displayHintId} checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
+          <p id={displayHintId} className="translation-settings__hint">开启后，你的消息显示发送的英文，AI 回复显示中文；关闭后优先显示原文。</p>
+        </div>
+      </section>
+      <section className="translation-settings__group" aria-label="翻译方式">
+        <h3>翻译方式</h3>
+        <label className="translation-settings__field"><span>翻译引擎（选择已有配置）</span><select value={provider} disabled={busyAction !== null} onChange={(event) => selectProvider(event.currentTarget.value as TranslationProvider)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
+        <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
+        <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic' || provider === 'responses'
+          ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
+          : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
+      </section>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>
-        <strong>{choices.find((choice) => choice.value === provider)?.label} · {current?.configured ? '已配置' : '待配置'}</strong>
+        <div className="translation-settings__config-heading"><h3>接口配置</h3><span>{choices.find((choice) => choice.value === provider)?.label} · {current?.configured ? '已配置' : '待配置'}</span></div>
         {moveOffer?.target === provider ? <div className="translation-settings__transfer">
           <p className="translation-settings__hint">刚才使用的是“{moveOffer.name}”。要将它改为当前协议并保留地址、模型和密钥吗？</p>
           <div className="translation-settings__actions"><button type="button" disabled={busyAction !== null} onClick={() => void moveProfile(moveOffer.source, moveOffer.profileId, moveOffer.target)}>{busyAction === 'move' ? <LoaderCircle className="spin" size={14} /> : null}沿用刚才的配置</button><button type="button" disabled={busyAction !== null} onClick={() => setMoveOffer(null)}>使用当前协议已有配置</button></div>
