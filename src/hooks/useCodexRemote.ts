@@ -58,6 +58,7 @@ export interface CodexOperation {
   steps?: CodexOperationStep[]
   paths?: string[]
   imagePath?: string
+  terminalOutput?: string
   status: CodexOperationStatus
 }
 
@@ -1145,6 +1146,7 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
     }
     const paths = operationPaths(parsedArgs)
     const toolType = tool.toLowerCase()
+    const isTerminalHandoff = toolType.includes('code_remote_terminal')
     const isSearch = /search|find|grep|query/.test(toolType)
     const isFile = /read|file|directory|folder|list/.test(toolType)
     const skillName = parsedArgs && typeof parsedArgs === 'object' && !Array.isArray(parsedArgs)
@@ -1152,14 +1154,20 @@ function operationForItem(value: unknown, statusOverride?: CodexOperationStatus)
         .find((value): value is string => typeof value === 'string' && value.trim().length > 0)
       : undefined
     const isSkill = /skill/.test(toolType)
-    const label = isSkill ? '读取技能' : isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
+    const label = isTerminalHandoff
+      ? /interrupt_command/.test(toolType) ? '中断远端命令' : /read_terminal/.test(toolType) ? '读取远端终端' : '在远端终端执行'
+      : isSkill ? '读取技能' : isSearch ? '搜索文件' : isFile ? '查看文件' : '调用工具'
     const pathSummary = paths.length > 0
       ? `${paths.slice(0, 3).join('、')}${paths.length > 3 ? ` 等 ${paths.length} 个路径` : ''}`
       : ''
-    const detail = safeOperationDetail(isSkill
-      ? skillName?.trim() || tool
-      : [tool, pathSummary].filter(Boolean).join(' · '))
-    return { id, kind: isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), ...(paths.length > 0 ? { paths } : {}), status }
+    const detail = safeOperationDetail(isTerminalHandoff && typeof item.terminalCommand === 'string'
+      ? item.terminalCommand
+      : isSkill ? skillName?.trim() || tool
+        : [tool, pathSummary].filter(Boolean).join(' · '))
+    const terminalOutput = isTerminalHandoff && typeof item.terminalOutput === 'string'
+      ? item.terminalOutput.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, '').slice(-8_000)
+      : ''
+    return { id, kind: isTerminalHandoff ? 'command' : isSearch ? 'search' : isFile ? 'file' : 'tool', label, ...(detail ? { detail } : {}), ...(paths.length > 0 ? { paths } : {}), ...(terminalOutput ? { terminalOutput } : {}), status }
   }
 
   if (itemType === 'websearch') {

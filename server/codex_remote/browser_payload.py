@@ -86,6 +86,29 @@ def _browser_command_actions(value: Any) -> list[dict[str, str]]:
     return actions
 
 
+def _terminal_result_text(value: Any, depth: int = 0) -> str:
+    if depth > 6:
+        return ""
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, RecursionError):
+            return value
+        return _terminal_result_text(decoded, depth + 1)
+    if isinstance(value, list):
+        return "\n".join(filter(None, (_terminal_result_text(part, depth + 1) for part in value)))
+    if isinstance(value, dict):
+        screen = value.get("screen")
+        if isinstance(screen, str):
+            return screen
+        for key in ("terminalOutput", "result", "content", "output", "text"):
+            if key in value:
+                text = _terminal_result_text(value[key], depth + 1)
+                if text:
+                    return text
+    return ""
+
+
 def browser_item(item: dict[str, Any]) -> dict[str, Any]:
     result = _pick(item, ("id", "type", "status", "createdAt", "created_at", "timestamp"))
     item_type = str(item.get("type", "")).replace("_", "").replace("-", "").lower()
@@ -113,12 +136,21 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
             result["commandActions"] = command_actions
     elif item_type in {"mcptoolcall", "dynamictoolcall", "collabagenttoolcall"}:
         result.update(_pick(item, ("server", "tool", "name", "namespace")))
+        terminal_tool = item.get("server") == "code_remote_terminal" or "code_remote_terminal" in str(item.get("tool", ""))
+        if terminal_tool:
+            terminal_output = _terminal_result_text(item.get("terminalOutput", item.get("result")))
+            if terminal_output:
+                result["terminalOutput"] = terminal_output[-8_000:]
         args = item.get("arguments", item.get("args", item.get("input")))
         if isinstance(args, str) and len(args) < 20_000:
             try:
                 args = json.loads(args)
             except (ValueError, RecursionError):
                 args = None
+        if terminal_tool and isinstance(args, dict) and isinstance(args.get("command"), str):
+            result["terminalCommand"] = args["command"][:4_096]
+        elif terminal_tool and isinstance(item.get("terminalCommand"), str):
+            result["terminalCommand"] = item["terminalCommand"][:4_096]
         paths = _operation_paths(args)
         safe_arguments: dict[str, Any] = {}
         if paths:

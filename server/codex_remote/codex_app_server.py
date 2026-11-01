@@ -11,6 +11,7 @@ import sqlite3
 import shutil
 import socket
 import subprocess
+import sys
 import time
 import uuid
 from contextlib import closing, suppress
@@ -22,6 +23,7 @@ from watchfiles import Change, DefaultFilter, awatch
 from websockets.asyncio.client import connect as websocket_connect
 from .codex_history import CodexHistoryStore
 from .mcp_approvals import MCPApprovalError, MCPApprovalStore, mcp_tool_confirmation
+from .terminal_handoff import TerminalHandoffBroker
 
 logger = logging.getLogger(__name__)
 _APP_SERVER_MAX_MESSAGE_SIZE = 256 * 1024 * 1024
@@ -311,6 +313,7 @@ class CodexAppServer:
         self._server_requests: dict[str | int, dict[str, Any]] = {}
         self._active_turn_ids: dict[str, str] = {}
         self._mcp_approval_store: MCPApprovalStore | None = None
+        self._terminal_handoff: TerminalHandoffBroker | None = None
         # thread/start creates an in-memory thread before its first rollout
         # exists. Such a thread can accept turn/start but not thread/resume.
         self._fresh_thread_cwds: dict[str, Path] = {}
@@ -343,6 +346,23 @@ class CodexAppServer:
 
     def enable_mcp_approvals(self, store: MCPApprovalStore) -> None:
         self._mcp_approval_store = store
+
+    def enable_terminal_handoff(self, broker: TerminalHandoffBroker) -> None:
+        self._terminal_handoff = broker
+
+    def _terminal_mcp_config(self, context: str) -> dict[str, Any]:
+        assert self._terminal_handoff is not None
+        package_parent = str(Path(__file__).resolve().parent.parent)
+        python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+        return {"mcp_servers": {"code_remote_terminal": {
+            "command": sys.executable,
+            "args": ["-m", "codex_remote.terminal_handoff"],
+            "env": {
+                "PYTHONPATH": python_path,
+                "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),
+                "CODE_REMOTE_TERMINAL_CONTEXT": context,
+            },
+        }}}
 
     @property
     def connected(self) -> bool:
@@ -746,6 +766,9 @@ class CodexAppServer:
             "cwd": str(cwd or self.workspace),
             "serviceName": "codex_remote_web",
         }
+        terminal_context = secrets.token_hex(16) if self._terminal_handoff and os.name != "nt" else None
+        if terminal_context:
+            params["config"] = self._terminal_mcp_config(terminal_context)
         if model:
             params["model"] = model
         if approval_policy:
@@ -755,6 +778,8 @@ class CodexAppServer:
         thread = result.get("thread")
         if not isinstance(thread, dict) or not isinstance(thread.get("id"), str):
             raise CodexRuntimeError("Codex 没有返回新对话编号")
+        if terminal_context and self._terminal_handoff:
+            self._terminal_handoff.bind_context(terminal_context, thread["id"])
         thread_cwd = thread.get("cwd")
         if not isinstance(thread_cwd, str) or not thread_cwd.strip():
             thread_cwd = str(cwd or self.workspace)
@@ -769,12 +794,17 @@ class CodexAppServer:
         ):
             raise CodexRuntimeError("本机 Codex 历史数据库没有该对话，无法在隔离运行时中恢复。")
         params: dict[str, Any] = {"threadId": thread_id}
+        terminal_context = secrets.token_hex(16) if self._terminal_handoff and os.name != "nt" else None
+        if terminal_context:
+            params["config"] = self._terminal_mcp_config(terminal_context)
         if cwd is not None:
             params["cwd"] = str(cwd)
         result = await self.request("thread/resume", params)
         thread = result.get("thread")
         if not isinstance(thread, dict):
             raise CodexRuntimeError("Codex 无法恢复该对话")
+        if terminal_context and self._terminal_handoff:
+            self._terminal_handoff.bind_context(terminal_context, thread_id)
         thread_cwd = thread.get("cwd")
         if not isinstance(thread_cwd, str) or not thread_cwd.strip():
             thread_cwd = str(cwd or self.workspace)

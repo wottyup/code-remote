@@ -50,19 +50,22 @@ export function forgetTerminalScreen(threadId: string) {
   writeSnapshots(readSnapshots().filter((entry) => entry.threadId !== threadId))
 }
 
-function readOpenPanels(): Record<string, string> {
+function readOpenPanels(): Record<string, string[]> {
   try {
     const value: unknown = JSON.parse(window.sessionStorage.getItem(openPanelsStorageKey) ?? '{}')
     if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-    return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] =>
-      typeof entry[1] === 'string' && entry[1].length > 0 && entry[1].length <= 512,
-    ))
+    return Object.fromEntries(Object.entries(value).flatMap(([pane, threads]) => {
+      const ids = (Array.isArray(threads) ? threads : [threads]).filter((id): id is string =>
+        typeof id === 'string' && id.length > 0 && id.length <= 512,
+      )
+      return ids.length > 0 ? [[pane, [...new Set(ids)].slice(-12)]] : []
+    }))
   } catch {
     return {}
   }
 }
 
-function writeOpenPanels(panels: Record<string, string>) {
+function writeOpenPanels(panels: Record<string, string[]>) {
   try {
     window.sessionStorage.setItem(openPanelsStorageKey, JSON.stringify(panels))
   } catch {
@@ -70,16 +73,24 @@ function writeOpenPanels(panels: Record<string, string>) {
   }
 }
 
-export function readOpenTerminalThread(paneIndex: number): string | null {
-  return readOpenPanels()[String(paneIndex)] ?? null
+export function isOpenTerminalThread(paneIndex: number, threadId: string): boolean {
+  return readOpenPanels()[String(paneIndex)]?.includes(threadId) ?? false
 }
 
 export function rememberOpenTerminalThread(paneIndex: number, threadId: string) {
-  writeOpenPanels({ ...readOpenPanels(), [String(paneIndex)]: threadId })
+  const panels = readOpenPanels()
+  const pane = String(paneIndex)
+  writeOpenPanels({ ...panels, [pane]: [...(panels[pane] ?? []).filter((id) => id !== threadId), threadId].slice(-12) })
 }
 
-export function forgetOpenTerminalThread(paneIndex: number) {
+export function forgetOpenTerminalThread(paneIndex: number, threadId?: string | null) {
   const panels = readOpenPanels()
-  delete panels[String(paneIndex)]
+  const pane = String(paneIndex)
+  if (threadId) {
+    panels[pane] = (panels[pane] ?? []).filter((id) => id !== threadId)
+    if (panels[pane].length === 0) delete panels[pane]
+  } else {
+    delete panels[pane]
+  }
   writeOpenPanels(panels)
 }

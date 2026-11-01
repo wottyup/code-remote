@@ -3,6 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
 import { memo, useEffect, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { copyTextToClipboard, readTextFromClipboard } from '../lib/clipboard'
+import { codexRemoteClient } from '../lib/codexRemoteClient'
 import { installTerminalMouseSelection } from '../lib/terminalMouseSelection'
 import { restoreTerminalTouchSelection, terminalTouchSelectionRects, type TerminalTouchSelection } from '../lib/terminalTouchSelection'
 import { terminalChangeDirectoryCommand, terminalRunScriptCommand } from '../lib/terminalPathCommand'
@@ -137,6 +138,15 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
   visibleRef.current = visible
   const updateVisibility = useRef<(open: boolean) => void>(() => {})
   const [status, setStatus] = useState<TerminalStatus>('connecting')
+  const [persistent, setPersistent] = useState(false)
+  const [handoffSupported, setHandoffSupported] = useState(false)
+  const [handoffStatusLoaded, setHandoffStatusLoaded] = useState(false)
+  const [handoffUnavailableReason, setHandoffUnavailableReason] = useState('')
+  const [handoffEnabled, setHandoffEnabled] = useState(false)
+  const [handoffBusy, setHandoffBusy] = useState(false)
+  const [handoffError, setHandoffError] = useState('')
+  const handoffEnabledRef = useRef(handoffEnabled)
+  handoffEnabledRef.current = handoffEnabled
   const [shellName, setShellName] = useState('')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -156,6 +166,51 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
     paste: () => {},
     selectAll: () => '',
   })
+
+  useEffect(() => {
+    setHandoffStatusLoaded(false)
+    setHandoffSupported(false)
+    setHandoffEnabled(false)
+    setHandoffError('')
+  }, [threadId])
+
+  useEffect(() => {
+    if (!threadId) {
+      return
+    }
+    if (!visible) return
+    let cancelled = false
+    const refresh = () => {
+      void codexRemoteClient.terminalHandoffStatus(token, threadId).then((result) => {
+        if (cancelled || handoffBusy) return
+        setHandoffSupported(result.supported)
+        setHandoffStatusLoaded(true)
+        setHandoffUnavailableReason(result.reason ?? '')
+        setHandoffEnabled(result.enabled)
+        setHandoffError('')
+      }).catch((reason: unknown) => {
+        if (!cancelled) setHandoffError(reason instanceof Error ? reason.message : '无法查询终端接管状态')
+      })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 10_000)
+    return () => { cancelled = true; window.clearInterval(timer) }
+  }, [handoffBusy, threadId, token, visible])
+
+  async function toggleHandoff() {
+    if (!threadId || handoffBusy) return
+    setHandoffBusy(true)
+    setHandoffError('')
+    try {
+      const result = await codexRemoteClient.setTerminalHandoff(token, threadId, !handoffEnabled)
+      setHandoffEnabled(result.enabled)
+      setHandoffSupported(result.supported)
+    } catch (reason) {
+      setHandoffError(reason instanceof Error ? reason.message : '切换终端接管失败')
+    } finally {
+      setHandoffBusy(false)
+    }
+  }
   const sendTerminalInput = useRef<(data: string) => void>(() => {})
   const sendControlInput = useRef<(code: TerminalControlCode) => void>(() => {})
   const controlRepeatDelay = useRef<number | undefined>(undefined)
@@ -474,7 +529,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
       send({ type: 'input', data })
     }
     const dispatchInput = (data: string) => {
-      if (!visibleRef.current) return
+      if (!visibleRef.current || handoffEnabledRef.current) return
       clearSelectionSnapshot()
       const modifier = activeModifierRef.current
       sendInput(applyTerminalModifier(data, modifier))
@@ -666,7 +721,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
         else if (event.data instanceof Blob) void event.data.arrayBuffer().then((data) => writeOutput(new Uint8Array(data)))
         return
       }
-      let payload: { type?: string; cwd?: string; shell?: string; message?: string }
+      let payload: { type?: string; cwd?: string; shell?: string; persistent?: boolean; message?: string }
       try {
         payload = JSON.parse(event.data) as typeof payload
       } catch {
@@ -675,6 +730,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
       if (payload.type === 'ready') {
         ready = true
         setStatus('connected')
+        setPersistent(payload.persistent === true)
         setShellName(payload.shell ?? '')
         if (payload.cwd) setWorkingDirectory(payload.cwd)
         for (const data of pendingInput.splice(0)) send({ type: 'input', data })
@@ -695,6 +751,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
         stopControlRepeat()
         resetModifier()
         setStatus('exited')
+        setHandoffEnabled(false)
         terminal.writeln('\r\n\x1b[90m[终端会话已结束]\x1b[0m')
       }
     })
@@ -818,7 +875,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected'}
+              disabled={status !== 'connected' || handoffEnabled}
               onPointerDown={(event) => {
                 event.preventDefault()
                 sendQuickInput('\x1b')
@@ -830,7 +887,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected'}
+              disabled={status !== 'connected' || handoffEnabled}
               onPointerDown={(event) => {
                 event.preventDefault()
                 sendQuickInput('\t')
@@ -844,7 +901,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                 className="terminal-dialog__navigation-button"
                 type="button"
                 key={modifier}
-                disabled={status !== 'connected'}
+                disabled={status !== 'connected' || handoffEnabled}
                 aria-pressed={activeModifier === modifier}
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -858,7 +915,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected'}
+              disabled={status !== 'connected' || handoffEnabled}
               aria-label="粘贴到终端"
               title="粘贴到终端"
               onPointerDown={(event) => {
@@ -872,7 +929,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected'}
+              disabled={status !== 'connected' || handoffEnabled}
               aria-label="终端回车"
               title="终端回车"
               onPointerDown={(event) => {
@@ -890,7 +947,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                 className="terminal-dialog__navigation-button"
                 type="button"
                 key={label}
-                disabled={status !== 'connected'}
+                disabled={status !== 'connected' || handoffEnabled}
                 aria-label={`终端${label}`}
                 title={code === 'Backspace' ? '终端退格，长按连续删除' : `终端${label}，长按连续输入`}
                 onPointerDown={(event) => beginControlRepeat(event, code)}
@@ -921,11 +978,26 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
               重连
             </button>
           ) : null}
+          {handoffStatusLoaded && threadId ? (
+            <button
+              className={`terminal-dialog__handoff${handoffEnabled ? ' terminal-dialog__handoff--active' : ''}`}
+              type="button"
+              aria-pressed={handoffEnabled}
+              title={!handoffSupported ? handoffUnavailableReason : handoffEnabled ? '收回终端控制权，AI 将无法继续操作此终端' : '先手动登录 SSH，再交给 AI；随后在聊天中发送任务'}
+              disabled={handoffBusy || !handoffSupported || !handoffEnabled && (status !== 'connected' || !persistent)}
+              onClick={() => void toggleHandoff()}
+            >
+              {handoffBusy ? <LoaderCircle className="spin" size={12} /> : null}
+              {!handoffSupported ? 'AI 接管不可用' : handoffEnabled ? '收回控制' : '交给 AI'}
+            </button>
+          ) : null}
           {workingDirectory ? <code title={workingDirectory}>{workingDirectory}</code> : null}
         </div>
       )}
     >
       <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
+      {handoffError ? <div className="terminal-dialog__paste-hint" role="alert">{handoffError}</div> : null}
+      {handoffEnabled && !handoffError ? <div className="terminal-dialog__paste-hint" role="status">AI 控制中。关闭终端后在聊天发送任务；要手动输入请先收回控制。</div> : null}
       {runError ? <div className="terminal-dialog__paste-hint" role="alert">{runError}</div> : null}
       {desktopPasteHintVisible ? (
         <div className="terminal-dialog__paste-hint" role="status">
@@ -954,7 +1026,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
           <button
             type="button"
             role="menuitem"
-            disabled={status !== 'connected' || Boolean(contextMenu.text)}
+            disabled={status !== 'connected' || handoffEnabled || Boolean(contextMenu.text)}
             onClick={() => void pasteIntoTerminal()}
           >
             <ClipboardPaste size={14} />
