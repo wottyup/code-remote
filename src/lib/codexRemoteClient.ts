@@ -28,6 +28,7 @@ export interface MCPApprovalGrant {
 }
 
 export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic' | 'responses'
+export type TranslationApiProtocol = Extract<TranslationProvider, 'chat' | 'anthropic' | 'responses'>
 export type TranslationStyle = 'natural' | 'formal'
 
 export interface TranslationProviderConfig {
@@ -755,6 +756,11 @@ export const codexRemoteClient = {
   updateTranslationProfile(token: string, provider: TranslationProvider, profileId: string, config: TranslationConfigInput) {
     return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}/profiles/${encodeURIComponent(profileId)}`, {
       method: 'PATCH', body: JSON.stringify(config),
+    })
+  },
+  moveTranslationProfile(token: string, provider: TranslationApiProtocol, profileId: string, targetProvider: TranslationApiProtocol, config: TranslationConfigInput = {}) {
+    return request<{ profileId: string; config: TranslationConfigResponse }>(token, `/api/v1/codex/translation/config/${provider}/profiles/${encodeURIComponent(profileId)}/move`, {
+      method: 'POST', body: JSON.stringify({ targetProvider, ...config }),
     })
   },
   deleteTranslationProfile(token: string, provider: TranslationProvider, profileId: string) {

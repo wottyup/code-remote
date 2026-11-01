@@ -22,6 +22,7 @@ from urllib.request import Request, urlopen
 
 
 PROVIDERS = {"google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"}
+API_PROTOCOLS = {"chat", "responses", "anthropic"}
 MAX_TEXT_LENGTH = 30_000
 MAX_SEGMENTS = 240
 MAX_SEGMENT_LENGTH = 3_000
@@ -299,6 +300,54 @@ class TranslationService:
             next_profiles[provider].append({"id": profile_id, "name": f"配置 {number}", "config": config})
             self._write_locked(next_profiles)
         return {"profileId": profile_id, "config": self.public_settings()}
+
+    def move_profile(self, provider: str, profile_id: str, target_provider: str, data: dict[str, Any]) -> dict[str, Any]:
+        if provider not in API_PROTOCOLS or target_provider not in API_PROTOCOLS or provider == target_provider:
+            raise TranslationError("只能在不同的 AI 接口协议之间更改配置协议。")
+        fields = {key: value for key, value in data.items() if key != "name"}
+        with self._lock:
+            profile = self._profile_locked(provider, profile_id)
+            destination = self._profiles[target_provider]
+            if len(destination) >= 30:
+                raise TranslationError("目标协议最多保存 30 套配置。")
+            config = self._merge_config(profile["config"], fields)
+            name = self._profile_name(data["name"]) if "name" in data else profile["name"]
+            base_url = str(config.get("base_url") or {
+                "responses": "https://api.openai.com/v1",
+                "anthropic": "https://api.anthropic.com/v1",
+            }.get(provider, ""))
+            endpoint_suffix = {"chat": "/chat/completions", "responses": "/responses", "anthropic": "/messages"}[provider]
+            if base_url.endswith(endpoint_suffix):
+                base_url = base_url[:-len(endpoint_suffix)]
+            config["base_url"] = base_url
+
+            existing_names = {entry["name"].casefold() for entry in destination}
+            if name.casefold() in existing_names:
+                original_name = name
+                number = 2
+                while True:
+                    suffix = f"（{number}）"
+                    name = original_name[:60 - len(suffix)].rstrip() + suffix
+                    if name.casefold() not in existing_names:
+                        break
+                    number += 1
+
+            next_profiles = copy.deepcopy(self._profiles)
+            source_entries = next_profiles[provider]
+            source_entries[:] = [entry for entry in source_entries if entry["id"] != profile_id]
+            used_ids = {entry["id"] for entries in next_profiles.values() for entry in entries}
+            if not source_entries:
+                replacement_id = secrets.token_hex(12)
+                while replacement_id in used_ids:
+                    replacement_id = secrets.token_hex(12)
+                source_entries.append({"id": replacement_id, "name": "默认配置", "config": {}})
+                used_ids.add(replacement_id)
+            moved_id = secrets.token_hex(12)
+            while moved_id in used_ids:
+                moved_id = secrets.token_hex(12)
+            next_profiles[target_provider].append({"id": moved_id, "name": name, "config": config})
+            self._write_locked(next_profiles)
+        return {"profileId": moved_id, "config": self.public_settings()}
 
     def delete_profile(self, provider: str, profile_id: str) -> dict[str, Any]:
         if provider not in PROVIDERS:

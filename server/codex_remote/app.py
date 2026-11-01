@@ -144,6 +144,10 @@ class TranslationCreateProfileRequest(BaseModel):
     copyFrom: str | None = Field(default=None, max_length=100)
 
 
+class TranslationMoveProfileRequest(TranslationConfigRequest):
+    targetProvider: Literal["chat", "responses", "anthropic"]
+
+
 class TranslationRequest(BaseModel):
     provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"]
     profileId: str | None = Field(default=None, max_length=100)
@@ -1791,7 +1795,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.97.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.97.1-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1870,6 +1874,15 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     async def update_translation_profile(provider: str, profile_id: str, body: TranslationConfigRequest) -> dict[str, Any]:
         try:
             return translation.update(provider, body.model_dump(exclude_unset=True), profile_id)
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/translation/config/{provider}/profiles/{profile_id}/move")
+    async def move_translation_profile(provider: str, profile_id: str, body: TranslationMoveProfileRequest) -> dict[str, Any]:
+        data = body.model_dump(exclude_unset=True)
+        target_provider = data.pop("targetProvider")
+        try:
+            return translation.move_profile(provider, profile_id, target_provider, data)
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
 
