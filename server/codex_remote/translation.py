@@ -35,22 +35,40 @@ class TranslationError(ValueError):
     pass
 
 
+class TranslationHTTPError(TranslationError):
+    def __init__(self, provider: str, status_code: int) -> None:
+        self.status_code = status_code
+        if status_code == 401:
+            detail = "请检查接口密钥。"
+        elif status_code == 403:
+            detail = "上游拒绝访问，请检查接口权限、路由或网关限制。"
+        elif status_code == 404:
+            detail = "请检查接口地址、路由和模型名称。"
+        elif status_code == 429:
+            detail = "请求过于频繁或额度不足，请稍后重试。"
+        else:
+            detail = "请检查接口配置和服务状态。"
+        super().__init__(f"{provider} 翻译服务返回 HTTP {status_code}，{detail}")
+
+
 def _json_request(url: str, payload: Any, headers: dict[str, str], provider: str, timeout: int = 22) -> Any:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = Request(url, data=data, headers={"Content-Type": "application/json", **headers}, method="POST")
+    request = Request(url, data=data, headers={"Content-Type": "application/json", "User-Agent": "CodeRemote/1.0", **headers}, method="POST")
     try:
         with urlopen(request, timeout=timeout) as response:
             if response.status >= 300:
-                raise TranslationError(f"{provider} 翻译服务返回 HTTP {response.status}。")
+                raise TranslationHTTPError(provider, response.status)
             body = response.read(256_001)
         if len(body) > 256_000:
             raise TranslationError(f"{provider} 翻译结果过长。")
         return json.loads(body)
     except HTTPError as error:
         # urllib error URLs can contain API keys. Never include them in errors or logs.
-        raise TranslationError(f"{provider} 翻译服务返回 HTTP {error.code}，请检查密钥和额度。") from None
+        raise TranslationHTTPError(provider, error.code) from None
     except (URLError, TimeoutError, OSError):
         raise TranslationError(f"无法连接 {provider} 翻译服务，请检查网络和接口地址。") from None
+    except TranslationError:
+        raise
     except (ValueError, UnicodeDecodeError):
         raise TranslationError(f"{provider} 翻译服务返回了无效内容。") from None
 
@@ -492,11 +510,26 @@ class TranslationService:
             parsed = urlparse(base_url)
             if parsed.scheme not in {"http", "https"} or not parsed.netloc:
                 raise TranslationError("Chat 接口地址无效。")
-            endpoint = base_url if base_url.endswith("/chat/completions") else base_url.rstrip("/") + "/chat/completions"
-            response = _json_request(endpoint, {"model": model, "messages": [
+            if base_url.endswith("/chat/completions"):
+                endpoint = base_url
+                fallback_endpoint = None
+            elif parsed.path in {"", "/"}:
+                endpoint = base_url.rstrip("/") + "/v1/chat/completions"
+                fallback_endpoint = base_url.rstrip("/") + "/chat/completions"
+            else:
+                endpoint = base_url.rstrip("/") + "/chat/completions"
+                fallback_endpoint = None
+            payload = {"model": model, "messages": [
                 {"role": "system", "content": _instruction(source, target, style)},
                 {"role": "user", "content": json.dumps(values, ensure_ascii=False)},
-            ]}, {"Authorization": f"Bearer {key}"} if key else {}, "Chat")
+            ]}
+            headers = {"Authorization": f"Bearer {key}"} if key else {}
+            try:
+                response = _json_request(endpoint, payload, headers, "Chat")
+            except TranslationHTTPError as error:
+                if fallback_endpoint is None or error.status_code != 404:
+                    raise
+                response = _json_request(fallback_endpoint, payload, headers, "Chat")
             choices = response.get("choices", []) if isinstance(response, dict) else []
             message = choices[0].get("message") if isinstance(choices, list) and choices and isinstance(choices[0], dict) else None
             content = message.get("content") if isinstance(message, dict) else None

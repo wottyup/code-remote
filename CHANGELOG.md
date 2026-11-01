@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.97.2-dev.1] - 修复 Chat 和 Responses 翻译接口连接网关失败
+
 ## [0.97.1-dev.1] - 翻译配置更改协议时保留已保存的参数
 
 ## [0.97.0-dev.1] - 聊天翻译支持 OpenAI Responses API
