@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import tempfile
 import threading
@@ -128,22 +130,66 @@ class TranslationService:
         self._cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._segment_cache: OrderedDict[str, tuple[float, str]] = OrderedDict()
         self._semaphore = asyncio.Semaphore(4)
-        self._settings = self._load()
+        self._profiles = self._load()
 
-    def _load(self) -> dict[str, dict[str, Any]]:
+    def _load(self) -> dict[str, list[dict[str, Any]]]:
         try:
             value = json.loads(self.path.read_text(encoding="utf-8"))
         except FileNotFoundError:
-            return {}
+            value = {}
         except (OSError, ValueError):
             raise TranslationError("翻译配置文件无法读取，请检查服务器文件权限。") from None
         if not isinstance(value, dict):
             raise TranslationError("翻译配置文件格式无效。")
-        return {name: config for name, config in value.items() if name in PROVIDERS and isinstance(config, dict)}
+        if "version" not in value:
+            return {
+                name: [{"id": f"{name}-default", "name": "默认配置", "config": dict(value.get(name, {})) if isinstance(value.get(name), dict) else {}}]
+                for name in PROVIDERS
+            }
+        if value.get("version") != 2 or not isinstance(value.get("providers"), dict):
+            raise TranslationError("翻译配置文件版本或格式无效。")
+        profiles: dict[str, list[dict[str, Any]]] = {}
+        for name in PROVIDERS:
+            entries = value["providers"].get(name)
+            if entries is None:
+                entries = [{"id": f"{name}-default", "name": "默认配置", "config": {}}]
+            if not isinstance(entries, list) or not 1 <= len(entries) <= 30:
+                raise TranslationError("翻译配置文件格式无效。")
+            seen: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(entry.get("id"), str) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("config"), dict) or entry["id"] in seen:
+                    raise TranslationError("翻译配置文件格式无效。")
+                seen.add(entry["id"])
+            profiles[name] = entries
+        return profiles
+
+    def _write_locked(self, profiles: dict[str, list[dict[str, Any]]]) -> None:
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        descriptor, temp_name = tempfile.mkstemp(prefix=".translation-", dir=self.path.parent)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
+                json.dump({"version": 2, "providers": profiles}, file, ensure_ascii=False)
+            os.replace(temp_name, self.path)
+        finally:
+            if os.path.exists(temp_name):
+                os.unlink(temp_name)
+        self._profiles = profiles
+        self._cache.clear()
+        self._segment_cache.clear()
+
+    def _profile_locked(self, provider: str, profile_id: str | None) -> dict[str, Any]:
+        entries = self._profiles[provider]
+        if profile_id is None:
+            return next((entry for entry in entries if entry["id"] == f"{provider}-default"), entries[0])
+        profile = next((entry for entry in entries if entry["id"] == profile_id), None)
+        if profile is None:
+            raise TranslationError("所选翻译配置已不存在，请在设置页重新选择。")
+        return profile
 
     def public_settings(self) -> dict[str, Any]:
         with self._lock:
-            configurations = {name: dict(self._settings.get(name, {})) for name in PROVIDERS}
+            profiles = copy.deepcopy(self._profiles)
 
         def configured(name: str, config: dict[str, Any]) -> bool:
             if name in {"codex", "claude"}:
@@ -154,17 +200,31 @@ class TranslationService:
                 return bool(config.get("api_key") and config.get("model"))
             return bool(config.get("api_key"))
 
-        return {"providers": {
-            name: {
-                "configured": configured(name, configurations[name]),
-                "hasKey": bool(configurations[name].get("api_key")),
-                "region": configurations[name].get("region", ""),
-                "plan": configurations[name].get("plan", "free"),
-                "baseUrl": configurations[name].get("base_url", ""),
-                "model": configurations[name].get("model", ""),
+        def public_config(name: str, config: dict[str, Any]) -> dict[str, Any]:
+            return {
+                "configured": configured(name, config),
+                "hasKey": bool(config.get("api_key")),
+                "region": config.get("region", ""),
+                "plan": config.get("plan", "free"),
+                "baseUrl": config.get("base_url", ""),
+                "model": config.get("model", ""),
             }
-            for name in sorted(PROVIDERS)
-        }}
+
+        result: dict[str, Any] = {}
+        for name in sorted(PROVIDERS):
+            entries = profiles[name]
+            legacy_default = next((entry for entry in entries if entry["id"] == f"{name}-default"), entries[0])
+            result[name] = {
+                **public_config(name, legacy_default["config"]),
+                "profiles": [{"id": entry["id"], "name": entry["name"], **public_config(name, entry["config"])} for entry in entries],
+            }
+        return {"providers": result}
+
+    @staticmethod
+    def _profile_name(value: Any) -> str:
+        if not isinstance(value, str) or len(value) > 60 or re.search(r"[\x00-\x1f\x7f]", value) or not value.strip():
+            raise TranslationError("配置名称不能为空，且不能超过 60 个字符。")
+        return value.strip()
 
     @staticmethod
     def _merge_config(config: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
@@ -202,32 +262,59 @@ class TranslationService:
             config["base_url"] = url.strip().rstrip("/")
         return config
 
-    def update(self, provider: str, data: dict[str, Any]) -> dict[str, Any]:
+    def update(self, provider: str, data: dict[str, Any], profile_id: str | None = None) -> dict[str, Any]:
         if provider not in PROVIDERS:
             raise TranslationError("不支持这个翻译引擎。")
+        fields = {key: value for key, value in data.items() if key != "name"}
+        name = self._profile_name(data["name"]) if "name" in data else None
         with self._lock:
-            config = self._merge_config(self._settings.get(provider, {}), data)
-            next_settings = {**self._settings, provider: config}
-            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            descriptor, temp_name = tempfile.mkstemp(prefix=".translation-", dir=self.path.parent)
-            try:
-                os.fchmod(descriptor, 0o600)
-                with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                    json.dump(next_settings, file, ensure_ascii=False)
-                os.replace(temp_name, self.path)
-            finally:
-                if os.path.exists(temp_name):
-                    os.unlink(temp_name)
-            self._settings = next_settings
-            self._cache.clear()
-            self._segment_cache.clear()
+            profile = self._profile_locked(provider, profile_id)
+            config = self._merge_config(profile["config"], fields)
+            if name is not None and any(entry["id"] != profile["id"] and entry["name"].casefold() == name.casefold() for entry in self._profiles[provider]):
+                raise TranslationError("这个引擎已有同名配置。")
+            next_profiles = copy.deepcopy(self._profiles)
+            entry = next(entry for entry in next_profiles[provider] if entry["id"] == profile["id"])
+            entry["config"] = config
+            if name is not None:
+                entry["name"] = name
+            self._write_locked(next_profiles)
         return self.public_settings()
 
-    async def check_connection(self, provider: str, data: dict[str, Any]) -> str:
+    def create_profile(self, provider: str, copy_from: str | None = None) -> dict[str, Any]:
         if provider not in PROVIDERS:
             raise TranslationError("不支持这个翻译引擎。")
         with self._lock:
-            saved = dict(self._settings.get(provider, {}))
+            entries = self._profiles[provider]
+            if len(entries) >= 30:
+                raise TranslationError("每个翻译引擎最多保存 30 套配置。")
+            config = copy.deepcopy(self._profile_locked(provider, copy_from)["config"]) if copy_from is not None else {}
+            names = {entry["name"].casefold() for entry in entries}
+            number = 2
+            while f"配置 {number}".casefold() in names:
+                number += 1
+            profile_id = secrets.token_hex(12)
+            next_profiles = copy.deepcopy(self._profiles)
+            next_profiles[provider].append({"id": profile_id, "name": f"配置 {number}", "config": config})
+            self._write_locked(next_profiles)
+        return {"profileId": profile_id, "config": self.public_settings()}
+
+    def delete_profile(self, provider: str, profile_id: str) -> dict[str, Any]:
+        if provider not in PROVIDERS:
+            raise TranslationError("不支持这个翻译引擎。")
+        with self._lock:
+            self._profile_locked(provider, profile_id)
+            if len(self._profiles[provider]) <= 1:
+                raise TranslationError("至少保留一套翻译配置。")
+            next_profiles = copy.deepcopy(self._profiles)
+            next_profiles[provider] = [entry for entry in next_profiles[provider] if entry["id"] != profile_id]
+            self._write_locked(next_profiles)
+        return self.public_settings()
+
+    async def check_connection(self, provider: str, data: dict[str, Any], profile_id: str | None = None) -> str:
+        if provider not in PROVIDERS:
+            raise TranslationError("不支持这个翻译引擎。")
+        with self._lock:
+            saved = dict(self._profile_locked(provider, profile_id)["config"])
         config = self._merge_config(saved, data)
         async with self._semaphore:
             if provider in {"codex", "claude"}:
@@ -241,7 +328,7 @@ class TranslationService:
             raise TranslationError("翻译服务已连接，但试译结果不是英文，请检查模型配置。")
         return sample[:160]
 
-    async def translate(self, provider: str, source: str, target: str, style: str, text: str) -> str:
+    async def translate(self, provider: str, source: str, target: str, style: str, text: str, profile_id: str | None = None) -> str:
         if provider not in PROVIDERS or source not in {"zh", "en"} or target not in {"zh", "en"} or source == target:
             raise TranslationError("翻译方向或引擎无效。")
         if style not in {"natural", "formal"} or len(text) > MAX_TEXT_LENGTH:
@@ -249,7 +336,7 @@ class TranslationService:
         if not text.strip() or source == "zh" and not _HAN.search(text) or source == "en" and not _LATIN.search(text):
             return text
         with self._lock:
-            config = dict(self._settings.get(provider, {}))
+            config = dict(self._profile_locked(provider, profile_id)["config"])
             fingerprint = hashlib.sha256(json.dumps([provider, config, source, target, style, text], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
             cached = self._cache.get(fingerprint)
             if cached and time.monotonic() - cached[0] < 86_400:

@@ -37,10 +37,26 @@ export interface TranslationProviderConfig {
   plan: 'free' | 'pro'
   baseUrl: string
   model: string
+  profiles: TranslationProfileConfig[]
+}
+
+export interface TranslationProfileConfig extends Omit<TranslationProviderConfig, 'profiles'> {
+  id: string
+  name: string
 }
 
 export interface TranslationConfigResponse {
   providers: Record<TranslationProvider, TranslationProviderConfig>
+}
+
+export interface TranslationConfigInput {
+  name?: string
+  apiKey?: string
+  clearKey?: boolean
+  region?: string
+  plan?: string
+  baseUrl?: string
+  model?: string
 }
 
 export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
@@ -726,17 +742,37 @@ export const codexRemoteClient = {
   translationConfig(token: string) {
     return request<TranslationConfigResponse>(token, '/api/v1/codex/translation/config')
   },
-  saveTranslationConfig(token: string, provider: TranslationProvider, config: { apiKey?: string; clearKey?: boolean; region?: string; plan?: string; baseUrl?: string; model?: string }) {
+  saveTranslationConfig(token: string, provider: TranslationProvider, config: TranslationConfigInput) {
     return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}`, {
       method: 'POST', body: JSON.stringify(config),
     })
   },
-  checkTranslationConnection(token: string, provider: TranslationProvider, config: { apiKey?: string; region?: string; plan?: string; baseUrl?: string; model?: string }) {
+  createTranslationProfile(token: string, provider: TranslationProvider, copyFrom?: string) {
+    return request<{ profileId: string; config: TranslationConfigResponse }>(token, `/api/v1/codex/translation/config/${provider}/profiles`, {
+      method: 'POST', body: JSON.stringify(copyFrom ? { copyFrom } : {}),
+    })
+  },
+  updateTranslationProfile(token: string, provider: TranslationProvider, profileId: string, config: TranslationConfigInput) {
+    return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'PATCH', body: JSON.stringify(config),
+    })
+  },
+  deleteTranslationProfile(token: string, provider: TranslationProvider, profileId: string) {
+    return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'DELETE',
+    })
+  },
+  checkTranslationConnection(token: string, provider: TranslationProvider, config: TranslationConfigInput) {
     return request<{ sample: string }>(token, `/api/v1/codex/translation/config/${provider}/check`, {
       method: 'POST', body: JSON.stringify(config),
     }, { timeoutMs: 90_000 })
   },
-  translateText(token: string, input: { provider: TranslationProvider; source: 'zh' | 'en'; target: 'zh' | 'en'; style: TranslationStyle; text: string }, signal?: AbortSignal) {
+  checkTranslationProfile(token: string, provider: TranslationProvider, profileId: string, config: TranslationConfigInput) {
+    return request<{ sample: string }>(token, `/api/v1/codex/translation/config/${provider}/profiles/${encodeURIComponent(profileId)}/check`, {
+      method: 'POST', body: JSON.stringify(config),
+    }, { timeoutMs: 90_000 })
+  },
+  translateText(token: string, input: { provider: TranslationProvider; profileId?: string; source: 'zh' | 'en'; target: 'zh' | 'en'; style: TranslationStyle; text: string }, signal?: AbortSignal) {
     return request<{ text: string }>(token, '/api/v1/codex/translation', {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 180_000 })

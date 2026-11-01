@@ -131,6 +131,7 @@ class PairRequest(BaseModel):
 
 
 class TranslationConfigRequest(BaseModel):
+    name: str | None = None
     apiKey: str | None = None
     clearKey: bool | None = None
     region: str | None = None
@@ -139,8 +140,13 @@ class TranslationConfigRequest(BaseModel):
     model: str | None = None
 
 
+class TranslationCreateProfileRequest(BaseModel):
+    copyFrom: str | None = Field(default=None, max_length=100)
+
+
 class TranslationRequest(BaseModel):
     provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic"]
+    profileId: str | None = Field(default=None, max_length=100)
     source: Literal["zh", "en"]
     target: Literal["zh", "en"]
     style: Literal["natural", "formal"] = "natural"
@@ -1785,7 +1791,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.95.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.96.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1853,6 +1859,27 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
 
+    @app.post("/api/v1/codex/translation/config/{provider}/profiles")
+    async def create_translation_profile(provider: str, body: TranslationCreateProfileRequest) -> dict[str, Any]:
+        try:
+            return translation.create_profile(provider, body.copyFrom)
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    @app.patch("/api/v1/codex/translation/config/{provider}/profiles/{profile_id}")
+    async def update_translation_profile(provider: str, profile_id: str, body: TranslationConfigRequest) -> dict[str, Any]:
+        try:
+            return translation.update(provider, body.model_dump(exclude_unset=True), profile_id)
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    @app.delete("/api/v1/codex/translation/config/{provider}/profiles/{profile_id}")
+    async def delete_translation_profile(provider: str, profile_id: str) -> dict[str, Any]:
+        try:
+            return translation.delete_profile(provider, profile_id)
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
     @app.post("/api/v1/codex/translation/config/{provider}/check")
     async def check_translation_connection(provider: str, body: TranslationConfigRequest) -> dict[str, Any]:
         try:
@@ -1860,10 +1887,17 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
+    @app.post("/api/v1/codex/translation/config/{provider}/profiles/{profile_id}/check")
+    async def check_translation_profile(provider: str, profile_id: str, body: TranslationConfigRequest) -> dict[str, Any]:
+        try:
+            return {"sample": await translation.check_connection(provider, body.model_dump(exclude_unset=True), profile_id)}
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
     @app.post("/api/v1/codex/translation")
     async def translate_text(body: TranslationRequest) -> dict[str, str]:
         try:
-            return {"text": await translation.translate(body.provider, body.source, body.target, body.style, body.text)}
+            return {"text": await translation.translate(body.provider, body.source, body.target, body.style, body.text, body.profileId)}
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 

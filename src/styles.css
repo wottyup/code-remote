@@ -4018,7 +4018,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .translation-settings__config > strong { font-size: 13px; }
 .translation-settings__actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .translation-settings__actions button, .assistant-translation__heading button, .assistant-translation__error button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border: 1px solid rgba(151, 165, 195, .34); border-radius: 8px; background: rgba(151, 165, 195, .12); color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
-.translation-settings__actions button:disabled { cursor: wait; opacity: .55; }
+.translation-settings__actions button:disabled { cursor: not-allowed; opacity: .55; }
 .translation-settings__error, .composer-translation-preview__error, .assistant-translation__error { color: #e18d8d; }
 .composer-translation-preview { max-height: 120px; margin: 0 1px 8px; padding: 8px 10px; overflow: auto; border: 1px solid rgba(150, 169, 211, .25); border-radius: 10px; background: rgba(130, 151, 195, .08); color: inherit; font-size: 12px; line-height: 1.5; }
 .composer-translation-preview strong { display: block; margin-bottom: 3px; font-size: 11px; opacity: .72; }

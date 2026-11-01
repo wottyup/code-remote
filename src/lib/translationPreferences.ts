@@ -4,6 +4,7 @@ export interface TranslationPreferences {
   enabled: boolean
   showTranslated: boolean
   provider: TranslationProvider
+  profileIds: Partial<Record<TranslationProvider, string>>
   style: TranslationStyle
 }
 
@@ -14,6 +15,7 @@ export const defaultTranslationPreferences: TranslationPreferences = {
   enabled: false,
   showTranslated: false,
   provider: 'microsoft',
+  profileIds: {},
   style: 'natural',
 }
 
@@ -22,15 +24,27 @@ export function readTranslationPreferences(): TranslationPreferences {
     const value = window.localStorage.getItem(key)
     if (!value) return defaultTranslationPreferences
     const parsed = JSON.parse(value) as Partial<TranslationPreferences>
+    const profileIds: TranslationPreferences['profileIds'] = {}
+    if (parsed.profileIds && typeof parsed.profileIds === 'object') {
+      for (const provider of providers) {
+        const id = parsed.profileIds[provider]
+        if (typeof id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(id)) profileIds[provider] = id
+      }
+    }
     return {
       enabled: parsed.enabled === true,
       showTranslated: parsed.showTranslated === true,
       provider: providers.has(parsed.provider as TranslationProvider) ? parsed.provider as TranslationProvider : defaultTranslationPreferences.provider,
+      profileIds,
       style: parsed.style === 'formal' ? 'formal' : 'natural',
     }
   } catch {
     return defaultTranslationPreferences
   }
+}
+
+export function selectedTranslationProfileId(value: TranslationPreferences) {
+  return value.profileIds[value.provider]
 }
 
 export function saveTranslationPreferences(value: TranslationPreferences) {

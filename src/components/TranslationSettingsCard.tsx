@@ -21,16 +21,21 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   onConfigSaved: () => void
 }) {
   const [configuration, setConfiguration] = useState<TranslationConfigResponse | null>(null)
+  const [nameDraft, setNameDraft] = useState('')
   const [keyDraft, setKeyDraft] = useState('')
   const [regionDraft, setRegionDraft] = useState('')
   const [planDraft, setPlanDraft] = useState('free')
   const [baseUrlDraft, setBaseUrlDraft] = useState('')
   const [modelDraft, setModelDraft] = useState('')
-  const [busyAction, setBusyAction] = useState<'save' | 'check' | 'clear' | null>(null)
+  const [busyAction, setBusyAction] = useState<'save' | 'check' | 'clear' | 'create' | 'copy' | 'delete' | null>(null)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const provider = preferences.provider
-  const current = configuration?.providers[provider]
+  const profiles = configuration?.providers[provider]?.profiles ?? []
+  const selectedId = preferences.profileIds[provider]
+  const fallbackProfile = profiles.find((profile) => profile.id === `${provider}-default`) ?? profiles[0]
+  const current = selectedId ? profiles.find((profile) => profile.id === selectedId) : fallbackProfile
+  const missingSelection = Boolean(configuration && selectedId && !current)
 
   useEffect(() => {
     let cancelled = false
@@ -43,12 +48,26 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   }, [token])
 
   useEffect(() => {
+    setNameDraft(current?.name ?? '')
     setKeyDraft('')
     setRegionDraft(current?.region ?? '')
     setPlanDraft(current?.plan ?? 'free')
     setBaseUrlDraft(current?.baseUrl ?? '')
     setModelDraft(current?.model ?? '')
-  }, [provider, current?.region, current?.plan, current?.baseUrl, current?.model])
+  }, [provider, current?.id, current?.name, current?.region, current?.plan, current?.baseUrl, current?.model])
+
+  function selectProfile(profileId: string) {
+    const profile = profiles.find((entry) => entry.id === profileId)
+    setNameDraft(profile?.name ?? '')
+    setKeyDraft('')
+    setRegionDraft(profile?.region ?? '')
+    setPlanDraft(profile?.plan ?? 'free')
+    setBaseUrlDraft(profile?.baseUrl ?? '')
+    setModelDraft(profile?.model ?? '')
+    setError('')
+    setNotice('')
+    onChange({ ...preferences, profileIds: { ...preferences.profileIds, [provider]: profileId } })
+  }
 
   function configDraft() {
     return {
@@ -62,11 +81,12 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
+    if (!current) return
     setBusyAction('save')
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.saveTranslationConfig(token, provider, configDraft())
+      const response = await codexRemoteClient.updateTranslationProfile(token, provider, current.id, { name: nameDraft, ...configDraft() })
       setConfiguration(response)
       setKeyDraft('')
       onConfigSaved()
@@ -79,11 +99,12 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   }
 
   async function checkConnection() {
+    if (!current) return
     setBusyAction('check')
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.checkTranslationConnection(token, provider, configDraft())
+      const response = await codexRemoteClient.checkTranslationProfile(token, provider, current.id, configDraft())
       setNotice(`连接成功，试译：${response.sample}`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '翻译接口连通性检查失败。')
@@ -93,17 +114,54 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   }
 
   async function clearKey() {
+    if (!current) return
     setBusyAction('clear')
     setError('')
     setNotice('')
     try {
-      const response = await codexRemoteClient.saveTranslationConfig(token, provider, { clearKey: true })
+      const response = await codexRemoteClient.updateTranslationProfile(token, provider, current.id, { clearKey: true })
       setConfiguration(response)
       setKeyDraft('')
       onConfigSaved()
       setNotice('接口密钥已清除。')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '无法清除接口密钥。')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function createProfile(copyCurrent: boolean) {
+    setBusyAction(copyCurrent ? 'copy' : 'create')
+    setError('')
+    setNotice('')
+    try {
+      const response = await codexRemoteClient.createTranslationProfile(token, provider, copyCurrent ? current?.id : undefined)
+      setConfiguration(response.config)
+      onChange({ ...preferences, profileIds: { ...preferences.profileIds, [provider]: response.profileId } })
+      onConfigSaved()
+      setNotice(copyCurrent ? '已复制配置，可修改名称和参数后保存。' : '已新建空配置，请填写并保存。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法新建翻译配置。')
+    } finally {
+      setBusyAction(null)
+    }
+  }
+
+  async function deleteProfile() {
+    if (!current || profiles.length <= 1 || !window.confirm(`删除“${current.name}”？此操作无法恢复。`)) return
+    setBusyAction('delete')
+    setError('')
+    setNotice('')
+    try {
+      const response = await codexRemoteClient.deleteTranslationProfile(token, provider, current.id)
+      setConfiguration(response)
+      const nextProfile = response.providers[provider].profiles[0]
+      onChange({ ...preferences, profileIds: { ...preferences.profileIds, [provider]: nextProfile.id } })
+      onConfigSaved()
+      setNotice('配置已删除。')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法删除翻译配置。')
     } finally {
       setBusyAction(null)
     }
@@ -116,23 +174,38 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
     </summary>
     <div className="translation-settings">
-      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.enabled} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
-      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.showTranslated} disabled={!preferences.enabled} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
+      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.enabled} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
+      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
       <p className="translation-settings__hint">默认显示原文。开启后，你的消息显示实际发送的英文，AI 回复显示中文译文；可展开查看另一版本。</p>
       <label className="translation-settings__field"><span>翻译引擎</span><select value={provider} disabled={busyAction !== null} onChange={(event) => { setError(''); setNotice(''); onChange({ ...preferences, provider: event.currentTarget.value as TranslationProvider }) }}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
-      <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
+      <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
       <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic'
         ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
         : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>
-        <strong>{choices.find((choice) => choice.value === provider)?.label} 配置 {current?.configured ? '· 已就绪' : '· 未就绪'}</strong>
-        {needsKey ? <label className="translation-settings__field"><span>接口密钥 {current?.hasKey ? '（已保存，留空不修改）' : ''}</span><input type="password" autoComplete="off" disabled={busyAction !== null} value={keyDraft} onChange={(event) => setKeyDraft(event.currentTarget.value)} placeholder={current?.hasKey ? '已保存密钥' : '填写接口密钥'} /></label> : null}
-        {provider === 'microsoft' ? <label className="translation-settings__field"><span>资源区域（按 Azure 资源填写）</span><input disabled={busyAction !== null} value={regionDraft} onChange={(event) => setRegionDraft(event.currentTarget.value)} placeholder="例如 eastus" /></label> : null}
-        {provider === 'deepl' ? <label className="translation-settings__field"><span>账户类型</span><select disabled={busyAction !== null} value={planDraft} onChange={(event) => setPlanDraft(event.currentTarget.value)}><option value="free">API Free</option><option value="pro">API Pro</option></select></label> : null}
-        {provider === 'chat' || provider === 'anthropic' ? <><label className="translation-settings__field"><span>{provider === 'anthropic' ? '接口地址（留空使用 Anthropic 官方地址）' : '接口地址'}</span><input type="url" disabled={busyAction !== null} value={baseUrlDraft} onChange={(event) => setBaseUrlDraft(event.currentTarget.value)} placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://example.com/v1'} /></label><label className="translation-settings__field"><span>模型名称</span><input disabled={busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="输入接口支持的模型 ID" /></label></> : null}
-        {provider === 'codex' || provider === 'claude' ? <label className="translation-settings__field"><span>模型名称（留空使用默认模型）</span><input disabled={busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="默认模型" /></label> : null}
-        <div className="translation-settings__actions"><button type="submit" disabled={busyAction !== null}>{busyAction === 'save' ? <LoaderCircle className="spin" size={14} /> : null}保存配置</button><button type="button" disabled={busyAction !== null} onClick={() => void checkConnection()}>{busyAction === 'check' ? <LoaderCircle className="spin" size={14} /> : null}测试连通性</button>{needsKey && current?.hasKey ? <button type="button" disabled={busyAction !== null} onClick={() => void clearKey()}>{busyAction === 'clear' ? <LoaderCircle className="spin" size={14} /> : null}清除密钥</button> : null}</div>
-        <p className="translation-settings__hint">测试会使用当前填写的内容试译一句，不会保存配置。</p>
+        <strong>{choices.find((choice) => choice.value === provider)?.label} · {current?.configured ? '已配置' : '待配置'}</strong>
+        <label className="translation-settings__field">
+          <span>使用的配置</span>
+          <select value={selectedId ?? current?.id ?? ''} disabled={!configuration || busyAction !== null} onChange={(event) => selectProfile(event.currentTarget.value)}>
+            {!configuration ? <option value={selectedId ?? ''}>正在读取配置…</option> : null}
+            {missingSelection ? <option value={selectedId}>原配置已删除，请重新选择</option> : null}
+            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.configured ? '' : ' · 待配置'}</option>)}
+          </select>
+        </label>
+        <div className="translation-settings__actions">
+          <button type="button" disabled={!configuration || profiles.length >= 30 || busyAction !== null} onClick={() => void createProfile(false)}>{busyAction === 'create' ? <LoaderCircle className="spin" size={14} /> : null}新建配置</button>
+          <button type="button" disabled={!current || profiles.length >= 30 || busyAction !== null} onClick={() => void createProfile(true)}>{busyAction === 'copy' ? <LoaderCircle className="spin" size={14} /> : null}复制当前</button>
+          <button type="button" disabled={!current || profiles.length <= 1 || busyAction !== null} onClick={() => void deleteProfile()}>{busyAction === 'delete' ? <LoaderCircle className="spin" size={14} /> : null}删除当前</button>
+        </div>
+        {missingSelection ? <p role="alert" className="translation-settings__error">原来选用的配置已删除。请在上方重新选择；发送翻译前不会自动改用其他接口。</p> : null}
+        <label className="translation-settings__field"><span>配置名称</span><input value={nameDraft} maxLength={60} required disabled={!current || busyAction !== null} onChange={(event) => setNameDraft(event.currentTarget.value)} placeholder="例如工作接口" /></label>
+        {needsKey ? <label className="translation-settings__field"><span>接口密钥 {current?.hasKey ? '（已保存，留空不修改）' : ''}</span><input type="password" autoComplete="off" disabled={!current || busyAction !== null} value={keyDraft} onChange={(event) => setKeyDraft(event.currentTarget.value)} placeholder={current?.hasKey ? '已保存密钥' : '填写接口密钥'} /></label> : null}
+        {provider === 'microsoft' ? <label className="translation-settings__field"><span>资源区域（按 Azure 资源填写）</span><input disabled={!current || busyAction !== null} value={regionDraft} onChange={(event) => setRegionDraft(event.currentTarget.value)} placeholder="例如 eastus" /></label> : null}
+        {provider === 'deepl' ? <label className="translation-settings__field"><span>账户类型</span><select disabled={!current || busyAction !== null} value={planDraft} onChange={(event) => setPlanDraft(event.currentTarget.value)}><option value="free">API Free</option><option value="pro">API Pro</option></select></label> : null}
+        {provider === 'chat' || provider === 'anthropic' ? <><label className="translation-settings__field"><span>{provider === 'anthropic' ? '接口地址（留空使用 Anthropic 官方地址）' : '接口地址'}</span><input type="url" disabled={!current || busyAction !== null} value={baseUrlDraft} onChange={(event) => setBaseUrlDraft(event.currentTarget.value)} placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://example.com/v1'} /></label><label className="translation-settings__field"><span>模型名称</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="输入接口支持的模型 ID" /></label></> : null}
+        {provider === 'codex' || provider === 'claude' ? <label className="translation-settings__field"><span>模型名称（留空使用默认模型）</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="默认模型" /></label> : null}
+        <div className="translation-settings__actions"><button type="submit" disabled={!current || busyAction !== null}>{busyAction === 'save' ? <LoaderCircle className="spin" size={14} /> : null}保存配置</button><button type="button" disabled={!current || busyAction !== null} onClick={() => void checkConnection()}>{busyAction === 'check' ? <LoaderCircle className="spin" size={14} /> : null}测试连通性</button>{needsKey && current?.hasKey ? <button type="button" disabled={busyAction !== null} onClick={() => void clearKey()}>{busyAction === 'clear' ? <LoaderCircle className="spin" size={14} /> : null}清除密钥</button> : null}</div>
+        <p className="translation-settings__hint">切换后立即使用所选配置；未保存的修改不会带到其他配置。测试会试译一句，不会保存修改。</p>
         {error ? <p role="alert" className="translation-settings__error">{error}</p> : null}
         {notice ? <p role="status" className="translation-settings__hint">{notice}</p> : null}
       </form>

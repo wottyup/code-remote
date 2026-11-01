@@ -82,7 +82,7 @@ import { ImagePreviewButton } from './ImagePreviewButton'
 import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
-import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, type TranslationPreferences } from '../lib/translationPreferences'
+import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, selectedTranslationProfileId, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
 
 interface Props {
@@ -1116,6 +1116,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   createThreadTitle,
 }, ref) {
   const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
+  const translationProfileId = selectedTranslationProfileId(translation)
   const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [translationPreview, setTranslationPreview] = useState<{ key: string; text?: string; error?: string; loading: boolean } | null>(null)
@@ -1403,7 +1404,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     const source = draft.trim()
-    const key = `${translationRevision}:${translation.provider}:${translation.style}:${source}`
+    const key = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${source}`
     if (!translation.enabled || !containsChinese(source)) {
       setTranslationPreview(null)
       return
@@ -1415,14 +1416,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const controller = new AbortController()
     setTranslationPreview({ key, loading: true })
     const timer = window.setTimeout(() => {
-      void codexRemoteClient.translateText(token, { provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: source }, controller.signal)
+      void codexRemoteClient.translateText(token, { provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: source }, controller.signal)
         .then((result) => { if (!controller.signal.aborted) setTranslationPreview({ key, text: result.text, loading: false }) })
         .catch((reason: unknown) => {
           if (!controller.signal.aborted) setTranslationPreview({ key, error: reason instanceof Error ? reason.message : '翻译失败。', loading: false })
         })
     }, 700)
     return () => { window.clearTimeout(timer); controller.abort() }
-  }, [draft, token, translation.enabled, translation.provider, translation.style, translationRevision])
+  }, [draft, token, translation.enabled, translation.provider, translationProfileId, translation.style, translationRevision])
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
@@ -1880,11 +1881,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       sendingRef.current = true
       setSending(true)
       try {
-        const previewKey = `${translationRevision}:${translation.provider}:${translation.style}:${prompt}`
+        const previewKey = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${prompt}`
         outgoingPrompt = (translationPreview?.key === previewKey && translationPreview.text
           ? translationPreview.text
           : (await codexRemoteClient.translateText(token, {
-            provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: prompt,
+            provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
           })).text).trim()
         if (!outgoingPrompt) throw new Error('翻译结果为空，消息没有发送。')
       } catch (reason) {
@@ -2051,7 +2052,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       let outgoingPrompt = prompt
       if (translation.enabled && containsChinese(prompt)) {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: prompt,
+          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
         })
         if (draftRef.current.trim() !== prompt) throw new Error('翻译时输入内容发生变化，请重新确认最新内容。')
         outgoingPrompt = result.text.trim()
@@ -2393,9 +2394,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       ) : null}
       {translation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
         <strong>英文发送预览</strong>
-        {translationPreview?.key === `${translationRevision}:${translation.provider}:${translation.style}:${draft.trim()}` && translationPreview.text
+        {translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.text
           ? <p>{translationPreview.text}</p>
-          : translationPreview?.key === `${translationRevision}:${translation.provider}:${translation.style}:${draft.trim()}` && translationPreview.error
+          : translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.error
             ? <p className="composer-translation-preview__error">{translationPreview.error}</p>
             : <p>正在翻译最新内容…</p>}
       </div> : null}
@@ -3905,6 +3906,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
+  const translationProfileId = selectedTranslationProfileId(translation)
   const activeThreadId = remote.activeThread?.id ?? null
   const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
   const latestUserMarker = useMemo(() => {
@@ -4001,7 +4003,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     if (translation.enabled && containsChinese(reply)) {
       try {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: reply,
+          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: reply,
         })
         prompt = result.text.trim()
         if (!prompt) return false
@@ -4019,7 +4021,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
       onDeliveryStatus: (status) => { delivery = status },
     })
     return accepted ? delivery : false
-  }, [active, token, translation.enabled, translation.provider, translation.style])
+  }, [active, token, translation.enabled, translation.provider, translationProfileId, translation.style])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -7600,6 +7602,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   children: ReactNode
   renderCopyAction: (text: string) => ReactNode
 }) {
+  const translationProfileId = selectedTranslationProfileId(preferences)
   const container = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
   const [result, setResult] = useState<{ key: string; text?: string; error?: string } | null>(null)
@@ -7608,7 +7611,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   const tooLong = preferences.enabled && preferences.showTranslated && text.length > 30_000 && containsEnglish(text)
   const eligible = preferences.enabled && preferences.showTranslated && !tooLong && containsEnglish(text)
   const waitingForText = preferences.enabled && preferences.showTranslated && streaming && !text
-  const key = `${revision}:${preferences.provider}:${preferences.style}:${text}`
+  const key = `${revision}:${preferences.provider}:${translationProfileId ?? 'default'}:${preferences.style}:${text}`
 
   useEffect(() => {
     if (!eligible) return
@@ -7635,7 +7638,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
     const controller = new AbortController()
     setResult({ key })
     void codexRemoteClient.translateText(token, {
-      provider: preferences.provider, source: 'en', target: 'zh', style: preferences.style, text,
+      provider: preferences.provider, profileId: translationProfileId, source: 'en', target: 'zh', style: preferences.style, text,
     }, controller.signal).then((response) => {
       if (controller.signal.aborted) return
       assistantTranslationCache.set(key, response.text)
@@ -7645,7 +7648,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
       if (!controller.signal.aborted) setResult({ key, error: reason instanceof Error ? reason.message : '翻译失败。' })
     })
     return () => controller.abort()
-  }, [eligible, visible, key, retry, text, token, preferences.provider, preferences.style])
+  }, [eligible, visible, key, retry, text, token, preferences.provider, translationProfileId, preferences.style])
 
   const translated = eligible ? (result?.key === key && result.text ? result.text : assistantTranslationCache.get(key)) : undefined
   const error = eligible && result?.key === key ? result.error ?? (result.text === '' ? '翻译结果为空，请重试。' : undefined) : undefined
