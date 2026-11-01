@@ -234,17 +234,11 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
           <label className="translation-settings__switch"><input type="checkbox" aria-describedby={displayHintId} checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
           <p id={displayHintId} className="translation-settings__hint">开启后，你的消息显示发送的英文，AI 回复显示中文；关闭后优先显示原文。</p>
         </div>
-      </section>
-      <section className="translation-settings__group" aria-label="翻译方式">
-        <h3>翻译方式</h3>
-        <label className="translation-settings__field"><span>翻译引擎（选择已有配置）</span><select value={provider} disabled={busyAction !== null} onChange={(event) => selectProvider(event.currentTarget.value as TranslationProvider)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
         <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
-        <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic' || provider === 'responses'
-          ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
-          : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
       </section>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>
         <div className="translation-settings__config-heading"><h3>接口配置</h3><span>{choices.find((choice) => choice.value === provider)?.label} · {current?.configured ? '已配置' : '待配置'}</span></div>
+        <label className="translation-settings__field"><span>翻译引擎（选择已有配置）</span><select value={provider} disabled={busyAction !== null} onChange={(event) => selectProvider(event.currentTarget.value as TranslationProvider)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
         {moveOffer?.target === provider ? <div className="translation-settings__transfer">
           <p className="translation-settings__hint">刚才使用的是“{moveOffer.name}”。要将它改为当前协议并保留地址、模型和密钥吗？</p>
           <div className="translation-settings__actions"><button type="button" disabled={busyAction !== null} onClick={() => void moveProfile(moveOffer.source, moveOffer.profileId, moveOffer.target)}>{busyAction === 'move' ? <LoaderCircle className="spin" size={14} /> : null}沿用刚才的配置</button><button type="button" disabled={busyAction !== null} onClick={() => setMoveOffer(null)}>使用当前协议已有配置</button></div>
@@ -262,6 +256,9 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
           <button type="button" disabled={!current || profiles.length >= 30 || busyAction !== null} onClick={() => void createProfile(true)}>{busyAction === 'copy' ? <LoaderCircle className="spin" size={14} /> : null}复制当前</button>
           <button type="button" disabled={!current || profiles.length <= 1 || busyAction !== null} onClick={() => void deleteProfile()}>{busyAction === 'delete' ? <LoaderCircle className="spin" size={14} /> : null}删除当前</button>
         </div>
+        <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic' || provider === 'responses'
+          ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
+          : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
         {missingSelection ? <p role="alert" className="translation-settings__error">原来选用的配置已删除。请在上方重新选择；发送翻译前不会自动改用其他接口。</p> : null}
         <label className="translation-settings__field"><span>配置名称</span><input value={nameDraft} maxLength={60} required disabled={!current || busyAction !== null} onChange={(event) => setNameDraft(event.currentTarget.value)} placeholder="例如工作接口" /></label>
         {needsKey ? <label className="translation-settings__field"><span>接口密钥 {current?.hasKey ? '（已保存，留空不修改）' : ''}</span><input type="password" autoComplete="off" disabled={!current || busyAction !== null} value={keyDraft} onChange={(event) => setKeyDraft(event.currentTarget.value)} placeholder={current?.hasKey ? '已保存密钥' : '填写接口密钥'} /></label> : null}
