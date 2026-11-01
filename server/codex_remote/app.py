@@ -337,6 +337,7 @@ class QueuedDocument(BaseModel):
 class QueuedMessageRequest(BaseModel):
     id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     text: str
+    originalText: str | None = Field(default=None, max_length=30_000)
     requestText: str
     images: list[QueuedImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     documents: list[QueuedDocument] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
@@ -1784,7 +1785,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.93.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.94.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2185,6 +2186,12 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/api/v1/codex/queue/scheduled-thread-ids")
     async def read_scheduled_thread_ids() -> dict[str, list[str]]:
         return {"thread_ids": shared_state.scheduled_thread_ids()}
+
+    @app.get("/api/v1/codex/threads/{thread_id}/translated-inputs")
+    async def read_translated_inputs(thread_id: str) -> dict[str, Any]:
+        if not thread_id or len(thread_id) > 512:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="聊天编号无效。")
+        return {"messages": shared_state.translated_user_messages(thread_id)}
 
     @app.get("/api/v1/codex/queue/{thread_id}")
     async def read_queued_messages(thread_id: str) -> dict[str, Any]:

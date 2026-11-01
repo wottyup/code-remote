@@ -95,11 +95,13 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   const needsKey = provider !== 'codex' && provider !== 'claude'
   return <details className="theme-settings-card theme-settings-card--collapsible" open={readSettingsSectionOpen('translation', false)} onToggle={(event) => saveSettingsSectionOpen('translation', event.currentTarget.open)}>
     <summary className="theme-settings-card__heading theme-settings-card__summary">
-      <div><h2><Languages size={17} aria-hidden="true" />聊天翻译</h2><p>中文草稿预览英文，发送英文；英文回复显示中文译文。</p></div>
+      <div><h2><Languages size={17} aria-hidden="true" />聊天翻译</h2><p>中文草稿预览英文，发送英文；聊天可切换原文和译文。</p></div>
       <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
     </summary>
     <div className="translation-settings">
       <label className="translation-settings__switch"><input type="checkbox" checked={preferences.enabled} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
+      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.showTranslated} disabled={!preferences.enabled} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
+      <p className="translation-settings__hint">默认显示原文。开启后，你的消息显示实际发送的英文，AI 回复显示中文译文；可展开查看另一版本。</p>
       <label className="translation-settings__field"><span>翻译引擎</span><select value={provider} onChange={(event) => onChange({ ...preferences, provider: event.currentTarget.value as TranslationProvider })}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
       <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
       <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat'

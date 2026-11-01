@@ -2,6 +2,7 @@ import type { TranslationProvider, TranslationStyle } from './codexRemoteClient'
 
 export interface TranslationPreferences {
   enabled: boolean
+  showTranslated: boolean
   provider: TranslationProvider
   style: TranslationStyle
 }
@@ -11,6 +12,7 @@ const providers = new Set<TranslationProvider>(['google', 'microsoft', 'deepl', 
 
 export const defaultTranslationPreferences: TranslationPreferences = {
   enabled: false,
+  showTranslated: false,
   provider: 'microsoft',
   style: 'natural',
 }
@@ -22,6 +24,7 @@ export function readTranslationPreferences(): TranslationPreferences {
     const parsed = JSON.parse(value) as Partial<TranslationPreferences>
     return {
       enabled: parsed.enabled === true,
+      showTranslated: parsed.showTranslated === true,
       provider: providers.has(parsed.provider as TranslationProvider) ? parsed.provider as TranslationProvider : defaultTranslationPreferences.provider,
       style: parsed.style === 'formal' ? 'formal' : 'natural',
     }

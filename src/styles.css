@@ -4017,7 +4017,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .translation-settings__config { display: grid; gap: 11px; padding-top: 15px; border-top: 1px solid rgba(151, 165, 195, .18); }
 .translation-settings__config > strong { font-size: 13px; }
 .translation-settings__actions { display: flex; gap: 8px; flex-wrap: wrap; }
-.translation-settings__actions button, .assistant-translation button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border: 1px solid rgba(151, 165, 195, .34); border-radius: 8px; background: rgba(151, 165, 195, .12); color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
+.translation-settings__actions button, .assistant-translation__heading button, .assistant-translation__error button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border: 1px solid rgba(151, 165, 195, .34); border-radius: 8px; background: rgba(151, 165, 195, .12); color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
 .translation-settings__actions button:disabled { cursor: wait; opacity: .55; }
 .translation-settings__error, .composer-translation-preview__error, .assistant-translation__error { color: #e18d8d; }
 .composer-translation-preview { max-height: 120px; margin: 0 1px 8px; padding: 8px 10px; overflow: auto; border: 1px solid rgba(150, 169, 211, .25); border-radius: 10px; background: rgba(130, 151, 195, .08); color: inherit; font-size: 12px; line-height: 1.5; }
@@ -4029,6 +4029,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .assistant-translation__original { margin-top: 6px; font-size: 12px; }
 .assistant-translation__original > summary { width: fit-content; cursor: pointer; opacity: .7; }
 .assistant-translation__original[open] > summary { margin-bottom: 8px; }
+.chat-message__alternate-text { margin-top: 7px; font-size: 12px; }
+.chat-message__alternate-text > summary { width: fit-content; cursor: pointer; opacity: .7; }
+.chat-message__alternate-text[open] > summary { margin-bottom: 8px; }
 .assistant-translation__status { display: block; margin: 4px 0; opacity: .65; }
 .assistant-translation__error { display: flex; align-items: center; gap: 7px; margin: 5px 0; font-size: 12px; }
 .remote-shell--theme-light .translation-settings__field input, .remote-shell--theme-light .translation-settings__field select { background: #fff; color: #303030; }

@@ -93,6 +93,7 @@ export interface CodexFileChange {
 export interface QueuedTurnMessage {
   id: string
   text: string
+  originalText?: string
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -122,6 +123,7 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 
 interface SendMessageInput {
   prompt: string
+  originalText?: string
   continuePaused?: boolean
   sendImmediately?: boolean
   onDeliveryStatus?: (status: 'sent' | 'queued' | 'unverified') => void
@@ -289,6 +291,7 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
         ...(typeof message.sourceItemId === 'string' ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text: message.text,
+        ...(typeof message.originalText === 'string' ? { originalText: message.originalText } : {}),
         createdAt: message.createdAt,
         ...(typeof message.sentAt === 'string' ? { sentAt: message.sentAt } : {}),
         ...(typeof message.replyStartedAt === 'string' ? { replyStartedAt: message.replyStartedAt } : {}),
@@ -340,6 +343,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.sourceItemId ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text,
+        ...(message.originalText ? { originalText: message.originalText } : {}),
         createdAt: message.createdAt,
         ...(message.sentAt ? { sentAt: message.sentAt } : {}),
         ...(message.replyStartedAt ? { replyStartedAt: message.replyStartedAt } : {}),
@@ -354,7 +358,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.choicePromptText ? { choicePromptText: message.choicePromptText } : {}),
         ...(message.choiceDelivery ? { choiceDelivery: message.choiceDelivery } : {}),
       } as CodexMessage
-      const messageCharacters = text.length + 128
+      const messageCharacters = text.length + (message.originalText?.length ?? 0) + 128
       if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
       cachedMessages.unshift(compactMessage)
       cachedCharacters += messageCharacters
@@ -373,7 +377,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
 function cachedMessageCharacters(message: CodexMessage) {
   const imageCharacters = message.images?.reduce((total, image) => total + image.name.length + image.previewUrl.length, 0) ?? 0
   const documentCharacters = message.documents?.reduce((total, document) => total + document.name.length + document.content.length, 0) ?? 0
-  return message.text.length + imageCharacters + documentCharacters + 128
+  return message.text.length + (message.originalText?.length ?? 0) + imageCharacters + documentCharacters + 128
 }
 
 function cachedHistoryCharacters(messages: CodexMessage[]) {
@@ -476,6 +480,7 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
   return {
     id: queuedMessageId(),
     text,
+    ...(input.originalText && input.originalText !== text ? { originalText: input.originalText } : {}),
     requestText: queuedRequestText(text, documents),
     images: input.images,
     ...(documents.length > 0 ? { documents } : {}),
@@ -526,6 +531,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const payload = value as Record<string, unknown>
   const id = typeof payload.id === 'string' ? payload.id : ''
   const text = typeof payload.text === 'string' ? payload.text : ''
+  const originalText = typeof payload.originalText === 'string' && payload.originalText.length <= 30_000 ? payload.originalText : undefined
   const createdAt = typeof payload.createdAt === 'string' ? payload.createdAt : ''
   if (!id || id.length > 256 || !createdAt || createdAt.length > 128) return null
   const images = Array.isArray(payload.images)
@@ -568,6 +574,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   return {
     id,
     text,
+    ...(originalText && originalText !== text ? { originalText } : {}),
     requestText: queuedRequestText(text, documents),
     images,
     ...(documents.length > 0 ? { documents } : {}),
@@ -676,6 +683,7 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
     id: payload.id,
     role: 'user',
     text: payload.text,
+    ...(payload.originalText ? { originalText: payload.originalText } : {}),
     images: payload.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
     ...(payload.documents?.length ? { documents: payload.documents.map((document) => ({ ...document, charCount: document.content.length })) } : {}),
     createdAt: payload.createdAt,
@@ -696,6 +704,7 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
     if (previous) {
       nextMessage = {
         ...message,
+        ...(!message.originalText && previous.originalText ? { originalText: previous.originalText } : {}),
         ...(!message.sentAt && previous.sentAt ? { sentAt: previous.sentAt } : {}),
         ...(!message.replyStartedAt && previous.replyStartedAt ? { replyStartedAt: previous.replyStartedAt } : {}),
         ...(message.replyDurationMs === undefined && previous.replyDurationMs !== undefined
@@ -725,6 +734,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.sourceItemId === candidate.sourceItemId
       && message.role === candidate.role
       && message.text === candidate.text
+      && message.originalText === candidate.originalText
       && message.turnId === candidate.turnId
       && message.sentAt === candidate.sentAt
       && message.replyStartedAt === candidate.replyStartedAt
@@ -2864,7 +2874,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return true
   }, [queueRecoveryReadyThreadId])
 
-  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
     const text = input.prompt.trim()
@@ -2878,6 +2888,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         ? {
           ...message,
           text,
+          originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
           requestText: queuedRequestText(text, documents),
           images,
           ...(documents.length > 0 ? { documents } : { documents: undefined }),
@@ -3148,7 +3159,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return began
   }, [sharedQueueAction])
 
-  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
     if (!threadId || !previous) return false
@@ -3158,6 +3169,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const result = await codexRemoteClient.updateQueuedMessage(token, threadId, {
         ...previous,
         text,
+        originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
         requestText: queuedRequestText(text, documents),
         images: input.images,
         documents,

@@ -972,6 +972,7 @@ type RemoteConnection = keyof typeof connectionLabel
 
 interface ComposerSendInput {
   prompt: string
+  originalText?: string
   continuePaused?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
@@ -985,7 +986,7 @@ interface ComposerSendInput {
 }
 
 type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
-type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 interface ComposerHandle {
   focusInput(): void
@@ -1915,6 +1916,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     try {
       sent = await onSend({
         prompt: outgoingPrompt,
+        ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
         images: previousImages,
         documents: previousDocuments,
         model: showCodexPreferences ? selectedModel || undefined : undefined,
@@ -2014,7 +2016,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       : { claudeModel: message.claudeModel ?? 'default', claudeEffort: message.claudeEffort ?? 'default' })
     editingQueuedMessageIdRef.current = message.id
     setEditingQueuedMessageId(message.id)
-    updateDraft(message.text)
+    updateDraft(message.originalText ?? message.text)
     updateAttachedImages(message.images, false)
     attachedDocumentsRef.current = message.documents ?? []
     setAttachedDocuments(message.documents ?? [])
@@ -2057,6 +2059,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       }
       if (!await onUpdateQueuedMessage(messageId, {
         prompt: outgoingPrompt,
+        ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
         images: attachedImages,
         documents: attachedDocuments,
         model: showCodexPreferences ? editingQueuedPreferences?.model || undefined : undefined,
@@ -2354,7 +2357,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                 message.images.length > 0 ? `${message.images.length} 张图片` : '',
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
               ].filter(Boolean).join(' · ')
-              const summary = [message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const summary = [translation.enabled && translation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
               const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
               const queueStatus = isSubmitting ? '正在确认送达'
                 : isEditing ? '正在输入框中编辑'
@@ -3869,12 +3872,14 @@ interface RemoteChatPaneProps {
   onDirectoryRequestHandled: (id: number) => void
   composerHandle: RefObject<ComposerHandle | null>
   copyFeedback: { id: string; label: string } | null
-  onCopy: (message: CodexMessage) => void | Promise<void>
+  onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
 }
 
 const emptyOperations: CodexOperation[] = []
 const emptyFileChanges: CodexFileChange[] = []
 const emptyActivityTimeline: CodexActivityTimelineEntry[] = []
+
+type TranslatedInput = { requestId: string; turnId: string; sentText: string; originalText: string }
 
 const RemoteChatPane = memo(function RemoteChatPane({
   paneIndex,
@@ -3901,6 +3906,59 @@ const RemoteChatPane = memo(function RemoteChatPane({
   onCopy,
 }: RemoteChatPaneProps) {
   const activeThreadId = remote.activeThread?.id ?? null
+  const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
+  const latestUserMarker = useMemo(() => {
+    for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+      const message = remote.messages[index]
+      if (message.role === 'user') return `${message.id}:${message.turnId ?? ''}`
+    }
+    return ''
+  }, [remote.messages])
+  useEffect(() => {
+    if (!activeThreadId) return
+    let cancelled = false
+    const load = () => {
+      void codexRemoteClient.translatedInputs(token, activeThreadId).then((response) => {
+        if (!cancelled) setTranslatedInputs((current) => {
+          if (current?.threadId === activeThreadId && current.messages.length > response.messages.length) return current
+          if (current?.threadId === activeThreadId
+            && current.messages.length === response.messages.length
+            && current.messages.at(-1)?.requestId === response.messages.at(-1)?.requestId) return current
+          return { threadId: activeThreadId, messages: response.messages }
+        })
+      }).catch(() => {
+        // History remains readable if the translation metadata is unavailable.
+      })
+    }
+    load()
+    const retry = window.setTimeout(load, 900)
+    return () => { cancelled = true; window.clearTimeout(retry) }
+  }, [activeThreadId, latestUserMarker, remote.queueRevision, token])
+  const originalTextByMessageId = useMemo(() => {
+    const originalText = new Map<string, string>()
+    if (translatedInputs?.threadId !== activeThreadId || !translatedInputs.messages.length) return originalText
+    const byRequestId = new Map(translatedInputs.messages.map((entry) => [entry.requestId, entry]))
+    const byTurnAndText = new Map<string, TranslatedInput[]>()
+    for (const entry of translatedInputs.messages) {
+      const key = `${entry.turnId}\u0000${entry.sentText}`
+      const matches = byTurnAndText.get(key) ?? []
+      matches.push(entry)
+      byTurnAndText.set(key, matches)
+    }
+    const used = new Set<string>()
+    const directRequestIds = new Set(remote.messages.filter((message) => message.role === 'user').map((message) => message.id))
+    for (const message of remote.messages) {
+      if (message.role !== 'user') continue
+      let entry = byRequestId.get(message.id)
+      if (!entry && message.turnId) {
+        const matches = byTurnAndText.get(`${message.turnId}\u0000${message.text}`) ?? []
+        entry = matches.find((candidate) => !used.has(candidate.requestId) && !directRequestIds.has(candidate.requestId))
+      }
+      if (entry) used.add(entry.requestId)
+      if (!message.originalText && entry?.originalText) originalText.set(message.id, entry.originalText)
+    }
+    return originalText
+  }, [activeThreadId, latestUserMarker, remote.activeThread?.historyRevision, remote.messages.length, translatedInputs])
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalMountedThreadId, setTerminalMountedThreadId] = useState<string | null>(null)
@@ -3954,6 +4012,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     let delivery: ChoiceReplyDelivery = 'sent'
     const accepted = await target.sendMessage({
       prompt,
+      ...(prompt !== reply ? { originalText: reply } : {}),
       images: [],
       documents: [],
       sendImmediately: true,
@@ -4411,6 +4470,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   translation={translation}
                   translationRevision={translationRevision}
                   message={message}
+                  originalTextOverride={originalTextByMessageId.get(message.id)}
                   assistantName={activeEngineLabel}
                   operations={operations}
                   fileChanges={operationFileChanges}
@@ -5752,11 +5812,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setCompletionToast(null)
   }
 
-  const copyMessage = useCallback(async (message: CodexMessage) => {
+  const copyMessage = useCallback(async (message: CodexMessage, displayedText?: string) => {
     const documentText = message.documents?.map((document) => document.sourceFileId
       ? `\n\n[原始 PDF 附件：${document.name}]`
       : '\n\n' + document.name + '\n' + document.content).join('') ?? ''
-    const value = (message.text + documentText).trim()
+    const value = ((displayedText ?? message.text) + documentText).trim()
     let label = '复制失败'
     if (message.images?.length) {
       const result = await copyTextAndImagesToClipboard(value, message.images)
@@ -7530,21 +7590,22 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
 
 const assistantTranslationCache = new Map<string, string>()
 
-function AssistantTranslation({ token, text, preferences, revision, primary, children }: {
+function AssistantTranslation({ token, text, preferences, revision, primary, children, renderCopyAction }: {
   token: string
   text: string
   preferences: TranslationPreferences
   revision: number
   primary: boolean
   children: ReactNode
+  renderCopyAction: (text: string) => ReactNode
 }) {
   const container = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
   const [result, setResult] = useState<{ key: string; text?: string; error?: string } | null>(null)
   const [retry, setRetry] = useState(0)
   const [copied, setCopied] = useState(false)
-  const tooLong = preferences.enabled && text.length > 30_000 && containsEnglish(text)
-  const eligible = preferences.enabled && !tooLong && containsEnglish(text)
+  const tooLong = preferences.enabled && preferences.showTranslated && text.length > 30_000 && containsEnglish(text)
+  const eligible = preferences.enabled && preferences.showTranslated && !tooLong && containsEnglish(text)
   const key = `${revision}:${preferences.provider}:${preferences.style}:${text}`
 
   useEffect(() => {
@@ -7596,14 +7657,16 @@ function AssistantTranslation({ token, text, preferences, revision, primary, chi
     {eligible && visible && !finished && !error ? <small className="assistant-translation__status">正在翻译回复…</small> : null}
     {eligible && error ? <div className="assistant-translation__error"><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试</button></div> : null}
     {translated && primary ? <details className="assistant-translation__original"><summary>查看英文原文</summary>{children}</details> : children}
+    {renderCopyAction(translated ?? text)}
   </div>
 }
 
-const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   token: string
   translation: TranslationPreferences
   translationRevision: number
   message: CodexMessage
+  originalTextOverride?: string
   assistantName: string
   operations: CodexOperation[]
   fileChanges: CodexFileChange[]
@@ -7614,13 +7677,13 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   onUseChoices?: (reply: string) => boolean
   onSendChoices?: (reply: string) => Promise<ChoiceReplyDelivery | false>
   copyFeedback: string | null
-  onCopy: (message: CodexMessage) => void | Promise<void>
+  onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
 }) {
   // Whole-message copy waits for the turn; closed code blocks can be copied immediately.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length || message.images?.length)
-  const copyAction = showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
+  const renderCopyAction = (displayedText: string) => showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
@@ -7638,7 +7701,11 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     ? message.text.indexOf(message.choicePromptText) : -1
   const splitStructuredChoice = Boolean(choiceCard && structuredQuestions && !choiceInTimeline && promptStart >= 0
     && !activityTimeline.some((entry) => entry.type === 'operation'))
-  const renderedText = choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const originalText = message.originalText ?? originalTextOverride
+  const originalUserText = message.role === 'user' && originalText && originalText !== message.text ? originalText : undefined
+  const showTranslatedUser = Boolean(translation.enabled && translation.showTranslated)
+  const displayedUserText = originalUserText && !showTranslatedUser ? originalUserText : message.text
+  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
   const preferWebUrlLabel = message.role === 'assistant'
   const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
   const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
@@ -7662,16 +7729,16 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && !message.streaming
-          ? <AssistantTranslation token={token} text={message.text} preferences={translation} revision={translationRevision} primary={!choiceCard && activityTimeline.length === 0 && operations.length === 0}>{bodyContent}</AssistantTranslation>
+          ? <AssistantTranslation token={token} text={message.text} preferences={translation} revision={translationRevision} primary={!choiceCard && activityTimeline.length === 0 && operations.length === 0} renderCopyAction={renderCopyAction}>{bodyContent}</AssistantTranslation>
           : bodyContent}
-        {message.role === 'assistant' ? copyAction : null}
+        {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? '查看中文原文' : '查看英文发送内容'}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 && !message.streaming && !message.id.startsWith('streaming-assistant-') ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
-      {message.role === 'user' && (sentAtLabel || copyAction) ? (
+      {message.role === 'user' && (sentAtLabel || showCopyAction) ? (
         <div className="chat-message__footer">
           {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
-          {copyAction}
+          {renderCopyAction(displayedUserText)}
         </div>
       ) : null}
     </article>

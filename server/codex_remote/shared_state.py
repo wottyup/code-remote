@@ -95,6 +95,15 @@ class SharedStateStore:
             CREATE TABLE IF NOT EXISTS paused_threads (thread_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS pinned_threads (thread_id TEXT PRIMARY KEY);
             CREATE TABLE IF NOT EXISTS thread_workspaces (thread_id TEXT PRIMARY KEY, cwd TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS translated_user_messages (
+                request_id TEXT PRIMARY KEY,
+                thread_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                sent_text TEXT NOT NULL,
+                original_text TEXT NOT NULL,
+                delivered_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS translated_user_messages_thread ON translated_user_messages(thread_id, delivered_at);
             CREATE TABLE IF NOT EXISTS state_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
         """)
         columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(queued_messages)")}
@@ -329,6 +338,7 @@ class SharedStateStore:
         row = self.connection.execute("SELECT payload FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id)).fetchone()
         if not row:
             return
+        payload = json.loads(row["payload"])
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
             self.connection.execute(
@@ -336,6 +346,13 @@ class SharedStateStore:
                 (message_id, thread_id, hashlib.sha256(row["payload"].encode()).hexdigest(), _now()),
             )
             self.connection.execute("DELETE FROM queued_messages WHERE thread_id = ? AND id = ?", (thread_id, message_id))
+            original_text = payload.get("originalText")
+            sent_text = payload.get("text")
+            if turn_id and isinstance(original_text, str) and original_text and isinstance(sent_text, str) and original_text != sent_text:
+                self.connection.execute(
+                    "INSERT OR IGNORE INTO translated_user_messages(request_id, thread_id, turn_id, sent_text, original_text, delivered_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (message_id, thread_id, turn_id, sent_text, original_text, _now()),
+                )
             if new_turn and turn_id:
                 self.connection.execute(
                     "INSERT INTO queue_barriers(thread_id, turn_id) VALUES (?, ?) ON CONFLICT(thread_id) DO UPDATE SET turn_id = excluded.turn_id",
@@ -436,8 +453,20 @@ class SharedStateStore:
                 "paused_threads",
                 "pinned_threads",
                 "thread_workspaces",
+                "translated_user_messages",
             ):
                 self.connection.execute(f"DELETE FROM {table} WHERE thread_id = ?", (thread_id,))
+
+    def translated_user_messages(self, thread_id: str) -> list[dict[str, str]]:
+        rows = self.connection.execute(
+            "SELECT request_id, turn_id, sent_text, original_text FROM translated_user_messages "
+            "WHERE thread_id = ? ORDER BY delivered_at DESC, rowid DESC LIMIT 2000",
+            (thread_id,),
+        ).fetchall()
+        return [
+            {"requestId": row["request_id"], "turnId": row["turn_id"], "sentText": row["sent_text"], "originalText": row["original_text"]}
+            for row in reversed(rows)
+        ]
 
 
 def _turn_status(turn: dict[str, Any]) -> str:

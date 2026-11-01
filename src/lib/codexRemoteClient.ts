@@ -89,6 +89,7 @@ export interface CodexMessage {
   sourceItemId?: string
   role: 'user' | 'assistant'
   text: string
+  originalText?: string
   createdAt: string
   sentAt?: string
   replyStartedAt?: string
@@ -114,6 +115,7 @@ export interface CodexImageAttachment {
 export interface CodexQueuedMessage {
   id: string
   text: string
+  originalText?: string
   requestText: string
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
@@ -733,6 +735,12 @@ export const codexRemoteClient = {
     return request<{ text: string }>(token, '/api/v1/codex/translation', {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 180_000 })
+  },
+  translatedInputs(token: string, threadId: string) {
+    return request<{ messages: Array<{ requestId: string; turnId: string; sentText: string; originalText: string }> }>(
+      token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/translated-inputs`, undefined,
+      { networkRetries: 0 },
+    )
   },
   mcpApprovals(token: string) {
     return request<{ approvals: MCPApprovalGrant[] }>(token, '/api/v1/mcp/approvals')
