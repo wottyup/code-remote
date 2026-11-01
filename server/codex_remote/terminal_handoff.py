@@ -88,7 +88,8 @@ class TerminalHandoffBroker:
             if enabled:
                 if os.name == "nt":
                     raise TerminalHandoffError("Windows 终端暂不支持交给 AI 接管。")
-                await self._ssh_session_name(thread_id)
+                session_name = await self._ssh_session_name(thread_id)
+                await self._show_live_terminal(session_name)
                 self._enabled.add(thread_id)
             else:
                 self._enabled.discard(thread_id)
@@ -108,6 +109,20 @@ class TerminalHandoffBroker:
         screen = await _run_tmux("capture-pane", "-p", "-S", "-100", "-t", session_name)
         return screen.rstrip()[-MAX_SCREEN_LENGTH:]
 
+    @staticmethod
+    async def _show_live_terminal(session_name: str) -> None:
+        try:
+            mode = (await _run_tmux("display-message", "-p", "-t", session_name, "#{pane_mode}")).strip()
+        except (OSError, RuntimeError) as error:
+            raise TerminalHandoffError("无法读取终端状态，请重新打开终端。") from error
+        if mode == "copy-mode":
+            try:
+                await _run_tmux("send-keys", "-X", "-t", session_name, "cancel")
+            except (OSError, RuntimeError) as error:
+                raise TerminalHandoffError("无法退出终端历史浏览模式，请先收回控制后手动退出。") from error
+        elif mode:
+            raise TerminalHandoffError("终端当前处于 tmux 模式，请退出该模式后再让 AI 操作。")
+
     async def _dispatch(self, request: dict[str, Any]) -> dict[str, Any]:
         context = request.get("context")
         action = request.get("action")
@@ -121,6 +136,7 @@ class TerminalHandoffBroker:
             if thread_id not in self._enabled:
                 raise TerminalHandoffError("用户已收回终端控制权，本次操作未执行。")
             session_name = await self._ssh_session_name(thread_id)
+            await self._show_live_terminal(session_name)
             if action == "read_terminal":
                 return {"screen": await self._screen(session_name)}
             if action == "send_command":
