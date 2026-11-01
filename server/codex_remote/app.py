@@ -56,6 +56,7 @@ from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprov
 from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 from .terminal_handoff import TerminalHandoffBroker, TerminalHandoffError
+from .translation import TranslationError, TranslationService
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +128,23 @@ async def watch_claude_history(claude_code: ClaudeCodeServer) -> None:
 
 class PairRequest(BaseModel):
     code: str = Field(min_length=6, max_length=12)
+
+
+class TranslationConfigRequest(BaseModel):
+    apiKey: str | None = None
+    clearKey: bool | None = None
+    region: str | None = None
+    plan: str | None = None
+    baseUrl: str | None = None
+    model: str | None = None
+
+
+class TranslationRequest(BaseModel):
+    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat"]
+    source: Literal["zh", "en"]
+    target: Literal["zh", "en"]
+    style: Literal["natural", "formal"] = "natural"
+    text: str = Field(max_length=30_000)
 
 
 class PairingStateError(RuntimeError):
@@ -1593,22 +1611,22 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         project_root,
         configured=workspace or (Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None),
     )
-    app_server = CodexAppServer(
-        codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex"),
-        configured_workspace,
-    )
+    codex_executable = codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex")
+    claude_executable = os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude")
+    app_server = CodexAppServer(codex_executable, configured_workspace)
     auth = PairingAuth()
     try:
         auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as error:
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
     state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
+    translation = TranslationService(auth.state_path.parent / "translation.json", codex_executable, claude_executable)
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
     remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
     app_server.enable_mcp_approvals(mcp_approvals)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
-        os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude"),
+        claude_executable,
         configured_workspace,
         state_path.parent / "claude-code.sqlite3",
         app_server._emit,
@@ -1766,7 +1784,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.92.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.93.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1777,6 +1795,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.shared_queue = shared_queue
     app.state.mcp_approvals = mcp_approvals
     app.state.terminal_handoff = terminal_handoff
+    app.state.translation = translation
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1821,6 +1840,24 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.get("/api/v1/codex/translation/config")
+    async def translation_config() -> dict[str, Any]:
+        return translation.public_settings()
+
+    @app.post("/api/v1/codex/translation/config/{provider}")
+    async def update_translation_config(provider: str, body: TranslationConfigRequest) -> dict[str, Any]:
+        try:
+            return translation.update(provider, body.model_dump(exclude_unset=True))
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/translation")
+    async def translate_text(body: TranslationRequest) -> dict[str, str]:
+        try:
+            return {"text": await translation.translate(body.provider, body.source, body.target, body.style, body.text)}
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     @app.post("/api/v1/pair")
     async def pair(request: PairRequest) -> dict[str, str]:

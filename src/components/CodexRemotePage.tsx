@@ -82,6 +82,8 @@ import { ImagePreviewButton } from './ImagePreviewButton'
 import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
+import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, type TranslationPreferences } from '../lib/translationPreferences'
+import { TranslationSettingsCard } from './TranslationSettingsCard'
 
 interface Props {
   token: string
@@ -999,6 +1001,8 @@ interface ComposerHandle {
 
 interface MessageComposerProps {
   token: string
+  translation: TranslationPreferences
+  translationRevision: number
   portalTheme: AppTheme
   portalThemeStyle: CSSProperties
   draftScope: string
@@ -1055,6 +1059,8 @@ interface MessageComposerProps {
 
 const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(function MessageComposer({
   token,
+  translation,
+  translationRevision,
   portalTheme,
   portalThemeStyle,
   draftScope,
@@ -1111,6 +1117,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
   const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
+  const [translationPreview, setTranslationPreview] = useState<{ key: string; text?: string; error?: string; loading: boolean } | null>(null)
   const [sending, setSending] = useState(false)
   const sendingRef = useRef(false)
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
@@ -1392,6 +1399,29 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       unsubscribe()
     }
   }, [draftScope])
+
+  useEffect(() => {
+    const source = draft.trim()
+    const key = `${translationRevision}:${translation.provider}:${translation.style}:${source}`
+    if (!translation.enabled || !containsChinese(source)) {
+      setTranslationPreview(null)
+      return
+    }
+    if (source.length > 30_000) {
+      setTranslationPreview({ key, error: '内容超过 30000 字符，无法翻译。', loading: false })
+      return
+    }
+    const controller = new AbortController()
+    setTranslationPreview({ key, loading: true })
+    const timer = window.setTimeout(() => {
+      void codexRemoteClient.translateText(token, { provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: source }, controller.signal)
+        .then((result) => { if (!controller.signal.aborted) setTranslationPreview({ key, text: result.text, loading: false }) })
+        .catch((reason: unknown) => {
+          if (!controller.signal.aborted) setTranslationPreview({ key, error: reason instanceof Error ? reason.message : '翻译失败。', loading: false })
+        })
+    }, 700)
+    return () => { window.clearTimeout(timer); controller.abort() }
+  }, [draft, token, translation.enabled, translation.provider, translation.style, translationRevision])
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
@@ -1844,6 +1874,31 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       setAttachmentError('当前模型不支持图片输入，请选择支持图片的模型。')
       return
     }
+    let outgoingPrompt = prompt
+    if (translation.enabled && containsChinese(prompt)) {
+      sendingRef.current = true
+      setSending(true)
+      try {
+        const previewKey = `${translationRevision}:${translation.provider}:${translation.style}:${prompt}`
+        outgoingPrompt = (translationPreview?.key === previewKey && translationPreview.text
+          ? translationPreview.text
+          : (await codexRemoteClient.translateText(token, {
+            provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: prompt,
+          })).text).trim()
+        if (!outgoingPrompt) throw new Error('翻译结果为空，消息没有发送。')
+      } catch (reason) {
+        setAttachmentError(reason instanceof Error ? reason.message : '翻译失败，消息没有发送。')
+        sendingRef.current = false
+        setSending(false)
+        return
+      }
+      if (draftRef.current.trim() !== prompt) {
+        setAttachmentError('翻译时输入内容发生变化，请重新发送最新内容。')
+        sendingRef.current = false
+        setSending(false)
+        return
+      }
+    }
     const previousDraft = draftRef.current
     const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocumentsRef.current
@@ -1859,7 +1914,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     let sent = false
     try {
       sent = await onSend({
-        prompt,
+        prompt: outgoingPrompt,
         images: previousImages,
         documents: previousDocuments,
         model: showCodexPreferences ? selectedModel || undefined : undefined,
@@ -1991,8 +2046,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     sendingRef.current = true
     setSending(true)
     try {
+      let outgoingPrompt = prompt
+      if (translation.enabled && containsChinese(prompt)) {
+        const result = await codexRemoteClient.translateText(token, {
+          provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: prompt,
+        })
+        if (draftRef.current.trim() !== prompt) throw new Error('翻译时输入内容发生变化，请重新确认最新内容。')
+        outgoingPrompt = result.text.trim()
+        if (!outgoingPrompt) throw new Error('翻译结果为空，排队消息没有更新。')
+      }
       if (!await onUpdateQueuedMessage(messageId, {
-        prompt,
+        prompt: outgoingPrompt,
         images: attachedImages,
         documents: attachedDocuments,
         model: showCodexPreferences ? editingQueuedPreferences?.model || undefined : undefined,
@@ -2008,6 +2072,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         return
       }
       await finishQueuedEdit()
+    } catch (reason) {
+      setAttachmentError(reason instanceof Error ? reason.message : '翻译失败，排队消息没有更新。')
     } finally {
       sendingRef.current = false
       setSending(false)
@@ -2322,6 +2388,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <span className="composer-queue__placeholder-label">已排队 0 条</span>
         </div>
       ) : null}
+      {translation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
+        <strong>英文发送预览</strong>
+        {translationPreview?.key === `${translationRevision}:${translation.provider}:${translation.style}:${draft.trim()}` && translationPreview.text
+          ? <p>{translationPreview.text}</p>
+          : translationPreview?.key === `${translationRevision}:${translation.provider}:${translation.style}:${draft.trim()}` && translationPreview.error
+            ? <p className="composer-translation-preview__error">{translationPreview.error}</p>
+            : <p>正在翻译最新内容…</p>}
+      </div> : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
         <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
         <textarea
@@ -3776,6 +3850,8 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 interface RemoteChatPaneProps {
   paneIndex: number
   token: string
+  translation: TranslationPreferences
+  translationRevision: number
   remote: CodexRemoteController
   active: boolean
   showActiveFrame: boolean
@@ -3803,6 +3879,8 @@ const emptyActivityTimeline: CodexActivityTimelineEntry[] = []
 const RemoteChatPane = memo(function RemoteChatPane({
   paneIndex,
   token,
+  translation,
+  translationRevision,
   remote,
   active,
   showActiveFrame,
@@ -3861,16 +3939,28 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const sendChoiceReply = useCallback(async (reply: string): Promise<ChoiceReplyDelivery | false> => {
     const target = choiceReplyTarget.current
     if (!active || !target.activeThread) return false
+    let prompt = reply
+    if (translation.enabled && containsChinese(reply)) {
+      try {
+        const result = await codexRemoteClient.translateText(token, {
+          provider: translation.provider, source: 'zh', target: 'en', style: translation.style, text: reply,
+        })
+        prompt = result.text.trim()
+        if (!prompt) return false
+      } catch (reason) {
+        throw new Error(`答案翻译失败，尚未发送：${reason instanceof Error ? reason.message : '请检查翻译配置。'}`)
+      }
+    }
     let delivery: ChoiceReplyDelivery = 'sent'
     const accepted = await target.sendMessage({
-      prompt: reply,
+      prompt,
       images: [],
       documents: [],
       sendImmediately: true,
       onDeliveryStatus: (status) => { delivery = status },
     })
     return accepted ? delivery : false
-  }, [active])
+  }, [active, token, translation.enabled, translation.provider, translation.style])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -4317,6 +4407,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
             return (
               <Fragment key={message.id}>
                 <MessageBubble
+                  token={token}
+                  translation={translation}
+                  translationRevision={translationRevision}
                   message={message}
                   assistantName={activeEngineLabel}
                   operations={operations}
@@ -4525,6 +4618,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
   const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
+  const [translationPreferences, setTranslationPreferences] = useState<TranslationPreferences>(readTranslationPreferences)
+  const [translationRevision, setTranslationRevision] = useState(0)
+  useEffect(() => saveTranslationPreferences(translationPreferences), [translationPreferences])
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copyFeedback, setCopyFeedback] = useState<{ id: string; label: string } | null>(null)
@@ -6137,7 +6233,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={setTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
@@ -6150,6 +6246,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     {...paneActions[paneIndex]}
                     paneIndex={paneIndex}
                     token={token}
+                    translation={translationPreferences}
+                    translationRevision={translationRevision}
                     remote={remotes[paneIndex]}
                     active={paneIndex === selectedPaneIndex}
                     showActiveFrame={openPaneIndexes.length > 1}
@@ -6167,6 +6265,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             </div>
             <MessageComposer
               token={token}
+              translation={translationPreferences}
+              translationRevision={translationRevision}
               portalTheme={themePreferences.theme}
               portalThemeStyle={composerPortalThemeStyle}
               key={composerDraftScope}
@@ -6367,7 +6467,7 @@ function MCPApprovalsCard({ token }: { token: string }) {
   </details>
 }
 
-function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
   token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
@@ -6376,6 +6476,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   onChatShortcutsChange: (next: SidebarChatShortcuts) => void
   cpaUsageSettings: CPAUsageSettings
   onCPAUsageSettingsChange: (next: CPAUsageSettings) => void
+  translation: TranslationPreferences
+  onTranslationChange: (next: TranslationPreferences) => void
+  onTranslationConfigSaved: () => void
 }) {
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
@@ -6566,6 +6669,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       <div className="theme-settings-panel__content">
         <MCPApprovalsCard token={token} />
         <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+        <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
 
         <details
           className="theme-settings-card theme-settings-card--collapsible"
@@ -7408,8 +7512,8 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
                 : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
                   : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
             } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
-          } catch {
-            setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+          } catch (reason) {
+            setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
           } finally {
             setSending(false)
           }
@@ -7424,7 +7528,81 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   )
 }
 
-const MessageBubble = memo(function MessageBubble({ message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const assistantTranslationCache = new Map<string, string>()
+
+function AssistantTranslation({ token, text, preferences, revision, primary, children }: {
+  token: string
+  text: string
+  preferences: TranslationPreferences
+  revision: number
+  primary: boolean
+  children: ReactNode
+}) {
+  const container = useRef<HTMLDivElement>(null)
+  const [visible, setVisible] = useState(false)
+  const [result, setResult] = useState<{ key: string; text?: string; error?: string } | null>(null)
+  const [retry, setRetry] = useState(0)
+  const [copied, setCopied] = useState(false)
+  const tooLong = preferences.enabled && text.length > 30_000 && containsEnglish(text)
+  const eligible = preferences.enabled && !tooLong && containsEnglish(text)
+  const key = `${revision}:${preferences.provider}:${preferences.style}:${text}`
+
+  useEffect(() => {
+    if (!eligible) return
+    const element = container.current
+    if (!element) return
+    if (!('IntersectionObserver' in window)) {
+      setVisible(true)
+      return
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) setVisible(true)
+    }, { rootMargin: '240px' })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [eligible])
+
+  useEffect(() => {
+    if (!eligible || !visible) return
+    const cached = assistantTranslationCache.get(key)
+    if (cached) {
+      setResult({ key, text: cached })
+      return
+    }
+    const controller = new AbortController()
+    setResult({ key })
+    void codexRemoteClient.translateText(token, {
+      provider: preferences.provider, source: 'en', target: 'zh', style: preferences.style, text,
+    }, controller.signal).then((response) => {
+      if (controller.signal.aborted) return
+      assistantTranslationCache.set(key, response.text)
+      if (assistantTranslationCache.size > 300) assistantTranslationCache.delete(assistantTranslationCache.keys().next().value ?? '')
+      setResult({ key, text: response.text })
+    }).catch((reason: unknown) => {
+      if (!controller.signal.aborted) setResult({ key, error: reason instanceof Error ? reason.message : '翻译失败。' })
+    })
+    return () => controller.abort()
+  }, [eligible, visible, key, retry, text, token, preferences.provider, preferences.style])
+
+  const translated = eligible && result?.key === key && result.text !== text ? result.text : undefined
+  const error = eligible && result?.key === key ? result.error : undefined
+  const finished = result?.key === key && result.text !== undefined
+  return <div ref={container} className="assistant-translation">
+    {tooLong ? <small className="assistant-translation__status">回复超过 30000 字符，请分段查看英文原文。</small> : null}
+    {eligible && translated ? <div className="assistant-translation__result">
+      <div className="assistant-translation__heading"><strong>中文译文</strong><button type="button" onClick={() => { void copyTextToClipboard(translated).then((success) => { if (success) setCopied(true) }) }}>{copied ? '已复制' : '复制译文'}</button></div>
+      <MessageContent text={translated} hideStandaloneSeparators preferWebUrlLabel />
+    </div> : null}
+    {eligible && visible && !finished && !error ? <small className="assistant-translation__status">正在翻译回复…</small> : null}
+    {eligible && error ? <div className="assistant-translation__error"><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试</button></div> : null}
+    {translated && primary ? <details className="assistant-translation__original"><summary>查看英文原文</summary>{children}</details> : children}
+  </div>
+}
+
+const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+  token: string
+  translation: TranslationPreferences
+  translationRevision: number
   message: CodexMessage
   assistantName: string
   operations: CodexOperation[]
@@ -7464,6 +7642,13 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
   const preferWebUrlLabel = message.role === 'assistant'
   const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
   const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
+  const bodyContent = splitStructuredChoice ? <>
+    {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+    {choiceCard}
+    {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
+  </> : message.role === 'assistant' && (activityTimeline.length > 0 || message.streaming || message.id.startsWith('streaming-assistant-'))
+    ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} preferWebUrlLabel={preferWebUrlLabel} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
+    : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} preferWebUrlLabel={preferWebUrlLabel} /> : null
 
   return (
     <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
@@ -7476,13 +7661,9 @@ const MessageBubble = memo(function MessageBubble({ message, assistantName, oper
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
-        {splitStructuredChoice ? <>
-          {beforeChoiceText ? <MessageContent text={beforeChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
-          {choiceCard}
-          {afterChoiceText ? <MessageContent text={afterChoiceText} hideStandaloneSeparators preferWebUrlLabel={preferWebUrlLabel} /> : null}
-        </> : message.role === 'assistant' && (activityTimeline.length > 0 || message.streaming || message.id.startsWith('streaming-assistant-'))
-          ? <ActivityTimelineContent text={renderedText} timeline={activityTimeline} operations={showOperations ? operations : emptyOperations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} preferWebUrlLabel={preferWebUrlLabel} streaming={message.streaming} messageId={message.id} choiceItemId={choiceInTimeline ? message.choiceItemId : undefined} choicePromptText={choiceInTimeline ? message.choicePromptText : undefined} choiceCard={choiceInTimeline ? choiceCard : undefined} />
-          : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} preferWebUrlLabel={preferWebUrlLabel} /> : null}
+        {message.role === 'assistant' && !message.streaming
+          ? <AssistantTranslation token={token} text={message.text} preferences={translation} revision={translationRevision} primary={!choiceCard && activityTimeline.length === 0 && operations.length === 0}>{bodyContent}</AssistantTranslation>
+          : bodyContent}
         {message.role === 'assistant' ? copyAction : null}
         {showOperations && operations.length > 0 && activityTimeline.length === 0 && !message.streaming && !message.id.startsWith('streaming-assistant-') ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}

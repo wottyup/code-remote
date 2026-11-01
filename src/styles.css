@@ -4007,3 +4007,30 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
     border-radius: 9px;
   }
 }
+.translation-settings { display: grid; gap: 13px; padding: 18px 22px 22px; }
+.translation-settings__switch { display: inline-flex; align-items: center; gap: 9px; width: fit-content; cursor: pointer; }
+.translation-settings__field { display: grid; gap: 6px; min-width: 0; font-size: 13px; }
+.translation-settings__field input, .translation-settings__field select { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid rgba(151, 165, 195, .3); border-radius: 9px; outline: none; background: rgba(20, 24, 32, .45); color: inherit; font: inherit; }
+.translation-settings__field input:focus, .translation-settings__field select:focus { border-color: #8da4d5; }
+.translation-settings__field option { color: #202329; background: #fff; }
+.translation-settings__hint { margin: 0; color: #9fa9bb; font-size: 12px; line-height: 1.5; }
+.translation-settings__config { display: grid; gap: 11px; padding-top: 15px; border-top: 1px solid rgba(151, 165, 195, .18); }
+.translation-settings__config > strong { font-size: 13px; }
+.translation-settings__actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.translation-settings__actions button, .assistant-translation button { display: inline-flex; align-items: center; gap: 5px; padding: 6px 10px; border: 1px solid rgba(151, 165, 195, .34); border-radius: 8px; background: rgba(151, 165, 195, .12); color: inherit; cursor: pointer; font: inherit; font-size: 12px; }
+.translation-settings__actions button:disabled { cursor: wait; opacity: .55; }
+.translation-settings__error, .composer-translation-preview__error, .assistant-translation__error { color: #e18d8d; }
+.composer-translation-preview { max-height: 120px; margin: 0 1px 8px; padding: 8px 10px; overflow: auto; border: 1px solid rgba(150, 169, 211, .25); border-radius: 10px; background: rgba(130, 151, 195, .08); color: inherit; font-size: 12px; line-height: 1.5; }
+.composer-translation-preview strong { display: block; margin-bottom: 3px; font-size: 11px; opacity: .72; }
+.composer-translation-preview p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.assistant-translation__result { margin: 0 0 10px; padding: 10px 12px; border: 1px solid rgba(151, 165, 195, .23); border-radius: 10px; background: rgba(151, 165, 195, .07); }
+.assistant-translation__heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; font-size: 11px; opacity: .85; }
+.assistant-translation__result > :last-child { margin-bottom: 0; }
+.assistant-translation__original { margin-top: 6px; font-size: 12px; }
+.assistant-translation__original > summary { width: fit-content; cursor: pointer; opacity: .7; }
+.assistant-translation__original[open] > summary { margin-bottom: 8px; }
+.assistant-translation__status { display: block; margin: 4px 0; opacity: .65; }
+.assistant-translation__error { display: flex; align-items: center; gap: 7px; margin: 5px 0; font-size: 12px; }
+.remote-shell--theme-light .translation-settings__field input, .remote-shell--theme-light .translation-settings__field select { background: #fff; color: #303030; }
+.remote-shell--theme-light .translation-settings__hint { color: #6c7480; }
+.remote-shell--theme-light .composer-translation-preview, .remote-shell--theme-light .assistant-translation__result { background: rgba(55, 78, 115, .05); }

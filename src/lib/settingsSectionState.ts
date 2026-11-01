@@ -1,6 +1,7 @@
 export type SettingsSectionId =
   | 'mcp-approvals'
   | 'cpa-manager'
+  | 'translation'
   | 'theme'
   | 'display'
   | 'chat-shortcuts'

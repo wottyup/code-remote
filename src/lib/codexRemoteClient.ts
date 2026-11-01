@@ -27,6 +27,22 @@ export interface MCPApprovalGrant {
   toolName?: string
 }
 
+export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat'
+export type TranslationStyle = 'natural' | 'formal'
+
+export interface TranslationProviderConfig {
+  configured: boolean
+  hasKey: boolean
+  region: string
+  plan: 'free' | 'pro'
+  baseUrl: string
+  model: string
+}
+
+export interface TranslationConfigResponse {
+  providers: Record<TranslationProvider, TranslationProviderConfig>
+}
+
 export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
 
 export interface WorkspaceUploadProgress {
@@ -704,6 +720,19 @@ export const codexRemoteClient = {
   },
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
+  translationConfig(token: string) {
+    return request<TranslationConfigResponse>(token, '/api/v1/codex/translation/config')
+  },
+  saveTranslationConfig(token: string, provider: TranslationProvider, config: { apiKey?: string; clearKey?: boolean; region?: string; plan?: string; baseUrl?: string; model?: string }) {
+    return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}`, {
+      method: 'POST', body: JSON.stringify(config),
+    })
+  },
+  translateText(token: string, input: { provider: TranslationProvider; source: 'zh' | 'en'; target: 'zh' | 'en'; style: TranslationStyle; text: string }, signal?: AbortSignal) {
+    return request<{ text: string }>(token, '/api/v1/codex/translation', {
+      method: 'POST', body: JSON.stringify(input), signal,
+    }, { timeoutMs: 180_000 })
   },
   mcpApprovals(token: string) {
     return request<{ approvals: MCPApprovalGrant[] }>(token, '/api/v1/mcp/approvals')
