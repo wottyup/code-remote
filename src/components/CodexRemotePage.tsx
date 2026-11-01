@@ -53,7 +53,7 @@ import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, ty
 import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
-import { forgetOpenTerminalThread, readOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
+import { forgetOpenTerminalThread, isOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
 import { clipboardTableToMarkdown } from '../lib/clipboardTable'
 import { parseMarkdownTableBlock } from '../lib/markdownTableParser.mjs'
 import { splitMessageInlineLinks } from '../lib/messageInlineLinks'
@@ -3826,7 +3826,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalMountedThreadId, setTerminalMountedThreadId] = useState<string | null>(null)
-  const terminalRestoreChecked = useRef(false)
+  const terminalVisible = terminalOpen && terminalMountedThreadId === activeThreadId
   const [terminalDirectoryRequest, setTerminalDirectoryRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const [terminalRunRequest, setTerminalRunRequest] = useState<WorkspaceTerminalRequest | null>(null)
   const [terminalSessionCwd, setTerminalSessionCwd] = useState<string | undefined>()
@@ -3877,7 +3877,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     handledDirectoryRequestId.current = directoryRequest.id
     onActivate()
     if (directoryRequest.action === 'run') {
-      forgetOpenTerminalThread(paneIndex)
+      if (activeThreadId) forgetOpenTerminalThread(paneIndex, activeThreadId)
       setTerminalMountedThreadId(activeThreadId)
       setTerminalRunRequest(directoryRequest)
       setTerminalDirectoryRequest(null)
@@ -3886,43 +3886,33 @@ const RemoteChatPane = memo(function RemoteChatPane({
       setTerminalSessionId((value) => value + 1)
     } else {
       setTerminalDirectoryRequest(directoryRequest)
-      if (!terminalOpen) {
+      if (!terminalVisible) {
         setTerminalMountedThreadId(activeThreadId)
         setTerminalSessionCwd(undefined)
         setTerminalSessionIsolated(false)
       }
+      if (activeThreadId) rememberOpenTerminalThread(paneIndex, activeThreadId)
     }
     setTerminalMounted(true)
     setTerminalOpen(true)
     onDirectoryRequestHandled(directoryRequest.id)
-  }, [active, activeThreadId, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalOpen])
+  }, [active, activeThreadId, directoryRequest, onActivate, onDirectoryRequestHandled, paneIndex, terminalVisible])
 
-  useEffect(() => {
-    if (!activeThreadId || terminalRestoreChecked.current) return
-    terminalRestoreChecked.current = true
-    if (readOpenTerminalThread(paneIndex) === activeThreadId) {
-      setTerminalMountedThreadId(activeThreadId)
-      setTerminalMounted(true)
-      setTerminalOpen(true)
-    }
+  useLayoutEffect(() => {
+    const restore = activeThreadId !== null && isOpenTerminalThread(paneIndex, activeThreadId)
+    setTerminalOpen(restore)
+    setTerminalMounted(restore)
+    setTerminalMountedThreadId(restore ? activeThreadId : null)
+    setTerminalSessionIsolated(false)
+    setTerminalSessionCwd(undefined)
+    setTerminalRunRequest(null)
+    setTerminalDirectoryRequest(null)
   }, [activeThreadId, paneIndex])
 
-  useEffect(() => {
-    if (terminalOpen && !terminalSessionIsolated && terminalMountedThreadId !== activeThreadId) {
-      setTerminalMountedThreadId(activeThreadId)
-    }
-  }, [activeThreadId, terminalMountedThreadId, terminalOpen, terminalSessionIsolated])
-
-  useEffect(() => {
-    if (terminalOpen && !terminalSessionIsolated && activeThreadId) {
-      rememberOpenTerminalThread(paneIndex, activeThreadId)
-    }
-  }, [activeThreadId, paneIndex, terminalOpen, terminalSessionIsolated])
-
   const closeTerminal = useCallback(() => {
-    forgetOpenTerminalThread(paneIndex)
+    if (terminalMountedThreadId) forgetOpenTerminalThread(paneIndex, terminalMountedThreadId)
     setTerminalOpen(false)
-  }, [paneIndex])
+  }, [paneIndex, terminalMountedThreadId])
   const handleTerminalDirectoryRequestConsumed = useCallback((id: number) => {
     setTerminalDirectoryRequest((current) => current?.id === id ? null : current)
   }, [])
@@ -4254,13 +4244,13 @@ const RemoteChatPane = memo(function RemoteChatPane({
             <EngineBrandIcon engine={targetEngine} />
           </button>
           <button
-            className={`icon-button terminal-open-button${terminalOpen ? ' terminal-open-button--active' : ''}`}
+            className={`icon-button terminal-open-button${terminalVisible ? ' terminal-open-button--active' : ''}`}
             type="button"
-            aria-label={terminalOpen ? '关闭本机终端' : '打开本机终端'}
-            title={terminalOpen ? '关闭本机终端' : '本机终端'}
+            aria-label={terminalVisible ? '关闭本机终端' : '打开本机终端'}
+            title={terminalVisible ? '关闭本机终端' : '本机终端'}
             onClick={(event) => {
               event.stopPropagation()
-              if (terminalOpen) {
+              if (terminalVisible) {
                 closeTerminal()
               } else {
                 onActivate()
@@ -4270,12 +4260,13 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   setTerminalSessionIsolated(false)
                   setTerminalRunRequest(null)
                 }
+                if (activeThreadId) rememberOpenTerminalThread(paneIndex, activeThreadId)
                 setTerminalMounted(true)
                 setTerminalOpen(true)
               }
             }}
           >
-            {terminalOpen ? <X size={16} /> : <TerminalIcon size={16} />}
+            {terminalVisible ? <X size={16} /> : <TerminalIcon size={16} />}
           </button>
           <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
@@ -4394,15 +4385,15 @@ const RemoteChatPane = memo(function RemoteChatPane({
           {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
         </div>
       ) : null}
-      {terminalMounted && (terminalOpen || terminalSessionIsolated || terminalMountedThreadId === activeThreadId) ? (
-        <TerminalRecoveryBoundary key={terminalSessionIsolated ? `run-${terminalSessionId}` : activeThreadId ?? 'no-thread'} onClose={closeTerminal} hidden={!terminalOpen}>
+      {terminalMounted && terminalMountedThreadId === activeThreadId ? (
+        <TerminalRecoveryBoundary key={terminalSessionIsolated ? `run-${terminalSessionId}` : activeThreadId ?? 'no-thread'} onClose={closeTerminal} hidden={!terminalVisible}>
           <Suspense fallback={(
             <ChatOverlayPanel
               ariaLabel="本机终端"
               backdropLabel="关闭本机终端"
               className="terminal-dialog"
               onClose={closeTerminal}
-              hidden={!terminalOpen}
+              hidden={!terminalVisible}
               showCloseButton={false}
               header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
             >
@@ -4413,7 +4404,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
               key={terminalSessionId}
               token={token}
               engine={remote.activeEngine}
-              visible={terminalOpen}
+              visible={terminalVisible}
               threadId={terminalSessionIsolated ? undefined : remote.activeThread?.id}
               cwd={terminalSessionCwd ?? remote.activeThread?.cwd ?? remote.runtime.workspace ?? undefined}
               directoryRequest={terminalDirectoryRequest}
