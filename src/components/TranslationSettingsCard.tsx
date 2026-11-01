@@ -234,6 +234,9 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
           <label className="translation-settings__switch"><input type="checkbox" aria-describedby={displayHintId} checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
           <p id={displayHintId} className="translation-settings__hint">开启后，你的消息显示发送的英文，AI 回复显示中文；关闭后优先显示原文。</p>
         </div>
+      </section>
+      <section className="translation-settings__group" aria-label="翻译方式">
+        <h3>翻译方式</h3>
         <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
       </section>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>

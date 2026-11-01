@@ -4043,7 +4043,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .translation-settings__config-heading span { font-size: calc(12px + var(--mobile-font-offset)); opacity: .8; }
 .translation-settings__option { display: grid; gap: 6px; }
 .translation-settings__option + .translation-settings__option { padding-top: 16px; border-top: 1px solid var(--settings-inner-rule); }
-.translation-settings__option + .translation-settings__field { padding-top: 16px; border-top: 1px solid var(--settings-inner-rule); }
 .translation-settings__option .translation-settings__hint { padding-inline-start: 25px; }
 .translation-settings__switch { display: inline-flex; align-items: center; gap: 9px; width: fit-content; cursor: pointer; font-size: calc(13px + var(--mobile-font-offset)); font-weight: 600; }
 .translation-settings__field { display: grid; gap: 8px; min-width: 0; font-size: calc(13px + var(--mobile-font-offset)); }
