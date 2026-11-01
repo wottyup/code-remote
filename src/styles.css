@@ -1837,6 +1837,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-dark { color: #fff; }
 .remote-shell--theme-light :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #000; }
 .remote-shell--theme-dark :is(.remote-shell *) :not(svg, svg *, .chat-message__code, .chat-message__code *, .workspace-file-preview__line-content *, .workspace-file-type-icon, .workspace-file-type-icon *, .file-change-card__diff-code, .file-change-card__diff-code *, .terminal-dialog__screen, .terminal-dialog__screen *, .terminal-manual-paste, .terminal-manual-paste *) { color: #fff; }
+.remote-shell--theme-light :is(.remote-shell *) .chat-message__code-copy { color: #d7e0ef; }
+.remote-shell--theme-light :is(.remote-shell *) .chat-message__code-copy:hover { color: #fff; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > span { color: #c3cad7; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary > small { color: #929baa; }
 .remote-shell--theme-dark :is(.remote-shell *) .operation-log > summary { --operation-log-accent: #242a3e; }
