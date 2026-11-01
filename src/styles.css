@@ -101,7 +101,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .new-thread-button:disabled { cursor: not-allowed; opacity: .48; }
 .sidebar-engine-filters { display: flex; align-items: center; gap: 6px; min-height: 30px; }
 .sidebar-engine-filter { display: grid; width: 34px; height: 30px; flex: 0 0 34px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #8490ad; cursor: pointer; transition: border-color .16s ease, background-color .16s ease, color .16s ease; }
-.sidebar-engine-filter--codex > .engine-brand-icon { background-color: currentColor; }
+.sidebar-engine-filter--codex > .engine-brand-icon { background-color: #7188c2; }
 .sidebar-engine-filter--claude-code > .engine-brand-icon { opacity: .78; }
 .sidebar-engine-filter:hover { background: rgba(129, 148, 204, .12); color: #d2dcfa; }
 .sidebar-engine-filter--claude-code:hover { color: #e7a08a; }
