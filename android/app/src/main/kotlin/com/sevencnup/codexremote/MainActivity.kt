@@ -891,6 +891,7 @@ class MainActivity : Activity() {
     private var queueTouchActive = false
     private var queueRenderDirty = false
     private var expandedOperationIds = mutableSetOf<String>()
+    private val revealedTerminalOutputLogIds = mutableSetOf<String>()
     private val operationPageIndexes = mutableMapOf<String, Int>()
     private var expandedFileChangeIds = mutableSetOf<String>()
     private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
@@ -935,6 +936,21 @@ class MainActivity : Activity() {
     private var terminalOutputScroll: ScrollView? = null
     private var terminalStatusView: TextView? = null
     private var terminalInputSink: TerminalInputSink? = null
+    private var terminalHandoffButton: TextView? = null
+    private var terminalHandoffHint: TextView? = null
+    private var terminalKeyboardButton: TextView? = null
+    private val terminalShortcutButtons = mutableListOf<TextView>()
+    private var terminalHandoffLoaded = false
+    private var terminalHandoffSupported = false
+    @Volatile private var terminalHandoffEnabled = false
+    private var terminalHandoffBusy = false
+    private var terminalHandoffRequestPending = false
+    private var terminalHandoffReason = ""
+    private var terminalHandoffGeneration = 0L
+    private var terminalHandoffRevision = 0L
+    private val terminalHandoffPoll = object : Runnable {
+        override fun run() { refreshTerminalHandoffStatus() }
+    }
     private var terminalResizeRunnable: Runnable? = null
     private var terminalRenderRunnable: Runnable? = null
     private var terminalInputFocusPending = false
@@ -1166,6 +1182,7 @@ class MainActivity : Activity() {
         super.onResume()
         webPreviewView?.onResume()
         foreground = true
+        if (terminalOverlay != null) refreshTerminalHandoffStatus()
         activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
             val now = System.currentTimeMillis()
@@ -1206,6 +1223,7 @@ class MainActivity : Activity() {
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
         backgroundedAt = System.currentTimeMillis()
+        handler.removeCallbacks(terminalHandoffPoll)
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
         activeThreadRefreshScheduled = false
@@ -1332,6 +1350,7 @@ class MainActivity : Activity() {
             if (restoreSettingsScrollY != null) showSettings(restoreSettingsScrollY)
             return
         }
+        if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
         connectionGeneration++
         sidebarSelectionMode = false
@@ -3408,6 +3427,7 @@ class MainActivity : Activity() {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val id = thread.optString("id")
         if (id.isBlank()) return
+        if (terminalOverlay != null && terminalThreadId != id) closeTerminal()
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
         val memoryHistory = historyMemoryCache[id]
         val diskHistory = if (eagerDiskCache && existingHistory == null && memoryHistory == null) {
@@ -4565,6 +4585,9 @@ class MainActivity : Activity() {
             "查看文件" -> "正在读取"
             "搜索文件" -> "正在搜索文件"
             "执行命令" -> "正在运行"
+            "在远端终端执行" -> "正在运行"
+            "读取远端终端" -> "正在读取"
+            "中断远端命令" -> "正在运行"
             "修改文件" -> "正在修改文件"
             "搜索资料" -> "正在搜索文件"
             "查看图片" -> "正在查看图片"
@@ -4611,6 +4634,11 @@ class MainActivity : Activity() {
 
     private fun activityLabelForItem(item: JSONObject?): String {
         if (item == null) return "正在思考"
+        if (isRemoteTerminalOperation(item)) return when (operationLabel(item)) {
+            "读取远端终端" -> "正在读取远端终端"
+            "中断远端命令" -> "正在中断远端命令"
+            else -> "正在远端终端执行"
+        }
         return when (normalizedType(item.optString("type"))) {
             "reasoning" -> "正在思考"
             "plan" -> "正在整理执行计划"
@@ -5967,6 +5995,10 @@ class MainActivity : Activity() {
                 ?: operation.optString("id").takeIf { it.isNotBlank() }
         } ?: "empty"
         val logId = "$turnId:$operationKey"
+        if (logId !in revealedTerminalOutputLogIds && operations.any { isRemoteTerminalOperation(it) && it.optString("terminalOutput").isNotBlank() }) {
+            revealedTerminalOutputLogIds.add(logId)
+            expandedOperationIds.add(logId)
+        }
         val failed = operations.count { normalizedOperationStatus(it) == "failed" }
         val runningCount = operations.count { normalizedOperationStatus(it) == "running" }
         val statusText = when {
@@ -6077,6 +6109,26 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
             }, widthWrap())
+            if (isRemoteTerminalOperation(operation)) {
+                val output = operation.optString("terminalOutput").takeLast(8_000)
+                    .replace(Regex("[\\u0000-\\u0008\\u000b-\\u001f\\u007f]"), "")
+                if (output.isNotBlank()) {
+                    val outputScroll = object : ScrollView(this) {
+                        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(dp(210), View.MeasureSpec.AT_MOST))
+                        }
+                    }.apply {
+                        isVerticalScrollBarEnabled = false
+                        overScrollMode = View.OVER_SCROLL_NEVER
+                        background = rounded(PANEL_INSET, dp(6), BORDER, dp(1))
+                        addView(label(output, 11, TEXT, translateUi = false, pixelize = false).apply {
+                            typeface = Typeface.MONOSPACE
+                            setPadding(dp(8), dp(6), dp(8), dp(6))
+                        })
+                    }
+                    copy.addView(outputScroll, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
+                }
+            }
             if (paths.isNotEmpty() && changedFiles.isEmpty()) {
                 val path = paths.first()
                 val imagePath = isWorkspaceImagePath(path)
@@ -6139,6 +6191,15 @@ class MainActivity : Activity() {
 
     private fun operationLabel(operation: JSONObject): String {
         val type = normalizedType(operation.optString("type"))
+        if (isRemoteTerminalOperation(operation)) {
+            val tool = listOf(operation.optString("tool"), operation.optString("name"))
+                .joinToString(" ").lowercase(Locale.ROOT)
+            return when {
+                "interrupt_command" in tool -> "中断远端命令"
+                "read_terminal" in tool -> "读取远端终端"
+                else -> "在远端终端执行"
+            }
+        }
         if (type == "commandexecution") {
             val command = operation.optString("command")
             return when {
@@ -6175,7 +6236,9 @@ class MainActivity : Activity() {
 
     private fun operationDetail(operation: JSONObject, knownPaths: List<String>? = null): String {
         val type = normalizedType(operation.optString("type"))
-        val raw = when (type) {
+        val raw = if (isRemoteTerminalOperation(operation) && operation.optString("terminalCommand").isNotBlank()) {
+            operation.optString("terminalCommand")
+        } else when (type) {
             "commandexecution" -> operation.optString("command")
             "websearch" -> operation.optString("query")
             "filechange" -> (knownPaths ?: operationPaths(operation)).take(3).joinToString("、")
@@ -6187,6 +6250,11 @@ class MainActivity : Activity() {
             .trim()
             .let { if (it.length > 120) it.take(119) + "…" else it }
     }
+
+    private fun isRemoteTerminalOperation(operation: JSONObject): Boolean =
+        normalizedType(operation.optString("type")) in setOf("mcptoolcall", "dynamictoolcall", "collabagenttoolcall") &&
+            listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"))
+                .any { "code_remote_terminal" in it.lowercase(Locale.ROOT) }
 
     private fun operationPaths(value: Any?, depth: Int = 0, output: LinkedHashSet<String> = linkedSetOf()): List<String> {
         if (depth > 4 || value == null || output.size >= 8) return output.toList()
@@ -7799,6 +7867,7 @@ class MainActivity : Activity() {
             showToast(claudeStatusMessage)
             return
         }
+        if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
         activeThreadId?.let { prefs.edit().putString(activeThreadStorageKey(previousMode), it).apply() }
         currentMode = targetMode
@@ -10443,6 +10512,15 @@ class MainActivity : Activity() {
 
     private fun showTerminal(isolated: Boolean = false) {
         if (terminalOverlay != null) return
+        terminalHandoffGeneration++
+        terminalHandoffLoaded = false
+        terminalHandoffSupported = false
+        terminalHandoffEnabled = false
+        terminalHandoffBusy = false
+        terminalHandoffRequestPending = false
+        terminalHandoffReason = ""
+        terminalHandoffRevision = 0L
+        terminalShortcutButtons.clear()
         terminalShellName = null
         preferencePopup?.dismiss()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
@@ -10479,7 +10557,18 @@ class MainActivity : Activity() {
             imageTintList = retroIconTint(SUBTLE)
             contentDescription = "本机终端"
         }, LinearLayout.LayoutParams(dp(if (retroTheme) 22 else 18), dp(if (retroTheme) 22 else 18)).apply { rightMargin = dp(7) })
-        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        terminalHandoffButton = smallButton("正在查询…") { toggleTerminalHandoff() }.apply {
+            visibility = if (terminalThreadId == null) View.GONE else View.VISIBLE
+            minWidth = dp(70)
+            maxWidth = dp(110)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        header.addView(terminalHandoffButton, LinearLayout.LayoutParams(WRAP, dp(32)).apply { rightMargin = dp(5) })
         header.addView(iconButton("close", "关闭终端") { closeTerminal() }.apply {
             if (retroTheme) {
                 imageTintList = null
@@ -10491,6 +10580,11 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
+        terminalHandoffHint = label("AI 控制中。关闭终端后在聊天发送任务；要手动输入请先收回控制。", 10, SUBTLE).apply {
+            visibility = View.GONE
+            setPadding(dp(3), 0, dp(3), dp(4))
+        }
+        shell.addView(terminalHandoffHint, LinearLayout.LayoutParams(MATCH, WRAP))
         terminalOutput = TerminalOutputView(this).apply {
             textSize = adjustedTextSize(12)
             setTag(R.id.base_text_size, 12f)
@@ -10545,7 +10639,9 @@ class MainActivity : Activity() {
         shell.addView(terminalContent, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
         val arrows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("←" to "\u001b[D", "↑" to "\u001b[A", "↓" to "\u001b[B", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
-            arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
+            val shortcut = smallButton(label) { sendTerminalInput(value) }
+            terminalShortcutButtons.add(shortcut)
+            arrows.addView(shortcut, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
         }
         shell.addView(arrows, widthWrap())
         val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -10561,7 +10657,8 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(WRAP, dp(32)))
         transferRow.addView(View(this), LinearLayout.LayoutParams(0, MATCH, 1f))
-        transferRow.addView(smallButton("键盘") { focusTerminalInput() }, LinearLayout.LayoutParams(dp(50), dp(36)))
+        terminalKeyboardButton = smallButton("键盘") { focusTerminalInput() }
+        transferRow.addView(terminalKeyboardButton, LinearLayout.LayoutParams(dp(50), dp(36)))
         shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(36)))
         terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -10588,9 +10685,14 @@ class MainActivity : Activity() {
             scheduleTerminalRender()
         }
         connectTerminal()
+        refreshTerminalHandoffStatus()
     }
 
     private fun focusTerminalInput() {
+        if (terminalHandoffEnabled || terminalHandoffBusy) {
+            showToast("AI 控制中，请先收回终端控制权")
+            return
+        }
         val input = terminalInputSink ?: return
         if (!terminalReady) {
             terminalInputFocusPending = true
@@ -10612,6 +10714,116 @@ class MainActivity : Activity() {
                     ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             }
         }
+    }
+
+    private fun terminalHandoffPath(threadId: String): String =
+        "/api/v1/codex/terminal/handoff/${RemoteApi.encodePath(threadId)}"
+
+    private fun scheduleTerminalHandoffRefresh() {
+        handler.removeCallbacks(terminalHandoffPoll)
+        if (foreground && terminalOverlay != null && terminalThreadId != null) {
+            handler.postDelayed(terminalHandoffPoll, 10_000L)
+        }
+    }
+
+    private fun refreshTerminalHandoffStatus() {
+        val threadId = terminalThreadId ?: return
+        if (!foreground || terminalOverlay == null) return
+        if (terminalHandoffRequestPending || terminalHandoffBusy) {
+            scheduleTerminalHandoffRefresh()
+            return
+        }
+        val generation = terminalHandoffGeneration
+        val revision = terminalHandoffRevision
+        terminalHandoffRequestPending = true
+        runApi({ RemoteApi(endpoint, token).get(terminalHandoffPath(threadId)) }, { result ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffRequestPending = false
+            if (revision == terminalHandoffRevision && !terminalHandoffBusy) applyTerminalHandoffStatus(result)
+            scheduleTerminalHandoffRefresh()
+        }, { error ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffRequestPending = false
+            if (!terminalHandoffLoaded) {
+                terminalHandoffLoaded = true
+                terminalHandoffSupported = false
+                terminalHandoffReason = error.message ?: "无法查询终端接管状态"
+                renderTerminalHandoffControl()
+            }
+            scheduleTerminalHandoffRefresh()
+        })
+    }
+
+    private fun applyTerminalHandoffStatus(result: JSONObject) {
+        terminalHandoffLoaded = true
+        terminalHandoffSupported = result.optBoolean("supported")
+        terminalHandoffEnabled = terminalHandoffSupported && result.optBoolean("enabled")
+        terminalHandoffReason = result.optString("reason")
+        renderTerminalHandoffControl()
+    }
+
+    private fun renderTerminalHandoffControl() {
+        terminalHandoffButton?.apply {
+            val caption = when {
+                terminalHandoffBusy -> "正在切换…"
+                !terminalHandoffLoaded -> "正在查询…"
+                !terminalHandoffSupported -> "AI 接管不可用"
+                terminalHandoffEnabled -> "收回控制"
+                else -> "交给 AI"
+            }
+            text = tr(caption)
+            contentDescription = tr(caption)
+            isEnabled = terminalHandoffLoaded && !terminalHandoffBusy
+            alpha = if (isEnabled) 1f else 0.6f
+            setTextColor(if (terminalHandoffEnabled) ACCENT else SUBTLE)
+        }
+        terminalHandoffHint?.visibility = if (terminalHandoffEnabled) View.VISIBLE else View.GONE
+        val allowManualInput = !terminalHandoffEnabled && !terminalHandoffBusy
+        if (!allowManualInput) {
+            terminalInputFocusPending = false
+            terminalInputSink?.let { input ->
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.hideSoftInputFromWindow(input.windowToken, 0)
+                input.clearFocus()
+            }
+        }
+        terminalInputSink?.isEnabled = allowManualInput
+        terminalKeyboardButton?.apply { isEnabled = allowManualInput; alpha = if (allowManualInput) 1f else 0.45f }
+        terminalShortcutButtons.forEach { shortcut ->
+            shortcut.isEnabled = allowManualInput
+            shortcut.alpha = if (allowManualInput) 1f else 0.45f
+        }
+    }
+
+    private fun toggleTerminalHandoff() {
+        val threadId = terminalThreadId ?: return
+        if (terminalHandoffBusy || !terminalHandoffLoaded) return
+        if (!terminalHandoffSupported) {
+            showToast(terminalHandoffReason.ifBlank { "当前服务不支持终端交给 AI" })
+            return
+        }
+        if (!terminalHandoffEnabled && (!terminalReady || !terminalPersistent)) {
+            showToast(if (!terminalReady) "终端连接中，请稍等" else "请先打开当前聊天的持久终端")
+            return
+        }
+        val generation = terminalHandoffGeneration
+        val enable = !terminalHandoffEnabled
+        terminalHandoffRevision++
+        terminalHandoffBusy = true
+        renderTerminalHandoffControl()
+        runApi({ RemoteApi(endpoint, token).post(terminalHandoffPath(threadId), JSONObject().put("enabled", enable)) }, { result ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffBusy = false
+            applyTerminalHandoffStatus(result)
+            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，请在聊天发送任务" else "已收回终端控制权")
+            scheduleTerminalHandoffRefresh()
+        }, { error ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffBusy = false
+            renderTerminalHandoffControl()
+            showToast(error.message ?: "切换终端控制权失败")
+            refreshTerminalHandoffStatus()
+        })
     }
 
     private fun positionTerminalOverlay() {
@@ -10688,6 +10900,8 @@ class MainActivity : Activity() {
 
     private fun closeTerminal() {
         val shell = terminalOverlay ?: return
+        terminalHandoffGeneration++
+        handler.removeCallbacks(terminalHandoffPoll)
         terminalScreenKey?.let { key ->
             terminalScreenCache[key] = terminalScreen to terminalPersistent
             while (terminalScreenCache.size > 8) terminalScreenCache.remove(terminalScreenCache.keys.first())
@@ -10721,6 +10935,16 @@ class MainActivity : Activity() {
         terminalOutput = null
         terminalOutputScroll = null
         terminalStatusView = null
+        terminalHandoffButton = null
+        terminalHandoffHint = null
+        terminalKeyboardButton = null
+        terminalShortcutButtons.clear()
+        terminalHandoffLoaded = false
+        terminalHandoffSupported = false
+        terminalHandoffEnabled = false
+        terminalHandoffBusy = false
+        terminalHandoffRequestPending = false
+        terminalHandoffReason = ""
         terminalImeVisible = false
         terminalLockedImeInset = 0
         terminalLockedContentBottom = 0
@@ -10757,6 +10981,8 @@ class MainActivity : Activity() {
                                 if (terminalSocket !== webSocket) return@post
                                 terminalShellName = shellName
                                 terminalPersistent = event.optBoolean("persistent")
+                                renderTerminalHandoffControl()
+                                refreshTerminalHandoffStatus()
                                 updateTerminalDimensions(forceSend = true)
                                 scheduleTerminalRender()
                                 if (terminalInputFocusPending) focusTerminalInput()
@@ -10783,6 +11009,7 @@ class MainActivity : Activity() {
                             terminalReady = false
                             updateTerminalStatus("终端会话已结束", WARNING)
                             appendTerminal("\n[终端已退出]\n", webSocket)
+                            handler.post { if (terminalSocket === webSocket) refreshTerminalHandoffStatus() }
                         }
                     }
                 } catch (_: JSONException) { }
@@ -10845,7 +11072,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendTerminalInput(value: String): Boolean {
-        if (!terminalReady) return false
+        if (!terminalReady || terminalHandoffEnabled || terminalHandoffBusy) return false
         val sent = terminalSocket?.send(JSONObject().put("type", "input").put("data", value).toString()) == true
         if (!sent) terminalReady = false
         return sent
@@ -11438,6 +11665,7 @@ class MainActivity : Activity() {
         val targetConnection = intent.getStringExtra(EXTRA_CONNECTION_ID)
         if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) switchConnection(targetConnection)
         if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) return
+        if (terminalOverlay != null && terminalThreadId != threadId) closeTerminal()
         val thread = findThread(threadId)
         if (thread != null) selectThread(thread) else {
             activeThreadId = threadId
