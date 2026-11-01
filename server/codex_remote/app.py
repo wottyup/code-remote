@@ -55,6 +55,7 @@ from .shared_state import QueueConflictError, SharedQueueService, SharedStateSto
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
 from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
+from .terminal_handoff import TerminalHandoffBroker, TerminalHandoffError
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +272,10 @@ class ThreadSettingsUpdateRequest(BaseModel):
 
 class ThreadNameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=256)
+
+
+class TerminalHandoffRequest(BaseModel):
+    enabled: bool
 
 
 class TurnImage(BaseModel):
@@ -1614,15 +1619,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
+    terminal_handoff = TerminalHandoffBroker(runtime_directory / "terminal.sock")
+    app_server.enable_terminal_handoff(terminal_handoff)
+    claude_code.enable_terminal_handoff(terminal_handoff)
 
     async def reap_tmux_terminal_sessions() -> None:
         while True:
             try:
+                await terminal_handoff.refresh_enabled_sessions()
                 protected_sessions = {
                     session.tmux_session_name
                     for session in terminal_sessions
                     if session.tmux_session_name is not None
                 }
+                protected_sessions.update(terminal_handoff.protected_session_names())
                 await cleanup_tmux_sessions(protected_sessions)
             except asyncio.CancelledError:
                 raise
@@ -1719,6 +1729,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         print(f"\nCode Remote 配对码：{auth.code}\n", flush=True)
+        await terminal_handoff.start()
         try:
             deleted = await asyncio.to_thread(cleanup_expired_message_images, image_directory)
             if deleted:
@@ -1751,10 +1762,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(asyncio.CancelledError):
                 await claude_history_watcher
             await app_server.close()
+            await terminal_handoff.close()
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.90.8-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.91.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1764,6 +1776,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
     app.state.mcp_approvals = mcp_approvals
+    app.state.terminal_handoff = terminal_handoff
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -2073,6 +2086,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="聊天编号无效。")
         try:
             await shared_queue.delete_thread(thread_id)
+            await terminal_handoff.set_enabled(thread_id, False)
             await app_server._emit({"type": "remote.pins.changed", "threadId": thread_id, "pinned": False})
             return {"thread_id": thread_id, "deleted": True, "thread_ids": shared_state.pins()}
         except CodexThreadBusyError as error:
@@ -2607,6 +2621,19 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             with suppress(WebSocketDisconnect, RuntimeError, OSError):
                 await websocket.close()
 
+    @app.get("/api/v1/codex/terminal/handoff/{thread_id}")
+    async def read_terminal_handoff(thread_id: str) -> dict[str, Any]:
+        if not thread_id or len(thread_id) > 512:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="聊天编号无效。")
+        return await terminal_handoff.status(thread_id)
+
+    @app.post("/api/v1/codex/terminal/handoff/{thread_id}")
+    async def set_terminal_handoff(thread_id: str, body: TerminalHandoffRequest) -> dict[str, Any]:
+        try:
+            return await terminal_handoff.set_enabled(thread_id, body.enabled)
+        except TerminalHandoffError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
     @app.websocket("/api/v1/codex/terminal")
     async def terminal_websocket(websocket: WebSocket) -> None:
         await websocket.accept()
@@ -2700,7 +2727,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 if not isinstance(payload, dict):
                     continue
                 if payload.get("type") == "input" and isinstance(payload.get("data"), str):
-                    await terminal_session.write(payload["data"])
+                    if not thread_id or not terminal_handoff.is_enabled(thread_id):
+                        await terminal_session.write(payload["data"])
                 elif payload.get("type") == "resize":
                     await terminal_session.resize(payload.get("columns"), payload.get("rows"))
                 elif payload.get("type") == "close":

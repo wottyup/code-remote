@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import sqlite3
+import sys
 import time
 import uuid
 from contextlib import suppress
@@ -15,8 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
+from .browser_payload import browser_item
 from .claude_native_history import scan_native_sessions
 from .claude_stream import ClaudeReplyText
+from .terminal_handoff import TerminalHandoffBroker
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +78,8 @@ class ClaudeCodeServer:
         self._processes: dict[str, asyncio.subprocess.Process] = {}
         self._interrupts: set[str] = set()
         self._live_replies: dict[str, dict[str, Any]] = {}
+        self._live_terminal_items: dict[str, dict[str, dict[str, Any]]] = {}
+        self._terminal_handoff: TerminalHandoffBroker | None = None
         self._database_path_parent_ready()
         self._connection = sqlite3.connect(database_path, check_same_thread=False)
         with suppress(OSError):
@@ -107,6 +112,9 @@ class ClaudeCodeServer:
 
     def _database_path_parent_ready(self) -> None:
         self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    def enable_terminal_handoff(self, broker: TerminalHandoffBroker) -> None:
+        self._terminal_handoff = broker
 
     def _recover_interrupted_turns(self) -> None:
         rows = self._connection.execute(
@@ -334,6 +342,7 @@ class ClaudeCodeServer:
             if turn is not None:
                 turn["status"] = "inProgress"
                 turn.pop("completedAt", None)
+                turn["items"].extend(self._live_terminal_items.get(thread_id, {}).values())
                 reply = self._live_replies.get(thread_id)
                 if reply and reply["turnId"] == running_turn_id and reply["text"]:
                     turn["items"].append({
@@ -353,7 +362,7 @@ class ClaudeCodeServer:
                 continue
             turn_id = message.get("turnId")
             role = message.get("role")
-            if not isinstance(turn_id, str) or role not in {"user", "assistant"}:
+            if not isinstance(turn_id, str) or role not in {"user", "assistant", "tool"}:
                 continue
             turn = by_id.get(turn_id)
             if turn is None:
@@ -366,6 +375,11 @@ class ClaudeCodeServer:
                 }
                 by_id[turn_id] = turn
                 turns.append(turn)
+            if role == "tool":
+                tool_item = message.get("item")
+                if isinstance(tool_item, dict):
+                    turn["items"].append(tool_item)
+                continue
             item: dict[str, Any] = {
                 "id": message.get("id"),
                 "type": "userMessage" if role == "user" else "agentMessage",
@@ -497,6 +511,7 @@ class ClaudeCodeServer:
             self._live_replies[thread_id] = {
                 "id": f"assistant-{turn_id}", "turnId": turn_id, "text": "", "createdAt": created_at,
             }
+            self._live_terminal_items[thread_id] = {}
             await self.emit({
                 "type": "notification",
                 "method": "turn/started",
@@ -566,6 +581,21 @@ class ClaudeCodeServer:
                 str(command), "--print", "--output-format", "stream-json", "--include-partial-messages",
                 "--verbose",
             ]
+            if self._terminal_handoff and os.name != "nt" and self._terminal_handoff.is_enabled(thread_id):
+                context = uuid.uuid4().hex
+                self._terminal_handoff.bind_context(context, thread_id)
+                package_parent = str(Path(__file__).resolve().parent.parent)
+                python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+                mcp_config = {"mcpServers": {"code_remote_terminal": {
+                    "command": sys.executable,
+                    "args": ["-m", "codex_remote.terminal_handoff"],
+                    "env": {
+                        "PYTHONPATH": python_path,
+                        "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),
+                        "CODE_REMOTE_TERMINAL_CONTEXT": context,
+                    },
+                }}}
+                args.extend(["--mcp-config", json.dumps(mcp_config, ensure_ascii=False)])
             if model and model != "default":
                 args.extend(["--model", model])
             if effort:
@@ -646,6 +676,8 @@ class ClaudeCodeServer:
                                 if isinstance(tool_id, str) and isinstance(name, str):
                                     item = self._tool_item(tool_id, name, inputs)
                                     tool_items[tool_id] = item
+                                    if "code_remote_terminal" in name:
+                                        self._live_terminal_items.setdefault(thread_id, {})[tool_id] = browser_item(item)
                                     await self.emit({
                                         "type": "notification", "method": "item/started",
                                         "params": {"threadId": thread_id, "turnId": turn_id, "item": item},
@@ -659,7 +691,12 @@ class ClaudeCodeServer:
                                 continue
                             tool_id = block.get("tool_use_id")
                             if isinstance(tool_id, str) and tool_id in tool_items:
-                                item = {**tool_items[tool_id], "status": "completed"}
+                                item = {**tool_items[tool_id], "status": "failed" if block.get("is_error") is True else "completed"}
+                                if "code_remote_terminal" in str(item.get("tool", "")):
+                                    item["terminalOutput"] = block.get("content")
+                                    projected = browser_item(item)
+                                    self._live_terminal_items.get(thread_id, {}).pop(tool_id, None)
+                                    self._save_terminal_tool_item(thread_id, turn_id, projected)
                                 await self.emit({
                                     "type": "notification", "method": "item/completed",
                                     "params": {"threadId": thread_id, "turnId": turn_id, "item": item},
@@ -706,6 +743,7 @@ class ClaudeCodeServer:
             reply = self._live_replies.get(thread_id)
             if reply and reply["turnId"] == turn_id:
                 self._live_replies.pop(thread_id, None)
+            self._live_terminal_items.pop(thread_id, None)
             self._interrupts.discard(thread_id)
             current_task = asyncio.current_task()
             if self._tasks.get(thread_id) is current_task:
@@ -722,6 +760,24 @@ class ClaudeCodeServer:
             "id": tool_id, "type": "dynamicToolCall", "status": "inProgress",
             "server": "Claude Code", "tool": name, "arguments": inputs if isinstance(inputs, dict) else {},
         }
+
+    def _save_terminal_tool_item(self, thread_id: str, turn_id: str, item: dict[str, Any]) -> None:
+        row = self._row(thread_id)
+        try:
+            messages = json.loads(row["messages_json"])
+        except (TypeError, json.JSONDecodeError):
+            messages = []
+        if not isinstance(messages, list):
+            messages = []
+        messages.append({
+            "id": item.get("id"), "role": "tool", "turnId": turn_id,
+            "createdAt": _now(), "item": item,
+        })
+        with self._connection:
+            self._connection.execute(
+                "UPDATE claude_threads SET messages_json = ? WHERE thread_id = ?",
+                (json.dumps(messages, ensure_ascii=False), thread_id),
+            )
 
     async def _emit_delta(self, thread_id: str, turn_id: str, item_id: str, delta: str) -> None:
         reply = self._live_replies.get(thread_id)

@@ -844,6 +844,15 @@ export const codexRemoteClient = {
       body: JSON.stringify({ approval_policy: approvalPolicy }),
     })
   },
+  terminalHandoffStatus(token: string, threadId: string) {
+    return request<{ supported: boolean; enabled: boolean; reason?: string }>(token, `/api/v1/codex/terminal/handoff/${encodeURIComponent(threadId)}`)
+  },
+  setTerminalHandoff(token: string, threadId: string, enabled: boolean) {
+    return request<{ supported: boolean; enabled: boolean; reason?: string }>(token, `/api/v1/codex/terminal/handoff/${encodeURIComponent(threadId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    })
+  },
   queuedMessages(token: string, threadId: string) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}`)
   },

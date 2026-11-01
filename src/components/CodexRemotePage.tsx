@@ -7135,6 +7135,13 @@ const OperationLog = memo(function OperationLog({
   title?: string
 }) {
   const [expanded, setExpanded] = useState(false)
+  const revealedTerminalOutput = useRef(false)
+  useEffect(() => {
+    if (!revealedTerminalOutput.current && operations.some((operation) => Boolean(operation.terminalOutput))) {
+      revealedTerminalOutput.current = true
+      setExpanded(true)
+    }
+  }, [operations])
   if (operations.length === 0) return null
   const runningCount = operations.filter((operation) => operation.status === 'running').length
   const failedCount = operations.filter((operation) => operation.status === 'failed').length
@@ -7165,6 +7172,7 @@ const OperationLog = memo(function OperationLog({
             <span className="operation-log__content">
               <strong>{operation.label}</strong>
               {operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}
+              {operation.terminalOutput ? <pre className="operation-log__terminal-output">{operation.terminalOutput}</pre> : null}
               {operation.imagePath ? (
                 <span className="operation-log__actions">
                   <button type="button" onClick={() => onOpenImage(operation.imagePath!)} title={operation.imagePath}><Eye size={12} />打开图片</button>
