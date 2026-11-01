@@ -4008,6 +4008,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   }
 }
 .translation-settings { display: grid; gap: 13px; padding: 18px 22px 22px; }
+.translation-settings__option { display: grid; gap: 4px; }
+.translation-settings__option .translation-settings__hint { padding-inline-start: 25px; }
 .translation-settings__switch { display: inline-flex; align-items: center; gap: 9px; width: fit-content; cursor: pointer; }
 .translation-settings__field { display: grid; gap: 6px; min-width: 0; font-size: 13px; }
 .translation-settings__field input, .translation-settings__field select { width: 100%; min-height: 36px; padding: 7px 10px; border: 1px solid rgba(151, 165, 195, .3); border-radius: 9px; outline: none; background: rgba(20, 24, 32, .45); color: inherit; font: inherit; }

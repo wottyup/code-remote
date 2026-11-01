@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useId, useState, type FormEvent } from 'react'
 import { ChevronDown, Languages, LoaderCircle } from 'lucide-react'
 import { codexRemoteClient, type TranslationConfigResponse, type TranslationProvider } from '../lib/codexRemoteClient'
 import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
@@ -20,6 +20,8 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   onChange: (next: TranslationPreferences) => void
   onConfigSaved: () => void
 }) {
+  const sendHintId = useId()
+  const displayHintId = useId()
   const [configuration, setConfiguration] = useState<TranslationConfigResponse | null>(null)
   const [nameDraft, setNameDraft] = useState('')
   const [keyDraft, setKeyDraft] = useState('')
@@ -174,9 +176,14 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
     </summary>
     <div className="translation-settings">
-      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.enabled} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
-      <label className="translation-settings__switch"><input type="checkbox" checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
-      <p className="translation-settings__hint">默认显示原文。开启后，你的消息显示实际发送的英文，AI 回复显示中文译文；可展开查看另一版本。</p>
+      <div className="translation-settings__option">
+        <label className="translation-settings__switch"><input type="checkbox" aria-describedby={sendHintId} checked={preferences.enabled} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, enabled: event.currentTarget.checked })} /><span>启用聊天翻译</span></label>
+        <p id={sendHintId} className="translation-settings__hint">输入中文时预览英文，发送给 AI 的是英文；输入英文则原样发送。</p>
+      </div>
+      <div className="translation-settings__option">
+        <label className="translation-settings__switch"><input type="checkbox" aria-describedby={displayHintId} checked={preferences.showTranslated} disabled={!preferences.enabled || busyAction !== null} onChange={(event) => onChange({ ...preferences, showTranslated: event.currentTarget.checked })} /><span>聊天消息优先显示译文</span></label>
+        <p id={displayHintId} className="translation-settings__hint">开启后，你的消息显示发送的英文，AI 回复显示中文；关闭后优先显示原文。</p>
+      </div>
       <label className="translation-settings__field"><span>翻译引擎</span><select value={provider} disabled={busyAction !== null} onChange={(event) => { setError(''); setNotice(''); onChange({ ...preferences, provider: event.currentTarget.value as TranslationProvider }) }}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
       <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
       <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic'
