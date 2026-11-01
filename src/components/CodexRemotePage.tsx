@@ -7590,12 +7590,13 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
 
 const assistantTranslationCache = new Map<string, string>()
 
-function AssistantTranslation({ token, text, preferences, revision, primary, children, renderCopyAction }: {
+function AssistantTranslation({ token, text, preferences, revision, streaming, choiceCard, children, renderCopyAction }: {
   token: string
   text: string
   preferences: TranslationPreferences
   revision: number
-  primary: boolean
+  streaming: boolean
+  choiceCard?: ReactNode
   children: ReactNode
   renderCopyAction: (text: string) => ReactNode
 }) {
@@ -7606,6 +7607,7 @@ function AssistantTranslation({ token, text, preferences, revision, primary, chi
   const [copied, setCopied] = useState(false)
   const tooLong = preferences.enabled && preferences.showTranslated && text.length > 30_000 && containsEnglish(text)
   const eligible = preferences.enabled && preferences.showTranslated && !tooLong && containsEnglish(text)
+  const waitingForText = preferences.enabled && preferences.showTranslated && streaming && !text
   const key = `${revision}:${preferences.provider}:${preferences.style}:${text}`
 
   useEffect(() => {
@@ -7645,19 +7647,24 @@ function AssistantTranslation({ token, text, preferences, revision, primary, chi
     return () => controller.abort()
   }, [eligible, visible, key, retry, text, token, preferences.provider, preferences.style])
 
-  const translated = eligible && result?.key === key && result.text !== text ? result.text : undefined
-  const error = eligible && result?.key === key ? result.error : undefined
-  const finished = result?.key === key && result.text !== undefined
+  const translated = eligible ? (result?.key === key && result.text ? result.text : assistantTranslationCache.get(key)) : undefined
+  const error = eligible && result?.key === key ? result.error ?? (result.text === '' ? '翻译结果为空，请重试。' : undefined) : undefined
   return <div ref={container} className="assistant-translation">
-    {tooLong ? <small className="assistant-translation__status">回复超过 30000 字符，请分段查看英文原文。</small> : null}
+    {waitingForText ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />AI 正在回复，完成后显示译文…</small> : null}
+    {tooLong ? <small className="assistant-translation__status">回复超过 30000 字符，无法整条翻译。</small> : null}
     {eligible && translated ? <div className="assistant-translation__result">
       <div className="assistant-translation__heading"><strong>中文译文</strong><button type="button" onClick={() => { void copyTextToClipboard(translated).then((success) => { if (success) setCopied(true) }) }}>{copied ? '已复制' : '复制译文'}</button></div>
       <MessageContent text={translated} hideStandaloneSeparators preferWebUrlLabel />
     </div> : null}
-    {eligible && visible && !finished && !error ? <small className="assistant-translation__status">正在翻译回复…</small> : null}
+    {eligible && !translated && !error ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />回复已生成，正在翻译…</small> : null}
     {eligible && error ? <div className="assistant-translation__error"><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试</button></div> : null}
-    {translated && primary ? <details className="assistant-translation__original"><summary>查看英文原文</summary>{children}</details> : children}
-    {renderCopyAction(translated ?? text)}
+    {eligible || tooLong
+      ? translated || error || tooLong
+        ? <details className="assistant-translation__original"><summary>查看英文原文</summary>{children}{renderCopyAction(text)}</details>
+        : null
+      : waitingForText ? null : children}
+    {translated || error || tooLong || (!eligible && !waitingForText) ? choiceCard : null}
+    {translated ? renderCopyAction(translated) : !eligible && !tooLong && !waitingForText ? renderCopyAction(text) : null}
   </div>
 }
 
@@ -7704,6 +7711,10 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   const originalText = message.originalText ?? originalTextOverride
   const originalUserText = message.role === 'user' && originalText && originalText !== message.text ? originalText : undefined
   const showTranslatedUser = Boolean(translation.enabled && translation.showTranslated)
+  const translateAssistant = message.role === 'assistant' && showTranslatedUser
+  const completedAssistantText = message.streaming && choiceCard
+    ? message.text.slice(0, message.completedTextLength ?? 0)
+    : message.streaming ? '' : message.text
   const displayedUserText = originalUserText && !showTranslatedUser ? originalUserText : message.text
   const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
   const preferWebUrlLabel = message.role === 'assistant'
@@ -7728,12 +7739,12 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
-        {message.role === 'assistant' && !message.streaming
-          ? <AssistantTranslation token={token} text={message.text} preferences={translation} revision={translationRevision} primary={!choiceCard && activityTimeline.length === 0 && operations.length === 0} renderCopyAction={renderCopyAction}>{bodyContent}</AssistantTranslation>
+        {message.role === 'assistant' && (translateAssistant || !message.streaming)
+          ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
         {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? '查看中文原文' : '查看英文发送内容'}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
-        {showOperations && operations.length > 0 && activityTimeline.length === 0 && !message.streaming && !message.id.startsWith('streaming-assistant-') ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
-        {!choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
+        {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
+        {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {message.role === 'user' && (sentAtLabel || showCopyAction) ? (
         <div className="chat-message__footer">

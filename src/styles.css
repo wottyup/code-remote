@@ -4032,7 +4032,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message__alternate-text { margin-top: 7px; font-size: 12px; }
 .chat-message__alternate-text > summary { width: fit-content; cursor: pointer; opacity: .7; }
 .chat-message__alternate-text[open] > summary { margin-bottom: 8px; }
-.assistant-translation__status { display: block; margin: 4px 0; opacity: .65; }
+.assistant-translation__status { display: flex; align-items: center; gap: 6px; margin: 4px 0; opacity: .65; }
 .assistant-translation__error { display: flex; align-items: center; gap: 7px; margin: 5px 0; font-size: 12px; }
 .remote-shell--theme-light .translation-settings__field input, .remote-shell--theme-light .translation-settings__field select { background: #fff; color: #303030; }
 .remote-shell--theme-light .translation-settings__hint { color: #6c7480; }
