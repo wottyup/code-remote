@@ -145,7 +145,7 @@ class TranslationCreateProfileRequest(BaseModel):
 
 
 class TranslationRequest(BaseModel):
-    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic"]
+    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"]
     profileId: str | None = Field(default=None, max_length=100)
     source: Literal["zh", "en"]
     target: Literal["zh", "en"]
@@ -1791,7 +1791,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.96.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.97.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

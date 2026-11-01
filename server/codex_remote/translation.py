@@ -21,7 +21,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
-PROVIDERS = {"google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic"}
+PROVIDERS = {"google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"}
 MAX_TEXT_LENGTH = 30_000
 MAX_SEGMENTS = 240
 MAX_SEGMENT_LENGTH = 3_000
@@ -198,6 +198,8 @@ class TranslationService:
                 return bool(config.get("base_url") and config.get("model"))
             if name == "anthropic":
                 return bool(config.get("api_key") and config.get("model"))
+            if name == "responses":
+                return bool(config.get("api_key") and config.get("model"))
             return bool(config.get("api_key"))
 
         def public_config(name: str, config: dict[str, Any]) -> dict[str, Any]:
@@ -362,7 +364,7 @@ class TranslationService:
         if missing_values:
             async with self._semaphore:
                 missing_results: list[str] = []
-                if provider == "anthropic":
+                if provider in {"anthropic", "responses"}:
                     batches: list[list[str]] = []
                     batch: list[str] = []
                     batch_length = 0
@@ -479,6 +481,45 @@ class TranslationService:
             content = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
             if not content:
                 raise TranslationError("Anthropic 接口没有返回文本内容。")
+            result = _parse_chat_result(content, len(values))
+        elif provider == "responses":
+            model = str(config.get("model") or "")
+            if not model:
+                raise TranslationError("请先设置 OpenAI Responses 模型名称。")
+            base_url = str(config.get("base_url") or "https://api.openai.com/v1").rstrip("/")
+            parsed = urlparse(base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+                raise TranslationError("OpenAI Responses 接口地址无效。")
+            if base_url.endswith("/responses"):
+                endpoint = base_url
+            elif base_url.endswith("/v1"):
+                endpoint = base_url + "/responses"
+            else:
+                endpoint = base_url + "/v1/responses"
+            response = _json_request(endpoint, {
+                "model": model,
+                "instructions": _instruction(source, target, style),
+                "input": json.dumps(values, ensure_ascii=False),
+                "max_output_tokens": 8_192,
+            }, {"Authorization": f"Bearer {key}"}, "OpenAI Responses", timeout=60)
+            if not isinstance(response, dict):
+                raise TranslationError("OpenAI Responses 接口返回了无效内容。")
+            if response.get("status") not in (None, "completed"):
+                raise TranslationError("OpenAI Responses 译文未完成，请缩短文本后重试。")
+            output = response.get("output")
+            if not isinstance(output, list):
+                raise TranslationError("OpenAI Responses 接口没有返回文本内容。")
+            content = ""
+            for item in output:
+                if not isinstance(item, dict) or item.get("type") != "message" or item.get("role") not in (None, "assistant"):
+                    continue
+                if item.get("status") not in (None, "completed"):
+                    raise TranslationError("OpenAI Responses 译文未完成，请缩短文本后重试。")
+                blocks = item.get("content")
+                if isinstance(blocks, list):
+                    content += "".join(block["text"] for block in blocks if isinstance(block, dict) and block.get("type") == "output_text" and isinstance(block.get("text"), str))
+            if not content:
+                raise TranslationError("OpenAI Responses 接口没有返回文本内容。")
             result = _parse_chat_result(content, len(values))
         else:
             raise TranslationError("不支持这个翻译引擎。")

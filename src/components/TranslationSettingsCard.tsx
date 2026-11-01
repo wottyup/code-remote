@@ -9,6 +9,7 @@ const choices: Array<{ value: TranslationProvider; label: string }> = [
   { value: 'google', label: 'Google Cloud Translation' },
   { value: 'deepl', label: 'DeepL API' },
   { value: 'chat', label: '兼容 Chat Completions 的接口' },
+  { value: 'responses', label: 'OpenAI Responses API（需开启路由）' },
   { value: 'anthropic', label: 'Anthropic Messages 原生接口' },
   { value: 'codex', label: 'Codex' },
   { value: 'claude', label: 'Claude Code' },
@@ -76,8 +77,8 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       ...(keyDraft.trim() ? { apiKey: keyDraft.trim() } : {}),
       ...(provider === 'microsoft' ? { region: regionDraft } : {}),
       ...(provider === 'deepl' ? { plan: planDraft } : {}),
-      ...(provider === 'chat' || provider === 'anthropic' ? { baseUrl: baseUrlDraft } : {}),
-      ...(provider === 'chat' || provider === 'anthropic' || provider === 'codex' || provider === 'claude' ? { model: modelDraft } : {}),
+      ...(provider === 'chat' || provider === 'anthropic' || provider === 'responses' ? { baseUrl: baseUrlDraft } : {}),
+      ...(provider === 'chat' || provider === 'anthropic' || provider === 'responses' || provider === 'codex' || provider === 'claude' ? { model: modelDraft } : {}),
     }
   }
 
@@ -186,7 +187,7 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       </div>
       <label className="translation-settings__field"><span>翻译引擎</span><select value={provider} disabled={busyAction !== null} onChange={(event) => { setError(''); setNotice(''); onChange({ ...preferences, provider: event.currentTarget.value as TranslationProvider }) }}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
       <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
-      <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic'
+      <p className="translation-settings__hint">{provider === 'codex' || provider === 'claude' || provider === 'chat' || provider === 'anthropic' || provider === 'responses'
         ? 'AI 翻译会遵循美式表达指令；Codex 和 Claude Code 的预览速度取决于模型。'
         : '官方翻译 API 速度通常较快，但不能保证按指定语气改写。输入预览会延迟更新并复用相同译文。'}</p>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>
@@ -209,7 +210,8 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
         {needsKey ? <label className="translation-settings__field"><span>接口密钥 {current?.hasKey ? '（已保存，留空不修改）' : ''}</span><input type="password" autoComplete="off" disabled={!current || busyAction !== null} value={keyDraft} onChange={(event) => setKeyDraft(event.currentTarget.value)} placeholder={current?.hasKey ? '已保存密钥' : '填写接口密钥'} /></label> : null}
         {provider === 'microsoft' ? <label className="translation-settings__field"><span>资源区域（按 Azure 资源填写）</span><input disabled={!current || busyAction !== null} value={regionDraft} onChange={(event) => setRegionDraft(event.currentTarget.value)} placeholder="例如 eastus" /></label> : null}
         {provider === 'deepl' ? <label className="translation-settings__field"><span>账户类型</span><select disabled={!current || busyAction !== null} value={planDraft} onChange={(event) => setPlanDraft(event.currentTarget.value)}><option value="free">API Free</option><option value="pro">API Pro</option></select></label> : null}
-        {provider === 'chat' || provider === 'anthropic' ? <><label className="translation-settings__field"><span>{provider === 'anthropic' ? '接口地址（留空使用 Anthropic 官方地址）' : '接口地址'}</span><input type="url" disabled={!current || busyAction !== null} value={baseUrlDraft} onChange={(event) => setBaseUrlDraft(event.currentTarget.value)} placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://example.com/v1'} /></label><label className="translation-settings__field"><span>模型名称</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="输入接口支持的模型 ID" /></label></> : null}
+        {provider === 'chat' || provider === 'anthropic' || provider === 'responses' ? <><label className="translation-settings__field"><span>{provider === 'anthropic' ? '接口地址（留空使用 Anthropic 官方地址）' : provider === 'responses' ? '接口地址（留空使用 OpenAI 官方地址）' : '接口地址'}</span><input type="url" disabled={!current || busyAction !== null} value={baseUrlDraft} onChange={(event) => setBaseUrlDraft(event.currentTarget.value)} placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'responses' ? 'https://api.openai.com/v1' : 'https://example.com/v1'} /></label><label className="translation-settings__field"><span>模型名称</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="输入接口支持的模型 ID" /></label></> : null}
+        {provider === 'responses' ? <p className="translation-settings__hint">第三方接口需开启 Responses 路由；地址支持 API 根地址、/v1 或完整 /responses 地址。</p> : null}
         {provider === 'codex' || provider === 'claude' ? <label className="translation-settings__field"><span>模型名称（留空使用默认模型）</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="默认模型" /></label> : null}
         <div className="translation-settings__actions"><button type="submit" disabled={!current || busyAction !== null}>{busyAction === 'save' ? <LoaderCircle className="spin" size={14} /> : null}保存配置</button><button type="button" disabled={!current || busyAction !== null} onClick={() => void checkConnection()}>{busyAction === 'check' ? <LoaderCircle className="spin" size={14} /> : null}测试连通性</button>{needsKey && current?.hasKey ? <button type="button" disabled={busyAction !== null} onClick={() => void clearKey()}>{busyAction === 'clear' ? <LoaderCircle className="spin" size={14} /> : null}清除密钥</button> : null}</div>
         <p className="translation-settings__hint">切换后立即使用所选配置；未保存的修改不会带到其他配置。测试会试译一句，不会保存修改。</p>

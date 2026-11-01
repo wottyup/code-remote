@@ -27,7 +27,7 @@ export interface MCPApprovalGrant {
   toolName?: string
 }
 
-export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic'
+export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic' | 'responses'
 export type TranslationStyle = 'natural' | 'formal'
 
 export interface TranslationProviderConfig {

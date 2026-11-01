@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.97.0-dev.1] - 聊天翻译支持 OpenAI Responses API
+
 ## [0.96.0-dev.1] - 聊天翻译支持保存多套配置并切换使用
 
 ## [0.95.0-dev.1] - 翻译引擎支持 Anthropic Messages 接口及连通性检查
