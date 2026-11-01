@@ -19,7 +19,7 @@ from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
 
-PROVIDERS = {"google", "microsoft", "deepl", "codex", "claude", "chat"}
+PROVIDERS = {"google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic"}
 MAX_TEXT_LENGTH = 30_000
 MAX_SEGMENTS = 240
 MAX_SEGMENT_LENGTH = 3_000
@@ -32,11 +32,11 @@ class TranslationError(ValueError):
     pass
 
 
-def _json_request(url: str, payload: Any, headers: dict[str, str], provider: str) -> Any:
+def _json_request(url: str, payload: Any, headers: dict[str, str], provider: str, timeout: int = 22) -> Any:
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = Request(url, data=data, headers={"Content-Type": "application/json", **headers}, method="POST")
     try:
-        with urlopen(request, timeout=22) as response:
+        with urlopen(request, timeout=timeout) as response:
             if response.status >= 300:
                 raise TranslationError(f"{provider} 翻译服务返回 HTTP {response.status}。")
             body = response.read(256_001)
@@ -144,10 +144,19 @@ class TranslationService:
     def public_settings(self) -> dict[str, Any]:
         with self._lock:
             configurations = {name: dict(self._settings.get(name, {})) for name in PROVIDERS}
+
+        def configured(name: str, config: dict[str, Any]) -> bool:
+            if name in {"codex", "claude"}:
+                return shutil.which(self._commands[name]) is not None
+            if name == "chat":
+                return bool(config.get("base_url") and config.get("model"))
+            if name == "anthropic":
+                return bool(config.get("api_key") and config.get("model"))
+            return bool(config.get("api_key"))
+
         return {"providers": {
             name: {
-                "configured": (name in {"codex", "claude"} and shutil.which(self._commands[name]) is not None)
-                    or (bool(configurations[name].get("base_url") and configurations[name].get("model")) if name == "chat" else bool(configurations[name].get("api_key"))),
+                "configured": configured(name, configurations[name]),
                 "hasKey": bool(configurations[name].get("api_key")),
                 "region": configurations[name].get("region", ""),
                 "plan": configurations[name].get("plan", "free"),
@@ -157,42 +166,47 @@ class TranslationService:
             for name in sorted(PROVIDERS)
         }}
 
-    def update(self, provider: str, data: dict[str, Any]) -> dict[str, Any]:
-        if provider not in PROVIDERS:
-            raise TranslationError("不支持这个翻译引擎。")
+    @staticmethod
+    def _merge_config(config: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         allowed = {"apiKey", "clearKey", "region", "plan", "baseUrl", "model"}
         if any(key not in allowed for key in data):
             raise TranslationError("翻译配置包含未知字段。")
+        config = dict(config)
+        key = data.get("apiKey")
+        if key is not None:
+            if not isinstance(key, str) or len(key) > 512 or re.search(r"[\x00-\x1f\x7f]", key):
+                raise TranslationError("接口密钥格式无效。")
+            if key.strip():
+                config["api_key"] = key.strip()
+        if data.get("clearKey") is True:
+            config.pop("api_key", None)
+        for input_name, stored_name, limit in (("region", "region", 100), ("model", "model", 128)):
+            if input_name in data:
+                value = data[input_name]
+                if not isinstance(value, str) or len(value) > limit or re.search(r"[\x00-\x1f\x7f]", value):
+                    raise TranslationError(f"{input_name} 格式无效。")
+                config[stored_name] = value.strip()
+        if "plan" in data:
+            if data["plan"] not in {"free", "pro"}:
+                raise TranslationError("DeepL 账户类型无效。")
+            config["plan"] = data["plan"]
+        if "baseUrl" in data:
+            url = data["baseUrl"]
+            try:
+                parsed = urlparse(url) if isinstance(url, str) else None
+                valid_url = not url or bool(parsed and parsed.scheme in {"http", "https"} and parsed.hostname and (parsed.port is None or 0 < parsed.port < 65536) and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment)
+            except ValueError:
+                valid_url = False
+            if not isinstance(url, str) or len(url) > 500 or re.search(r"\s", url) or not valid_url:
+                raise TranslationError("接口地址必须以 http:// 或 https:// 开头。")
+            config["base_url"] = url.strip().rstrip("/")
+        return config
+
+    def update(self, provider: str, data: dict[str, Any]) -> dict[str, Any]:
+        if provider not in PROVIDERS:
+            raise TranslationError("不支持这个翻译引擎。")
         with self._lock:
-            config = dict(self._settings.get(provider, {}))
-            key = data.get("apiKey")
-            if key is not None:
-                if not isinstance(key, str) or len(key) > 512 or re.search(r"[\x00-\x1f\x7f]", key):
-                    raise TranslationError("接口密钥格式无效。")
-                if key.strip():
-                    config["api_key"] = key.strip()
-            if data.get("clearKey") is True:
-                config.pop("api_key", None)
-            for input_name, stored_name, limit in (("region", "region", 100), ("model", "model", 128)):
-                if input_name in data:
-                    value = data[input_name]
-                    if not isinstance(value, str) or len(value) > limit or re.search(r"[\x00-\x1f\x7f]", value):
-                        raise TranslationError(f"{input_name} 格式无效。")
-                    config[stored_name] = value.strip()
-            if "plan" in data:
-                if data["plan"] not in {"free", "pro"}:
-                    raise TranslationError("DeepL 账户类型无效。")
-                config["plan"] = data["plan"]
-            if "baseUrl" in data:
-                url = data["baseUrl"]
-                try:
-                    parsed = urlparse(url) if isinstance(url, str) else None
-                    valid_url = not url or bool(parsed and parsed.scheme in {"http", "https"} and parsed.hostname and (parsed.port is None or 0 < parsed.port < 65536) and not parsed.username and not parsed.password and not parsed.query and not parsed.fragment)
-                except ValueError:
-                    valid_url = False
-                if not isinstance(url, str) or len(url) > 500 or re.search(r"\s", url) or not valid_url:
-                    raise TranslationError("Chat 接口地址必须以 http:// 或 https:// 开头。")
-                config["base_url"] = url.strip().rstrip("/")
+            config = self._merge_config(self._settings.get(provider, {}), data)
             next_settings = {**self._settings, provider: config}
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             descriptor, temp_name = tempfile.mkstemp(prefix=".translation-", dir=self.path.parent)
@@ -208,6 +222,24 @@ class TranslationService:
             self._cache.clear()
             self._segment_cache.clear()
         return self.public_settings()
+
+    async def check_connection(self, provider: str, data: dict[str, Any]) -> str:
+        if provider not in PROVIDERS:
+            raise TranslationError("不支持这个翻译引擎。")
+        with self._lock:
+            saved = dict(self._settings.get(provider, {}))
+        config = self._merge_config(saved, data)
+        async with self._semaphore:
+            if provider in {"codex", "claude"}:
+                result = await self._translate_cli(provider, config, ["你好。"], "zh", "en", "natural")
+            else:
+                result = await asyncio.to_thread(self._translate_api, provider, config, ["你好。"], "zh", "en", "natural")
+        sample = result[0].strip() if result else ""
+        if not sample:
+            raise TranslationError("翻译服务没有返回试译结果。")
+        if not _LATIN.search(sample):
+            raise TranslationError("翻译服务已连接，但试译结果不是英文，请检查模型配置。")
+        return sample[:160]
 
     async def translate(self, provider: str, source: str, target: str, style: str, text: str) -> str:
         if provider not in PROVIDERS or source not in {"zh", "en"} or target not in {"zh", "en"} or source == target:
@@ -243,8 +275,22 @@ class TranslationService:
         if missing_values:
             async with self._semaphore:
                 missing_results: list[str] = []
-                for offset in range(0, len(missing_values), 40):
-                    batch = missing_values[offset:offset + 40]
+                if provider == "anthropic":
+                    batches: list[list[str]] = []
+                    batch: list[str] = []
+                    batch_length = 0
+                    for value in missing_values:
+                        if batch and (len(batch) >= 8 or batch_length + len(value) > 3_000):
+                            batches.append(batch)
+                            batch = []
+                            batch_length = 0
+                        batch.append(value)
+                        batch_length += len(value)
+                    if batch:
+                        batches.append(batch)
+                else:
+                    batches = [missing_values[offset:offset + 40] for offset in range(0, len(missing_values), 40)]
+                for batch in batches:
                     if provider in {"codex", "claude"}:
                         missing_results.extend(await self._translate_cli(provider, config, batch, source, target, style))
                     else:
@@ -318,6 +364,34 @@ class TranslationService:
             content = message.get("content") if isinstance(message, dict) else None
             if not isinstance(content, str):
                 raise TranslationError("Chat 接口没有返回译文。")
+            result = _parse_chat_result(content, len(values))
+        elif provider == "anthropic":
+            model = str(config.get("model") or "")
+            if not model:
+                raise TranslationError("请先设置 Anthropic 模型名称。")
+            base_url = str(config.get("base_url") or "https://api.anthropic.com").rstrip("/")
+            if base_url.endswith("/v1/messages"):
+                endpoint = base_url
+            elif base_url.endswith("/v1"):
+                endpoint = base_url + "/messages"
+            else:
+                endpoint = base_url + "/v1/messages"
+            response = _json_request(endpoint, {
+                "model": model,
+                "max_tokens": 8_192,
+                "system": _instruction(source, target, style),
+                "messages": [{"role": "user", "content": json.dumps(values, ensure_ascii=False)}],
+            }, {"x-api-key": key, "anthropic-version": "2023-06-01"}, "Anthropic", timeout=60)
+            if not isinstance(response, dict):
+                raise TranslationError("Anthropic 接口返回了无效内容。")
+            if response.get("stop_reason") == "max_tokens":
+                raise TranslationError("Anthropic 译文被截断，请缩短文本后重试。")
+            blocks = response.get("content")
+            if not isinstance(blocks, list):
+                raise TranslationError("Anthropic 接口没有返回文本内容。")
+            content = "".join(block.get("text", "") for block in blocks if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str))
+            if not content:
+                raise TranslationError("Anthropic 接口没有返回文本内容。")
             result = _parse_chat_result(content, len(values))
         else:
             raise TranslationError("不支持这个翻译引擎。")

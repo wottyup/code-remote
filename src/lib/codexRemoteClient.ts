@@ -27,7 +27,7 @@ export interface MCPApprovalGrant {
   toolName?: string
 }
 
-export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat'
+export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic'
 export type TranslationStyle = 'natural' | 'formal'
 
 export interface TranslationProviderConfig {
@@ -730,6 +730,11 @@ export const codexRemoteClient = {
     return request<TranslationConfigResponse>(token, `/api/v1/codex/translation/config/${provider}`, {
       method: 'POST', body: JSON.stringify(config),
     })
+  },
+  checkTranslationConnection(token: string, provider: TranslationProvider, config: { apiKey?: string; region?: string; plan?: string; baseUrl?: string; model?: string }) {
+    return request<{ sample: string }>(token, `/api/v1/codex/translation/config/${provider}/check`, {
+      method: 'POST', body: JSON.stringify(config),
+    }, { timeoutMs: 90_000 })
   },
   translateText(token: string, input: { provider: TranslationProvider; source: 'zh' | 'en'; target: 'zh' | 'en'; style: TranslationStyle; text: string }, signal?: AbortSignal) {
     return request<{ text: string }>(token, '/api/v1/codex/translation', {

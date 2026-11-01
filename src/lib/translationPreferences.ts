@@ -8,7 +8,7 @@ export interface TranslationPreferences {
 }
 
 const key = 'codex-remote.translation-preferences'
-const providers = new Set<TranslationProvider>(['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat'])
+const providers = new Set<TranslationProvider>(['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat', 'anthropic'])
 
 export const defaultTranslationPreferences: TranslationPreferences = {
   enabled: false,

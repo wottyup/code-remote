@@ -140,7 +140,7 @@ class TranslationConfigRequest(BaseModel):
 
 
 class TranslationRequest(BaseModel):
-    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat"]
+    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic"]
     source: Literal["zh", "en"]
     target: Literal["zh", "en"]
     style: Literal["natural", "formal"] = "natural"
@@ -1785,7 +1785,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.94.1-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.95.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1852,6 +1852,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             return translation.update(provider, body.model_dump(exclude_unset=True))
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/translation/config/{provider}/check")
+    async def check_translation_connection(provider: str, body: TranslationConfigRequest) -> dict[str, Any]:
+        try:
+            return {"sample": await translation.check_connection(provider, body.model_dump(exclude_unset=True))}
+        except TranslationError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     @app.post("/api/v1/codex/translation")
     async def translate_text(body: TranslationRequest) -> dict[str, str]:
