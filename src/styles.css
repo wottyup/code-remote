@@ -4049,7 +4049,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .translation-settings__field > span { font-weight: 600; line-height: 1.4; }
 .translation-settings__field input, .translation-settings__field select { width: 100%; min-height: 40px; padding: 8px 11px; border: 1px solid rgba(151, 165, 195, .3); border-radius: 9px; outline: none; background: rgba(20, 24, 32, .45); color: inherit; font: inherit; }
 .translation-settings__field input:focus, .translation-settings__field select:focus { border-color: #8da4d5; }
-.translation-settings__field option { color: #202329; background: #fff; }
 .translation-settings__hint { margin: 0; color: #9fa9bb; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
 .translation-settings__transfer { display: grid; gap: 12px; padding: 16px; border: 1px solid var(--settings-inner-border); border-radius: 10px; background: color-mix(in srgb, currentColor 5%, transparent); }
 .translation-settings__actions { display: flex; gap: 10px; flex-wrap: wrap; }
@@ -4072,9 +4071,19 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message__alternate-text[open] > summary { margin-bottom: 8px; }
 .assistant-translation__status { display: flex; align-items: center; gap: 6px; margin: 4px 0; opacity: .65; }
 .assistant-translation__error { display: flex; align-items: center; gap: 7px; margin: 5px 0; font-size: 12px; }
-.remote-shell--theme-light .translation-settings__field input, .remote-shell--theme-light .translation-settings__field select { background: #fff; color: #303030; }
+.remote-shell--theme-light .translation-settings__field input { background: #fff; color: #303030; }
 .remote-shell--theme-light .translation-settings__hint { color: #6c7480; }
 .remote-shell--theme-light .composer-translation-preview, .remote-shell--theme-light .assistant-translation__result { background: rgba(55, 78, 115, .05); }
+.translation-settings { --translation-menu-control: #1b1e25; --translation-menu-popup: #1b1e25; --translation-menu-text: #f5f6f9; --translation-menu-border: rgba(157, 173, 204, .42); --translation-menu-selected: #f5f6f9; --translation-menu-selected-text: #1b1e25; --translation-menu-scheme: dark; }
+.remote-shell--theme-light .translation-settings { --translation-menu-control: #fff; --translation-menu-popup: #fff; --translation-menu-text: #20252b; --translation-menu-border: #becbd8; --translation-menu-selected: #273747; --translation-menu-selected-text: #fff; --translation-menu-scheme: light; }
+.remote-shell--theme-warm .translation-settings { --translation-menu-control: #fffaf3; --translation-menu-popup: #fffaf3; --translation-menu-text: #46382c; --translation-menu-border: #d3b99b; --translation-menu-selected: #5b4433; --translation-menu-selected-text: #fffaf3; --translation-menu-scheme: light; }
+.remote-shell--theme-retro .translation-settings { --translation-menu-control: #fff; --translation-menu-popup: #fff; --translation-menu-text: #20252b; --translation-menu-border: #8fa2b3; --translation-menu-selected: #1d4e78; --translation-menu-selected-text: #fff; --translation-menu-scheme: light; }
+.remote-shell--theme-pixel .translation-settings { --translation-menu-control: var(--pixel-panel-inset); --translation-menu-popup: #0b1522; --translation-menu-text: var(--pixel-text); --translation-menu-border: var(--pixel-border-shadow); --translation-menu-selected: var(--pixel-cream); --translation-menu-selected-text: var(--pixel-ink); --translation-menu-scheme: dark; }
+.remote-shell--theme-chinese-retro .translation-settings { --translation-menu-control: #f5fdff; --translation-menu-popup: #f5fdff; --translation-menu-text: #293c39; --translation-menu-border: #8abac4; --translation-menu-selected: #24515a; --translation-menu-selected-text: #fff; --translation-menu-scheme: light; }
+.remote-shell--theme-custom .translation-settings { --translation-menu-control: var(--custom-theme-control); --translation-menu-popup: var(--custom-theme-background); --translation-menu-text: var(--custom-theme-text-color); --translation-menu-border: var(--custom-theme-border); --translation-menu-selected: var(--custom-theme-text-color); --translation-menu-selected-text: var(--custom-theme-background); --translation-menu-scheme: var(--custom-theme-native-color-scheme); }
+.remote-shell .theme-settings-panel .translation-settings__field select { border-color: var(--translation-menu-border); background: var(--translation-menu-control); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
+.remote-shell .theme-settings-panel .translation-settings__field select option { background: var(--translation-menu-popup); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
+.remote-shell .theme-settings-panel .translation-settings__field select option:is(:checked, :hover) { background: var(--translation-menu-selected); color: var(--translation-menu-selected-text); }
 @media (max-width: 700px) {
   .theme-settings-panel .theme-custom-controls { margin-inline: 16px; }
   .theme-settings-panel .theme-display-controls { padding-inline: 16px; }
