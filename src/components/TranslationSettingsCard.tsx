@@ -1,7 +1,6 @@
 import { useEffect, useId, useState, type FormEvent } from 'react'
-import { ChevronDown, Languages, LoaderCircle } from 'lucide-react'
+import { Languages, LoaderCircle } from 'lucide-react'
 import { codexRemoteClient, type TranslationApiProtocol, type TranslationConfigInput, type TranslationConfigResponse, type TranslationProvider } from '../lib/codexRemoteClient'
-import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
 import type { TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSelect } from './TranslationSelect'
 
@@ -234,11 +233,10 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   }
 
   const needsKey = provider !== 'codex' && provider !== 'claude'
-  return <details className="theme-settings-card theme-settings-card--collapsible" open={readSettingsSectionOpen('translation', false)} onToggle={(event) => saveSettingsSectionOpen('translation', event.currentTarget.open)}>
-    <summary className="theme-settings-card__heading theme-settings-card__summary">
+  return <section className="theme-settings-card theme-settings-card--page" aria-label="聊天翻译">
+    <div className="theme-settings-card__heading">
       <div><h2><Languages size={17} aria-hidden="true" />聊天翻译</h2><p>中文草稿预览英文，发送英文；聊天可切换原文和译文。</p></div>
-      <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-    </summary>
+    </div>
     <div className="translation-settings">
       <section className="translation-settings__group" aria-label="翻译行为">
         <h3>翻译行为</h3>
@@ -291,5 +289,5 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
         {notice ? <p role="status" className="translation-settings__hint">{notice}</p> : null}
       </form>
     </div>
-  </details>
+  </section>
 }

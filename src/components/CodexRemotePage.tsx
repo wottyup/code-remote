@@ -25,11 +25,16 @@ import {
   FolderOpen,
   FolderPlus,
   ImagePlus,
+  Info,
+  Keyboard,
+  Languages,
   Link2,
   LoaderCircle,
   Menu,
+  Monitor,
   MessageSquarePlus,
   MessagesSquare,
+  Palette,
   Pause,
   Pencil,
   Pin,
@@ -69,7 +74,7 @@ import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBac
 import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
 import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
-import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
+import { readActiveSettingsSection, saveActiveSettingsSection, type SettingsSectionId } from '../lib/settingsSectionState'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
@@ -6503,18 +6508,13 @@ function MCPApprovalsCard({ token }: { token: string }) {
     }
   }
 
-  if (loading || (approvals.length === 0 && !error)) return null
-
-  return <details
-    className="theme-settings-card theme-settings-card--collapsible mcp-approvals-card"
-    open={readSettingsSectionOpen('mcp-approvals')}
-    onToggle={(event) => saveSettingsSectionOpen('mcp-approvals', event.currentTarget.open)}
-  >
-    <summary className="theme-settings-card__heading theme-settings-card__summary">
+  return <section className="theme-settings-card theme-settings-card--page mcp-approvals-card" aria-label="MCP 自动批准">
+    <div className="theme-settings-card__heading">
       <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
-      <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-    </summary>
+    </div>
     <div className="mcp-approvals-body">
+      {loading ? <p className="mcp-approvals-empty" role="status">正在读取授权…</p> : null}
+      {!loading && approvals.length === 0 && !error ? <p className="mcp-approvals-empty">还没有「始终允许」的 MCP 授权。</p> : null}
       {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
         <div className="mcp-approvals-grant__info">
           <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
@@ -6526,7 +6526,7 @@ function MCPApprovalsCard({ token }: { token: string }) {
       {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{error}</p> : null}
       <p className="mcp-approvals-note">自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。</p>
     </div>
-  </details>
+  </section>
 }
 
 function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
@@ -6548,6 +6548,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   const [notificationRequestPending, setNotificationRequestPending] = useState(false)
   const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
+  const [activeSection, setActiveSection] = useState<SettingsSectionId>(readActiveSettingsSection)
+  const settingsNavRef = useRef<HTMLElement>(null)
+  const settingsContentRef = useRef<HTMLDivElement>(null)
   const backgroundCropDrag = useRef<{
     pointerId: number
     clientX: number
@@ -6568,6 +6571,48 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
     { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
   ]
+  const navigationGroups: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: ReactNode }> }> = [
+    { label: '外观', items: [
+      { id: 'theme', label: '主题', icon: <Palette size={17} /> },
+      { id: 'display', label: '显示', icon: <Monitor size={17} /> },
+    ] },
+    { label: '聊天', items: [
+      { id: 'translation', label: '聊天翻译', icon: <Languages size={17} /> },
+      { id: 'chat-shortcuts', label: '切换快捷键', icon: <Keyboard size={17} /> },
+    ] },
+    { label: '连接', items: [
+      { id: 'cpa-manager', label: 'CPA 统计接入', icon: <Link2 size={17} /> },
+      { id: 'mcp-approvals', label: 'MCP 自动批准', icon: <ShieldCheck size={17} /> },
+    ] },
+    { label: '其他', items: [
+      { id: 'system-notifications', label: '系统通知', icon: <Bell size={17} /> },
+      { id: 'about', label: '关于', icon: <Info size={17} /> },
+    ] },
+  ]
+
+  useLayoutEffect(() => {
+    const nav = settingsNavRef.current
+    const selected = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!nav || !selected) return
+
+    const navBounds = nav.getBoundingClientRect()
+    const selectedBounds = selected.getBoundingClientRect()
+    if (selectedBounds.left < navBounds.left) nav.scrollLeft -= navBounds.left - selectedBounds.left + 12
+    if (selectedBounds.right > navBounds.right) nav.scrollLeft += selectedBounds.right - navBounds.right + 12
+    if (selectedBounds.top < navBounds.top) nav.scrollTop -= navBounds.top - selectedBounds.top + 12
+    if (selectedBounds.bottom > navBounds.bottom) nav.scrollTop += selectedBounds.bottom - navBounds.bottom + 12
+  }, [activeSection])
+
+  function selectSection(sectionId: SettingsSectionId) {
+    if (sectionId === activeSection) return
+    if (activeSection === 'chat-shortcuts' && recordingShortcut) {
+      setRecordingShortcut(null)
+      setShortcutMessage('已取消录制。')
+    }
+    setActiveSection(sectionId)
+    saveActiveSettingsSection(sectionId)
+    settingsContentRef.current?.scrollTo({ top: 0 })
+  }
 
   useEffect(() => {
     if (!recordingShortcut) return
@@ -6718,30 +6763,47 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   }
 
   return (
-    <main className="theme-settings-panel" aria-label="设置">
+    <main className="theme-settings-panel theme-settings-panel--navigation" aria-label="设置">
       <header className="theme-settings-panel__header">
         <div>
           <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
           <h1>设置</h1>
-          <p>界面偏好保存在当前设备。</p>
+          <p>管理界面、聊天与连接选项。</p>
         </div>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
 
-      <div className="theme-settings-panel__content">
-        <MCPApprovalsCard token={token} />
-        <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
-        <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
+      <div className="theme-settings-panel__layout">
+        <nav className="theme-settings-panel__nav" ref={settingsNavRef} aria-label="设置分类">
+          {navigationGroups.map((group) => <div className="theme-settings-panel__nav-group" key={group.label}>
+            <h2>{group.label}</h2>
+            {group.items.map((item) => <button
+              className={`theme-settings-panel__nav-item${activeSection === item.id ? ' theme-settings-panel__nav-item--active' : ''}`}
+              key={item.id}
+              type="button"
+              aria-current={activeSection === item.id ? 'page' : undefined}
+              aria-controls={`settings-section-${item.id}`}
+              onClick={() => selectSection(item.id)}
+            >{item.icon}<span>{item.label}</span></button>)}
+          </div>)}
+        </nav>
+        <div className="theme-settings-panel__content" ref={settingsContentRef}>
+        <div id="settings-section-mcp-approvals" className="theme-settings-panel__section" hidden={activeSection !== 'mcp-approvals'}>
+          <MCPApprovalsCard token={token} />
+        </div>
+        <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
+          <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+        </div>
+        <div id="settings-section-translation" className="theme-settings-panel__section" hidden={activeSection !== 'translation'}>
+          <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
+        </div>
+        <div id="settings-section-theme" className="theme-settings-panel__section" hidden={activeSection !== 'theme'}>
 
-        <details
-          className="theme-settings-card theme-settings-card--collapsible"
-          open={readSettingsSectionOpen('theme', true)}
-          onToggle={(event) => saveSettingsSectionOpen('theme', event.currentTarget.open)}
-        >
-          <summary className="theme-settings-card__heading theme-settings-card__summary">
+        <section className="theme-settings-card theme-settings-card--page" aria-label="主题">
+          <div className="theme-settings-card__heading">
             <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div>
-            <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-          </summary>
+            <span className="theme-settings-card__badge">即时预览</span>
+          </div>
           <div className="theme-options" role="radiogroup" aria-label="界面主题">
             {themeOptions.map((option) => (
               <button
@@ -6875,17 +6937,15 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
             </div>
           ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
-        </details>
+        </section>
+        </div>
 
-        <details
-          className="theme-settings-card theme-settings-card--collapsible"
-          open={readSettingsSectionOpen('display')}
-          onToggle={(event) => saveSettingsSectionOpen('display', event.currentTarget.open)}
-        >
-          <summary className="theme-settings-card__heading theme-settings-card__summary">
+        <div id="settings-section-display" className="theme-settings-panel__section" hidden={activeSection !== 'display'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label="显示">
+          <div className="theme-settings-card__heading">
             <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div>
-            <span className="theme-settings-card__summary-actions"><span className="theme-settings-card__badge">即时预览</span><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-          </summary>
+            <span className="theme-settings-card__badge">即时预览</span>
+          </div>
           <div className="theme-display-controls theme-display-controls--typography">
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
@@ -6896,23 +6956,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label="全局字间距" /><output>{letterSpacingPercent}%</output></span>
             </label>
           </div>
-        </details>
+        </section>
+        </div>
 
-        <details
-          className="theme-settings-card theme-settings-card--collapsible"
-          open={readSettingsSectionOpen('chat-shortcuts')}
-          onToggle={(event) => {
-            saveSettingsSectionOpen('chat-shortcuts', event.currentTarget.open)
-            if (!event.currentTarget.open && recordingShortcut) {
-              setRecordingShortcut(null)
-              setShortcutMessage('已取消录制。')
-            }
-          }}
-        >
-          <summary className="theme-settings-card__heading theme-settings-card__summary">
+        <div id="settings-section-chat-shortcuts" className="theme-settings-panel__section" hidden={activeSection !== 'chat-shortcuts'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label="聊天切换快捷键">
+          <div className="theme-settings-card__heading">
             <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
-            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-          </summary>
+          </div>
           <div className="theme-display-controls sidebar-chat-shortcut-controls">
             <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button></div>
             {(['previous', 'next'] as const).map((action) => {
@@ -6934,17 +6985,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           </div>
           <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
           {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
-        </details>
+        </section>
+        </div>
 
-        <details
-          className="theme-settings-card theme-settings-card--collapsible"
-          open={readSettingsSectionOpen('system-notifications')}
-          onToggle={(event) => saveSettingsSectionOpen('system-notifications', event.currentTarget.open)}
-        >
-          <summary className="theme-settings-card__heading theme-settings-card__summary">
+        <div id="settings-section-system-notifications" className="theme-settings-panel__section" hidden={activeSection !== 'system-notifications'}>
+        <section className="theme-settings-card theme-settings-card--page" aria-label="系统通知">
+          <div className="theme-settings-card__heading">
             <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div>
-            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-          </summary>
+          </div>
           <div className="theme-display-controls">
             <div className="theme-control-row">
               <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
@@ -6961,17 +7009,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
             </div>
             {notificationError ? <p className="theme-notification-error" role="alert">{notificationError}</p> : null}
           </div>
-        </details>
+        </section>
+        </div>
 
-        <details
-          className="theme-settings-card theme-settings-card--collapsible theme-about-card"
-          open={readSettingsSectionOpen('about')}
-          onToggle={(event) => saveSettingsSectionOpen('about', event.currentTarget.open)}
-        >
-          <summary className="theme-settings-card__heading theme-settings-card__summary">
+        <div id="settings-section-about" className="theme-settings-panel__section" hidden={activeSection !== 'about'}>
+        <section className="theme-settings-card theme-settings-card--page theme-about-card" aria-label="关于">
+          <div className="theme-settings-card__heading">
             <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2><p>项目介绍、源代码与更新。</p></div>
-            <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-          </summary>
+          </div>
           <div className="theme-about-card__body">
             <img className="theme-about-card__logo" src="/code-remote.png" alt="Code Remote Logo" />
             <strong className="theme-about-card__name">Code Remote</strong>
@@ -6981,7 +7026,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               <span>https://github.com/sevencnup/code-remote</span>
             </a>
           </div>
-        </details>
+        </section>
+        </div>
+        </div>
       </div>
     </main>
   )
