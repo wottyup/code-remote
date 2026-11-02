@@ -6120,11 +6120,31 @@ class MainActivity : Activity() {
                     }.apply {
                         isVerticalScrollBarEnabled = false
                         overScrollMode = View.OVER_SCROLL_NEVER
+                        isNestedScrollingEnabled = true
                         background = rounded(PANEL_INSET, dp(6), BORDER, dp(1))
                         addView(label(output, 11, TEXT, translateUi = false, pixelize = false).apply {
                             typeface = Typeface.MONOSPACE
                             setPadding(dp(8), dp(6), dp(8), dp(6))
                         })
+                        var previousY = 0f
+                        setOnTouchListener { view, event ->
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    previousY = event.y
+                                    view.parent?.requestDisallowInterceptTouchEvent(
+                                        view.canScrollVertically(-1) || view.canScrollVertically(1),
+                                    )
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    val direction = if (event.y < previousY) 1 else -1
+                                    view.parent?.requestDisallowInterceptTouchEvent(view.canScrollVertically(direction))
+                                    previousY = event.y
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                            false
+                        }
                     }
                     copy.addView(outputScroll, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
                 }
