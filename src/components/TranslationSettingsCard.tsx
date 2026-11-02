@@ -3,6 +3,7 @@ import { ChevronDown, Languages, LoaderCircle } from 'lucide-react'
 import { codexRemoteClient, type TranslationApiProtocol, type TranslationConfigInput, type TranslationConfigResponse, type TranslationProvider } from '../lib/codexRemoteClient'
 import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
 import type { TranslationPreferences } from '../lib/translationPreferences'
+import { TranslationSelect } from './TranslationSelect'
 
 const choices: Array<{ value: TranslationProvider; label: string }> = [
   { value: 'microsoft', label: 'Microsoft Translator' },
@@ -19,6 +20,16 @@ const protocolChoices: Array<{ value: TranslationApiProtocol; label: string }> =
   { value: 'chat', label: 'Chat Completions' },
   { value: 'responses', label: 'OpenAI Responses' },
   { value: 'anthropic', label: 'Anthropic Messages' },
+]
+
+const styleChoices = [
+  { value: 'natural', label: '自然美式英语' },
+  { value: 'formal', label: '正式美式英语' },
+]
+
+const planChoices = [
+  { value: 'free', label: 'API Free' },
+  { value: 'pro', label: 'API Pro' },
 ]
 
 function isApiProtocol(value: TranslationProvider): value is TranslationApiProtocol {
@@ -52,6 +63,11 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
   const current = selectedId ? profiles.find((profile) => profile.id === selectedId) : fallbackProfile
   const missingSelection = Boolean(configuration && selectedId && !current)
   const selectedProtocolTarget = protocolTarget === provider ? (provider === 'chat' ? 'responses' : 'chat') : protocolTarget
+  const profileChoices = [
+    ...(!configuration ? [{ value: selectedId ?? '', label: '正在读取配置…' }] : []),
+    ...(missingSelection && selectedId ? [{ value: selectedId, label: '原配置已删除，请重新选择' }] : []),
+    ...profiles.map((profile) => ({ value: profile.id, label: `${profile.name}${profile.configured ? '' : ' · 待配置'}` })),
+  ]
 
   useEffect(() => {
     let cancelled = false
@@ -237,23 +253,16 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
       </section>
       <section className="translation-settings__group" aria-label="翻译方式">
         <h3>翻译方式</h3>
-        <label className="translation-settings__field"><span>英文表达</span><select value={preferences.style} disabled={busyAction !== null} onChange={(event) => onChange({ ...preferences, style: event.currentTarget.value === 'formal' ? 'formal' : 'natural' })}><option value="natural">自然美式英语</option><option value="formal">正式美式英语</option></select></label>
+        <TranslationSelect label="英文表达" value={preferences.style} options={styleChoices} disabled={busyAction !== null} onChange={(next) => onChange({ ...preferences, style: next === 'formal' ? 'formal' : 'natural' })} />
       </section>
       <form className="translation-settings__config" onSubmit={(event) => void save(event)}>
         <div className="translation-settings__config-heading"><h3>接口配置</h3><span>{choices.find((choice) => choice.value === provider)?.label} · {current?.configured ? '已配置' : '待配置'}</span></div>
-        <label className="translation-settings__field"><span>翻译引擎（选择已有配置）</span><select value={provider} disabled={busyAction !== null} onChange={(event) => selectProvider(event.currentTarget.value as TranslationProvider)}>{choices.map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
+        <TranslationSelect label="翻译引擎（选择已有配置）" value={provider} options={choices} disabled={busyAction !== null} onChange={(next) => selectProvider(next as TranslationProvider)} />
         {moveOffer?.target === provider ? <div className="translation-settings__transfer">
           <p className="translation-settings__hint">刚才使用的是“{moveOffer.name}”。要将它改为当前协议并保留地址、模型和密钥吗？</p>
           <div className="translation-settings__actions"><button type="button" disabled={busyAction !== null} onClick={() => void moveProfile(moveOffer.source, moveOffer.profileId, moveOffer.target)}>{busyAction === 'move' ? <LoaderCircle className="spin" size={14} /> : null}沿用刚才的配置</button><button type="button" disabled={busyAction !== null} onClick={() => setMoveOffer(null)}>使用当前协议已有配置</button></div>
         </div> : null}
-        <label className="translation-settings__field">
-          <span>使用的配置</span>
-          <select value={selectedId ?? current?.id ?? ''} disabled={!configuration || busyAction !== null} onChange={(event) => selectProfile(event.currentTarget.value)}>
-            {!configuration ? <option value={selectedId ?? ''}>正在读取配置…</option> : null}
-            {missingSelection ? <option value={selectedId}>原配置已删除，请重新选择</option> : null}
-            {profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}{profile.configured ? '' : ' · 待配置'}</option>)}
-          </select>
-        </label>
+        <TranslationSelect label="使用的配置" value={selectedId ?? current?.id ?? ''} options={profileChoices} disabled={!configuration || busyAction !== null} onChange={selectProfile} />
         <div className="translation-settings__actions">
           <button type="button" disabled={!configuration || profiles.length >= 30 || busyAction !== null} onClick={() => void createProfile(false)}>{busyAction === 'create' ? <LoaderCircle className="spin" size={14} /> : null}新建配置</button>
           <button type="button" disabled={!current || profiles.length >= 30 || busyAction !== null} onClick={() => void createProfile(true)}>{busyAction === 'copy' ? <LoaderCircle className="spin" size={14} /> : null}复制当前</button>
@@ -266,13 +275,13 @@ export function TranslationSettingsCard({ token, preferences, onChange, onConfig
         <label className="translation-settings__field"><span>配置名称</span><input value={nameDraft} maxLength={60} required disabled={!current || busyAction !== null} onChange={(event) => setNameDraft(event.currentTarget.value)} placeholder="例如工作接口" /></label>
         {needsKey ? <label className="translation-settings__field"><span>接口密钥 {current?.hasKey ? '（已保存，留空不修改）' : ''}</span><input type="password" autoComplete="off" disabled={!current || busyAction !== null} value={keyDraft} onChange={(event) => setKeyDraft(event.currentTarget.value)} placeholder={current?.hasKey ? '已保存密钥' : '填写接口密钥'} /></label> : null}
         {provider === 'microsoft' ? <label className="translation-settings__field"><span>资源区域（按 Azure 资源填写）</span><input disabled={!current || busyAction !== null} value={regionDraft} onChange={(event) => setRegionDraft(event.currentTarget.value)} placeholder="例如 eastus" /></label> : null}
-        {provider === 'deepl' ? <label className="translation-settings__field"><span>账户类型</span><select disabled={!current || busyAction !== null} value={planDraft} onChange={(event) => setPlanDraft(event.currentTarget.value)}><option value="free">API Free</option><option value="pro">API Pro</option></select></label> : null}
+        {provider === 'deepl' ? <TranslationSelect label="账户类型" value={planDraft} options={planChoices} disabled={!current || busyAction !== null} onChange={setPlanDraft} /> : null}
         {provider === 'chat' || provider === 'anthropic' || provider === 'responses' ? <><label className="translation-settings__field"><span>{provider === 'anthropic' ? '接口地址（留空使用 Anthropic 官方地址）' : provider === 'responses' ? '接口地址（留空使用 OpenAI 官方地址）' : '接口地址'}</span><input type="url" disabled={!current || busyAction !== null} value={baseUrlDraft} onChange={(event) => setBaseUrlDraft(event.currentTarget.value)} placeholder={provider === 'anthropic' ? 'https://api.anthropic.com' : provider === 'responses' ? 'https://api.openai.com/v1' : 'https://example.com/v1'} /></label><label className="translation-settings__field"><span>模型名称</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="输入接口支持的模型 ID" /></label></> : null}
         {provider === 'responses' ? <p className="translation-settings__hint">第三方接口需开启 Responses 路由；地址支持 API 根地址、/v1 或完整 /responses 地址。</p> : null}
         {provider === 'chat' ? <p className="translation-settings__hint">地址支持 API 根地址、/v1 或完整 /chat/completions 地址；根地址会优先使用 /v1 路由。</p> : null}
         {provider === 'codex' || provider === 'claude' ? <label className="translation-settings__field"><span>模型名称（留空使用默认模型）</span><input disabled={!current || busyAction !== null} value={modelDraft} onChange={(event) => setModelDraft(event.currentTarget.value)} placeholder="默认模型" /></label> : null}
         {isApiProtocol(provider) && current ? <div className="translation-settings__transfer">
-          <label className="translation-settings__field"><span>更改当前配置的协议</span><select value={selectedProtocolTarget} disabled={busyAction !== null} onChange={(event) => setProtocolTarget(event.currentTarget.value as TranslationApiProtocol)}>{protocolChoices.filter((choice) => choice.value !== provider).map((choice) => <option key={choice.value} value={choice.value}>{choice.label}</option>)}</select></label>
+          <TranslationSelect label="更改当前配置的协议" value={selectedProtocolTarget} options={protocolChoices.filter((choice) => choice.value !== provider)} disabled={busyAction !== null} onChange={(next) => setProtocolTarget(next as TranslationApiProtocol)} />
           <div className="translation-settings__actions"><button type="button" disabled={busyAction !== null || (configuration?.providers[selectedProtocolTarget]?.profiles.length ?? 0) >= 30} onClick={() => void moveProfile(provider, current.id, selectedProtocolTarget, { name: nameDraft, ...configDraft() })}>{busyAction === 'move' ? <LoaderCircle className="spin" size={14} /> : null}更改协议并保留配置</button></div>
           <p className="translation-settings__hint">会把这套配置移到新协议；已保存的密钥无需重新输入。不同接口可能仍需修改模型或地址。</p>
         </div> : null}

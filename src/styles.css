@@ -4084,6 +4084,26 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell .theme-settings-panel .translation-settings__field select { border-color: var(--translation-menu-border); background: var(--translation-menu-control); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
 .remote-shell .theme-settings-panel .translation-settings__field select option { background: var(--translation-menu-popup); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
 .remote-shell .theme-settings-panel .translation-settings__field select option:is(:checked, :hover) { background: var(--translation-menu-selected); color: var(--translation-menu-selected-text); }
+.translation-select__trigger { display: flex; width: 100%; min-height: 42px; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 11px; border: 1px solid; border-radius: 9px; cursor: pointer; font: inherit; text-align: left; }
+.remote-shell .theme-settings-panel .translation-select__trigger { border-color: var(--translation-menu-border); background: var(--translation-menu-control); color: var(--translation-menu-text); }
+.translation-select__trigger:hover:not(:disabled), .translation-select__trigger[aria-expanded="true"] { box-shadow: 0 0 0 2px color-mix(in srgb, var(--translation-menu-text) 14%, transparent); }
+.translation-select__trigger:focus-visible { outline: 2px solid var(--translation-menu-border); outline-offset: 2px; }
+.translation-select__trigger:disabled { cursor: not-allowed; opacity: .55; }
+.translation-select__trigger > svg { flex: 0 0 auto; transition: transform .16s ease; }
+.translation-select__trigger[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.translation-select__value { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.remote-shell .theme-settings-panel .translation-select__menu { position: fixed; inset: auto; min-width: 0; margin: 0; padding: 6px; overflow-y: auto; overscroll-behavior: contain; border: 1px solid var(--translation-menu-border); border-radius: 11px; background: var(--translation-menu-popup); color: var(--translation-menu-text); box-shadow: 0 18px 42px rgba(0, 0, 0, .28); }
+.translation-select__menu:popover-open { display: grid; align-content: start; gap: 3px; }
+.translation-select__option { display: flex; width: 100%; min-height: 38px; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 11px; border: 0; border-radius: 7px; cursor: pointer; font: inherit; font-size: calc(13px + var(--mobile-font-offset)); line-height: 1.4; text-align: left; }
+.remote-shell .theme-settings-panel .translation-select__option { background: transparent; color: var(--translation-menu-text); }
+.remote-shell .theme-settings-panel .translation-select__option:is(:hover, :focus-visible, [aria-selected="true"]) { background: var(--translation-menu-selected); color: var(--translation-menu-selected-text); }
+.translation-select__option:focus-visible { outline: 2px solid var(--translation-menu-border); outline-offset: -2px; }
+.translation-select__option:disabled { cursor: not-allowed; opacity: .5; }
+.translation-select__option > span { min-width: 0; overflow-wrap: anywhere; }
+.translation-select__option > svg { flex: 0 0 auto; }
+.remote-shell--theme-retro .translation-select__menu, .remote-shell--theme-retro .translation-select__option { border-radius: 2px; }
+.remote-shell--theme-pixel .translation-select__menu, .remote-shell--theme-pixel .translation-select__option { border-radius: 0; box-shadow: none; }
+.remote-shell--theme-chinese-retro .translation-select__menu, .remote-shell--theme-chinese-retro .translation-select__option { border-radius: 4px; }
 @media (max-width: 700px) {
   .theme-settings-panel .theme-custom-controls { margin-inline: 16px; }
   .theme-settings-panel .theme-display-controls { padding-inline: 16px; }
@@ -4095,4 +4115,5 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .theme-settings-panel .theme-background-framing { padding: 14px; }
   .translation-settings { gap: 12px; padding: 16px; }
   .translation-settings__group, .translation-settings__config { gap: 14px; padding: 15px; }
+  .translation-select__option { min-height: 44px; }
 }
