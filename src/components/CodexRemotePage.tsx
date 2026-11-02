@@ -6765,11 +6765,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   return (
     <main className="theme-settings-panel theme-settings-panel--navigation" aria-label="设置">
       <header className="theme-settings-panel__header">
-        <div>
-          <span className="theme-settings-panel__eyebrow">PREFERENCES</span>
-          <h1>设置</h1>
-          <p>管理界面、聊天与连接选项。</p>
-        </div>
+        <h1>设置</h1>
         <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
       </header>
 
