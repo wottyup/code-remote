@@ -4100,6 +4100,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .translation-select__option:focus-visible { outline: 2px solid var(--translation-menu-border); outline-offset: -2px; }
 .translation-select__option:disabled { cursor: not-allowed; opacity: .5; }
 .translation-select__option > span { min-width: 0; overflow-wrap: anywhere; }
+.remote-shell .theme-settings-panel .translation-select__menu .translation-select__option > span { color: inherit; }
 .translation-select__option > svg { flex: 0 0 auto; }
 .remote-shell--theme-retro .translation-select__menu, .remote-shell--theme-retro .translation-select__option { border-radius: 2px; }
 .remote-shell--theme-pixel .translation-select__menu, .remote-shell--theme-pixel .translation-select__option { border-radius: 0; box-shadow: none; }
