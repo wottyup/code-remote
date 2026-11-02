@@ -6581,7 +6581,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       { id: 'chat-shortcuts', label: '切换快捷键', icon: <Keyboard size={17} /> },
     ] },
     { label: '连接', items: [
-      { id: 'cpa-manager', label: 'CPA 统计接入', icon: <Link2 size={17} /> },
+      { id: 'cpa-manager', label: 'token使用量查询', icon: <Link2 size={17} /> },
       { id: 'mcp-approvals', label: 'MCP 自动批准', icon: <ShieldCheck size={17} /> },
     ] },
     { label: '其他', items: [

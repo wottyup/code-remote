@@ -61,9 +61,9 @@ export function CPAUsageSettingsCard({
   }
 
   return (
-    <section className="theme-settings-card theme-settings-card--page" aria-label="CPA Manager Server 接入">
+    <section className="theme-settings-card theme-settings-card--page" aria-label="token使用量查询">
       <div className="theme-settings-card__heading">
-        <div><h2><Link2 size={16} />CPA Manager Server 接入</h2><p>测试 Full Mode 统计接口连通性，并连接 Token 用量数据源。</p></div>
+        <div><h2><Link2 size={16} />token使用量查询</h2><p>测试 Full Mode 统计接口连通性，并连接 Token 用量数据源。</p></div>
       </div>
       <div className="theme-custom-controls cpa-usage-settings-controls">
         <label className="theme-control-row theme-control-row--stacked">
