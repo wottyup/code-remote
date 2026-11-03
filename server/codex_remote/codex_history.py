@@ -302,6 +302,7 @@ class CodexHistoryStore:
         latest_user_text = projected.get("preview", "") if projected else ""
         first_time: str | None = None
         model: str | None = None
+        turn_metadata: dict[str, dict[str, str]] = {}
         active_turn_id: str | None = turn_order[-1] if turn_order else None
 
         try:
@@ -336,6 +337,20 @@ class CodexHistoryStore:
                     candidate_model = payload.get("model")
                     if isinstance(candidate_model, str) and candidate_model:
                         model = candidate_model
+                    context_turn_id = payload.get("turn_id", payload.get("turnId"))
+                    if not isinstance(context_turn_id, str) or not context_turn_id:
+                        context_turn_id = active_turn_id
+                    metadata: dict[str, str] = {}
+                    if isinstance(candidate_model, str) and candidate_model:
+                        metadata["model"] = candidate_model
+                    candidate_effort = payload.get("effort", payload.get("reasoning_effort"))
+                    if isinstance(candidate_effort, str) and candidate_effort:
+                        metadata["effort"] = candidate_effort
+                    if context_turn_id and metadata:
+                        turn_metadata[context_turn_id] = metadata
+                        existing_turn = turns.get(context_turn_id)
+                        if existing_turn is not None:
+                            existing_turn.update(metadata)
 
                 event_type = payload.get("type")
                 turn_id = payload.get("turn_id")
@@ -359,10 +374,13 @@ class CodexHistoryStore:
                         "completedAt": None,
                         "durationMs": None,
                     }
+                    turn.update(turn_metadata.get(turn_id, {}))
                     turns[turn_id] = turn
                     turn_order.append(turn_id)
                 elif turn.get("startedAt") is None and timestamp:
                     turn["startedAt"] = timestamp
+                if turn_metadata.get(turn_id):
+                    turn.update(turn_metadata[turn_id])
 
                 if event_type == "item_completed":
                     item = payload.get("item")

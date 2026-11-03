@@ -106,6 +106,8 @@ export interface CodexMessage {
   sourceItemId?: string
   role: 'user' | 'assistant'
   text: string
+  model?: string
+  effort?: string
   originalText?: string
   createdAt: string
   sentAt?: string
@@ -468,6 +470,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
     const turnId = typeof turn.id === 'string' ? turn.id : undefined
+    const turnModel = typeof turn.model === 'string' && turn.model ? turn.model : undefined
+    const turnEffort = typeof turn.effort === 'string' && turn.effort
+      ? turn.effort
+      : typeof turn.reasoningEffort === 'string' && turn.reasoningEffort ? turn.reasoningEffort : undefined
     const turnStartedAt = parsedTimestampFromFields(turn, 'startedAt', 'started_at', 'startedAtMs', 'started_at_ms', 'createdAt', 'created_at')
     const turnCompletedAt = parsedTimestampFromFields(turn, 'completedAt', 'completed_at', 'completedAtMs', 'completed_at_ms')
     const replyDurationMs = turnStartedAt && turnCompletedAt
@@ -479,6 +485,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const item = itemValue as Record<string, unknown>
       const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
+      const itemModel = typeof item.model === 'string' && item.model ? item.model : turnModel
+      const itemEffort = typeof item.effort === 'string' && item.effort
+        ? item.effort
+        : typeof item.reasoningEffort === 'string' && item.reasoningEffort ? item.reasoningEffort : turnEffort
       const questions = itemType === 'agentmessage' ? parseStructuredAssistantQuestions(item.questions) : []
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
         || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
@@ -510,6 +520,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
           assistantMessage.completedTextLength = assistantMessage.text.length
         }
         if (!itemComplete) assistantMessage.streaming = true
+        if (!assistantMessage.model && itemModel) assistantMessage.model = itemModel
+        if (!assistantMessage.effort && itemEffort) assistantMessage.effort = itemEffort
         if (questions.length > 0) {
           assistantMessage.questions = questions
           assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
@@ -523,6 +535,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: itemType === 'usermessage' ? 'user' : 'assistant',
         text,
+        ...(itemType === 'agentmessage' && itemModel ? { model: itemModel } : {}),
+        ...(itemType === 'agentmessage' && itemEffort ? { effort: itemEffort } : {}),
         createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt ?? turn.started_at),
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),

@@ -373,8 +373,17 @@ class ClaudeCodeServer:
                     "completedAt": message.get("completedAt"),
                     "items": [],
                 }
+                for field in ("model", "effort"):
+                    value = message.get(field)
+                    if isinstance(value, str) and value:
+                        turn[field] = value
                 by_id[turn_id] = turn
                 turns.append(turn)
+            else:
+                for field in ("model", "effort"):
+                    value = message.get(field)
+                    if isinstance(value, str) and value and field not in turn:
+                        turn[field] = value
             if role == "tool":
                 tool_item = message.get("item")
                 if isinstance(tool_item, dict):
@@ -495,7 +504,13 @@ class ClaudeCodeServer:
                 "text": display_text,
                 "createdAt": created_at,
                 "turnId": turn_id,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             })
+            turn_metadata = {
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
+            }
             preview = " ".join(display_text.split())[:400]
             name = row["name"]
             if name == "新对话" and preview:
@@ -517,6 +532,7 @@ class ClaudeCodeServer:
                 "method": "turn/started",
                 "params": {"threadId": thread_id, "turn": {
                     "id": turn_id, "threadId": thread_id, "status": "inProgress", "startedAt": created_at,
+                    **turn_metadata,
                 }},
             })
             await self.emit({
@@ -739,7 +755,7 @@ class ClaudeCodeServer:
                 with suppress(Exception):
                     await self._emit_delta(thread_id, turn_id, assistant_item_id, final_text)
             with suppress(Exception):
-                await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status)
+                await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status, model, effort)
             reply = self._live_replies.get(thread_id)
             if reply and reply["turnId"] == turn_id:
                 self._live_replies.pop(thread_id, None)
@@ -796,6 +812,8 @@ class ClaudeCodeServer:
         text: str,
         completed_at: str,
         status: str,
+        model: str | None,
+        effort: str | None,
     ) -> None:
         row = self._row(thread_id)
         try:
@@ -813,6 +831,8 @@ class ClaudeCodeServer:
                 "completedAt": completed_at,
                 "turnId": turn_id,
                 "status": status,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             })
         preview = row["preview"]
         if text.strip():
@@ -824,7 +844,11 @@ class ClaudeCodeServer:
                 (preview, completed_at, json.dumps(messages, ensure_ascii=False), thread_id),
             )
         await self._notify_threads_changed()
-        item = {"id": assistant_item_id, "type": "agentMessage", "text": text, "status": status}
+        item = {
+            "id": assistant_item_id, "type": "agentMessage", "text": text, "status": status,
+            "model": model if model and model != "default" else "default",
+            "effort": effort or "default",
+        }
         await self.emit({
             "type": "notification", "method": "item/completed",
             "params": {"threadId": thread_id, "turnId": turn_id, "item": item},
@@ -833,6 +857,8 @@ class ClaudeCodeServer:
             "type": "notification", "method": "turn/completed",
             "params": {"threadId": thread_id, "turn": {
                 "id": turn_id, "threadId": thread_id, "status": status, "completedAt": completed_at,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             }},
         })
 

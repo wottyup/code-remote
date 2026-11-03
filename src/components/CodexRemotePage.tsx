@@ -4447,6 +4447,12 @@ const RemoteChatPane = memo(function RemoteChatPane({
     ? '已交还给本机'
     : connectionLabel[remote.connection]
   const activeEngineLabel = remote.activeEngine === 'claude-code' ? 'Claude Code' : 'Codex'
+  const assistantModelOptions = useMemo<ComposerMenuOption[]>(() => remote.activeEngine === 'claude-code'
+    ? claudeModelOptions
+    : remote.models.flatMap((model) => {
+      const id = modelIdOf(model)
+      return id ? [{ value: id, label: modelLabelOf(model) }] : []
+    }), [remote.activeEngine, remote.models])
   const targetEngine = remote.activeEngine === 'claude-code' ? 'codex' : 'claude-code'
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
@@ -4591,6 +4597,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
                   choiceEnabled={active && message.role === 'assistant' && index >= choiceStartIndex}
                   onUseChoices={fillChoiceReply}
                   onSendChoices={sendChoiceReply}
+                  assistantModelOptions={assistantModelOptions}
                   copyFeedback={copyFeedback?.id === message.id ? copyFeedback.label : null}
                   onCopy={onCopy}
                   onOpenFile={openChangedFilePreview}
@@ -7819,7 +7826,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   </div>
 }
 
-const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
+const MessageBubble = memo(function MessageBubble({ token, translation, translationRevision, message, originalTextOverride, assistantName, operations, fileChanges, activityTimeline, showOperations, choiceVisible, choiceEnabled, onUseChoices, onSendChoices, assistantModelOptions, copyFeedback, onCopy, onOpenFile, onOpenImage }: {
   token: string
   translation: TranslationPreferences
   translationRevision: number
@@ -7834,6 +7841,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   choiceEnabled?: boolean
   onUseChoices?: (reply: string) => boolean
   onSendChoices?: (reply: string) => Promise<ChoiceReplyDelivery | false>
+  assistantModelOptions: ComposerMenuOption[]
   copyFeedback: string | null
   onCopy: (message: CodexMessage, displayedText?: string) => void | Promise<void>
   onOpenFile: (path: string, diff?: string) => void
@@ -7853,6 +7861,14 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   const choiceCard = choiceGroups.length > 0 && onUseChoices && onSendChoices
     ? <MessageChoiceForm key={JSON.stringify(choiceGroups)} groups={choiceGroups} enabled={Boolean(choiceEnabled)} onUse={onUseChoices} onSend={onSendChoices} />
     : null
+  const assistantModelLabel = message.role === 'assistant' && message.model
+    ? assistantModelOptions.find((option) => option.value === message.model)?.label
+      ?? (message.model === 'default' ? '本机默认模型' : message.model)
+    : null
+  const assistantEffortLabel = message.role === 'assistant' && message.effort
+    ? message.effort === 'default' ? assistantName === 'Claude Code' ? '本机默认' : '默认' : effortLabelOf(message.effort)
+    : null
+  const showAssistantPreferences = message.role === 'assistant' && !message.streaming && Boolean(assistantModelLabel || assistantEffortLabel)
   const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
     && activityTimeline.some((entry) => entry.type === 'message' && entry.itemId === message.choiceItemId && entry.length > 0))
   const promptStart = choiceCard && structuredQuestions && message.choicePromptText
@@ -7899,6 +7915,11 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
         {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
+      {showAssistantPreferences ? (
+        <div className="chat-message__footer chat-message__footer--assistant">
+          <small className="chat-message__assistant-settings">模型 {assistantModelLabel ?? '本机默认模型'} · 思考 {assistantEffortLabel ?? (assistantName === 'Claude Code' ? '本机默认' : '默认')}</small>
+        </div>
+      ) : null}
       {message.role === 'user' && (sentAtLabel || showCopyAction) ? (
         <div className="chat-message__footer">
           {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
