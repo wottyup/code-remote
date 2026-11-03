@@ -10600,7 +10600,7 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
-        terminalHandoffHint = label("AI 控制中。关闭终端后在聊天发送任务；要手动输入请先收回控制。", 10, SUBTLE).apply {
+        terminalHandoffHint = label("AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。", 10, SUBTLE).apply {
             visibility = View.GONE
             setPadding(dp(3), 0, dp(3), dp(4))
         }
@@ -10709,10 +10709,6 @@ class MainActivity : Activity() {
     }
 
     private fun focusTerminalInput() {
-        if (terminalHandoffEnabled || terminalHandoffBusy) {
-            showToast("AI 控制中，请先收回终端控制权")
-            return
-        }
         val input = terminalInputSink ?: return
         if (!terminalReady) {
             terminalInputFocusPending = true
@@ -10798,7 +10794,7 @@ class MainActivity : Activity() {
             setTextColor(if (terminalHandoffEnabled) ACCENT else SUBTLE)
         }
         terminalHandoffHint?.visibility = if (terminalHandoffEnabled) View.VISIBLE else View.GONE
-        val allowManualInput = !terminalHandoffEnabled && !terminalHandoffBusy
+        val allowManualInput = terminalReady
         if (!allowManualInput) {
             terminalInputFocusPending = false
             terminalInputSink?.let { input ->
@@ -10835,7 +10831,7 @@ class MainActivity : Activity() {
             if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
             terminalHandoffBusy = false
             applyTerminalHandoffStatus(result)
-            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，请在聊天发送任务" else "已收回终端控制权")
+            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，需要密码时可直接输入" else "已收回终端控制权")
             scheduleTerminalHandoffRefresh()
         }, { error ->
             if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
@@ -11092,7 +11088,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendTerminalInput(value: String): Boolean {
-        if (!terminalReady || terminalHandoffEnabled || terminalHandoffBusy) return false
+        if (!terminalReady) return false
         val sent = terminalSocket?.send(JSONObject().put("type", "input").put("data", value).toString()) == true
         if (!sent) terminalReady = false
         return sent

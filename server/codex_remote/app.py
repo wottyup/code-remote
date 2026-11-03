@@ -2825,7 +2825,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 if not isinstance(payload, dict):
                     continue
                 if payload.get("type") == "input" and isinstance(payload.get("data"), str):
-                    if not thread_id or not terminal_handoff.is_enabled(thread_id):
+                    if thread_id:
+                        await terminal_handoff.write_manual_input(thread_id, payload["data"], terminal_session.write)
+                    else:
                         await terminal_session.write(payload["data"])
                 elif payload.get("type") == "resize":
                     await terminal_session.resize(payload.get("columns"), payload.get("rows"))
