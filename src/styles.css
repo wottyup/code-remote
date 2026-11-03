@@ -991,7 +991,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .pasted-table-preview__action:hover:not(:disabled), .pasted-table-preview__remove:hover:not(:disabled) { background: var(--pasted-table-head); }
 .pasted-table-preview__action:focus-visible, .pasted-table-preview__remove:focus-visible, .pasted-table-preview__scroll:focus-visible, .pasted-table-preview__source:focus-visible { outline: 2px solid currentColor; outline-offset: -2px; }
 .pasted-table-preview__action:disabled, .pasted-table-preview__remove:disabled { cursor: not-allowed; opacity: .45; }
-.pasted-table-preview__scroll { width: 100%; max-height: 240px; overflow: auto; overscroll-behavior-x: contain; scrollbar-width: thin; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; }
+.pasted-table-preview__scroll { width: 100%; max-height: 240px; overflow: auto; overscroll-behavior-x: contain; scrollbar-width: none; -webkit-overflow-scrolling: touch; touch-action: pan-x pan-y; }
+.pasted-table-preview__scroll::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .pasted-table-preview__table { min-width: 100%; margin: 0; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; }
 .pasted-table-preview__table + .pasted-table-preview__table { margin-top: 8px; border-top: 1px solid var(--pasted-table-border); }
 .pasted-table-preview__table th, .pasted-table-preview__table td { box-sizing: border-box; padding: 7px 9px; border-right: 1px solid var(--pasted-table-border); border-bottom: 1px solid var(--pasted-table-border); overflow-wrap: anywhere; vertical-align: top; white-space: normal; }
