@@ -690,7 +690,7 @@ function modelLabelOf(model: CodexModel) {
 }
 
 function effortLabelOf(effort: string) {
-  return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高' } as Record<string, string>)[effort] ?? effort
+  return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' } as Record<string, string>)[effort] ?? effort
 }
 
 function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachment['mediaType'] | null {
