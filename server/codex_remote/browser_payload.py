@@ -122,7 +122,9 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
     elif item_type == "agentmessage":
         # Async questions are delivered as assistant messages while the turn
         # remains active. Keep their UI data on both history and live events.
-        result.update(_pick(item, ("text", "phase", "delivery", "questions")))
+        result.update(_pick(item, (
+            "text", "phase", "delivery", "questions", "model", "effort", "reasoningEffort", "reasoning_effort",
+        )))
     elif item_type == "filechange":
         result["changes"] = browser_changes(item.get("changes", []))
     elif item_type == "imageview":
@@ -168,7 +170,10 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def browser_turn(turn: dict[str, Any], *, include_items: bool) -> dict[str, Any]:
-    result = _pick(turn, ("id", "threadId", "status", "startedAt", "completedAt", "durationMs", "error"))
+    result = _pick(turn, (
+        "id", "threadId", "status", "startedAt", "completedAt", "durationMs", "error",
+        "model", "effort", "reasoningEffort", "reasoning_effort",
+    ))
     if include_items:
         result["items"] = [
             browser_item(item)

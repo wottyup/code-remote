@@ -137,6 +137,7 @@ class CodexHistoryStore:
         self._internal_thread_ids: set[str] = set()
         self._projection_lock = threading.RLock()
         self._browser_items: OrderedDict[tuple[str, str, str, int], dict[str, Any]] = OrderedDict()
+        self._turn_metadata_cache: dict[str, tuple[str, dict[str, dict[str, str]]]] = {}
 
     def list_threads(self) -> list[dict[str, Any]]:
         entries = self._load_index_entries()
@@ -220,6 +221,54 @@ class CodexHistoryStore:
         self._path_index = None
         self._index_entries = None
         self._internal_thread_ids = set()
+        self._turn_metadata_cache.clear()
+
+    def _read_turn_metadata(self, path: Path, source_revision: str) -> dict[str, dict[str, str]]:
+        """Read model and reasoning metadata omitted by the SQLite projection.
+
+        The compact browser history path is intentionally built from the local
+        projection database, but that database does not retain ``turn_context``
+        records. Cache this lightweight JSONL scan by rollout revision so normal
+        repeated history reads do not repeatedly walk a large conversation.
+        """
+        cache_key = str(path)
+        cached = self._turn_metadata_cache.get(cache_key)
+        if cached is not None and cached[0] == source_revision:
+            return cached[1]
+        metadata_by_turn: dict[str, dict[str, str]] = {}
+        try:
+            with path.open("rb") as lines:
+                for raw_line in lines:
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    try:
+                        envelope = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(envelope, dict) or envelope.get("type") != "turn_context":
+                        continue
+                    payload = envelope.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    turn_id = payload.get("turn_id", payload.get("turnId"))
+                    if not isinstance(turn_id, str) or not turn_id:
+                        continue
+                    metadata: dict[str, str] = {}
+                    model = payload.get("model")
+                    if isinstance(model, str) and model:
+                        metadata["model"] = model
+                    effort = payload.get(
+                        "effort",
+                        payload.get("reasoning_effort", payload.get("reasoningEffort")),
+                    )
+                    if isinstance(effort, str) and effort:
+                        metadata["effort"] = effort
+                    if metadata:
+                        metadata_by_turn.setdefault(turn_id, {}).update(metadata)
+        except OSError:
+            metadata_by_turn = {}
+        self._turn_metadata_cache[cache_key] = (source_revision, metadata_by_turn)
+        return metadata_by_turn
 
     def thread_revision(self, thread_id: str) -> str | None:
         path = self._load_path_index().get(thread_id)
@@ -504,7 +553,9 @@ class CodexHistoryStore:
             return None
         bounded_limit = max(1, min(int(limit), 100)) if limit is not None else -1
         try:
-            rollout_size = path.stat().st_size
+            source_stat = path.stat()
+            rollout_size = source_stat.st_size
+            source_revision = f"{source_stat.st_mtime_ns}:{source_stat.st_size}"
             with closing(sqlite3.connect(
                 f"file:{self.history_index.as_posix()}?mode=ro", uri=True, timeout=5,
             )) as connection:
@@ -602,6 +653,12 @@ class CodexHistoryStore:
                 "durationMs": row["duration_ms"],
             })
 
+        turn_metadata = self._read_turn_metadata(path, source_revision)
+        for turn in turns:
+            metadata = turn_metadata.get(turn["id"])
+            if metadata:
+                turn.update(metadata)
+
         session_meta = self._read_file_summary(path) or {}
         latest_user_text = ""
         for turn in reversed(turns):
@@ -630,6 +687,7 @@ class CodexHistoryStore:
             "originator": session_meta.get("originator"),
             "source": session_meta.get("source"),
             "cliVersion": session_meta.get("cli_version"),
+            "model": next((turn.get("model") for turn in reversed(turns) if turn.get("model")), None),
             "status": {"type": turns[-1].get("status", "completed")} if turns else {"type": "notLoaded"},
             "turns": turns,
             "totalTurns": total_turns,
