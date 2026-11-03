@@ -997,6 +997,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .pasted-table-preview__table + .pasted-table-preview__table { margin-top: 8px; border-top: 1px solid var(--pasted-table-border); }
 .pasted-table-preview__table th, .pasted-table-preview__table td { box-sizing: border-box; padding: 7px 9px; border-right: 1px solid var(--pasted-table-border); border-bottom: 1px solid var(--pasted-table-border); overflow-wrap: anywhere; vertical-align: top; white-space: normal; }
 .pasted-table-preview__table th { position: sticky; z-index: 1; top: 0; background: var(--pasted-table-head); font-weight: 620; }
+.pasted-table-preview__table th.pasted-table-preview__edit-cell, .pasted-table-preview__table td.pasted-table-preview__edit-cell { padding: 4px 5px; }
+.pasted-table-preview__cell-input { box-sizing: border-box; display: block; width: 100%; min-width: 180px; min-height: 30px; padding: 5px 7px; border: 1px solid var(--pasted-table-border); border-radius: 5px; background: var(--pasted-table-surface); color: inherit; font: inherit; line-height: 1.4; }
+.pasted-table-preview__cell-input--header { background: var(--pasted-table-head); font-weight: 620; }
+.pasted-table-preview__cell-input:focus { border-color: currentColor; outline: 2px solid currentColor; outline-offset: -2px; }
 .pasted-table-preview__table th:last-child, .pasted-table-preview__table td:last-child { border-right: 0; }
 .pasted-table-preview__fallback { max-height: 240px; margin: 0; padding: 8px 10px; overflow: auto; border-top: 1px solid var(--pasted-table-border); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-composer .pasted-table-preview__source { box-sizing: border-box; display: block; width: 100%; height: 185px; min-height: 120px; max-height: 320px; padding: 9px 10px; overflow: auto; resize: vertical; border: 0; border-top: 1px solid var(--pasted-table-border); border-radius: 0; outline: 0; background: transparent; color: inherit; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
