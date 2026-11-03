@@ -84,6 +84,7 @@ import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
+import { PastedTablePreview } from './PastedTablePreview'
 import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
@@ -292,9 +293,12 @@ const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
 const legacyComposerDraftStorageKey = 'codex-remote.composer-draft'
 const composerDraftStoragePrefix = 'codex-remote.composer-draft.'
+const composerTableDraftStoragePrefix = 'codex-remote.composer-table-draft.'
+const maxComposerTableDraftStorageLength = 2_000_000
 const composerFocusRestoreStorageKey = 'codex-remote.composer-focus-restore'
 const pinnedThreadIdsStorageKey = 'codex-remote.pinned-thread-ids'
 const newThreadComposerDraftScope = 'new'
+const deletedTableDraftScopes = new Set<string>()
 
 function readPinnedThreadIds() {
   if (typeof window === 'undefined') return new Set<string>()
@@ -619,6 +623,56 @@ function saveComposerDraft(scope: string, draft: string) {
   } catch {
     // The composer still works for this session when storage is unavailable.
   }
+}
+
+function composerTableDraftStorageKeyFor(scope: string) {
+  return `${composerTableDraftStoragePrefix}${encodeURIComponent(scope)}`
+}
+
+function readComposerTableDraft(scope: string): CodexDocumentAttachment[] {
+  if (typeof window === 'undefined' || deletedTableDraftScopes.has(scope)) return []
+  try {
+    const raw = window.localStorage.getItem(composerTableDraftStorageKeyFor(scope))
+    if (!raw || raw.length > maxComposerTableDraftStorageLength) return []
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((item): item is CodexDocumentAttachment => item !== null
+      && typeof item === 'object'
+      && item.name === 'pasted-table.md'
+      && typeof item.content === 'string'
+      && !item.sourceFileId).slice(0, maxDocumentsPerTurn)
+  } catch {
+    return []
+  }
+}
+
+function saveComposerTableDraft(scope: string, documents: CodexDocumentAttachment[]) {
+  if (typeof window === 'undefined') return true
+  try {
+    const key = composerTableDraftStorageKeyFor(scope)
+    if (deletedTableDraftScopes.has(scope)) {
+      window.localStorage.removeItem(key)
+      return true
+    }
+    const tables = documents.filter((item) => item.name === 'pasted-table.md' && !item.sourceFileId)
+      .map(({ name, content }) => ({ name, content }))
+    if (tables.length > 0) {
+      const serialized = JSON.stringify(tables)
+      if (serialized.length > maxComposerTableDraftStorageLength) {
+        window.localStorage.removeItem(key)
+        return false
+      }
+      window.localStorage.setItem(key, serialized)
+    } else window.localStorage.removeItem(key)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function forgetComposerTableDraft(scope: string) {
+  deletedTableDraftScopes.add(scope)
+  saveComposerTableDraft(scope, [])
 }
 
 interface ComposerFocusRestoreState {
@@ -1130,7 +1184,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [attachedImages, setAttachedImages] = useState<CodexImageAttachment[]>([])
   const [imagesReady, setImagesReady] = useState(false)
   const [readingImages, setReadingImages] = useState(false)
-  const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>([])
+  const [attachedDocuments, setAttachedDocuments] = useState<CodexDocumentAttachment[]>(() => readComposerTableDraft(draftScope))
   const [readingDocuments, setReadingDocuments] = useState(false)
   const [attachmentError, setAttachmentError] = useState<string | null>(null)
   const [compactLandscape, setCompactLandscape] = useState(() => typeof window !== 'undefined' && isCompactLandscape())
@@ -1176,6 +1230,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const openMenuRef = useRef<'model' | 'effort' | 'approval' | null>(null)
   const composerEngineRef = useRef(composerEngine)
   const draftSaveTimer = useRef<number | undefined>(undefined)
+  const tableDraftSaveTimer = useRef<number | undefined>(undefined)
   const focusRestoreAttempted = useRef(false)
   const resizeState = useRef<{ startY: number; startHeight: number } | null>(null)
   const composerHeightWasResized = useRef(savedComposerHeight?.manuallyResized ?? false)
@@ -1604,6 +1659,31 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     return () => {
       window.removeEventListener('pagehide', persistDraft)
       persistDraft()
+    }
+  }, [draftScope])
+
+  useEffect(() => {
+    if (tableDraftSaveTimer.current !== undefined) window.clearTimeout(tableDraftSaveTimer.current)
+    const documents = editingDraftSnapshot.current?.documents ?? attachedDocuments
+    const timer = window.setTimeout(() => {
+      if (!saveComposerTableDraft(draftScope, documents) && documents.some((item) => item.name === 'pasted-table.md')) {
+        setAttachmentError((current) => current ?? '表格草稿暂未保存，刷新页面后可能无法恢复。')
+      }
+    }, 260)
+    tableDraftSaveTimer.current = timer
+    return () => {
+      if (tableDraftSaveTimer.current !== timer) return
+      window.clearTimeout(timer)
+      tableDraftSaveTimer.current = undefined
+    }
+  }, [attachedDocuments, draftScope, editingQueuedMessageId])
+
+  useLayoutEffect(() => {
+    const persistTables = () => saveComposerTableDraft(draftScope, editingDraftSnapshot.current?.documents ?? attachedDocumentsRef.current)
+    window.addEventListener('pagehide', persistTables)
+    return () => {
+      window.removeEventListener('pagehide', persistTables)
+      persistTables()
     }
   }, [draftScope])
 
@@ -2153,6 +2233,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         activeTextarea.setSelectionRange(cursor, cursor)
       })
     }
+    const appendPastedTable = (value: string) => {
+      if (attachedDocumentsRef.current.length >= maxDocumentsPerTurn) {
+        insertPastedText(value, true)
+        return
+      }
+      appendDocument({ name: 'pasted-table.md', content: value })
+    }
     const directFiles = Array.from(event.clipboardData.files)
     const itemFiles = Array.from(event.clipboardData.items)
       .map((item) => item.kind === 'file' ? item.getAsFile() : null)
@@ -2173,21 +2260,21 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           ? pastedText.slice(0, -(labels.length + 2))
           : pastedText
       const text = copiedMessageText ?? recoverCopiedMessageTextFromImagePaste(pastedText, images) ?? plainText
-      const value = pastedTable ?? text
-      if (pastedTable && value.length >= longPasteThreshold) appendDocument({ name: 'pasted-table.md', content: value })
-      else if (value) insertPastedText(value, Boolean(pastedTable))
+      if (pastedTable) appendPastedTable(pastedTable)
+      else if (text) insertPastedText(text, false)
       return
     }
     if (copiedMessageText !== null) {
       event.preventDefault()
-      if (copiedMessageText.length >= longPasteThreshold) appendDocument({ name: 'pasted-content.md', content: copiedMessageText })
+      const copiedTable = clipboardTableToMarkdown('', copiedMessageText)
+      if (copiedTable) appendPastedTable(copiedTable)
+      else if (copiedMessageText.length >= longPasteThreshold) appendDocument({ name: 'pasted-content.md', content: copiedMessageText })
       else if (copiedMessageText) insertPastedText(copiedMessageText, false)
       return
     }
     if (pastedTable) {
       event.preventDefault()
-      if (pastedTable.length >= longPasteThreshold) appendDocument({ name: 'pasted-table.md', content: pastedTable })
-      else insertPastedText(pastedTable, true)
+      appendPastedTable(pastedTable)
       return
     }
     if (pastedText.length < longPasteThreshold) return
@@ -2305,9 +2392,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
       {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取图片…</p> : null}
       {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
-      {attachedDocuments.length > 0 ? (
-        <div className="composer-documents" aria-label={`待发送文档 ${attachedDocuments.length} 个`}>
-          {attachedDocuments.map((document, index) => (
+      {attachedDocuments.some((document) => document.name !== 'pasted-table.md' || document.sourceFileId) ? (
+        <div className="composer-documents" aria-label="待发送文档">
+          {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId ? null : (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
               <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 将读取原件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
@@ -2318,6 +2405,23 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               }} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
             </div>
           ))}
+        </div>
+      ) : null}
+      {attachedDocuments.some((document) => document.name === 'pasted-table.md' && !document.sourceFileId) ? (
+        <div className="composer-tables" aria-label="待发送表格">
+          {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
+            ? <PastedTablePreview key={`${editingQueuedMessageId ?? 'draft'}-${document.name}-${index}`} content={document.content} disabled={readingDocuments || sending} onChange={(content) => {
+                const next = [...attachedDocumentsRef.current]
+                if (!next[index]) return
+                next[index] = { ...next[index], content }
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} onRemove={() => {
+                const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
+                attachedDocumentsRef.current = next
+                setAttachedDocuments(next)
+              }} />
+            : null)}
         </div>
       ) : null}
       {queuedMessages.length > 0 ? (
@@ -4935,6 +5039,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     })
     const draftScope = composerDraftScopeForThread(thread.id)
     saveComposerDraft(draftScope, '')
+    forgetComposerTableDraft(draftScope)
     forgetComposerImageDraftTarget(draftScope)
     void saveComposerImageDraft(draftScope, []).catch(() => undefined)
     setWorkspaceDraftSnapshot((current) => current?.scope === draftScope ? null : current)
@@ -7784,7 +7889,9 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
           {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
-        {message.documents?.map((document, index) => <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
+        {message.documents?.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
+          ? <PastedTablePreview key={`${document.name}-${index}`} content={document.content} maxRows={60} />
+          : <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
         {message.role === 'assistant' && (translateAssistant || !message.streaming)
           ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
