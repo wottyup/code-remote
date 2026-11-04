@@ -7059,7 +7059,12 @@ const MessageContent = memo(function MessageContent({ text, hideStandaloneSepara
     <div className="chat-message__content">
       {blocks.map((block, index) => {
         if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
-        const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
+        // Claude can leave whitespace-only text around tool calls. Display the
+        // same paragraph spacing during streaming and after history refresh;
+        // code blocks and user-authored whitespace remain untouched.
+        const value = hideStandaloneSeparators
+          ? stripStandaloneSeparators(block.value).replace(/\r\n?/g, '\n').replace(/\n(?:[\t ]*\n){2,}/g, '\n\n').trim()
+          : block.value
         return value ? renderMessageText(value, `text-${index}`, preferWebUrlLabel) : null
       })}
     </div>
