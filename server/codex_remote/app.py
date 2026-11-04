@@ -57,6 +57,7 @@ from .shared_state import QueueConflictError, SharedQueueService, SharedStateSto
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
 from .native_engine_config import NativeEngineConfigError, NativeEngineConfigStore
 from .native_engine_profiles import NativeEngineProfiles
+from .native_engine_gateway import NativeEngineGateway
 from .native_engine_connection import check_connection as check_native_connection
 from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
@@ -1651,7 +1652,10 @@ class PairingAuth:
         return True
 
 
-def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
+def create_app(
+    workspace: Path | None = None, codex_command: str | None = None, *,
+    native_gateway_url: str = "http://127.0.0.1:18766",
+) -> FastAPI:
     project_root = Path(__file__).resolve().parents[2]
     configured_workspace = resolve_default_workspace(
         project_root,
@@ -1681,7 +1685,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         app_server._history_home / "config.toml",
         claude_code._native_home / "settings.json",
     )
-    native_profiles = NativeEngineProfiles(auth.state_path.parent, native_config)
+    native_gateway = NativeEngineGateway(auth.state_path.parent, native_config, native_gateway_url)
+    native_profiles = NativeEngineProfiles(auth.state_path.parent, native_config, native_gateway)
     native_connection_slots = asyncio.Semaphore(5)
     codex_config_reload_pending = False
     idempotent_requests = IdempotentRequestRegistry()
@@ -1837,7 +1842,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.102.1-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.103.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1850,6 +1855,8 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.terminal_handoff = terminal_handoff
     app.state.translation = translation
     app.state.native_config = native_config
+    app.state.native_profiles = native_profiles
+    app.state.native_gateway = native_gateway
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1905,6 +1912,10 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.post("/native-api/{engine}/{connection_id}/v1/{endpoint:path}")
+    async def native_api_gateway(engine: Literal["codex", "claude"], connection_id: str, endpoint: str, request: Request):
+        return await native_gateway.handle(engine, connection_id, endpoint, request)
 
     async def apply_codex_config() -> dict[str, Any]:
         nonlocal codex_config_reload_pending

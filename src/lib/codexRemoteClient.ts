@@ -104,6 +104,8 @@ export interface NativeEngineConfig {
   profilesRevision: string
   profiles: NativeEngineProfile[]
   activeProfileId: string | null
+  viaGateway?: boolean
+  supportedProtocols?: NativeEngineProtocol[]
 }
 
 export interface NativeEngineProfileSaveResult {

@@ -8,10 +8,15 @@ import json
 import threading
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .native_engine_config import (
     CLAUDE_MODEL_ROLES, NATIVE_PROTOCOLS, NativeEngineConfigError, NativeEngineConfigStore,
 )
+from .native_engine_protocol import PROTOCOLS, normalize_base_url
+
+if TYPE_CHECKING:
+    from .native_engine_gateway import NativeEngineGateway
 
 PROFILE_FIELDS = ("baseUrl", "apiKey", "authMode", "protocol", "model", "models")
 MAX_PROFILES = 30
@@ -24,13 +29,16 @@ def _text(value: object, label: str, limit: int = 256) -> str:
 
 
 class NativeEngineProfiles:
-    def __init__(self, directory: Path, native: NativeEngineConfigStore) -> None:
+    def __init__(self, directory: Path, native: NativeEngineConfigStore, gateway: NativeEngineGateway | None = None) -> None:
         self.directory = directory
         self.native = native
+        self.gateway = gateway
         self._lock = threading.RLock()
 
     def _load(self, engine: str) -> tuple[Path, bytes | None, dict, dict]:
         source = self.native.profile_source(engine)
+        if self.gateway:
+            source = self.gateway.restore(engine, source)
         path = (self.directory / f"native-{engine}-profiles.json").resolve()
         data = self.native._read_bytes(path)
         if data is None:
@@ -85,8 +93,9 @@ class NativeEngineProfiles:
 
     def _public(self, path: Path, data: bytes | None, library: dict, source: dict) -> dict:
         return {
-            **{key: value for key, value in source.items() if key != "apiKey"},
+            **{key: value for key, value in source.items() if key != "apiKey" and not key.startswith("_")},
             "profilesRevision": self._revision(path, data, source),
+            "supportedProtocols": ["responses", "anthropic", "chat"],
             "activeProfileId": self._active_id(library, source),
             "profiles": [
                 {**{key: value for key, value in profile.items() if key != "apiKey"}, "hasKey": bool(profile.get("apiKey"))}
@@ -104,20 +113,21 @@ class NativeEngineProfiles:
         if profile_id and existing is None:
             raise NativeEngineConfigError("该配置已被删除，请重新读取。", conflict=True)
         protocol = draft.get("protocol")
-        if protocol != NATIVE_PROTOCOLS[engine]:
-            label = "OpenAI Responses" if engine == "codex" else "Anthropic Messages"
-            raise NativeEngineConfigError(f"此引擎原生仅支持 {label} 协议。其他协议需要兼容网关转换。")
+        if protocol not in PROTOCOLS:
+            raise NativeEngineConfigError("不支持的接口协议。")
         name = _text(draft.get("name", ""), "配置名称", 80)
         if not name:
             raise NativeEngineConfigError("请填写配置名称。")
         model = _text(draft.get("model", ""), "默认模型")
         if engine == "codex" and not model:
             raise NativeEngineConfigError("请填写 Codex 默认模型的实际请求名称。")
+        if engine == "claude" and protocol != "anthropic" and not model:
+            raise NativeEngineConfigError("跨协议连接请填写默认模型，也可以填写已配置映射的角色名。")
         key = self.native._api_key(self.native._api_key(draft.get("apiKey", "")) or (existing or {}).get("apiKey", ""))
         if not key:
             raise NativeEngineConfigError("请填写此配置的 API 密钥。")
         auth_mode = draft.get("authMode", "bearer")
-        if auth_mode not in {"bearer", "api_key"} or (engine == "codex" and auth_mode != "bearer"):
+        if auth_mode not in {"bearer", "api_key"}:
             raise NativeEngineConfigError("不支持的密钥传递方式。")
         mappings = {}
         if engine == "claude":
@@ -132,14 +142,7 @@ class NativeEngineProfiles:
                     "model": _text(entry.get("model", ""), f"{role.title()} 请求模型"),
                     "displayName": _text(entry.get("displayName", ""), f"{role.title()} 显示名称", 80),
                 }
-        url = self.native._api_url(draft.get("baseUrl", ""))
-        if engine == "claude":
-            for suffix in ("/v1/messages", "/v1"):
-                if url.endswith(suffix):
-                    url = url[:-len(suffix)]
-                    break
-        elif url.endswith("/responses"):
-            url = url[:-len("/responses")]
+        url = normalize_base_url(self.native._api_url(draft.get("baseUrl", "")), protocol)
         return {
             "id": profile_id or uuid.uuid4().hex,
             "name": name,
@@ -178,13 +181,22 @@ class NativeEngineProfiles:
             self.native.atomic_write(path, encoded, self.native._revision(path, data))
             result: dict = {"profileId": profile["id"], "changed": False, "applied": False}
             if apply:
+                prepared = None
                 try:
+                    if self.gateway:
+                        prepared = self.gateway.prepare(engine, profile, source)
+                    elif protocol_requires_gateway(engine, profile):
+                        raise NativeEngineConfigError("此服务尚未启用本机协议转换，请更新并重启后端。")
+                    else:
+                        prepared = profile
                     saved = self.native.save(
-                        engine, profile["baseUrl"], profile["apiKey"], profile["authMode"],
+                        engine, prepared["baseUrl"], prepared["apiKey"], prepared["authMode"],
                         expected_native or "", profile["model"], profile["models"],
                     )
                     result.update(changed=saved["changed"], applied=True)
                 except NativeEngineConfigError as error:
+                    if self.gateway and prepared:
+                        self.gateway.discard_prepared(prepared)
                     # The reusable profile is already safely stored. Report the
                     # partial outcome so the UI never retries a create blindly.
                     result["applyError"] = f"配置已保存，但未应用到 CLI：{error}"
@@ -211,3 +223,7 @@ class NativeEngineProfiles:
             path, data, library, source = self._load(engine)
             self._check_revision(path, data, source, expected)
             return self._draft(engine, draft, library)
+
+
+def protocol_requires_gateway(engine: str, profile: dict) -> bool:
+    return profile["protocol"] != NATIVE_PROTOCOLS[engine] or (engine == "codex" and profile["authMode"] != "bearer")

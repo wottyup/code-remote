@@ -67,6 +67,9 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
   const active = config?.profiles.find((profile) => profile.id === config.activeProfileId)
   const dirty = Boolean(config && JSON.stringify(draft) !== JSON.stringify(draftFor(engine, selected)))
   const disabled = loading || Boolean(busy) || !config
+  const usesGateway = draft.protocol !== (engine === 'codex' ? 'responses' : 'anthropic')
+    || (engine === 'codex' && draft.authMode === 'api_key')
+  const needsBackendUpdate = Boolean(config && usesGateway && !config.supportedProtocols?.includes(draft.protocol))
 
   function receive(response: NativeEngineConfig, preferredId?: string) {
     if (!Array.isArray(response.profiles) || !response.profilesRevision) {
@@ -131,7 +134,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (disabled) return
+    if (disabled || needsBackendUpdate) return
     const apply = ((event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null)?.value !== 'save'
     setBusy(apply ? 'apply' : 'save')
     setMessage(null)
@@ -160,7 +163,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
   }
 
   async function test() {
-    if (disabled || !formRef.current?.reportValidity()) return
+    if (disabled || needsBackendUpdate || !formRef.current?.reportValidity()) return
     const controller = new AbortController()
     testController.current = controller
     setBusy('test')
@@ -216,26 +219,26 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
           <div className="native-config__columns">
             <div className="native-config__field">
               <TranslationSelect label="接口协议" value={draft.protocol} disabled={disabled} onChange={(value) => edit({ protocol: value as Draft['protocol'] })} options={[
-                { value: 'responses', label: `OpenAI Responses${engine === 'codex' ? '' : '（需转换网关）'}`, disabled: engine !== 'codex' },
-                { value: 'anthropic', label: `Anthropic Messages${engine === 'claude' ? '' : '（需转换网关）'}`, disabled: engine !== 'claude' },
-                { value: 'chat', label: 'OpenAI Chat Completions（需转换网关）', disabled: true },
+                { value: 'responses', label: 'OpenAI Responses' },
+                { value: 'anthropic', label: 'Anthropic Messages' },
+                { value: 'chat', label: 'OpenAI Chat Completions' },
               ]} />
-              <small>{engine === 'codex' ? 'Codex CLI 原生使用 Responses 协议。' : 'Claude Code 原生使用 Messages 协议。'}</small>
+              <small>{usesGateway ? '自动适配所选接口；使用期间需保持 Code Remote 后端运行。' : '直接使用所选协议连接接口。'}</small>
             </div>
-            {engine === 'claude' ? <div className="native-config__field">
+            <div className="native-config__field">
               <TranslationSelect label="密钥传递方式" value={draft.authMode} disabled={disabled} onChange={(value) => edit({ authMode: value as Draft['authMode'] })} options={[
                 { value: 'bearer', label: 'Bearer Token（Authorization）' },
                 { value: 'api_key', label: 'API Key（x-api-key）' },
               ]} />
               <small>根据接口要求选择，切换时保留当前密钥。</small>
-            </div> : null}
+            </div>
           </div>
-          <label className="native-config__field"><span>API 地址</span><input type="url" value={draft.baseUrl} onChange={(event) => edit({ baseUrl: event.target.value })} placeholder={engine === 'codex' ? 'https://api.example.com/v1' : 'https://api.example.com'} maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /><small>{engine === 'codex' ? '填写 API 基础地址，通常包含 /v1；末尾无需加 /responses。' : '填写 API 基础地址；末尾的 /v1 或 /v1/messages 会自动整理。'}</small></label>
+          <label className="native-config__field"><span>API 地址</span><input type="url" value={draft.baseUrl} onChange={(event) => edit({ baseUrl: event.target.value })} placeholder={draft.protocol === 'anthropic' ? 'https://api.example.com' : 'https://api.example.com/v1'} maxLength={2048} autoCapitalize="none" autoCorrect="off" spellCheck={false} required disabled={disabled} /><small>填写接口基础地址或完整请求地址，末尾路径会按所选协议自动整理。</small></label>
           <label className="native-config__field"><span>API 密钥{selected?.hasKey ? <em>已保存 · 留空保留</em> : null}</span><input type="password" value={draft.apiKey} onChange={(event) => edit({ apiKey: event.target.value })} placeholder={selected?.hasKey ? '留空保留此配置的密钥' : '输入 API 密钥'} autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} required={!selected?.hasKey} disabled={disabled} /></label>
         </section>
         <section className="native-config__group" aria-label="模型配置">
           <h3>模型配置</h3>
-          <label className="native-config__field"><span>默认模型</span><input value={draft.model} onChange={(event) => edit({ model: event.target.value })} placeholder={engine === 'codex' ? '填写服务商提供的模型 ID' : '例如 sonnet、opus，或实际模型 ID'} maxLength={256} autoCapitalize="none" autoCorrect="off" spellCheck={false} required={engine === 'codex'} disabled={disabled} /><small>{engine === 'codex' ? '应用后，网页模型菜单和本机 CLI 使用此模型。' : '可填下面的角色名以使用映射；留空使用 CLI 默认。聊天中手动选择的模型优先。'}</small></label>
+          <label className="native-config__field"><span>默认模型</span><input value={draft.model} onChange={(event) => edit({ model: event.target.value })} placeholder={engine === 'codex' ? '填写服务商提供的模型 ID' : '例如 sonnet、opus，或实际模型 ID'} maxLength={256} autoCapitalize="none" autoCorrect="off" spellCheck={false} required={engine === 'codex' || draft.protocol !== 'anthropic'} disabled={disabled} /><small>{engine === 'codex' ? '应用后，网页模型菜单和本机 CLI 使用此模型。' : '可填下面的角色名以使用映射；原生 Messages 协议可留空。聊天中手动选择的模型优先。'}</small></label>
           {engine === 'claude' ? <div className="native-config__mappings">
             <div className="native-config__model-header" aria-hidden="true"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span></div>
             {roles.map((role) => <div className="native-config__model-row" key={role}>
@@ -246,10 +249,11 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
             <p className="native-config__hint">显示名称用于模型菜单，实际请求模型填写服务商的模型 ID。多个角色可以填写同一个模型。</p>
           </div> : null}
         </section>
+        {needsBackendUpdate ? <p className="native-config__message" role="status">后端尚未加载接口转换功能，重启后端后请点“重新读取”，即可保存和使用此协议。</p> : null}
         <div className="native-config__actions">
-          <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" value="apply" disabled={disabled}>{busy === 'apply' ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{busy === 'apply' ? '正在应用…' : '保存并应用'}</button>
-          <button className="theme-notification-toggle" type="submit" value="save" disabled={disabled || !dirty}>{busy === 'save' ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存配置</button>
-          <button className="theme-notification-toggle" type="button" disabled={disabled} onClick={() => { void test() }}>{busy === 'test' ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />}{busy === 'test' ? '正在测试…' : '测试连通性'}</button>
+          <button className="theme-notification-toggle theme-notification-toggle--enabled" type="submit" value="apply" disabled={disabled || needsBackendUpdate}>{busy === 'apply' ? <LoaderCircle className="spin" size={15} /> : <Check size={15} />}{busy === 'apply' ? '正在应用…' : '保存并应用'}</button>
+          <button className="theme-notification-toggle" type="submit" value="save" disabled={disabled || needsBackendUpdate || !dirty}>{busy === 'save' ? <LoaderCircle className="spin" size={15} /> : <Save size={15} />}保存配置</button>
+          <button className="theme-notification-toggle" type="button" disabled={disabled || needsBackendUpdate} onClick={() => { void test() }}>{busy === 'test' ? <LoaderCircle className="spin" size={15} /> : <PlugZap size={15} />}{busy === 'test' ? '正在测试…' : '测试连通性'}</button>
           <button className="theme-notification-toggle" type="button" disabled={loading || Boolean(busy)} onClick={() => { void refresh() }}><RefreshCw className={busy === 'refresh' ? 'spin' : undefined} size={15} />重新读取</button>
           {engine === 'codex' && config?.reloadPending ? <button className="theme-notification-toggle" type="button" disabled={Boolean(busy)} onClick={() => { void reloadCodex() }}><RefreshCw className={busy === 'reload' ? 'spin' : undefined} size={15} />重新载入 Codex</button> : null}
         </div>
@@ -266,7 +270,7 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
       </div> : null}
       <div className="native-config__footnote">
         <p className="native-config__hint">测试使用当前表单发起简短请求，可能产生少量 API 费用；不修改正在使用的配置。</p>
-        <p className="native-config__hint">密钥保存在服务端及本机 CLI 配置中，网页不回显。独立运行中的 CLI 会话需重新打开才能读取新配置。</p>
+        <p className="native-config__hint">密钥保存在服务端，网页不回显。独立运行中的 CLI 会话需重新打开才能读取新配置。</p>
         {config ? <p className="native-config__hint">本机文件：<code>{config.path}</code></p> : null}
       </div>
     </div>

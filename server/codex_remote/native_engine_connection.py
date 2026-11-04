@@ -6,10 +6,12 @@ import asyncio
 import json
 import ssl
 import time
+from http.client import HTTPException as HTTPTransportError
 from urllib.error import HTTPError, URLError
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .native_engine_config import NativeEngineConfigError
+from .native_engine_protocol import api_endpoint
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -19,10 +21,7 @@ class _NoRedirect(HTTPRedirectHandler):
 
 
 def _endpoint(profile: dict) -> str:
-    base = profile["baseUrl"].rstrip("/")
-    if profile["protocol"] == "responses":
-        return base + "/responses"
-    return base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    return api_endpoint(profile)
 
 
 def _check_model(profile: dict, model: str) -> dict:
@@ -36,13 +35,26 @@ def _check_model(profile: dict, model: str) -> dict:
     if profile["protocol"] == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
         payload = {"model": model, "max_tokens": 64, "messages": [{"role": "user", "content": "Reply only OK."}]}
+    elif profile["protocol"] == "chat":
+        payload = {"model": model, "max_completion_tokens": 128, "stream": False,
+                   "messages": [{"role": "user", "content": "Reply only OK."}]}
     else:
         payload = {"model": model, "max_output_tokens": 128, "input": "Reply only OK.", "stream": False}
     request = Request(_endpoint(profile), data=json.dumps(payload).encode(), headers=headers, method="POST")
     ok = False
     message = ""
     try:
-        with build_opener(_NoRedirect()).open(request, timeout=20) as response:
+        opener = build_opener(_NoRedirect())
+        try:
+            response = opener.open(request, timeout=20)
+        except HTTPError as error:
+            if profile["protocol"] != "chat" or error.code != 400:
+                raise
+            error.close()
+            payload["max_tokens"] = payload.pop("max_completion_tokens")
+            request = Request(_endpoint(profile), data=json.dumps(payload).encode(), headers=headers, method="POST")
+            response = opener.open(request, timeout=20)
+        with response:
             body = response.read(256_001)
         if len(body) > 256_000:
             raise NativeEngineConfigError("接口响应超过限制。")
@@ -54,6 +66,11 @@ def _check_model(profile: dict, model: str) -> dict:
             ok = parsed.get("type") == "message" and isinstance(content, list) and any(
                 isinstance(item, dict) and item.get("type") == "text" and item.get("text") for item in content
             )
+        elif profile["protocol"] == "chat":
+            choices = parsed.get("choices")
+            choice = choices[0] if isinstance(choices, list) and choices and isinstance(choices[0], dict) else {}
+            response = choice.get("message") or {}
+            ok = isinstance(response, dict) and bool(response.get("content")) and choice.get("finish_reason") in {"stop", "length"}
         else:
             output = parsed.get("output")
             ok = parsed.get("status") == "completed" and isinstance(output, list) and any(
@@ -64,6 +81,9 @@ def _check_model(profile: dict, model: str) -> dict:
             )
         if ok:
             message = "连接成功，模型已返回回复。"
+        elif profile["protocol"] == "chat" and choice.get("finish_reason") == "length":
+            ok = True
+            message = "接口已连通，模型已接受请求；为控制用量，短测试在输出上限处结束。"
         elif parsed.get("status") == "incomplete":
             details = parsed.get("incomplete_details")
             if isinstance(details, dict) and details.get("reason") == "max_output_tokens" and isinstance(parsed.get("output"), list):
@@ -90,6 +110,8 @@ def _check_model(profile: dict, model: str) -> dict:
     except (URLError, OSError) as error:
         reason = getattr(error, "reason", error)
         message = "TLS 证书验证失败，请检查接口证书。" if isinstance(reason, ssl.SSLError) else "无法连接接口，请检查地址、端口和服务器网络。"
+    except HTTPTransportError:
+        message = "接口在回复完成前断开，请检查服务器网络或稍后重试。"
     except (ValueError, UnicodeError):
         message = "接口没有返回有效 JSON，请确认地址指向 API 服务。"
     except NativeEngineConfigError as error:
