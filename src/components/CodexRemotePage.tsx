@@ -278,7 +278,11 @@ const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
-const panelRouteQueryKey = 'panel'
+const legacyPanelRouteQueryKey = 'panel'
+const panelRoutePaths: Record<PanelHistoryEntry, string> = {
+  settings: '/settings',
+  'usage-stats': '/usage-stats',
+}
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
@@ -318,8 +322,13 @@ type PanelHistoryEntry = 'settings' | 'usage-stats'
 
 function getPanelRouteEntry(href = window.location.href): PanelHistoryEntry | null {
   try {
-    const panel = new URL(href).searchParams.get(panelRouteQueryKey)
-    return panel === 'settings' || panel === 'usage-stats' ? panel : null
+    const url = new URL(href)
+    const pathname = url.pathname.replace(/\/+$/, '') || '/'
+    if (pathname === panelRoutePaths.settings) return 'settings'
+    if (pathname === panelRoutePaths['usage-stats']) return 'usage-stats'
+    // Keep links created by the previous query-based build opening correctly.
+    const legacyPanel = url.searchParams.get(legacyPanelRouteQueryKey)
+    return legacyPanel === 'settings' || legacyPanel === 'usage-stats' ? legacyPanel : null
   } catch {
     return null
   }
@@ -327,8 +336,8 @@ function getPanelRouteEntry(href = window.location.href): PanelHistoryEntry | nu
 
 function panelRouteHref(panel: PanelHistoryEntry | null) {
   const url = new URL(window.location.href)
-  if (panel) url.searchParams.set(panelRouteQueryKey, panel)
-  else url.searchParams.delete(panelRouteQueryKey)
+  url.pathname = panel ? panelRoutePaths[panel] : '/'
+  url.searchParams.delete(legacyPanelRouteQueryKey)
   return `${url.pathname}${url.search}${url.hash}`
 }
 
