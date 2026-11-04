@@ -2673,7 +2673,6 @@ interface WorkspaceExplorerProps {
   mobileDragging: boolean
   onOpenMobile: () => void
   onCloseMobile: () => void
-  onCollapse: () => void
   panelRef: RefObject<HTMLElement | null>
 }
 
@@ -2816,7 +2815,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : maxConcurrentPaneCount
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, onCollapse, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -3743,7 +3742,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     : 0
   return (
     <>
-      <aside ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+      <aside id="workspace-explorer-panel" ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
         <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label="选择要上传到工作区的本机文件" />
         <header className="workspace-explorer__header">
           <div><span className="workspace-explorer__eyebrow">{eyebrow}</span><strong>文件</strong></div>
@@ -3751,7 +3750,6 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
             <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={!browsingRoot || Boolean(uploadProgress)} aria-label="上传本机文件到当前根目录" title="上传本机文件到当前根目录"><Upload size={15} /></button>
             <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
-            <button className="icon-button workspace-explorer__collapse" type="button" onClick={onCollapse} aria-label="折叠文件树侧栏" title="折叠文件树侧栏" aria-expanded="true"><ChevronRight size={16} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
         </header>
@@ -4977,16 +4975,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setWorkspaceOpen(mobileLayout)
     if (mobileLayout) return
     setWorkspaceCollapsed(false)
-    window.requestAnimationFrame(() => {
-      workspacePanel.current?.querySelector<HTMLButtonElement>('.workspace-explorer__collapse')?.focus({ preventScroll: true })
-    })
   }, [])
   const collapseWorkspacePanel = useCallback(() => {
     setWorkspaceOpen(false)
     setWorkspaceCollapsed(true)
-    window.requestAnimationFrame(() => {
-      remoteShell.current?.querySelector<HTMLButtonElement>('.conversation-pane--selected .mobile-workspace-button')?.focus({ preventScroll: true })
-    })
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
@@ -6390,6 +6382,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       onTouchEndCapture={handleSidebarTouchEnd}
       onTouchCancelCapture={handleSidebarTouchCancel}
     >
+      {!settingsOpen && !usageStatsOpen ? (
+        <button
+          className="icon-button workspace-panel-toggle"
+          type="button"
+          aria-label={workspaceCollapsed ? '展开文件树侧栏' : '收起文件树侧栏'}
+          title={workspaceCollapsed ? '展开文件树侧栏' : '收起文件树侧栏'}
+          aria-expanded={!workspaceCollapsed}
+          aria-controls="workspace-explorer-panel"
+          onClick={workspaceCollapsed ? openWorkspacePanel : collapseWorkspacePanel}
+        >
+          {workspaceCollapsed ? <ChevronLeft size={16} /> : <ChevronRight size={16} />}
+        </button>
+      ) : null}
       {completionToast ? (
         <div className={`thread-completion-toast thread-completion-toast--${completionToast.engine}`} role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
@@ -6702,7 +6707,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             mobileDragging={workspaceDragging}
             onOpenMobile={openWorkspacePanel}
             onCloseMobile={() => setWorkspaceOpen(false)}
-            onCollapse={collapseWorkspacePanel}
             panelRef={workspacePanel}
           />
         </>
