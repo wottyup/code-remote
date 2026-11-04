@@ -192,7 +192,7 @@ def browser_thread(thread: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-_GLOBAL_NOTIFICATIONS = {"thread/name/updated", "thread/deleted", "turn/started", "turn/completed"}
+_GLOBAL_NOTIFICATIONS = {"thread/name/updated", "thread/deleted", "turn/started", "turn/completed", "nativeConfig/changed"}
 _DETAIL_NOTIFICATIONS = {
     "item/started", "item/completed", "item/agentMessage/delta",
     "item/fileChange/patchUpdated", "turn/workspaceChanges", "turn/plan/updated",
@@ -227,4 +227,6 @@ def browser_event(event: dict[str, Any], *, thread_id: str | None = None, filter
         result["changes"] = browser_changes(params.get("changes", []))
     elif method == "thread/name/updated":
         result.update(_pick(params, ("threadName",)))
+    elif method == "nativeConfig/changed":
+        result.update(_pick(params, ("engine", "model")))
     return {"type": "notification", "method": method, "params": result}

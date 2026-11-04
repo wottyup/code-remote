@@ -23,6 +23,8 @@ MANAGED_BLOCK = re.compile(
 )
 TABLE_HEADER = re.compile(r"^\s*\[{1,2}[^\]\r\n]+\]{1,2}\s*(?:#.*)?$")
 ROOT_PROVIDER = re.compile(r"^\s*model_provider\s*=")
+CLAUDE_MODEL_ROLES = ("sonnet", "opus", "fable", "haiku")
+NATIVE_PROTOCOLS = {"codex": "responses", "claude": "anthropic"}
 
 
 class NativeEngineConfigError(Exception):
@@ -43,7 +45,7 @@ class NativeEngineConfigStore:
             "codex": codex_path.expanduser().absolute(),
             "claude": claude_path.expanduser().absolute(),
         }
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def _path(self, engine: str) -> Path:
         try:
@@ -123,11 +125,11 @@ class NativeEngineConfigStore:
         return key
 
     @staticmethod
-    def _codex_provider(parsed: dict) -> dict:
+    def _codex_provider(parsed: dict, *, active: bool = False) -> dict:
         providers = parsed.get("model_providers", {})
         if not isinstance(providers, dict):
             raise NativeEngineConfigError("Codex 的 model_providers 配置格式无效。")
-        provider = providers.get(MANAGED_PROVIDER, {})
+        provider = providers.get(parsed.get("model_provider", "openai") if active else MANAGED_PROVIDER, {})
         if not isinstance(provider, dict):
             raise NativeEngineConfigError("Codex 的托管提供方配置格式无效。")
         return provider
@@ -139,13 +141,15 @@ class NativeEngineConfigStore:
             raise NativeEngineConfigError("Claude 的 env 配置格式无效。")
         return env
 
-    def read(self, engine: str) -> dict[str, str | bool]:
+    def read(self, engine: str) -> dict:
         with self._lock:
             path = self._path(engine)
             data = self._read_bytes(path)
             _, parsed = self._parse(engine, data)
+        if "model" in parsed and not isinstance(parsed["model"], str):
+            raise NativeEngineConfigError("本机默认模型名称必须是文本。")
         if engine == "codex":
-            provider = self._codex_provider(parsed)
+            provider = self._codex_provider(parsed, active=True)
             current_provider = parsed.get("model_provider", "openai")
             return {
                 "engine": engine,
@@ -157,8 +161,17 @@ class NativeEngineConfigStore:
                 "enabled": current_provider == MANAGED_PROVIDER,
                 "currentProvider": current_provider if isinstance(current_provider, str) else "",
                 "revision": self._revision(path, data),
+                "protocol": provider.get("wire_api", "responses"),
+                "model": parsed.get("model", ""),
+                "models": {},
             }
         env = self._claude_env(parsed)
+        model_keys = ["ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL", *[
+            f"ANTHROPIC_DEFAULT_{role.upper()}_MODEL{suffix}"
+            for role in CLAUDE_MODEL_ROLES for suffix in ("", "_NAME")
+        ]]
+        if any(name in env and not isinstance(env[name], str) for name in model_keys):
+            raise NativeEngineConfigError("Claude 的模型映射和显示名称必须是文本。")
         auth_mode = "api_key" if env.get("ANTHROPIC_API_KEY") and not env.get("ANTHROPIC_AUTH_TOKEN") else "bearer"
         key_name = "ANTHROPIC_AUTH_TOKEN" if auth_mode == "bearer" else "ANTHROPIC_API_KEY"
         return {
@@ -171,10 +184,50 @@ class NativeEngineConfigStore:
             "enabled": bool(env.get("ANTHROPIC_BASE_URL") and env.get(key_name)),
             "currentProvider": "Anthropic Messages",
             "revision": self._revision(path, data),
+            "protocol": "anthropic",
+            "model": env.get("ANTHROPIC_MODEL") or parsed.get("model") or env.get("ANTHROPIC_DEFAULT_MODEL") or "",
+            "models": {
+                role: {
+                    "model": env.get(f"ANTHROPIC_DEFAULT_{role.upper()}_MODEL", ""),
+                    "displayName": env.get(f"ANTHROPIC_DEFAULT_{role.upper()}_MODEL_NAME", ""),
+                } for role in CLAUDE_MODEL_ROLES
+            },
         }
 
+    def profile_source(self, engine: str) -> dict:
+        """Private snapshot for importing/matching profiles. Never return to clients."""
+        with self._lock:
+            result = self.read(engine)
+            path = self._path(engine)
+            data = self._read_bytes(path)
+            if self._revision(path, data) != result["revision"]:
+                raise NativeEngineConfigError("本机配置正在被修改，请稍后重新读取。", conflict=True)
+            _, parsed = self._parse(engine, data)
+            if engine == "codex":
+                provider = self._codex_provider(parsed, active=True)
+                key = provider.get("experimental_bearer_token", "")
+            else:
+                env = self._claude_env(parsed)
+                key = env.get("ANTHROPIC_API_KEY" if result["authMode"] == "api_key" else "ANTHROPIC_AUTH_TOKEN", "")
+            result["apiKey"] = key if isinstance(key, str) else ""
+            return result
+
+    def claude_model_options(self) -> list[dict[str, str]]:
+        config = self.read("claude")
+        default = config["model"]
+        mappings = config["models"]
+        default_name = mappings.get(default, {}).get("displayName") or default
+        return [
+            {"value": "default", "label": f"本机默认 · {default_name}" if default_name else "本机默认模型"},
+            *[{
+                "value": role,
+                "label": mappings[role]["displayName"] or f"Claude {role.title()}",
+                "model": mappings[role]["model"] or role,
+            } for role in CLAUDE_MODEL_ROLES],
+        ]
+
     @staticmethod
-    def _codex_content(text: str, parsed: dict, url: str, key: str) -> bytes:
+    def _codex_content(text: str, parsed: dict, url: str, key: str, model: str | None = None) -> bytes:
         matches = list(MANAGED_BLOCK.finditer(text))
         if len(matches) > 1 or text.count(BEGIN_MARKER) != len(matches) or text.count(END_MARKER) != len(matches):
             raise NativeEngineConfigError("Codex 托管配置块已被手动修改，请在本机修复后重试。")
@@ -185,6 +238,8 @@ class NativeEngineConfigStore:
             text = text[:match.start()] + text[match.end():]
 
         newline = "\r\n" if "\r\n" in text else "\n"
+        if text and not text.endswith(("\n", "\r")):
+            text += newline
         lines = text.splitlines(keepends=True)
         root_end = next((index for index, line in enumerate(lines) if TABLE_HEADER.match(line)), len(lines))
         root_assignments = [index for index in range(root_end) if ROOT_PROVIDER.match(lines[index])]
@@ -195,6 +250,16 @@ class NativeEngineConfigStore:
             lines[root_assignments[0]] = assignment
         else:
             lines.insert(root_end, assignment + newline)
+        if model is not None:
+            root_end = next((index for index, line in enumerate(lines) if TABLE_HEADER.match(line)), len(lines))
+            model_assignments = [index for index in range(root_end) if re.match(r"^\s*model\s*=", lines[index])]
+            if len(model_assignments) > 1 or ("model" in parsed and not model_assignments):
+                raise NativeEngineConfigError("Codex 默认模型的写法无法安全更新，请在本机编辑。")
+            model_line = f"model = {json.dumps(model, ensure_ascii=False)}{newline}"
+            if model_assignments:
+                lines[model_assignments[0]] = model_line
+            else:
+                lines.insert(root_end, model_line)
         result = "".join(lines)
         if result and not result.endswith(("\n", "\r")):
             result += newline
@@ -205,6 +270,7 @@ class NativeEngineConfigStore:
             f"[model_providers.{MANAGED_PROVIDER}]",
             'name = "Code Remote API"',
             f"base_url = {json.dumps(url, ensure_ascii=False)}",
+            'wire_api = "responses"',
             f"experimental_bearer_token = {json.dumps(key, ensure_ascii=False)}",
             "requires_openai_auth = false",
             END_MARKER,
@@ -216,10 +282,22 @@ class NativeEngineConfigStore:
             raise NativeEngineConfigError("Codex 配置格式无法安全更新，请在本机编辑。") from error
         if updated.get("model_provider") != MANAGED_PROVIDER:
             raise NativeEngineConfigError("Codex 默认提供方未能更新。")
+        # Refuse edits that would change unrelated values (for example a root
+        # assignment hidden inside a multiline TOML string).
+        before, after = dict(parsed), dict(updated)
+        for config in (before, after):
+            config.pop("model_provider", None)
+            if model is not None:
+                config.pop("model", None)
+            providers = dict(config.get("model_providers", {}))
+            providers.pop(MANAGED_PROVIDER, None)
+            config["model_providers"] = providers
+        if before != after or (model is not None and updated.get("model") != model):
+            raise NativeEngineConfigError("Codex 配置包含无法安全更新的写法，请在本机编辑。")
         return result.encode("utf-8")
 
     @staticmethod
-    def _claude_content(parsed: dict, url: str, key: str, auth_mode: str) -> bytes:
+    def _claude_content(parsed: dict, url: str, key: str, auth_mode: str, model: str | None = None, models: dict | None = None) -> bytes:
         updated = dict(parsed)
         env = dict(NativeEngineConfigStore._claude_env(parsed))
         env["ANTHROPIC_BASE_URL"] = url
@@ -229,6 +307,26 @@ class NativeEngineConfigStore:
         else:
             env["ANTHROPIC_API_KEY"] = key
             env.pop("ANTHROPIC_AUTH_TOKEN", None)
+        if model is not None:
+            # A saved settings.model or a legacy env override must not mask the
+            # newly selected default. Both native interactive and print sessions
+            # read the same setting; an explicit --model still takes precedence.
+            for name in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_MODEL"):
+                env.pop(name, None)
+            if model:
+                updated["model"] = model
+                env["ANTHROPIC_MODEL"] = model
+            else:
+                updated.pop("model", None)
+        if models is not None:
+            for role in CLAUDE_MODEL_ROLES:
+                mapping = models.get(role, {})
+                for suffix, field in (("", "model"), ("_NAME", "displayName")):
+                    name = f"ANTHROPIC_DEFAULT_{role.upper()}_MODEL{suffix}"
+                    if mapping.get(field):
+                        env[name] = mapping[field]
+                    else:
+                        env.pop(name, None)
         updated["env"] = env
         return (json.dumps(updated, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
 
@@ -239,6 +337,8 @@ class NativeEngineConfigStore:
         api_key: str,
         auth_mode: str,
         expected_revision: str,
+        model: str | None = None,
+        models: dict | None = None,
     ) -> dict[str, str | bool]:
         url = self._api_url(base_url)
         entered_key = self._api_key(api_key)
@@ -255,7 +355,7 @@ class NativeEngineConfigStore:
                 key = entered_key or (existing_key if isinstance(existing_key, str) else "")
                 if not key:
                     raise NativeEngineConfigError("请填写 Codex API 密钥。")
-                data = self._codex_content(text, parsed, url, key)
+                data = self._codex_content(text, parsed, url, key, model)
             else:
                 env = self._claude_env(parsed)
                 key_name = "ANTHROPIC_AUTH_TOKEN" if auth_mode == "bearer" else "ANTHROPIC_API_KEY"
@@ -263,29 +363,35 @@ class NativeEngineConfigStore:
                 key = entered_key or (existing_key if isinstance(existing_key, str) else "")
                 if not key:
                     raise NativeEngineConfigError("请填写 Claude API 密钥；切换密钥方式时也需要重新填写。")
-                data = self._claude_content(parsed, url, key, auth_mode)
+                data = self._claude_content(parsed, url, key, auth_mode, model, models)
             if len(data) > MAX_CONFIG_BYTES:
                 raise NativeEngineConfigError("配置内容超过 512 KB，请在本机编辑。")
             if current == data:
                 return {"engine": engine, "path": str(path), "revision": self._revision(path, data), "changed": False}
-            try:
-                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-                try:
-                    if os.name != "nt":
-                        os.fchmod(descriptor, 0o600)
-                    with os.fdopen(descriptor, "wb") as temporary:
-                        temporary.write(data)
-                        temporary.flush()
-                        os.fsync(temporary.fileno())
-                    if self._revision(path, self._read_bytes(path)) != expected_revision:
-                        raise NativeEngineConfigError("配置文件保存期间又被本机修改，请重新读取后再保存。", conflict=True)
-                    os.replace(temporary_name, path)
-                    if os.name == "nt":
-                        os.chmod(path, 0o600)
-                finally:
-                    if os.path.exists(temporary_name):
-                        os.unlink(temporary_name)
-            except OSError as error:
-                raise NativeEngineConfigError("保存本机配置失败，请检查文件权限。") from error
+            self.atomic_write(path, data, expected_revision)
         return {"engine": engine, "path": str(path), "revision": self._revision(path, data), "changed": True}
+
+    @classmethod
+    def atomic_write(cls, path: Path, data: bytes, expected_revision: str) -> None:
+        if len(data) > MAX_CONFIG_BYTES:
+            raise NativeEngineConfigError("配置内容超过 512 KB。")
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+            try:
+                if os.name != "nt":
+                    os.fchmod(descriptor, 0o600)
+                with os.fdopen(descriptor, "wb") as temporary:
+                    temporary.write(data)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                if cls._revision(path, cls._read_bytes(path)) != expected_revision:
+                    raise NativeEngineConfigError("配置保存期间已被修改，请重新读取后再保存。", conflict=True)
+                os.replace(temporary_name, path)
+                if os.name == "nt":
+                    os.chmod(path, 0o600)
+            finally:
+                if os.path.exists(temporary_name):
+                    os.unlink(temporary_name)
+        except OSError as error:
+            raise NativeEngineConfigError("保存本机配置失败，请检查文件权限。") from error

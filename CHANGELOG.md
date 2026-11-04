@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.102.0-dev.1] - Codex 与 Claude API 支持多配置切换、模型映射和连通性测试
+
 ## [0.101.0-dev.1] - 设置页支持配置本机 Codex 与 Claude Code API
 
 ## [0.100.0-dev.4] - 设置页覆盖整个工作区

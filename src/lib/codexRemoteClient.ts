@@ -61,7 +61,31 @@ export interface TranslationConfigInput {
 }
 
 export type NativeEngine = 'codex' | 'claude'
-export type NativeConfigApplyStatus = 'reloaded' | 'pending' | 'next_connect' | 'failed' | 'next_turn' | 'unchanged'
+export type NativeConfigApplyStatus = 'reloaded' | 'pending' | 'next_connect' | 'failed' | 'next_turn' | 'unchanged' | 'saved'
+export type NativeEngineProtocol = 'responses' | 'anthropic' | 'chat'
+export type ClaudeModelRole = 'sonnet' | 'opus' | 'fable' | 'haiku'
+export interface NativeModelMapping { displayName: string; model: string }
+export interface NativeEngineProfile {
+  id: string
+  name: string
+  baseUrl: string
+  hasKey: boolean
+  authMode: 'bearer' | 'api_key'
+  protocol: NativeEngineProtocol
+  model: string
+  models: Partial<Record<ClaudeModelRole, NativeModelMapping>>
+}
+export interface NativeEngineProfileInput extends Omit<NativeEngineProfile, 'id' | 'hasKey'> {
+  profileId?: string
+  apiKey: string
+  expectedRevision: string
+  expectedNativeRevision?: string
+  apply?: boolean
+}
+export interface NativeEngineConnectionResult {
+  ok: boolean
+  results: Array<{ model: string; ok: boolean; latencyMs: number; message: string }>
+}
 
 export interface NativeEngineConfig {
   engine: NativeEngine
@@ -74,6 +98,20 @@ export interface NativeEngineConfig {
   currentProvider: string
   revision: string
   reloadPending: boolean
+  protocol: NativeEngineProtocol
+  model: string
+  models: Partial<Record<ClaudeModelRole, NativeModelMapping>>
+  profilesRevision: string
+  profiles: NativeEngineProfile[]
+  activeProfileId: string | null
+}
+
+export interface NativeEngineProfileSaveResult {
+  profileId: string
+  applied: boolean
+  applyError?: string
+  applyStatus: NativeConfigApplyStatus
+  config: NativeEngineConfig
 }
 
 export interface NativeEngineConfigSaveResult {
@@ -781,6 +819,26 @@ export const codexRemoteClient = {
   },
   nativeEngineConfig(token: string, engine: NativeEngine, signal?: AbortSignal) {
     return request<NativeEngineConfig>(token, `/api/v1/native-config/${engine}`, { cache: 'no-store', signal }, { networkRetries: 0 })
+  },
+  saveNativeEngineProfile(token: string, engine: NativeEngine, input: NativeEngineProfileInput) {
+    return request<NativeEngineProfileSaveResult>(token, `/api/v1/native-config/${engine}/profiles`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input),
+    }, { networkRetries: 0, timeoutMs: 90_000 })
+  },
+  deleteNativeEngineProfile(token: string, engine: NativeEngine, profileId: string, expectedRevision: string) {
+    return request<NativeEngineConfig>(token, `/api/v1/native-config/${engine}/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'DELETE', cache: 'no-store', body: JSON.stringify({ expectedRevision }),
+    }, { networkRetries: 0 })
+  },
+  testNativeEngineProfile(token: string, engine: NativeEngine, input: NativeEngineProfileInput, signal?: AbortSignal) {
+    return request<NativeEngineConnectionResult>(token, `/api/v1/native-config/${engine}/test`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input), signal,
+    }, { networkRetries: 0, timeoutMs: 55_000 })
+  },
+  claudeModels(token: string) {
+    return request<Array<{ value: string; label: string; model?: string }>>(token, '/api/v1/claude/models', {
+      cache: 'no-store',
+    }, { networkRetries: 0 })
   },
   saveNativeEngineConfig(token: string, engine: NativeEngine, input: {
     baseUrl: string

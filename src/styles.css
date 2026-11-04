@@ -4202,6 +4202,30 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-chinese-retro .theme-settings-panel--navigation .theme-settings-panel__nav-item { border-radius: 4px; }
 
 .native-config__body { display: grid; gap: 20px; padding: 22px 0 0; }
+.native-config .theme-settings-card__heading .engine-brand-icon { width: 22px; height: 22px; }
+.native-config .engine-brand-icon--codex, .theme-settings-panel__nav-item .engine-brand-icon--codex { background-color: #7188c2; }
+.native-config__profiles { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }
+.native-config__profile-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.native-config__profiles .translation-select__trigger, .native-config__profile-actions button { min-height: 44px; }
+.native-config__current { margin: -4px 0 4px; font-size: calc(13px + var(--mobile-font-offset)); line-height: 1.6; overflow-wrap: anywhere; }
+.native-config__current > span { display: block; margin-top: 3px; opacity: .72; }
+.native-config__group { display: grid; gap: 20px; padding-top: 24px; border-top: 1px solid var(--settings-inner-rule); }
+.native-config__group > h3 { margin: 0; font-size: calc(16px + var(--mobile-font-offset)); font-weight: 650; line-height: 1.4; }
+.native-config__columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.native-config__columns > :only-child { grid-column: 1 / -1; }
+.native-config__mappings { display: grid; gap: 12px; }
+.native-config__model-header, .native-config__model-row { display: grid; grid-template-columns: 86px minmax(0, 1fr) minmax(0, 1.15fr); gap: 12px; align-items: center; }
+.native-config__model-header { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; opacity: .72; }
+.native-config__role { font-size: calc(14px + var(--mobile-font-offset)); font-weight: 600; }
+.native-config__model-row .native-config__mobile-label { display: none; }
+.native-config__test-results { display: grid; gap: 16px; padding: 18px; border: 1px solid var(--settings-inner-border); border-radius: 9px; font-size: calc(13px + var(--mobile-font-offset)); }
+.native-config__test-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 10px; }
+.native-config__test-row > svg { margin-top: 2px; }
+.native-config__test-row strong { overflow-wrap: anywhere; font-weight: 600; }
+.native-config__test-row p { margin: 4px 0 0; line-height: 1.55; }
+.native-config__test-row small { line-height: 1.6; white-space: nowrap; opacity: .75; }
+.native-config__footnote { display: grid; gap: 8px; padding-top: 20px; border-top: 1px solid var(--settings-inner-rule); }
+.native-config__footnote code { overflow-wrap: anywhere; }
 .native-config__file { display: grid; min-width: 0; gap: 7px; padding: 15px 17px; border: 1px solid var(--settings-inner-border); border-radius: 12px; background: var(--settings-inner-surface); }
 .native-config__file > span, .native-config__field > span, .native-config__field .translation-settings__field > span { font-size: calc(14px + var(--mobile-font-offset)); font-weight: 650; }
 .native-config__file code { overflow-wrap: anywhere; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; }
@@ -4224,6 +4248,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-pixel .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 0; }
 .remote-shell--theme-retro .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 2px; }
 .remote-shell--theme-chinese-retro .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 5px; }
+
+@container settings-panel (max-width: 600px) {
+  .native-config__profiles { grid-template-columns: minmax(0, 1fr); }
+  .native-config__profile-actions { justify-content: flex-end; }
+  .native-config__columns { grid-template-columns: minmax(0, 1fr); }
+  .native-config__model-header { display: none; }
+  .native-config__model-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 14px; border-top: 1px solid var(--settings-inner-rule); }
+  .native-config__role { grid-column: 1 / -1; }
+  .native-config__model-row .native-config__mobile-label { display: block; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 500; opacity: .72; }
+  .native-config__actions > button { flex: 1 0 auto; min-height: 42px; justify-content: center; }
+}
 
 @container settings-panel (max-width: 760px) {
   .theme-settings-panel--navigation .theme-settings-panel__layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }

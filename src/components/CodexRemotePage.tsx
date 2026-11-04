@@ -749,11 +749,12 @@ const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }
   { value: 'never', label: '完全访问' },
 ]
 
-const claudeModelOptions = [
+const defaultClaudeModelOptions = [
   { value: 'default', label: '本机默认模型' },
   { value: 'fable', label: 'Claude Fable' },
   { value: 'opus', label: 'Claude Opus' },
   { value: 'sonnet', label: 'Claude Sonnet' },
+  { value: 'haiku', label: 'Claude Haiku' },
 ]
 
 const claudeEffortOptions = [
@@ -4012,6 +4013,7 @@ interface RemoteChatPaneProps {
   onClose: () => void
   onCreateThread: () => void
   claudeCodeAvailable: boolean | null
+  claudeModelOptions: ComposerMenuOption[]
   onSwitchEngine: (engine: 'codex' | 'claude-code') => Promise<unknown>
   onOpenSidebar: () => void
   onOpenWorkspace: () => void
@@ -4043,6 +4045,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   onClose,
   onCreateThread,
   claudeCodeAvailable,
+  claudeModelOptions,
   onSwitchEngine,
   onOpenSidebar,
   onOpenWorkspace,
@@ -4491,7 +4494,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     : remote.models.flatMap((model) => {
       const id = modelIdOf(model)
       return id ? [{ value: id, label: modelLabelOf(model) }] : []
-    }), [remote.activeEngine, remote.models])
+    }), [remote.activeEngine, remote.models, claudeModelOptions])
   const targetEngine = remote.activeEngine === 'claude-code' ? 'codex' : 'claude-code'
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
@@ -4817,6 +4820,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
+  const [claudeModelOptions, setClaudeModelOptions] = useState<ComposerMenuOption[]>(defaultClaudeModelOptions)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [sidebarEngineFilter, setSidebarEngineFilter] = useState<ChatEngine | null>(null)
@@ -4894,8 +4898,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       if (!current || checking || document.visibilityState === 'hidden') return
       checking = true
       try {
-        const status = await codexRemoteClient.claudeStatus(token)
-        if (current) setClaudeCodeAvailable(status.available)
+        const [status, models] = await Promise.allSettled([
+          codexRemoteClient.claudeStatus(token), codexRemoteClient.claudeModels(token),
+        ])
+        if (current) {
+          setClaudeCodeAvailable(status.status === 'fulfilled' ? status.value.available : false)
+          if (models.status === 'fulfilled') setClaudeModelOptions((previous) =>
+            JSON.stringify(previous) === JSON.stringify(models.value) ? previous : models.value)
+        }
       } catch {
         if (current) setClaudeCodeAvailable(false)
       } finally {
@@ -4908,11 +4918,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     void refreshClaudeStatus()
     const interval = window.setInterval(() => void refreshClaudeStatus(), 30_000)
     window.addEventListener('focus', refreshWhenVisible)
+    window.addEventListener('codex-remote:native-config-changed', refreshWhenVisible)
     document.addEventListener('visibilitychange', refreshWhenVisible)
     return () => {
       current = false
       window.clearInterval(interval)
       window.removeEventListener('focus', refreshWhenVisible)
+      window.removeEventListener('codex-remote:native-config-changed', refreshWhenVisible)
       document.removeEventListener('visibilitychange', refreshWhenVisible)
     }
   }, [token])
@@ -5456,6 +5468,18 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const snapshot = composerPreferencesFrom(preferences)
     setThreadComposerPreferences((current) => ({ ...current, [threadId]: snapshot }))
   }, [])
+
+  useEffect(() => {
+    const onNativeConfigChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine?: string; model?: string }>).detail
+      if (detail?.engine !== 'codex' || !detail.model) return
+      const model = detail.model
+      setDefaultComposerPreferences((current) => mergeComposerPreferences(current, { model }))
+      if (!isClaudeCodeThread) updateComposerPreferences({ model })
+    }
+    window.addEventListener('codex-remote:native-models-loaded', onNativeConfigChanged)
+    return () => window.removeEventListener('codex-remote:native-models-loaded', onNativeConfigChanged)
+  }, [isClaudeCodeThread, updateComposerPreferences])
 
   const changeModel = useCallback((model: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeModel: model } : { model }), [isClaudeCodeThread, updateComposerPreferences])
   const changeEffort = useCallback((effort: string) => updateComposerPreferences(isClaudeCodeThread ? { claudeEffort: effort } : { effort }), [isClaudeCodeThread, updateComposerPreferences])
@@ -6499,6 +6523,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                     showActiveFrame={openPaneIndexes.length > 1}
                     showPaneClose={openPaneIndexes.length > 1}
                     claudeCodeAvailable={claudeCodeAvailable}
+                    claudeModelOptions={claudeModelOptions}
                     onOpenSidebar={openSidebarPanel}
                     onOpenWorkspace={openWorkspacePanel}
                     directoryRequest={workspaceTerminalRequest?.paneIndex === paneIndex ? workspaceTerminalRequest : null}
@@ -6761,8 +6786,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       { id: 'chat-shortcuts', label: '切换快捷键', icon: <Keyboard size={17} /> },
     ] },
     { label: '连接', items: [
-      { id: 'codex-config', label: 'Codex API', icon: <TerminalIcon size={17} /> },
-      { id: 'claude-config', label: 'Claude Code API', icon: <FileText size={17} /> },
+      { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
+      { id: 'claude-config', label: 'Claude Code API', icon: <EngineBrandIcon engine="claude-code" size={17} /> },
       { id: 'cpa-manager', label: 'token使用量查询', icon: <Link2 size={17} /> },
       { id: 'mcp-approvals', label: 'MCP 自动批准', icon: <ShieldCheck size={17} /> },
     ] },

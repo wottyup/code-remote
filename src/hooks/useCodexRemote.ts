@@ -2391,6 +2391,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [loadModels, onUnauthorized, token])
 
+  useEffect(() => {
+    if (!enabled || !loadModels) return
+    const onConfigChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine?: string; model?: string }>).detail
+      if (detail?.engine !== 'codex') return
+      void refreshModels().then((next) => {
+        if (detail.model && next?.some((model) => (model.model ?? model.id) === detail.model)) {
+          window.dispatchEvent(new CustomEvent('codex-remote:native-models-loaded', { detail }))
+        }
+      })
+    }
+    window.addEventListener('codex-remote:native-config-changed', onConfigChanged)
+    return () => window.removeEventListener('codex-remote:native-config-changed', onConfigChanged)
+  }, [enabled, loadModels, refreshModels])
+
   const loadThread = useCallback(async (
     threadId: string,
     revision = historyRevision.current,
@@ -3539,6 +3554,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (event.type !== 'notification' || !event.method) return
 
+    if (event.method === 'nativeConfig/changed') {
+      if (loadModels) window.dispatchEvent(new CustomEvent('codex-remote:native-config-changed', { detail: event.params }))
+      return
+    }
+
     // A subscription update and in-flight events can cross on the wire. Keep
     // lightweight lifecycle notifications, but defer rendering missed details
     // to the single history reconciliation on foreground recovery.
@@ -3962,7 +3982,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadModels, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -4013,6 +4033,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           void restoreActiveThread()
           if (activeThreadId.current) void refreshServerQueue(activeThreadId.current)
           if (loadThreads) void refreshThreads()
+          if (loadModels) void refreshModels()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
           if (retryTimer !== undefined || isBackground()) return
           retryTimer = window.setTimeout(() => {
