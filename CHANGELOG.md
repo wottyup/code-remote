@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.102.1-dev.1] - 修复 API 配置下拉菜单背景透明与主题样式缺失
+
 ## [0.102.0-dev.1] - Codex 与 Claude API 支持多配置切换、模型映射和连通性测试
 
 ## [0.101.0-dev.1] - 设置页支持配置本机 Codex 与 Claude Code API
