@@ -14,6 +14,7 @@ import {
 import { TranslationSelect } from './TranslationSelect'
 
 const roles: ClaudeModelRole[] = ['sonnet', 'opus', 'fable', 'haiku']
+const modelDisplayNameMaxLength = 80
 type Draft = Omit<NativeEngineProfileInput, 'profileId' | 'expectedRevision' | 'expectedNativeRevision' | 'apply'>
 
 function loadError(reason: unknown): string {
@@ -243,10 +244,10 @@ export function NativeEngineConfigCard({ token, engine, onDirtyChange }: {
             <div className="native-config__model-header" aria-hidden="true"><span>模型角色</span><span>显示名称</span><span>实际请求模型</span></div>
             {roles.map((role) => <div className="native-config__model-row" key={role}>
               <span className="native-config__role">{role[0].toUpperCase() + role.slice(1)}</span>
-              <label className="native-config__field"><span className="native-config__mobile-label">显示名称</span><input aria-label={`${role} 显示名称`} value={draft.models[role]?.displayName ?? ''} onChange={(event) => edit({ models: { ...draft.models, [role]: { displayName: event.target.value, model: draft.models[role]?.model ?? '' } } })} placeholder={`Claude ${role[0].toUpperCase() + role.slice(1)}`} maxLength={80} disabled={disabled} /></label>
-              <label className="native-config__field"><span className="native-config__mobile-label">实际请求模型</span><input aria-label={`${role} 实际请求模型`} value={draft.models[role]?.model ?? ''} onChange={(event) => edit({ models: { ...draft.models, [role]: { displayName: draft.models[role]?.displayName ?? '', model: event.target.value } } })} placeholder="留空使用 CLI 默认" maxLength={256} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /></label>
+              <label className="native-config__field"><span className="native-config__mobile-label">显示名称</span><input aria-label={`${role} 显示名称`} value={draft.models[role]?.displayName ?? ''} onChange={(event) => edit({ models: { ...draft.models, [role]: { displayName: event.target.value, model: draft.models[role]?.model ?? '' } } })} placeholder={`Claude ${role[0].toUpperCase() + role.slice(1)}`} maxLength={modelDisplayNameMaxLength} disabled={disabled} /></label>
+              <label className="native-config__field"><span className="native-config__mobile-label">实际请求模型</span><input aria-label={`${role} 实际请求模型`} value={draft.models[role]?.model ?? ''} onChange={(event) => edit({ models: { ...draft.models, [role]: { displayName: event.target.value.slice(0, modelDisplayNameMaxLength), model: event.target.value } } })} placeholder="留空使用 CLI 默认" maxLength={256} autoCapitalize="none" autoCorrect="off" spellCheck={false} disabled={disabled} /></label>
             </div>)}
-            <p className="native-config__hint">显示名称用于模型菜单，实际请求模型填写服务商的模型 ID。多个角色可以填写同一个模型。</p>
+            <p className="native-config__hint">实际请求模型填写服务商的模型 ID，修改时会同步填写显示名称，之后可单独改名。多个角色可以填写同一个模型。</p>
           </div> : null}
         </section>
         {needsBackendUpdate ? <p className="native-config__message" role="status">后端尚未加载接口转换功能，重启后端后请点“重新读取”，即可保存和使用此协议。</p> : null}
