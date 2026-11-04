@@ -278,6 +278,7 @@ const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
+const panelRouteQueryKey = 'panel'
 const workspaceExplorerDefaultWidth = 340
 const workspaceExplorerMinWidth = 220
 const workspaceExplorerMaxWidth = 2_400
@@ -315,6 +316,31 @@ function readPinnedThreadIds() {
 
 type PanelHistoryEntry = 'settings' | 'usage-stats'
 
+function getPanelRouteEntry(href = window.location.href): PanelHistoryEntry | null {
+  try {
+    const panel = new URL(href).searchParams.get(panelRouteQueryKey)
+    return panel === 'settings' || panel === 'usage-stats' ? panel : null
+  } catch {
+    return null
+  }
+}
+
+function panelRouteHref(panel: PanelHistoryEntry | null) {
+  const url = new URL(window.location.href)
+  if (panel) url.searchParams.set(panelRouteQueryKey, panel)
+  else url.searchParams.delete(panelRouteQueryKey)
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+function panelState(state: unknown, panel: PanelHistoryEntry | null) {
+  const previousState = state && typeof state === 'object' && !Array.isArray(state)
+    ? { ...(state as Record<string, unknown>) }
+    : {}
+  if (panel) previousState[settingsHistoryStateKey] = panel
+  else delete previousState[settingsHistoryStateKey]
+  return previousState
+}
+
 function getPanelHistoryEntry(state: unknown): PanelHistoryEntry | null {
   if (!state || typeof state !== 'object') return null
   const panel = (state as Record<string, unknown>)[settingsHistoryStateKey]
@@ -325,15 +351,18 @@ function getPanelHistoryEntry(state: unknown): PanelHistoryEntry | null {
 
 function openPanelHistoryEntry(panel: PanelHistoryEntry) {
   const currentState = window.history.state
-  const currentPanel = getPanelHistoryEntry(currentState)
-  if (currentPanel === panel) return
-
-  const previousState = currentState && typeof currentState === 'object' && !Array.isArray(currentState)
-    ? currentState as Record<string, unknown>
-    : {}
-  const nextState = { ...previousState, [settingsHistoryStateKey]: panel }
-  if (currentPanel) window.history.replaceState(nextState, '')
-  else window.history.pushState(nextState, '')
+  const statePanel = getPanelHistoryEntry(currentState)
+  const currentPanel = statePanel ?? getPanelRouteEntry()
+  const nextState = panelState(currentState, panel)
+  const nextUrl = panelRouteHref(panel)
+  if (currentPanel === panel) {
+    if (statePanel !== panel || `${window.location.pathname}${window.location.search}${window.location.hash}` !== nextUrl) {
+      window.history.replaceState(nextState, '', nextUrl)
+    }
+    return
+  }
+  if (currentPanel) window.history.replaceState(nextState, '', nextUrl)
+  else window.history.pushState(nextState, '', nextUrl)
 }
 
 interface ComposerPreferences {
@@ -4793,8 +4822,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [workspaceResizing, setWorkspaceResizing] = useState(false)
   const [workspacePreviewRequest, setWorkspacePreviewRequest] = useState<WorkspacePreviewRequest | null>(null)
   const [sidebarDragging, setSidebarDragging] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'settings')
-  const [usageStatsOpen, setUsageStatsOpen] = useState(() => getPanelHistoryEntry(window.history.state) === 'usage-stats')
+  const [settingsOpen, setSettingsOpen] = useState(() => (getPanelRouteEntry() ?? getPanelHistoryEntry(window.history.state)) === 'settings')
+  const [usageStatsOpen, setUsageStatsOpen] = useState(() => (getPanelRouteEntry() ?? getPanelHistoryEntry(window.history.state)) === 'usage-stats')
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [translationPreferences, setTranslationPreferences] = useState<TranslationPreferences>(readTranslationPreferences)
   const [translationRevision, setTranslationRevision] = useState(0)
@@ -4819,6 +4848,28 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [threadDeleteSaving, setThreadDeleteSaving] = useState(false)
   const [threadDeleteProgress, setThreadDeleteProgress] = useState(0)
   const [workspaceDraftSnapshot, setWorkspaceDraftSnapshot] = useState<{ scope: string; draft: string } | null>(null)
+
+  useEffect(() => {
+    const routePanel = getPanelRouteEntry()
+    const statePanel = getPanelHistoryEntry(window.history.state)
+    if (!routePanel) {
+      if (statePanel) {
+        window.history.replaceState(panelState(window.history.state, statePanel), '', panelRouteHref(statePanel))
+      }
+      return
+    }
+    if (statePanel === routePanel) return
+    if (statePanel) {
+      window.history.replaceState(panelState(window.history.state, routePanel), '', panelRouteHref(routePanel))
+      return
+    }
+
+    // A directly opened panel URL gets a chat entry before it, so closing the
+    // panel and browser back behave the same as opening it from the sidebar.
+    const rootState = panelState(window.history.state, null)
+    window.history.replaceState(rootState, '', panelRouteHref(null))
+    window.history.pushState(panelState(rootState, routePanel), '', panelRouteHref(routePanel))
+  }, [])
 
   useEffect(() => {
     setSidebarSelectionMode(false)
@@ -4885,10 +4936,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSettingsOpen(false)
     setUsageStatsOpen(false)
     if (getPanelHistoryEntry(window.history.state)) window.history.back()
+    else if (getPanelRouteEntry()) window.history.replaceState(panelState(window.history.state, null), '', panelRouteHref(null))
   }, [])
   const closeUsageStatsPanel = useCallback(() => {
     setUsageStatsOpen(false)
     if (getPanelHistoryEntry(window.history.state)) window.history.back()
+    else if (getPanelRouteEntry()) window.history.replaceState(panelState(window.history.state, null), '', panelRouteHref(null))
   }, [])
   const updateCPAUsageSettings = useCallback((nextSettings: CPAUsageSettings) => {
     saveCPAUsageSettings(nextSettings)
@@ -5411,7 +5464,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useEffect(() => {
     const syncSettingsFromHistory = (event: PopStateEvent) => {
-      const panel = getPanelHistoryEntry(event.state)
+      const panel = getPanelHistoryEntry(event.state) ?? getPanelRouteEntry()
       setSettingsOpen(panel === 'settings')
       setUsageStatsOpen(panel === 'usage-stats')
     }
