@@ -158,7 +158,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-sidebar__actions .sidebar-settings { min-width: 0; margin-top: 0; padding-inline: 8px; }
 .remote-sidebar__actions .sidebar-settings:only-child { grid-column: 1 / -1; }
 .remote-sidebar__actions .sidebar-settings span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sidebar-settings { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #9299a5; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; }
+.sidebar-settings { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; padding: 0 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: #9299a5; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); text-align: left; text-decoration: none; }
 .sidebar-settings:hover, .sidebar-settings--active { border-color: rgba(146, 157, 184, .14); background: rgba(38, 41, 49, .7); color: #e4e7ee; }
 .sidebar-settings svg { color: #8b94a5; }
 .sidebar-endpoint { margin-top: 4px; }

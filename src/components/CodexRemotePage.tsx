@@ -6410,7 +6410,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="remote-sidebar__actions">
           {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
           <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
-          <button className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="设置" title="设置" onClick={openSettingsPanel}><Settings2 size={16} /><span>设置</span></button>
+          <a className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} href={panelRouteHref('settings')} aria-label="设置" title="设置" onClick={(event) => {
+            if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            openSettingsPanel()
+          }}><Settings2 size={16} /><span>设置</span></a>
         </div>
         <footer className="remote-sidebar__footer">
           <div className="remote-sidebar__engine-statuses" role="group" aria-label="引擎状态">
