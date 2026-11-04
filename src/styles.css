@@ -4181,6 +4181,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-settings-panel__nav-item > svg { flex: 0 0 auto; opacity: .78; }
 .theme-settings-panel__nav-item--active > svg { opacity: 1; }
 .theme-settings-panel__nav-item > span { min-width: 0; }
+.theme-settings-panel__session { margin-top: 28px; padding-top: 16px; border-top: 1px solid var(--settings-inner-rule); }
 .theme-settings-panel--navigation .theme-settings-panel__content { width: 100%; max-width: 920px; height: 100%; min-height: 0; margin: 0; padding: 31px clamp(22px, 3.2vw, 44px) 56px; overflow: auto; overscroll-behavior: contain; }
 .remote-shell--theme-dark .theme-settings-panel--navigation .theme-option { border-color: #3d3d3d; background: #181818; }
 .remote-shell--theme-dark .theme-settings-panel--navigation .theme-option:is(:hover, .theme-option--active) { border-color: #e8e8e8; background: #181818; box-shadow: 0 0 0 2px rgba(255, 255, 255, .08); }
@@ -4269,12 +4270,27 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .theme-settings-panel__nav-group > h2 { display: none; }
   .theme-settings-panel__nav-item { width: auto; min-height: 40px; white-space: nowrap; }
   .theme-settings-panel__nav-item + .theme-settings-panel__nav-item { margin-top: 0; }
+  .theme-settings-panel__session { display: flex; flex: 0 0 auto; align-items: center; margin-top: 0; padding: 0 0 0 6px; border-top: 0; border-left: 1px solid var(--settings-inner-rule); }
   .theme-settings-panel--navigation .theme-settings-panel__content { max-width: 760px; margin-inline: auto; padding: 25px 18px 44px; }
   .theme-settings-panel--navigation .theme-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (max-width: 700px) {
   .remote-shell .theme-settings-panel--navigation { grid-template-rows: 60px minmax(0, 1fr); }
+}
+
+/* Keep the mobile drawer independent of the remembered desktop layout. */
+.workspace-explorer .workspace-explorer__header-actions .workspace-explorer__collapse { display: none; }
+@media (min-width: 701px) {
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell .workspace-explorer__header-actions .workspace-explorer__collapse { display: grid; }
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell.remote-shell--workspace-collapsed { grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 0 0; }
+  @media (pointer: fine) {
+    :where(:root:not([data-touch-landscape="true"])) .remote-shell.remote-shell--workspace-collapsed.remote-shell--sidebar-collapsed { grid-template-columns: 112px minmax(0, 1fr) 0 0; }
+  }
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell.remote-shell--theme-retro.remote-shell--workspace-collapsed { grid-template-columns: var(--retro-side-panel-width) minmax(0, 1fr) 0 0; }
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell.remote-shell--workspace-collapsed > :is(.workspace-explorer, .workspace-resize-handle) { display: none; }
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell.remote-shell--workspace-collapsed .mobile-workspace-button { display: grid; }
+  :where(:root:not([data-touch-landscape="true"])) .remote-shell--theme-retro .workspace-explorer__header-actions .workspace-explorer__collapse::after { content: '收起'; }
 }
 
 /* Global settings panels replace the whole workspace, including both sidebars. */

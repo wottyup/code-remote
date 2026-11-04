@@ -30,6 +30,7 @@ import {
   Languages,
   Link2,
   LoaderCircle,
+  LogOut,
   Menu,
   Monitor,
   MessageSquarePlus,
@@ -276,6 +277,7 @@ function formatTurnDuration(durationMs: number) {
 }
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
+const workspaceExplorerCollapsedStorageKey = 'code-remote.workspace-explorer-collapsed'
 const retroSidePanelWidthStorageKey = 'codex-remote.retro-side-panel-width'
 const workspaceExplorerRootStorageKey = 'codex-remote.workspace-explorer-root'
 const settingsHistoryStateKey = '__codexRemoteSettingsOpen'
@@ -441,6 +443,15 @@ function readWorkspaceExplorerWidth() {
     return clampWorkspaceExplorerWidth(Number.isFinite(stored) && stored > 0 ? stored : workspaceExplorerDefaultWidth)
   } catch {
     return clampWorkspaceExplorerWidth(workspaceExplorerDefaultWidth)
+  }
+}
+
+function readWorkspaceExplorerCollapsed() {
+  if (typeof window === 'undefined') return false
+  try {
+    return window.localStorage.getItem(workspaceExplorerCollapsedStorageKey) === 'true'
+  } catch {
+    return false
   }
 }
 
@@ -2662,6 +2673,7 @@ interface WorkspaceExplorerProps {
   mobileDragging: boolean
   onOpenMobile: () => void
   onCloseMobile: () => void
+  onCollapse: () => void
   panelRef: RefObject<HTMLElement | null>
 }
 
@@ -2804,7 +2816,7 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : maxConcurrentPaneCount
 }
 
-const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, onCollapse, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -3739,6 +3751,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
             <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={!browsingRoot || Boolean(uploadProgress)} aria-label="上传本机文件到当前根目录" title="上传本机文件到当前根目录"><Upload size={15} /></button>
             <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button workspace-explorer__collapse" type="button" onClick={onCollapse} aria-label="折叠文件树侧栏" title="折叠文件树侧栏" aria-expanded="true"><ChevronRight size={16} /></button>
             <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
           </div>
         </header>
@@ -4576,7 +4589,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
           >
             {terminalVisible ? <X size={16} /> : <TerminalIcon size={16} />}
           </button>
-          <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件窗口" title="打开文件窗口" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
+          <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件树" title="打开文件树" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
           {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
         </div>
       </header>
@@ -4830,6 +4843,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [selectedSidebarThreadIds, setSelectedSidebarThreadIds] = useState<Set<string>>(() => new Set())
   const [sidebarSelectionBusy, setSidebarSelectionBusy] = useState(false)
   const [workspaceOpen, setWorkspaceOpen] = useState(false)
+  const [workspaceCollapsed, setWorkspaceCollapsed] = useState(readWorkspaceExplorerCollapsed)
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(workspaceExplorerCollapsedStorageKey, String(workspaceCollapsed))
+    } catch {
+      // Keep the current layout even when browser storage is unavailable.
+    }
+  }, [workspaceCollapsed])
   const [workspaceDragging, setWorkspaceDragging] = useState(false)
   const [workspaceExplorerWidth, setWorkspaceExplorerWidth] = useState(readWorkspaceExplorerWidth)
   const [retroSidePanelWidth, setRetroSidePanelWidth] = useState(readRetroSidePanelWidth)
@@ -4951,8 +4972,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(true)
   }, [])
   const openWorkspacePanel = useCallback(() => {
+    const mobileLayout = isMobileLayout()
     setSidebarOpen(false)
-    setWorkspaceOpen(true)
+    setWorkspaceOpen(mobileLayout)
+    if (mobileLayout) return
+    setWorkspaceCollapsed(false)
+    window.requestAnimationFrame(() => {
+      workspacePanel.current?.querySelector<HTMLButtonElement>('.workspace-explorer__collapse')?.focus({ preventScroll: true })
+    })
+  }, [])
+  const collapseWorkspacePanel = useCallback(() => {
+    setWorkspaceOpen(false)
+    setWorkspaceCollapsed(true)
+    window.requestAnimationFrame(() => {
+      remoteShell.current?.querySelector<HTMLButtonElement>('.conversation-pane--selected .mobile-workspace-button')?.focus({ preventScroll: true })
+    })
   }, [])
   const closeSettingsPanel = useCallback(() => {
     setSettingsOpen(false)
@@ -6349,7 +6383,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   return (
     <div
       ref={remoteShell}
-      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (settingsOpen || usageStatsOpen ? ' remote-shell--global-panel' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
+      className={'remote-shell remote-shell--theme-' + themePreferences.theme + (isClaudeCodeThread ? ' remote-shell--claude-mode' : '') + (androidEndpointBridgeAvailable ? ' remote-shell--android' : '') + (sidebarCollapsed ? ' remote-shell--sidebar-collapsed' : '') + (workspaceCollapsed ? ' remote-shell--workspace-collapsed' : '') + (settingsOpen || usageStatsOpen ? ' remote-shell--global-panel' : '') + (workspaceResizing ? ' remote-shell--resizing' : '') + (sidebarDragging ? ' remote-shell--sidebar-dragging' : '') + (workspaceDragging ? ' remote-shell--workspace-dragging' : '')}
       style={themeStyle}
       onTouchStartCapture={handleSidebarTouchStart}
       onTouchMoveCapture={handleSidebarTouchMove}
@@ -6450,7 +6484,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               </span>
             ))}
           </div>
-          <button type="button" aria-label="退出配对" title="退出配对" onClick={() => void onUnpair()}>退出</button>
         </footer>
       </aside>
 
@@ -6503,7 +6536,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={setTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={setTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
         <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
@@ -6669,6 +6702,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             mobileDragging={workspaceDragging}
             onOpenMobile={openWorkspacePanel}
             onCloseMobile={() => setWorkspaceOpen(false)}
+            onCollapse={collapseWorkspacePanel}
             panelRef={workspacePanel}
           />
         </>
@@ -6733,11 +6767,12 @@ function MCPApprovalsCard({ token }: { token: string }) {
   </section>
 }
 
-function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
+function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, chatShortcuts, onChatShortcutsChange, cpaUsageSettings, onCPAUsageSettingsChange, translation, onTranslationChange, onTranslationConfigSaved }: {
   token: string
   preferences: ThemePreferences
   onChange: (next: ThemePreferences) => void
   onClose: () => void
+  onUnpair: () => void | Promise<void>
   chatShortcuts: SidebarChatShortcuts
   onChatShortcutsChange: (next: SidebarChatShortcuts) => void
   cpaUsageSettings: CPAUsageSettings
@@ -6825,6 +6860,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   function closeWithConfigCheck() {
     if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续离开吗？')) return
     onClose()
+  }
+
+  function unpairWithConfigCheck() {
+    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续退出吗？')) return
+    void onUnpair()
   }
 
   useEffect(() => {
@@ -6995,6 +7035,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
               onClick={() => selectSection(item.id)}
             >{item.icon}<span>{item.label}</span></button>)}
           </div>)}
+          <div className="theme-settings-panel__session">
+            <button className="theme-settings-panel__nav-item" type="button" onClick={unpairWithConfigCheck} title="退出当前设备的配对">
+              <LogOut size={17} /><span>退出配对</span>
+            </button>
+          </div>
         </nav>
         <div className="theme-settings-panel__content" ref={settingsContentRef}>
         <div id="settings-section-codex-config" className="theme-settings-panel__section" hidden={activeSection !== 'codex-config'}>
