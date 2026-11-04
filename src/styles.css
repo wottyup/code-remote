@@ -4201,6 +4201,30 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-pixel .theme-settings-panel--navigation .theme-settings-panel__nav-item { border-radius: 0; }
 .remote-shell--theme-chinese-retro .theme-settings-panel--navigation .theme-settings-panel__nav-item { border-radius: 4px; }
 
+.native-config__body { display: grid; gap: 20px; padding: 22px 0 0; }
+.native-config__file { display: grid; min-width: 0; gap: 7px; padding: 15px 17px; border: 1px solid var(--settings-inner-border); border-radius: 12px; background: var(--settings-inner-surface); }
+.native-config__file > span, .native-config__field > span, .native-config__field .translation-settings__field > span { font-size: calc(14px + var(--mobile-font-offset)); font-weight: 650; }
+.native-config__file code { overflow-wrap: anywhere; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; }
+.native-config__file small, .native-config__field small, .native-config__hint { margin: 0; color: inherit; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; opacity: .72; }
+.native-config__form { display: grid; gap: 20px; }
+.native-config__field { display: grid; min-width: 0; gap: 8px; }
+.native-config__field > span { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.native-config__field > span em { font-size: calc(12px + var(--mobile-font-offset)); font-style: normal; font-weight: 500; opacity: .72; }
+.native-config__field input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--settings-inner-border); border-radius: 9px; outline: none; background: var(--settings-inner-surface); color: inherit; font: inherit; font-size: calc(14px + var(--mobile-font-offset)); }
+.native-config__field input::placeholder { color: inherit; opacity: .45; }
+.native-config__field input:focus-visible { border-color: var(--settings-nav-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--settings-nav-accent) 16%, transparent); }
+.native-config__field input:disabled { opacity: .65; }
+.native-config__field .translation-settings__field { display: grid; gap: 8px; }
+.native-config__field .translation-select__trigger { min-height: 44px; }
+.native-config__actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.native-config__message { margin: 0; padding: 12px 14px; border: 1px solid var(--settings-inner-border); border-radius: 9px; background: var(--settings-inner-surface); font-size: calc(13px + var(--mobile-font-offset)); line-height: 1.5; }
+.native-config__message--error { color: #dc4d4d; }
+.remote-shell--theme-light .native-config__message--error { color: #b42318; }
+.native-config__hint { padding: 0 2px; }
+.remote-shell--theme-pixel .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 0; }
+.remote-shell--theme-retro .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 2px; }
+.remote-shell--theme-chinese-retro .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 5px; }
+
 @container settings-panel (max-width: 760px) {
   .theme-settings-panel--navigation .theme-settings-panel__layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .theme-settings-panel--navigation .theme-settings-panel__nav { display: flex; gap: 6px; padding: 10px 12px; overflow-x: auto; overflow-y: hidden; border-right: 0; border-bottom: 1px solid var(--settings-inner-rule); scrollbar-width: thin; touch-action: pan-x; }

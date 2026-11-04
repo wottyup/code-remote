@@ -90,6 +90,7 @@ import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, selectedTranslationProfileId, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
+import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 
 interface Props {
   token: string
@@ -6727,6 +6728,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
   const [recordingShortcut, setRecordingShortcut] = useState<SidebarChatShortcutAction | null>(null)
   const [shortcutMessage, setShortcutMessage] = useState<string | null>(null)
   const [activeSection, setActiveSection] = useState<SettingsSectionId>(readActiveSettingsSection)
+  const [nativeConfigDirty, setNativeConfigDirty] = useState(false)
   const settingsNavRef = useRef<HTMLElement>(null)
   const settingsContentRef = useRef<HTMLDivElement>(null)
   const backgroundCropDrag = useRef<{
@@ -6759,6 +6761,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
       { id: 'chat-shortcuts', label: '切换快捷键', icon: <Keyboard size={17} /> },
     ] },
     { label: '连接', items: [
+      { id: 'codex-config', label: 'Codex API', icon: <TerminalIcon size={17} /> },
+      { id: 'claude-config', label: 'Claude Code API', icon: <FileText size={17} /> },
       { id: 'cpa-manager', label: 'token使用量查询', icon: <Link2 size={17} /> },
       { id: 'mcp-approvals', label: 'MCP 自动批准', icon: <ShieldCheck size={17} /> },
     ] },
@@ -6783,6 +6787,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
 
   function selectSection(sectionId: SettingsSectionId) {
     if (sectionId === activeSection) return
+    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续切换吗？')) return
     if (activeSection === 'chat-shortcuts' && recordingShortcut) {
       setRecordingShortcut(null)
       setShortcutMessage('已取消录制。')
@@ -6790,6 +6795,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     setActiveSection(sectionId)
     saveActiveSettingsSection(sectionId)
     settingsContentRef.current?.scrollTo({ top: 0 })
+  }
+
+  function closeWithConfigCheck() {
+    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续离开吗？')) return
+    onClose()
   }
 
   useEffect(() => {
@@ -6944,7 +6954,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
     <main className="theme-settings-panel theme-settings-panel--navigation" aria-label="设置">
       <header className="theme-settings-panel__header">
         <h1>设置</h1>
-        <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
+        <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={closeWithConfigCheck}><X size={18} /></button>
       </header>
 
       <div className="theme-settings-panel__layout">
@@ -6962,6 +6972,12 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, chatShortcu
           </div>)}
         </nav>
         <div className="theme-settings-panel__content" ref={settingsContentRef}>
+        <div id="settings-section-codex-config" className="theme-settings-panel__section" hidden={activeSection !== 'codex-config'}>
+          {activeSection === 'codex-config' ? <NativeEngineConfigCard token={token} engine="codex" onDirtyChange={setNativeConfigDirty} /> : null}
+        </div>
+        <div id="settings-section-claude-config" className="theme-settings-panel__section" hidden={activeSection !== 'claude-config'}>
+          {activeSection === 'claude-config' ? <NativeEngineConfigCard token={token} engine="claude" onDirtyChange={setNativeConfigDirty} /> : null}
+        </div>
         <div id="settings-section-mcp-approvals" className="theme-settings-panel__section" hidden={activeSection !== 'mcp-approvals'}>
           <MCPApprovalsCard token={token} />
         </div>

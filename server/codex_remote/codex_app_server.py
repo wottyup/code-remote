@@ -306,6 +306,8 @@ class CodexAppServer:
         self._history_sync_task: asyncio.Task[None] | None = None
         self._start_lock = asyncio.Lock()
         self._handoff_lock = asyncio.Lock()
+        self._config_reload_ready = asyncio.Event()
+        self._config_reload_ready.set()
         self._write_lock = asyncio.Lock()
         self._runtime_history_lock = asyncio.Lock()
         self._request_id = 1
@@ -426,6 +428,34 @@ class CodexAppServer:
     async def connect(self) -> dict[str, Any]:
         await self._ensure_started()
         return self.status()
+
+    async def reload_config_if_idle(self) -> str:
+        """Restart this App Server only when it has no live work to interrupt."""
+        async with self._handoff_lock:
+            async with self._start_lock:
+                if self._handed_off or not self.connected:
+                    return "next_connect"
+                if self.has_active_turns or self._pending or self._server_requests or self._fresh_thread_cwds:
+                    return "busy"
+                executable = self._resolve_executable()
+                if not executable:
+                    raise CodexRuntimeError("找不到可用的 Codex CLI，配置已保存但无法重新连接。")
+                self._config_reload_ready.clear()
+                try:
+                    await self._stop_process()
+                    await self._start_runtime(executable)
+                    self._last_error = None
+                    self._schedule_runtime_history_sync()
+                    await self._emit({"type": "connection", **self.status()})
+                    return "reloaded"
+                except Exception as error:
+                    self._last_error = "Codex 重新连接失败，请检查本机配置。"
+                    await self._emit({"type": "connection", **self.status()})
+                    if isinstance(error, CodexRuntimeError):
+                        raise
+                    raise CodexRuntimeError("Codex 重新连接失败，配置已保存。") from error
+                finally:
+                    self._config_reload_ready.set()
 
     async def handoff_to_local_codex(self) -> None:
         """Release the remote-owned App Server without stopping the web service.
@@ -1168,8 +1198,11 @@ class CodexAppServer:
 
     async def request(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
         self._raise_if_handed_off()
-        await self._ensure_started()
-        return await self._request(method, params, timeout=90)
+        while True:
+            await self._config_reload_ready.wait()
+            await self._ensure_started()
+            if self._config_reload_ready.is_set():
+                return await self._request(method, params, timeout=90)
 
     async def close(self) -> None:
         process = self._process
@@ -1816,6 +1849,10 @@ class CodexAppServer:
             while line := await process.stderr.readline():
                 detail = line.decode("utf-8", errors="replace").rstrip()
                 if detail:
+                    # Config parse diagnostics can print the managed bearer
+                    # token line. Never pass such lines to logs or status.
+                    if "experimental_bearer_token" in detail or "authorization" in detail.casefold():
+                        detail = "[凭据相关诊断已隐藏]"
                     self._recent_stderr.append(detail)
                     del self._recent_stderr[:-12]
                     logger.info("Codex: %s", detail)

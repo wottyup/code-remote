@@ -60,6 +60,31 @@ export interface TranslationConfigInput {
   model?: string
 }
 
+export type NativeEngine = 'codex' | 'claude'
+export type NativeConfigApplyStatus = 'reloaded' | 'pending' | 'next_connect' | 'failed' | 'next_turn' | 'unchanged'
+
+export interface NativeEngineConfig {
+  engine: NativeEngine
+  path: string
+  exists: boolean
+  baseUrl: string
+  hasKey: boolean
+  authMode: 'bearer' | 'api_key'
+  enabled: boolean
+  currentProvider: string
+  revision: string
+  reloadPending: boolean
+}
+
+export interface NativeEngineConfigSaveResult {
+  engine: NativeEngine
+  path: string
+  revision: string
+  changed: boolean
+  applyStatus: NativeConfigApplyStatus
+  reloadPending: boolean
+}
+
 export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
 
 export interface WorkspaceUploadProgress {
@@ -753,6 +778,24 @@ export const codexRemoteClient = {
   },
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
+  nativeEngineConfig(token: string, engine: NativeEngine, signal?: AbortSignal) {
+    return request<NativeEngineConfig>(token, `/api/v1/native-config/${engine}`, { cache: 'no-store', signal }, { networkRetries: 0 })
+  },
+  saveNativeEngineConfig(token: string, engine: NativeEngine, input: {
+    baseUrl: string
+    apiKey: string
+    authMode: 'bearer' | 'api_key'
+    expectedRevision: string
+  }) {
+    return request<NativeEngineConfigSaveResult>(token, `/api/v1/native-config/${engine}`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input),
+    }, { networkRetries: 0 })
+  },
+  reloadNativeCodexConfig(token: string) {
+    return request<{ applyStatus: NativeConfigApplyStatus; reloadPending: boolean }>(token, '/api/v1/native-config/codex/reload', {
+      method: 'POST', cache: 'no-store',
+    }, { networkRetries: 0 })
   },
   translationConfig(token: string) {
     return request<TranslationConfigResponse>(token, '/api/v1/codex/translation/config')
