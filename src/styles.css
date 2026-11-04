@@ -4216,3 +4216,18 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (max-width: 700px) {
   .remote-shell .theme-settings-panel--navigation { grid-template-rows: 60px minmax(0, 1fr); }
 }
+
+/* Global settings panels replace the whole workspace, including both sidebars. */
+.remote-shell.remote-shell--global-panel > .theme-settings-panel {
+  position: absolute;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  grid-column: auto;
+  grid-row: auto;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+}
