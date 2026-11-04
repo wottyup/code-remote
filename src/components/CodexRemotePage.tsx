@@ -4835,6 +4835,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [sidebarSearch, setSidebarSearch] = useState('')
   const [sidebarEngineFilter, setSidebarEngineFilter] = useState<ChatEngine | null>(null)
+  const newThreadEngine = sidebarEngineFilter ?? activeRemote.activeEngine
   const [sidebarChatShortcuts, setSidebarChatShortcuts] = useState(readSidebarChatShortcuts)
   useEffect(() => saveSidebarChatShortcuts(sidebarChatShortcuts), [sidebarChatShortcuts])
   const [sidebarSelectionMode, setSidebarSelectionMode] = useState(false)
@@ -5898,7 +5899,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   async function createThreadForPane(paneIndex = selectedPaneIndex, cwd?: string, engine?: ChatEngine) {
     const target = remotes[paneIndex] ?? remote0
-    const selectedEngine = engine ?? target.activeEngine
+    const selectedEngine = engine ?? sidebarEngineFilter ?? target.activeEngine
+    if (selectedEngine === 'claude-code' && claudeCodeAvailable === false) {
+      showPaneNotice('Claude Code 不可用')
+      return null
+    }
     const targetThreadId = target.activeThread?.id
     const targetPreferences = targetThreadId
       ? resolvedComposerPreferences(defaultComposerPreferences, threadComposerPreferences[targetThreadId])
@@ -6628,8 +6633,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               continuationPending={Boolean(activeContinuation)}
               onRefresh={activeRemote.refreshActiveThread}
               onCreateThread={createComposerThread}
-              createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (isClaudeCodeThread && claudeCodeAvailable === false)}
-              createThreadTitle={isClaudeCodeThread && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${isClaudeCodeThread ? ' Claude Code' : ' Codex'}对话`}
+              createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (newThreadEngine === 'claude-code' && claudeCodeAvailable === false)}
+              createThreadTitle={newThreadEngine === 'claude-code' && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${newThreadEngine === 'claude-code' ? ' Claude Code' : ' Codex'}对话`}
             />
           </section>
           <div
