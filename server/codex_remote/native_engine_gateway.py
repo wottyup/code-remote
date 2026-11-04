@@ -9,9 +9,11 @@ import ipaddress
 import json
 import re
 import secrets
+from collections import OrderedDict
 from collections.abc import Iterator
 from http.client import HTTPException as HTTPTransportError
 from pathlib import Path
+from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request as UpstreamRequest, build_opener
@@ -22,12 +24,64 @@ from starlette.background import BackgroundTask
 
 from .native_engine_config import NATIVE_PROTOCOLS, NativeEngineConfigError, NativeEngineConfigStore
 from .native_engine_protocol import (
-    MAX_RESPONSE_BYTES, PROTOCOLS, NativeOutput, ProtocolError, api_endpoint,
-    decode_request, encode_request, json_events, sse_bytes, sse_records, stream_events,
+    MAX_RESPONSE_BYTES, PROTOCOLS, Conversation, ImageInputError, NativeOutput, ProtocolError, api_endpoint,
+    decode_request, encode_request, json_events, sse_bytes, sse_records, stream_events, text_only_history,
 )
 
 MAX_REQUEST_BYTES = 64 * 1024 * 1024
 SNAPSHOT_FIELDS = ("baseUrl", "apiKey", "authMode", "protocol", "model", "models")
+IMAGE_CAPABILITY_CACHE_SECONDS = 300
+MAX_IMAGE_CAPABILITY_ENTRIES = 128
+
+
+class _UpstreamRejection(Exception):
+    """Keep only safe classifications, never the provider's error body."""
+
+    def __init__(self, error: HTTPError) -> None:
+        super().__init__("Upstream rejected the request")
+        self.code = error.code
+        fields = {}
+        try:
+            raw = error.read(16 * 1024 + 1)
+            if len(raw) <= 16 * 1024:
+                body = json.loads(raw)
+                if isinstance(body, dict):
+                    detail = body.get("error", body.get("detail", body))
+                    if isinstance(detail, str):
+                        fields = {"message": detail}
+                    elif isinstance(detail, dict):
+                        fields = {key: value for key, value in detail.items()
+                                  if key in {"message", "type", "code", "param"} and isinstance(value, str)}
+        except (ValueError, UnicodeError, OSError, HTTPTransportError):
+            pass
+        finally:
+            error.close()
+        message = " ".join(fields.values()).casefold()
+        code = fields.get("code", "").casefold()
+        invalid_image = re.search(
+            r"(?:invalid|malformed|corrupt) (?:image|base64)|image (?:format|type|size|dimensions|resolution|encoding)|media.?type|mime|download|fetch|图片格式|图像格式|图片大小|图片下载",
+            message,
+        )
+        image_term = r"(?:images?|image_urls?|image[_ -]?inputs?|vision|multimodal)"
+        image_rejection = re.search(
+            rf"\b(?:does not support|doesn't support|do not support|unsupported|no support for)\s+(?:[\w-]+[ :]+){{0,3}}['\"]?{image_term}\b"
+            rf"|\b{image_term}['\"]?(?:\s+(?:inputs?|content|requests?|messages?))?\s+(?:(?:is|are)\s+)?(?:not supported|unsupported|not allowed|disabled)\b"
+            r"|(?:model|endpoint|api|messages?|content|input).{0,64}(?:only supports?|supports? only|only accepts?|accepts? only|must contain only)\s+(?:plain\s+)?text\b"
+            r"|only\s+(?:plain\s+)?['\"]?text['\"]?(?:\s+\w+){0,3}\s+(?:is|are)\s+(?:supported|accepted|allowed)"
+            r"|(?:不支持|不接受|无法处理).{0,8}(?:图片|图像|视觉|多模态)|(?:图片|图像|视觉|多模态).{0,8}(?:不支持|不接受)",
+            message,
+        )
+        text_content_only = ("image_url" in message and re.search(
+            r"supported (?:values|types)(?: are)?[:=]\s*(?:\[\s*)?['\"]text['\"]\s*(?:\]|[.。]|$)", message,
+        ))
+        self.rejects_images = not invalid_image and bool(image_rejection or text_content_only or code in {
+            "image_not_supported", "image_input_not_supported", "model_does_not_support_images",
+            "vision_not_supported", "unsupported_multimodal",
+        })
+        self.rejects_token_limit = "max_completion_tokens" in message and bool(re.search(
+            r"unsupported|not supported|unknown|unrecognized|not allowed|not permitted|use\s+['\"]?max_tokens",
+            message,
+        ))
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -41,6 +95,7 @@ class NativeEngineGateway:
         self.native = native
         self.base_url = base_url.rstrip("/")
         self.slots = asyncio.Semaphore(16)
+        self._text_only_models: OrderedDict[tuple[str, str], float] = OrderedDict()
 
     def _snapshot(self, engine: str, connection_id: str) -> dict:
         if engine not in NATIVE_PROTOCOLS or not re.fullmatch(r"[a-f0-9]{32}", connection_id):
@@ -143,18 +198,54 @@ class NativeEngineGateway:
         def send(data: dict):
             upstream = UpstreamRequest(endpoint, data=json.dumps(data, ensure_ascii=False, allow_nan=False).encode(),
                                        headers=headers, method="POST")
-            return opener.open(upstream, timeout=90)
+            try:
+                return opener.open(upstream, timeout=90)
+            except HTTPError as error:
+                raise _UpstreamRejection(error) from None
 
         try:
             return send(payload)
-        except HTTPError as error:
-            if profile["protocol"] != "chat" or error.code != 400 or "max_completion_tokens" not in payload:
+        except _UpstreamRejection as error:
+            if (profile["protocol"] != "chat" or error.code != 400 or "max_completion_tokens" not in payload
+                    or not error.rejects_token_limit):
                 raise
             # Older Chat-compatible services implement the original limit name.
-            error.close()
             legacy = {key: value for key, value in payload.items() if key != "max_completion_tokens"}
             legacy["max_tokens"] = payload["max_completion_tokens"]
             return send(legacy)
+
+    async def _connect(self, connection_id: str, profile: dict, payload: dict, request: Request,
+                       conversation: Conversation | None, *, passthrough: bool, count: bool):
+        # Cache access stays on the event loop; only network I/O runs in threads.
+        if conversation is None or not any(
+            part["type"] == "image" for message in conversation.messages for part in message["content"]
+        ):
+            response = await asyncio.to_thread(self._open, profile, payload, request, passthrough=passthrough, count=count)
+            return response, ""
+        key = (connection_id, conversation.model)
+        notice, used_text_fallback = "", False
+        rejected_at = self._text_only_models.get(key)
+        if rejected_at is not None and monotonic() - rejected_at >= IMAGE_CAPABILITY_CACHE_SECONDS:
+            self._text_only_models.pop(key, None)
+            rejected_at = None
+        if rejected_at is not None:
+            self._text_only_models.move_to_end(key)
+            text_conversation, notice = text_only_history(conversation)
+            payload = encode_request(profile["protocol"], text_conversation)
+            used_text_fallback = True
+        try:
+            response = await asyncio.to_thread(self._open, profile, payload, request, passthrough=passthrough, count=count)
+        except _UpstreamRejection as error:
+            if used_text_fallback or error.code not in {400, 415, 422} or not error.rejects_images:
+                raise
+            self._text_only_models[key] = monotonic()
+            self._text_only_models.move_to_end(key)
+            while len(self._text_only_models) > MAX_IMAGE_CAPABILITY_ENTRIES:
+                self._text_only_models.popitem(last=False)
+            text_conversation, notice = text_only_history(conversation)
+            payload = encode_request(profile["protocol"], text_conversation)
+            response = await asyncio.to_thread(self._open, profile, payload, request, passthrough=False, count=False)
+        return response, notice
 
     @staticmethod
     def _body(response) -> dict:
@@ -256,18 +347,19 @@ class NativeEngineGateway:
                 await asyncio.to_thread(response.close)
 
         try:
-            response = await asyncio.to_thread(self._open, profile, payload, request, passthrough=passthrough, count=count)
+            response, notice = await self._connect(connection_id, profile, payload, request, conversation,
+                                                   passthrough=passthrough, count=count)
             if not payload.get("stream"):
                 data = await asyncio.to_thread(self._body, response)
                 if not passthrough:
-                    output = NativeOutput(native_protocol, conversation)
+                    output = NativeOutput(native_protocol, conversation, notice=notice)
                     for event in json_events(profile["protocol"], data):
                         output.push(event)
                     data = output.result("incomplete" if output.reason == "length" else "completed")
                 await cleanup()
                 return JSONResponse(data, headers={"Cache-Control": "no-store"})
             chunks = self._raw(response) if passthrough else self._converted(
-                response, profile["protocol"], NativeOutput(native_protocol, conversation),
+                response, profile["protocol"], NativeOutput(native_protocol, conversation, notice=notice),
             )
 
             def next_chunk() -> bytes | None:
@@ -289,9 +381,8 @@ class NativeEngineGateway:
             return StreamingResponse(stream(), media_type="text/event-stream",
                                      headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no", "Content-Encoding": "identity"},
                                      background=BackgroundTask(cleanup))
-        except HTTPError as error:
+        except _UpstreamRejection as error:
             code = error.code
-            error.close()
             await cleanup()
             message = {
                 400: "上游拒绝请求，请检查模型及其工具、图片和参数支持情况。",
@@ -301,6 +392,9 @@ class NativeEngineGateway:
                 429: "上游限流或额度不足，请稍后重试。",
             }.get(code, "上游接口请求失败，请检查地址和服务状态。")
             return self._error(native_protocol, message, code if 400 <= code < 600 else 502)
+        except ImageInputError as error:
+            await cleanup()
+            return self._error(native_protocol, str(error), 400)
         except ProtocolError as error:
             await cleanup()
             return self._error(native_protocol, str(error), 502)

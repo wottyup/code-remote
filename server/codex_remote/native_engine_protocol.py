@@ -12,16 +12,21 @@ import re
 import time
 import uuid
 from collections.abc import Iterable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from urllib.parse import urlsplit
 
 PROTOCOLS = {"responses", "anthropic", "chat"}
 MAX_RESPONSE_BYTES = 64 * 1024 * 1024
 MAX_EVENT_BYTES = 8 * 1024 * 1024
+HISTORY_IMAGE_NOTICE = "> 提示：当前模型不支持图片，本次未发送历史图片；原图片仍保留在聊天记录中。\n\n"
 
 
 class ProtocolError(Exception):
     """A safe error; must not contain submitted content or upstream secrets."""
+
+
+class ImageInputError(ProtocolError):
+    """The current user turn requires a model that accepts images."""
 
 
 def normalize_base_url(base: str, protocol: str) -> str:
@@ -200,6 +205,28 @@ class Conversation:
     effort: str | None = None
     temperature: float | None = None
     parallel_tools: bool = True
+    current_turn_start: int = 0
+
+
+def text_only_history(conversation: Conversation) -> tuple[Conversation, str]:
+    """Replace historical images only, after an explicit capability rejection."""
+    messages, omitted, notified = [], False, False
+    for index, message in enumerate(conversation.messages):
+        content = []
+        for part in message["content"]:
+            if part["type"] == "image":
+                if index >= conversation.current_turn_start:
+                    raise ImageInputError("当前模型不支持本轮消息或工具返回的图片。请改发纯文字消息，或切换支持图片的模型。")
+                omitted = True
+                content.append({"type": "text", "text": "[历史图片未发送：当前模型不支持图片。]"})
+            else:
+                content.append(part)
+                if (index >= conversation.current_turn_start and message["role"] == "assistant"
+                        and part["type"] == "text" and HISTORY_IMAGE_NOTICE.strip() in part["text"]):
+                    notified = True
+        messages.append({**message, "content": content})
+    notice = HISTORY_IMAGE_NOTICE if omitted and not notified else ""
+    return replace(conversation, messages=messages), notice
 
 
 def decode_request(protocol: str, payload: dict) -> Conversation:
@@ -231,6 +258,7 @@ def decode_request(protocol: str, payload: dict) -> Conversation:
 
     add_tools(payload.get("tools") or [])
     messages: list[dict] = []
+    current_turn_start = 0
 
     def message(role: str, content: object) -> None:
         if role not in {"system", "developer", "user", "assistant"}:
@@ -261,6 +289,8 @@ def decode_request(protocol: str, payload: dict) -> Conversation:
             for item in items:
                 kind = item.get("type", "message")
                 if kind == "message":
+                    if item.get("role", "user") == "user":
+                        current_turn_start = len(messages)
                     message(item.get("role", "user"), item.get("content"))
                 elif kind in {"function_call", "custom_tool_call"}:
                     call(item)
@@ -275,6 +305,12 @@ def decode_request(protocol: str, payload: dict) -> Conversation:
         message("system", payload.get("system"))
         for entry in payload.get("messages", []):
             content = entry.get("content", [])
+            if entry["role"] == "user" and (isinstance(content, str) or any(
+                part.get("type") in {"text", "image", "image_url", "input_image"} for part in content
+            )):
+                # Keep the complete multipart user message in the current turn;
+                # tool-result-only user entries continue the same turn.
+                current_turn_start = len(messages)
             if isinstance(content, str):
                 message(entry["role"], content)
                 continue
@@ -288,6 +324,8 @@ def decode_request(protocol: str, payload: dict) -> Conversation:
                     message(entry["role"], [part])
     else:
         for entry in payload.get("messages", []):
+            if entry["role"] == "user":
+                current_turn_start = len(messages)
             if entry["role"] == "tool":
                 messages.append({"role": "tool", "id": entry["tool_call_id"], "content": _parts(entry.get("content"))})
             else:
@@ -317,7 +355,7 @@ def decode_request(protocol: str, payload: dict) -> Conversation:
     return Conversation(
         str(payload.get("model", "")), bool(payload.get("stream", False)), messages, registry, tools,
         choice, limit, reasoning.get("effort"), payload.get("temperature"),
-        payload.get("parallel_tool_calls", True),
+        payload.get("parallel_tool_calls", True), current_turn_start,
     )
 
 
@@ -660,9 +698,10 @@ def stream_events(protocol: str, records: Iterable[tuple[str, dict | None]]) -> 
 class NativeOutput:
     """Encode a portable result in the format expected by either native CLI."""
 
-    def __init__(self, protocol: str, conversation: Conversation) -> None:
+    def __init__(self, protocol: str, conversation: Conversation, *, notice: str = "") -> None:
         self.protocol = protocol
         self.conversation = conversation
+        self.notice = notice
         self.id = ("resp_" if protocol == "responses" else "msg_") + uuid.uuid4().hex
         self.created = int(time.time())
         self.items: list[dict] = []
@@ -734,6 +773,8 @@ class NativeOutput:
         if kind == "usage":
             self.usage.update(event["usage"])
         elif kind == "text" and event["text"]:
+            text = self.notice + event["text"]
+            self.notice = ""
             if self.text_index is None:
                 self.text_index = len(self.items)
                 if self.protocol == "responses":
@@ -750,11 +791,11 @@ class NativeOutput:
             index = self.text_index
             item = self.items[index]
             if self.protocol == "responses":
-                item["content"][0]["text"] += event["text"]
-                events.append(self._event("response.output_text.delta", item_id=item["id"], output_index=index, content_index=0, delta=event["text"], logprobs=[]))
+                item["content"][0]["text"] += text
+                events.append(self._event("response.output_text.delta", item_id=item["id"], output_index=index, content_index=0, delta=text, logprobs=[]))
             else:
-                item["text"] += event["text"]
-                events.append(self._event("content_block_delta", index=index, delta={"type": "text_delta", "text": event["text"]}))
+                item["text"] += text
+                events.append(self._event("content_block_delta", index=index, delta={"type": "text_delta", "text": text}))
         elif kind == "tool":
             events.extend(self._close_text())
             tool, arguments = self.conversation.registry.decode(event["name"], event["arguments"])
@@ -783,6 +824,10 @@ class NativeOutput:
                 ])
             self.items.append(item)
         elif kind == "finish":
+            if self.notice and not self.has_tools:
+                # A successful empty reply should still disclose the omission.
+                notice, self.notice = self.notice, ""
+                events.extend(self.push({"kind": "text", "text": notice}))
             events.extend(self._close_text())
             self.reason, self.finished = event["reason"], True
             if self.protocol == "responses":
