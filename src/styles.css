@@ -749,6 +749,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (prefers-reduced-motion: reduce) { .operation-activity__text { animation: none; background-position: 50% center; } }
 .chat-message__content { width: 100%; min-width: 0; max-width: 100%; overflow: hidden; margin-top: 5px; color: #d5d8de; font: 14.5px/1.72 Inter, ui-sans-serif, system-ui, sans-serif; font-size: calc(14.5px + var(--mobile-font-offset)); overflow-wrap: break-word; }
 .chat-message__text { white-space: pre-wrap; }
+.claude-reply { line-height: 1.65; overflow-wrap: anywhere; }
+.claude-reply p { margin: 0 0 .65em; white-space: pre-wrap; }
+.claude-reply strong, .claude-reply__heading { font-weight: 650; color: inherit; }
+.claude-reply__heading { margin: .9em 0 .45em; font-size: 1em; }
+.claude-reply ul, .claude-reply ol { margin: .45em 0 .85em; padding-inline-start: 1.8em; }
+.claude-reply li { padding-inline-start: .15em; white-space: pre-wrap; margin: .2em 0; }
+.claude-reply code { padding: .08em .3em; border-radius: 3px; background: color-mix(in srgb, currentColor 11%, transparent); color: #dcc28c; font: .9em ui-monospace, Consolas, monospace; letter-spacing: normal; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.remote-shell--theme-light .claude-reply code, .remote-shell--theme-warm .claude-reply code { color: #76521b; }
+.claude-reply blockquote { margin: .6em 0; padding-inline-start: .85em; border-inline-start: 2px solid currentColor; opacity: .85; }
+.claude-reply > :first-child { margin-top: 0; }
+.claude-reply > :last-child { margin-bottom: 0; }
 .chat-message__content a { color: var(--chat-message-link, #67c4cf); overflow-wrap: anywhere; text-decoration: underline; text-underline-offset: .14em; }
 .chat-message__content a:hover { text-decoration-thickness: 2px; }
 .chat-message__table-scroll { --chat-message-table-border: #4a505b; --chat-message-table-header: rgba(255, 255, 255, .07); box-sizing: border-box; width: 100%; max-width: 100%; margin: 8px 0 11px; overflow: auto; overscroll-behavior-x: contain; -webkit-overflow-scrolling: touch; }
