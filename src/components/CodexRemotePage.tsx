@@ -1125,6 +1125,7 @@ interface MessageComposerProps {
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
+  stableQueueHeight: boolean
   showCodexPreferences: boolean
   isInterrupting: boolean
   writerConflict: boolean
@@ -1182,6 +1183,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
+  stableQueueHeight,
   showCodexPreferences,
   isInterrupting,
   writerConflict,
@@ -2471,6 +2473,16 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             : null)}
         </div>
       ) : null}
+      <div className={`composer-input-stack${stableQueueHeight ? ' composer-input-stack--stable' : ''}`}>
+        {stableQueueHeight ? (
+          <div className="composer-input-stack__sizer" aria-hidden="true">
+            <div className="composer-queue composer-queue--collapsed">
+              <div className="composer-queue__heading"><span>已排队 1 条</span><ChevronDown size={14} /></div>
+            </div>
+            <div className="composer-editor" style={{ height: `${composerHeight}px` }} />
+          </div>
+        ) : null}
+        <div className="composer-input-stack__body">
       {queuedMessages.length > 0 ? (
         <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条消息`}>
           <button
@@ -2578,6 +2590,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           inputMode="text"
           enterKeyHint="send"
         />
+      </div>
+        </div>
       </div>
       <div className="message-composer__footer">
         <div className="composer-footer-start">
@@ -6587,6 +6601,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
+              stableQueueHeight={openPaneIndexes.length > 1}
               showCodexPreferences={!isClaudeCodeThread}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
