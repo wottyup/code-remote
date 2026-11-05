@@ -146,6 +146,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
 .thread-row__copy strong { overflow: hidden; color: inherit; font-size: calc(13.5px + var(--mobile-font-offset)); font-weight: 520; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
+.thread-row--replying .thread-row__copy strong { position: relative; isolation: isolate; }
+.thread-row--replying .thread-row__copy strong::after { position: absolute; z-index: -1; inset: 0; border-radius: 5px; background: radial-gradient(ellipse 120% 115% at 50% 50%, color-mix(in srgb, currentColor 38%, transparent), transparent 78%); content: ''; pointer-events: none; opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .thread-row--replying .thread-row__copy strong::after { animation: none; opacity: .42; } }
 .thread-row__meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .thread-row__copy small { flex: 0 0 auto; color: #777e88; font-size: calc(11px + var(--mobile-font-offset)); }
 .thread-row__pin { flex: 0 0 auto; color: #d8b66f; }

@@ -55,7 +55,7 @@ import {
   Upload,
   X,
 } from 'lucide-react'
-import { useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { threadIsRunning, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
 import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
@@ -6454,6 +6454,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
             <div className="thread-list__section">{section.label}</div>
             {section.threads.map((thread) => {
               const paneIndex = paneIndexForThread(thread.id)
+              const threadRemote = paneIndex === undefined ? null : remotes[paneIndex]
+              const isReplying = threadRemote
+                ? threadRemote.isRunning || threadRemote.runningTurnId !== null || threadRemote.messages.at(-1)?.streaming === true
+                : threadIsRunning(thread)
               const isActive = !sidebarSelectionMode && paneIndex === selectedPaneIndex
               const isSelected = sidebarSelectionMode && selectedSidebarThreadIds.has(thread.id)
               const isPinned = pinnedThreadIds.has(thread.id)
@@ -6461,7 +6465,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '')} type="button" key={thread.id} onClick={(event) => {
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} onClick={(event) => {
                   const pending = threadLongPress.current
                   if (pending?.threadId === thread.id && pending.triggered) {
                     event.preventDefault()
@@ -6471,7 +6475,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   clearThreadLongPress()
                   if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
                   else void selectThread(thread)
-                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined}>
+                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? '正在回复' : undefined}>
                   <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
                   <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label="有定时发送" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                   {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}

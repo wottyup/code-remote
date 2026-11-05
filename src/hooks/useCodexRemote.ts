@@ -478,7 +478,7 @@ function threadTimestamp(thread: CodexThread) {
   return 0
 }
 
-function threadIsRunning(thread: CodexThread) {
+export function threadIsRunning(thread: CodexThread) {
   return ['active', 'inProgress', 'running', 'started'].includes(thread.status?.type ?? '')
 }
 
@@ -3685,9 +3685,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (retiredAssistantItems.current.turnId === (eventTurnId ?? activeTurnId.current)
       && typeof assistantItemId === 'string' && retiredAssistantItems.current.ids.has(assistantItemId)) return
     if (eventThreadId && (event.method === 'turn/started' || event.method === 'turn/completed')) {
+      const status = { type: event.method === 'turn/started' ? 'active' : 'idle' }
       codexRemoteClient.updateThreadListEntry(token, eventThreadId, {
-        status: { type: event.method === 'turn/started' ? 'active' : 'idle' },
+        status,
       })
+      if (loadThreads && threadListRef.current.some((thread) => thread.id === eventThreadId)) {
+        const next = threadListRef.current.map((thread) => thread.id === eventThreadId ? { ...thread, status } : thread)
+        threadListRef.current = next
+        setThreads(next)
+      }
     }
     // Older app-server notifications can omit threadId on item deltas. When
     // that happens, use the active turn as the second routing key so a second
@@ -4015,7 +4021,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadModels, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadModels, loadThread, loadThreads, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
