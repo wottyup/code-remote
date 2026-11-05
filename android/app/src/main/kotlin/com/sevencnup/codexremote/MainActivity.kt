@@ -4776,6 +4776,8 @@ class MainActivity : Activity() {
         }
         val columnCount = maxOf(1, rows.maxOfOrNull { it.size } ?: 1)
         val cellWidth = maxOf(dp(120), (maximumWidth - dp(1)) / columnCount)
+        val tableWidth = ((cellWidth.toLong() + dp(1)) * columnCount + dp(1))
+            .coerceAtMost(Int.MAX_VALUE.toLong() / 4).toInt()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val copyText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.first.toString() } }
         card.addView(copyActionButton("复制表格", "表格", copyText),
@@ -4807,10 +4809,83 @@ class MainActivity : Activity() {
             }
             grid.addView(row)
         }
-        card.addView(HorizontalScrollView(this).apply {
+        val tableScroll = object : HorizontalScrollView(this) {
+            private val touchSlop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
+            private val minFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMinimumFlingVelocity
+            private val maxFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMaximumFlingVelocity
+            private var startX = 0f
+            private var startY = 0f
+            private var previousX = 0f
+            private var draggingTable = false
+            private var velocityTracker: VelocityTracker? = null
+
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.x
+                        startY = event.y
+                        previousX = event.x
+                        draggingTable = false
+                        velocityTracker?.recycle()
+                        velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                        if (canScrollHorizontally(-1) || canScrollHorizontally(1)) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        velocityTracker?.addMovement(event)
+                        val deltaX = event.x - startX
+                        val deltaY = event.y - startY
+                        if (!draggingTable && (canScrollHorizontally(-1) || canScrollHorizontally(1)) &&
+                            abs(deltaX) > touchSlop && abs(deltaX) > abs(deltaY) * 1.25f &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            draggingTable = true
+                            val cancel = MotionEvent.obtain(event)
+                            cancel.action = MotionEvent.ACTION_CANCEL
+                            super.dispatchTouchEvent(cancel)
+                            cancel.recycle()
+                        }
+                        if (draggingTable) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            val pixels = (previousX - event.x).toInt()
+                            if (pixels != 0) {
+                                scrollBy(pixels, 0)
+                                previousX -= pixels
+                            }
+                            return true
+                        }
+                        if (abs(deltaY) > touchSlop && abs(deltaY) > abs(deltaX) &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            val handled = super.dispatchTouchEvent(event)
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return handled
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val wasDragging = draggingTable
+                        if (wasDragging && event.actionMasked == MotionEvent.ACTION_UP) {
+                            velocityTracker?.addMovement(event)
+                            velocityTracker?.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                            val velocity = velocityTracker?.xVelocity ?: 0f
+                            if (abs(velocity) >= minFlingVelocity) fling(-velocity.toInt())
+                        }
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        velocityTracker?.recycle()
+                        velocityTracker = null
+                        draggingTable = false
+                        if (wasDragging) return true
+                    }
+                }
+                return super.dispatchTouchEvent(event)
+            }
+        }.apply {
             isHorizontalScrollBarEnabled = false
-            addView(grid, FrameLayout.LayoutParams(WRAP, WRAP))
-        }, LinearLayout.LayoutParams(MATCH, WRAP))
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(grid, FrameLayout.LayoutParams(tableWidth, WRAP))
+        }
+        card.addView(tableScroll, LinearLayout.LayoutParams(MATCH, WRAP))
         return card
     }
 
