@@ -117,12 +117,36 @@ const connectionLabel = {
   unavailable: 'Codex 不可用',
 }
 
-const sidebarReplyBreatheDurationMs = 5500
+let replyBreathSyncFrame: number | null = null
 
-function syncSidebarReplyBreathe(element: HTMLButtonElement | null) {
-  if (!element) return
-  const phaseMs = Math.round(performance.now() % sidebarReplyBreatheDurationMs)
-  element.style.setProperty('--thread-row-breathe-delay', `-${phaseMs}ms`)
+function replyBreathAnimation(element: Element | null): Animation | null {
+  return element?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'composer-fill-breathe') ?? null
+}
+
+function syncSidebarReplyBreathe() {
+  replyBreathSyncFrame = null
+  const rows = Array.from(document.querySelectorAll<HTMLElement>('.thread-row--replying'))
+  if (rows.length === 0) return
+  const rowAnimations = rows.map(replyBreathAnimation).filter((animation): animation is Animation => animation !== null)
+  const composerAnimation = replyBreathAnimation(document.querySelector('.message-composer--running'))
+  const source = composerAnimation && (composerAnimation.startTime !== null || composerAnimation.currentTime !== null)
+    ? composerAnimation
+    : rowAnimations[0]
+  if (!source) return
+  for (const animation of rowAnimations) {
+    if (animation === source) continue
+    if (source.startTime !== null) animation.startTime = source.startTime
+    else if (source.currentTime !== null) animation.currentTime = source.currentTime
+  }
+}
+
+function scheduleSidebarReplyBreatheSync() {
+  if (replyBreathSyncFrame !== null) return
+  replyBreathSyncFrame = requestAnimationFrame(syncSidebarReplyBreathe)
+}
+
+function syncReplyBreatheOnMount(element: HTMLElement | null) {
+  if (element) scheduleSidebarReplyBreatheSync()
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
@@ -2451,6 +2475,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       ) : null}
       <form
         className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
+        ref={isReplying ? syncReplyBreatheOnMount : undefined}
+        onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleSidebarReplyBreatheSync() }}
         onSubmit={(event) => void send(event)}
       >
       {editingQueuedMessageId ? (
@@ -6491,7 +6517,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncSidebarReplyBreathe : undefined} onClick={(event) => {
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleSidebarReplyBreatheSync() }} onClick={(event) => {
                   const pending = threadLongPress.current
                   if (pending?.threadId === thread.id && pending.triggered) {
                     event.preventDefault()
