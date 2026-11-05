@@ -1486,15 +1486,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     let active = true
+    let imageDraftRevision = 0
     setImagesReady(false)
     const unsubscribe = subscribeToComposerImageDraft(draftScope, (images) => {
-      if (!active) return
+      if (!active || editingQueuedMessageIdRef.current) return
+      imageDraftRevision += 1
       attachedImagesRef.current = images
       setAttachedImages(images)
       setImagesReady(true)
     })
+    const readRevision = imageDraftRevision
     void readComposerImageDraft(draftScope).then((images) => {
-      if (!active) return
+      if (!active || imageDraftRevision !== readRevision || editingQueuedMessageIdRef.current) return
       attachedImagesRef.current = images
       setAttachedImages(images)
     }).catch((reason: unknown) => {
@@ -2039,6 +2042,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const previousImages = attachedImagesRef.current
     const previousDocuments = attachedDocumentsRef.current
     const previousAttachmentError = attachmentError
+    const pendingImageDraftClear = draftScope === newThreadComposerDraftScope
+      ? null
+      : saveComposerImageDraft(draftScope, []).then(
+        () => ({ ok: true as const }),
+        (reason: unknown) => ({ ok: false as const, reason }),
+      )
     sendingRef.current = true
     setSending(true)
     updateDraft('')
@@ -2081,8 +2090,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         }
       }
       updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
-      const currentImages = attachedImagesRef.current
-      updateAttachedImages(currentImages.length > 0 ? [...previousImages, ...currentImages] : previousImages, !imagesMovedToNewThread)
+      let persistedImages: CodexImageAttachment[] = []
+      if (pendingImageDraftClear && !imagesMovedToNewThread) {
+        try {
+          persistedImages = await readComposerImageDraft(draftScope)
+        } catch {
+          // Keep the in-memory images when browser storage is unavailable.
+        }
+      }
+      const restoredImages = [...previousImages, ...attachedImagesRef.current, ...persistedImages]
+        .filter((image, index, images) => images.findIndex((candidate) => candidate.name === image.name && candidate.data === image.data) === index)
+      updateAttachedImages(restoredImages, !imagesMovedToNewThread)
       const currentDocuments = attachedDocumentsRef.current
       const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
       attachedDocumentsRef.current = restoredDocuments
@@ -2096,7 +2114,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         setQueuedMessagesExpanded(true)
       }
       try {
-        await saveComposerImageDraft(draftScope, [])
+        if (pendingImageDraftClear) {
+          const result = await pendingImageDraftClear
+          if (!result.ok) throw result.reason
+        } else {
+          await saveComposerImageDraft(draftScope, [])
+        }
       } catch (reason) {
         if (draftScopeRef.current === draftScope) {
           setAttachmentError(reason instanceof Error
