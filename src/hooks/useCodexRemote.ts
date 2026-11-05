@@ -732,13 +732,39 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
 }
 
 function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
-  const previousImageMessages = current.filter((message) => message.role === 'user' && message.images?.length)
-  const used = new Set<string>()
+  const byId = new Map<string, CodexMessage>()
+  const byTurnText = new Map<string, CodexMessage[]>()
+  const imageMessagesByText = new Map<string, CodexMessage[]>()
+  const imageOffsets = new Map<string, number>()
+  const usedImageIds = new Set<string>()
+  const turnTextKey = (message: CodexMessage, text: string) => JSON.stringify([message.role, message.turnId, text])
+  for (const message of current) {
+    if (!byId.has(message.id)) byId.set(message.id, message)
+    if (message.turnId) {
+      const key = turnTextKey(message, message.text)
+      const candidates = byTurnText.get(key) ?? []
+      candidates.push(message)
+      byTurnText.set(key, candidates)
+      if (message.role === 'user') {
+        const requestText = queuedRequestText(message.text, message.documents)
+        if (requestText !== message.text) {
+          const requestKey = turnTextKey(message, requestText)
+          const requestCandidates = byTurnText.get(requestKey) ?? []
+          requestCandidates.push(message)
+          byTurnText.set(requestKey, requestCandidates)
+        }
+      }
+    }
+    if (message.role === 'user' && message.images?.length) {
+      const imageMessages = imageMessagesByText.get(message.text) ?? []
+      imageMessages.push(message)
+      imageMessagesByText.set(message.text, imageMessages)
+    }
+  }
   return next.map((message) => {
-    const previous = current.find((candidate) => candidate.id === message.id)
-      ?? (message.turnId ? current.find((candidate) => candidate.role === message.role
-        && candidate.turnId === message.turnId
-        && (candidate.text === message.text || (message.role === 'user' && sameQueuedMessageHistoryContent(message, candidate)))) : undefined)
+    const previous = byId.get(message.id)
+      ?? (message.turnId ? byTurnText.get(turnTextKey(message, message.text))?.find((candidate) => candidate.text === message.text
+        || (message.role === 'user' && sameQueuedMessageHistoryContent(message, candidate))) : undefined)
     let nextMessage = message
     if (previous) {
       nextMessage = {
@@ -760,9 +786,13 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
       }
     }
     if (message.role !== 'user' || message.images?.length) return nextMessage
-    const previousImageMessage = previousImageMessages.find((candidate) => !used.has(candidate.id) && candidate.text === message.text)
+    const imageMessages = imageMessagesByText.get(message.text) ?? []
+    let imageOffset = imageOffsets.get(message.text) ?? 0
+    while (imageOffset < imageMessages.length && usedImageIds.has(imageMessages[imageOffset].id)) imageOffset += 1
+    const previousImageMessage = imageMessages[imageOffset]
     if (!previousImageMessage) return nextMessage
-    used.add(previousImageMessage.id)
+    imageOffsets.set(message.text, imageOffset + 1)
+    usedImageIds.add(previousImageMessage.id)
     return { ...nextMessage, images: previousImageMessage.images }
   })
 }
@@ -3384,26 +3414,29 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     restoringThreadId.current = threadId
     if (messagesRef.current.length === 0) setLoadingHistory(true)
     try {
-      await refreshThreads()
+      const threadListRefresh = refreshThreads()
       let cached = threadHistoryCache.current.get(threadId) ?? null
       if (!cached?.complete) cached = await restorePersistentThreadCache(threadId) ?? cached
       if (activeThreadId.current !== threadId) return
 
-      const latestThread = threadListRef.current.find((candidate) => candidate.id === threadId)
       if (cached && messagesRef.current.length === 0) {
-        const mergedThread = latestThread ? { ...cached.thread, ...latestThread } : cached.thread
-        setActiveThread(mergedThread)
+        const mergedThread = threadListRef.current.find((candidate) => candidate.id === threadId)
+        const visibleThread = mergedThread ? { ...cached.thread, ...mergedThread } : cached.thread
+        setActiveThread(visibleThread)
         setMessages(cached.messages)
         setFileChangesByTurn(cached.fileChangesByTurn)
         operationsByTurnRef.current = cached.operationsByTurn
         setOperationsByTurn(cached.operationsByTurn)
         activityTimelineByTurnRef.current = cached.activityTimelineByTurn
         setActivityTimelineByTurn(cached.activityTimelineByTurn)
-        setIsRunning(Boolean(cached.running || (latestThread && threadIsRunning(latestThread))))
+        setIsRunning(Boolean(cached.running || (mergedThread && threadIsRunning(mergedThread))))
         setActiveTurnId(cached.running ? cached.turnId : null)
         setLoadingHistory(false)
       }
 
+      await threadListRefresh
+      if (activeThreadId.current !== threadId) return
+      const latestThread = threadListRef.current.find((candidate) => candidate.id === threadId)
       const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[threadId]?.length)
       const metadataIsFresh = (
         (threadListLoadedRef.current && Date.now() - threadListFetchedAtRef.current <= threadMetadataFreshnessMs)
