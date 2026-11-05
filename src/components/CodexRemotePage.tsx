@@ -1370,10 +1370,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }, [queuedMessages.length])
 
   useLayoutEffect(() => {
-    if (submittingQueuedMessageId) setQueuedMessagesExpanded(true)
-  }, [submittingQueuedMessageId])
-
-  useLayoutEffect(() => {
     if (!compactLandscape || composerHeightWasResized.current) return
     const textarea = composer.current
     if (!textarea) return
@@ -2111,7 +2107,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       if (scheduledAt) {
         setSchedulePanelOpen(false)
         setScheduleDateTime('')
-        setQueuedMessagesExpanded(true)
       }
       try {
         if (pendingImageDraftClear) {
