@@ -22,17 +22,6 @@ internal class RemoteApi(
     private val endpoint: String,
     private val token: String? = null,
 ) {
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(12, TimeUnit.SECONDS)
-        .readTimeout(90, TimeUnit.SECONDS)
-        .writeTimeout(90, TimeUnit.SECONDS)
-        .build()
-    private val uploadClient = client.newBuilder()
-        .callTimeout(10, TimeUnit.MINUTES)
-        .readTimeout(10, TimeUnit.MINUTES)
-        .writeTimeout(10, TimeUnit.MINUTES)
-        .build()
-
     fun get(path: String): JSONObject = request("GET", path)
 
     fun getArray(path: String): JSONArray = requestArray("GET", path)
@@ -69,7 +58,7 @@ internal class RemoteApi(
                 }
             }
         }
-        return execute("POST", path, body, "application/octet-stream", uploadClient)
+        return execute("POST", path, body, "application/octet-stream", UPLOAD_CLIENT)
     }
 
     private fun request(method: String, path: String, value: JSONObject? = null): JSONObject {
@@ -78,35 +67,30 @@ internal class RemoteApi(
     }
 
     private fun requestArray(method: String, path: String): JSONArray {
-        val response = executeRaw(method, path, null, null)
-        if (!response.isSuccessful) throw responseError(response.code, response.body?.string())
-        val text = response.body?.string().orEmpty()
-        return try {
-            JSONArray(text)
-        } catch (error: Exception) {
-            throw IOException("服务器返回的数据格式无效。", error)
-        } finally {
-            response.close()
+        return executeRaw(method, path, null, null).use { response ->
+            if (!response.isSuccessful) throw responseError(response.code, response.body?.string())
+            val text = response.body?.string().orEmpty()
+            try {
+                JSONArray(text)
+            } catch (error: Exception) {
+                throw IOException("服务器返回的数据格式无效。", error)
+            }
         }
     }
 
-    private fun execute(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = client): JSONObject {
-        val response = executeRaw(method, path, body, contentType, networkClient)
-        val text = response.body?.string().orEmpty()
-        if (!response.isSuccessful) {
-            val error = responseError(response.code, text)
-            response.close()
-            throw error
-        }
-        response.close()
-        return try {
-            JSONObject(text.ifBlank { "{}" })
-        } catch (error: Exception) {
-            throw IOException("服务器返回的数据格式无效。", error)
+    private fun execute(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = CLIENT): JSONObject {
+        return executeRaw(method, path, body, contentType, networkClient).use { response ->
+            val text = response.body?.string().orEmpty()
+            if (!response.isSuccessful) throw responseError(response.code, text)
+            try {
+                JSONObject(text.ifBlank { "{}" })
+            } catch (error: Exception) {
+                throw IOException("服务器返回的数据格式无效。", error)
+            }
         }
     }
 
-    private fun executeRaw(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = client): okhttp3.Response {
+    private fun executeRaw(method: String, path: String, body: RequestBody?, contentType: String?, networkClient: OkHttpClient = CLIENT): okhttp3.Response {
         val builder = Request.Builder()
             .url(endpoint.trimEnd('/') + path)
             .header("Accept", "application/json")
@@ -142,6 +126,16 @@ internal class RemoteApi(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val CLIENT = OkHttpClient.Builder()
+            .connectTimeout(12, TimeUnit.SECONDS)
+            .readTimeout(90, TimeUnit.SECONDS)
+            .writeTimeout(90, TimeUnit.SECONDS)
+            .build()
+        private val UPLOAD_CLIENT = CLIENT.newBuilder()
+            .callTimeout(10, TimeUnit.MINUTES)
+            .readTimeout(10, TimeUnit.MINUTES)
+            .writeTimeout(10, TimeUnit.MINUTES)
+            .build()
 
         fun normalizeEndpoint(raw: String): String {
             var value = raw.trim()

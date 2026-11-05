@@ -481,33 +481,44 @@ private class ComposerGlowDrawable(
     private val centerOpacity: Float,
 ) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private val clipPath = Path()
     private var drawableAlpha = 0
 
     fun currentIntensity(): Float = drawableAlpha / 255f
 
     fun setIntensity(value: Float) {
-        drawableAlpha = (value.coerceIn(0f, 1f) * 255).roundToInt()
+        val nextAlpha = (value.coerceIn(0f, 1f) * 255).roundToInt()
+        if (drawableAlpha == nextAlpha) return
+        drawableAlpha = nextAlpha
         invalidateSelf()
     }
 
-    override fun draw(canvas: Canvas) {
-        val rect = RectF(bounds)
+    override fun onBoundsChange(bounds: Rect) {
+        rect.set(bounds)
+        clipPath.reset()
         if (rect.isEmpty) return
-        val checkpoint = canvas.save()
-        canvas.clipPath(Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) })
-        paint.alpha = drawableAlpha
+        clipPath.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
         paint.shader = RadialGradient(
             rect.centerX(), rect.top, max(rect.width() * .92f, rect.height() * 1.15f),
             intArrayOf(withAlpha(color, centerOpacity), withAlpha(color, centerOpacity * .44f), Color.TRANSPARENT),
             floatArrayOf(0f, .43f, 1f), Shader.TileMode.CLAMP,
         )
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (rect.isEmpty || drawableAlpha == 0) return
+        val checkpoint = canvas.save()
+        canvas.clipPath(clipPath)
+        paint.alpha = drawableAlpha
         canvas.drawRect(rect, paint)
-        paint.shader = null
         canvas.restoreToCount(checkpoint)
     }
 
     override fun setAlpha(alpha: Int) {
-        drawableAlpha = alpha.coerceIn(0, 255)
+        val nextAlpha = alpha.coerceIn(0, 255)
+        if (drawableAlpha == nextAlpha) return
+        drawableAlpha = nextAlpha
         invalidateSelf()
     }
 
@@ -802,9 +813,17 @@ class MainActivity : Activity() {
     private var endpoint = ""
     private var token = ""
     private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
+    private data class UnconfirmedSubmission(
+        val threadId: String,
+        val payload: JSONObject,
+        val files: List<JSONObject>,
+        val scope: String,
+        val endpoint: String,
+    )
     private val connectionProfiles = mutableListOf<ConnectionProfile>()
     private val draftFilesByScope = mutableMapOf<String, MutableList<JSONObject>>()
     private val pendingUserMessages = mutableMapOf<String, MutableList<JSONObject>>()
+    private val unconfirmedSubmissions = mutableMapOf<String, UnconfirmedSubmission>()
     private val remoteUserMessageOverlays = mutableMapOf<String, LinkedHashMap<String, JSONObject>>()
     private val finishedTurnStates = linkedMapOf<String, JSONObject>()
     private val pendingLiveTurnIds = mutableMapOf<String, String>()
@@ -894,7 +913,7 @@ class MainActivity : Activity() {
     private val revealedTerminalOutputLogIds = mutableSetOf<String>()
     private val operationPageIndexes = mutableMapOf<String, Int>()
     private var expandedFileChangeIds = mutableSetOf<String>()
-    private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+    private var visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
     private var queueEditItem: JSONObject? = null
     private var queueEditThreadId: String? = null
@@ -991,6 +1010,11 @@ class MainActivity : Activity() {
     private var imeFollowScrollQueued = false
     private var messageNearBottomBeforeIme = false
     private var messageTouchActive = false
+    private var messageScrollSettling = false
+    private val messageScrollIdle = Runnable {
+        messageScrollSettling = false
+        flushDeferredMessageRender()
+    }
     private var followMessageBottom = true
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
@@ -1138,6 +1162,7 @@ class MainActivity : Activity() {
             openChatHome()
             verifySavedConnection(homeAlreadyOpen = true)
         } else showConnectionPage()
+        recoverUnconfirmedSubmissions()
         intent?.takeIf { it.hasExtra(EXTRA_THREAD_ID) }?.let { launchIntent ->
             handler.post { navigateNotification(launchIntent) }
         }
@@ -1226,6 +1251,8 @@ class MainActivity : Activity() {
         handler.removeCallbacks(terminalHandoffPoll)
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
+        handler.removeCallbacks(messageScrollIdle)
+        messageScrollSettling = false
         activeThreadRefreshScheduled = false
         if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) {
             handler.removeCallbacks(socketHeartbeatRunnable)
@@ -1512,7 +1539,7 @@ class MainActivity : Activity() {
         historyLoadingThreadId = null
         historyLoadError = null
         historySelectionGeneration += 1
-        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+        visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         handler.removeCallbacks(activeThreadRefreshRunnable)
         activeThreadRefreshScheduled = false
         lastActiveThreadRefreshAt = 0L
@@ -1539,6 +1566,9 @@ class MainActivity : Activity() {
         workspaceGestureActive = false
         workspacePendingRender = null
         closeTerminal()
+        handler.removeCallbacks(messageScrollIdle)
+        messageTouchActive = false
+        messageScrollSettling = false
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
@@ -1815,17 +1845,25 @@ class MainActivity : Activity() {
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
             if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
+            if (messageScrollSettling && !messageTouchActive) {
+                handler.removeCallbacks(messageScrollIdle)
+                handler.postDelayed(messageScrollIdle, 160L)
+            }
             updateScrollToBottomButton()
         }
         messageScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     messageTouchActive = true
+                    messageScrollSettling = true
+                    handler.removeCallbacks(messageScrollIdle)
                     if (imeInsetVisible) imeFollowMessageBottom = false
                     else messageNearBottomBeforeIme = isMessageListNearBottom()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     messageTouchActive = false
+                    handler.removeCallbacks(messageScrollIdle)
+                    handler.postDelayed(messageScrollIdle, 160L)
                     messageScroll.post { if (isMessageListNearBottom()) followMessageBottom = true }
                 }
             }
@@ -2152,6 +2190,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when {
                     queueEditItem != null -> finishQueueEdit(true)
+                    composerInput.text.isNotBlank() || selectedFiles.isNotEmpty() -> sendCurrentMessage()
                     running -> interruptTurn()
                     activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true -> continueInterruptedTurn()
                     else -> sendCurrentMessage()
@@ -3450,7 +3489,7 @@ class MainActivity : Activity() {
         historyLoadingThreadId = if (hasCachedHistory || knownEmptyThread) null else id
         historyLoadError = null
         historySelectionGeneration += 1
-        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+        visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
         prefs.edit().putString(KEY_MODE, currentMode).putString(activeThreadStorageKey(currentMode), id).apply()
         running = isThreadRunning(activeThread ?: thread)
@@ -3916,12 +3955,13 @@ class MainActivity : Activity() {
 
     private fun renderMessages(scrollToEnd: Boolean, incrementalTurnId: String? = null) {
         if (!::messageList.isInitialized) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) {
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || messageScrollSettling || isEditingAssistantAnswer()) {
             messageRenderDeferred = true
             deferredMessageScrollToEnd = deferredMessageScrollToEnd || scrollToEnd
             if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
             return
         }
+        val renderStartedAt = SystemClock.uptimeMillis()
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
         val restoreChoiceKey = assistantChoiceFocusedKey
@@ -4082,7 +4122,7 @@ class MainActivity : Activity() {
             (thread.optInt("totalTurns", turns.length()) - turns.length()).coerceAtLeast(0)
         } else 0
         if (effectiveIncrementalTurnId == null && (firstVisibleTurnIndex > 0 || remoteHiddenTurnCount > 0)) {
-            val hiddenTurnCount = if (remoteHiddenTurnCount > 0) remoteHiddenTurnCount else firstVisibleTurnIndex
+            val hiddenTurnCount = remoteHiddenTurnCount + firstVisibleTurnIndex
             messageList.addView(label(if (remoteHiddenTurnCount > 0) "加载更早的 $hiddenTurnCount 轮对话" else "显示更早的 $hiddenTurnCount 轮对话", 11, ACCENT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -4235,10 +4275,7 @@ class MainActivity : Activity() {
                 }
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
                 if (item.optBoolean("_pending", false)) {
-                    messageColumn.addView(label(item.optString("_pendingState", "发送中…"), 10, MUTED).apply {
-                        gravity = Gravity.END
-                        setPadding(0, dp(3), dp(2), 0)
-                    }, LinearLayout.LayoutParams(WRAP, WRAP))
+                    messageColumn.addView(pendingStateLabel(item), LinearLayout.LayoutParams(WRAP, WRAP))
                 }
                 item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
                     messageColumn.addView(label(displayTime, 10, MUTED).apply {
@@ -4347,6 +4384,10 @@ class MainActivity : Activity() {
         }
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
+        val renderDurationMs = SystemClock.uptimeMillis() - renderStartedAt
+        if (renderDurationMs > 48L) {
+            android.util.Log.w("CodeRemoteRender", "chat render took ${renderDurationMs}ms; incremental=${effectiveIncrementalTurnId != null}; rows=${messageList.childCount}")
+        }
     }
 
     private fun startActivityShimmer(view: TextView) {
@@ -4388,9 +4429,11 @@ class MainActivity : Activity() {
         scrollToBottomButton.visibility = if (distanceToBottom > dp(96)) View.VISIBLE else View.GONE
     }
 
-    private fun addPendingUserMessage(scope: String, payload: JSONObject, files: List<JSONObject>) {
+    private fun addPendingUserMessage(scope: String, payload: JSONObject, files: List<JSONObject>,
+                                      state: String = "发送中…", accepted: Boolean = false,
+                                      displayImmediately: Boolean = true, captureKnownIds: Boolean = true) {
         val knownIds = JSONArray()
-        activeThread?.optJSONArray("turns")?.let { turns ->
+        activeThread?.takeIf { captureKnownIds && draftStorageKey() == scope }?.optJSONArray("turns")?.let { turns ->
             for (turnIndex in 0 until turns.length()) {
                 val items = turns.optJSONObject(turnIndex)?.optJSONArray("items") ?: continue
                 for (itemIndex in 0 until items.length()) {
@@ -4415,9 +4458,9 @@ class MainActivity : Activity() {
             .put("_matchText", payload.optString("requestText").trim())
             .put("_imageCount", files.count { it.optString("kind") == "image" })
             .put("_knownUserIds", knownIds).put("_pending", true)
-            .put("_pendingState", "发送中…").put("_accepted", false).put("_animate", true)
+            .put("_pendingState", state).put("_accepted", accepted).put("_animate", displayImmediately)
         pendingUserMessages.getOrPut(scope) { mutableListOf() }.add(item)
-        if (draftStorageKey() == scope) appendPendingBubble(item)
+        if (displayImmediately && draftStorageKey() == scope) appendPendingBubble(item)
     }
 
     private fun appendPendingBubble(item: JSONObject) {
@@ -4455,10 +4498,7 @@ class MainActivity : Activity() {
         }
         addMessageImages(bubble, item, maxBubbleWidth)
         column.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
-        column.addView(label("发送中…", 10, MUTED).apply {
-            gravity = Gravity.END
-            setPadding(0, dp(3), dp(2), 0)
-        }, LinearLayout.LayoutParams(WRAP, WRAP))
+        column.addView(pendingStateLabel(item), LinearLayout.LayoutParams(WRAP, WRAP))
         row.addView(column, LinearLayout.LayoutParams(WRAP, WRAP))
         messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         row.animate().alpha(1f).translationY(0f).setDuration(170).start()
@@ -4493,6 +4533,11 @@ class MainActivity : Activity() {
             }
         }
         if (remaining.isEmpty()) pendingUserMessages.remove(scope) else pendingUserMessages[scope] = remaining.toMutableList()
+        pending.filterNot { it in remaining }.forEach { item ->
+            val requestId = item.optString("id")
+            unconfirmedSubmissions.remove(requestId)
+            io.execute { removeSavedUnconfirmedSubmission(requestId) }
+        }
         remaining.forEach { messages += "user" to it }
     }
 
@@ -4561,17 +4606,137 @@ class MainActivity : Activity() {
     }
 
     private fun removePendingUserMessage(scope: String, requestId: String) {
+        unconfirmedSubmissions.remove(requestId)
+        io.execute { removeSavedUnconfirmedSubmission(requestId) }
         pendingUserMessages[scope]?.removeAll { it.optString("id") == requestId }
         if (pendingUserMessages[scope]?.isEmpty() == true) pendingUserMessages.remove(scope)
-        if (draftStorageKey() == scope) renderMessages(false)
+        if (draftStorageKey() == scope && ::messageList.isInitialized) {
+            val tag = TAG_MESSAGE_TURN_PREFIX + "pending-" + requestId
+            for (index in messageList.childCount - 1 downTo 0) {
+                if (messageList.getChildAt(index).tag == tag) messageList.removeViewAt(index)
+            }
+            messageScroll.post { updateScrollToBottomButton() }
+        }
     }
 
     private fun markPendingUserMessageAccepted(scope: String, requestId: String) {
-        pendingUserMessages[scope]?.firstOrNull { it.optString("id") == requestId }?.apply {
-            put("_accepted", true)
-            put("_pendingState", "同步中…")
+        unconfirmedSubmissions.remove(requestId)
+        io.execute { removeSavedUnconfirmedSubmission(requestId) }
+        updatePendingUserMessageState(scope, requestId, "同步中…", accepted = true)
+    }
+
+    private fun pendingStateLabel(item: JSONObject): TextView = label(item.optString("_pendingState", "发送中…"), 10, MUTED).apply {
+        gravity = Gravity.END
+        setPadding(0, dp(3), dp(2), 0)
+        val requestId = item.optString("id")
+        isEnabled = unconfirmedSubmissions.containsKey(requestId)
+        if (isEnabled) {
+            minimumHeight = dp(32)
+            setPadding(dp(8), dp(5), dp(8), dp(5))
         }
-        if (draftStorageKey() == scope) renderMessages(false)
+        setOnClickListener { retryUnconfirmedSubmission(requestId) }
+    }
+
+    private fun updatePendingUserMessageState(scope: String, requestId: String, state: String, accepted: Boolean) {
+        pendingUserMessages[scope]?.firstOrNull { it.optString("id") == requestId }?.apply {
+            put("_accepted", accepted)
+            put("_pendingState", state)
+        }
+        if (draftStorageKey() != scope || !::messageList.isInitialized) return
+        val tag = TAG_MESSAGE_TURN_PREFIX + "pending-" + requestId
+        for (index in messageList.childCount - 1 downTo 0) {
+            val row = messageList.getChildAt(index)
+            if (row.tag != tag) continue
+            val column = (row as? ViewGroup)?.getChildAt(0) as? ViewGroup
+            val status = column?.getChildAt(1) as? TextView
+            status?.text = state
+            status?.isEnabled = unconfirmedSubmissions.containsKey(requestId)
+            if (status?.isEnabled == true) {
+                status.minimumHeight = dp(32)
+                status.setPadding(dp(8), dp(5), dp(8), dp(5))
+            }
+        }
+    }
+
+    private fun retryUnconfirmedSubmission(requestId: String) {
+        val pending = unconfirmedSubmissions[requestId] ?: return
+        if (sendBusy) return
+        if (draftStorageKey() != pending.scope || endpoint != pending.endpoint) {
+            showStatus("请切回原聊天后重试发送")
+            return
+        }
+        updatePendingUserMessageState(pending.scope, requestId, "正在重新确认…", accepted = true)
+        submitPayload(pending.threadId, pending.payload, pending.files, pending.scope,
+            connectionGeneration, endpoint, token)
+    }
+
+    private fun unconfirmedSubmissionFile(requestId: String): File {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(requestId.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+        return File(File(filesDir, "unconfirmed_submissions"), "$digest.json")
+    }
+
+    private fun saveUnconfirmedSubmission(submission: UnconfirmedSubmission): Boolean = try {
+        val requestId = submission.payload.optString("id")
+        val file = unconfirmedSubmissionFile(requestId)
+        if (!file.parentFile.exists() && !file.parentFile.mkdirs()) throw IOException("无法创建待确认消息目录")
+        val wrapper = JSONObject()
+            .put("threadId", submission.threadId)
+            .put("scope", submission.scope)
+            .put("endpoint", submission.endpoint)
+            .put("payload", submission.payload)
+            .put("files", JSONArray(submission.files))
+        val temporary = File(file.parentFile, file.name + ".tmp")
+        FileOutputStream(temporary).use { output ->
+            output.write(wrapper.toString().toByteArray(StandardCharsets.UTF_8))
+        }
+        if (!temporary.renameTo(file)) {
+            file.delete()
+            if (!temporary.renameTo(file)) throw IOException("无法保存待确认消息")
+        }
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun removeSavedUnconfirmedSubmission(requestId: String) {
+        runCatching { unconfirmedSubmissionFile(requestId).delete() }
+    }
+
+    private fun recoverUnconfirmedSubmissions() {
+        io.execute {
+            val directory = File(filesDir, "unconfirmed_submissions")
+            val recovered = directory.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }
+                ?.mapNotNull { file ->
+                    runCatching {
+                        val wrapper = JSONObject(file.readText(Charsets.UTF_8))
+                        val payload = wrapper.getJSONObject("payload")
+                        val files = wrapper.optJSONArray("files") ?: JSONArray()
+                        val requestId = payload.getString("id")
+                        val submission = UnconfirmedSubmission(
+                            wrapper.getString("threadId"), payload,
+                            (0 until files.length()).mapNotNull(files::optJSONObject),
+                            wrapper.getString("scope"), wrapper.getString("endpoint"),
+                        )
+                        requestId to submission
+                    }.getOrNull()
+                }.orEmpty()
+            if (recovered.isEmpty()) return@execute
+            handler.post {
+                var rerender = false
+                recovered.forEach { (requestId, submission) ->
+                    if (requestId in unconfirmedSubmissions ||
+                        pendingUserMessages[submission.scope]?.any { it.optString("id") == requestId } == true) return@forEach
+                    unconfirmedSubmissions[requestId] = submission
+                    addPendingUserMessage(submission.scope, submission.payload, submission.files,
+                        state = "上次发送未确认 · 点此重试", accepted = true,
+                        displayImmediately = false, captureKnownIds = false)
+                    if (draftStorageKey() == submission.scope) rerender = true
+                }
+                if (rerender) renderMessages(false)
+            }
+        }
     }
 
     private fun runningActivityText(operation: JSONObject?): String {
@@ -7549,12 +7714,7 @@ class MainActivity : Activity() {
             try {
                 val api = RemoteApi(sendEndpoint, sendToken)
                 val queuePath = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
-                var response = api.post("$queuePath/submit", payload)
-                if (sendImmediately && !response.optBoolean("sent", false)) {
-                    // An explicit answer must reach an async question during
-                    // the running turn, rather than wait behind that turn.
-                    response = api.post("$queuePath/send-now", JSONObject().put("message_id", payload.optString("id")))
-                }
+                val response = postSubmissionWithRetry(api, queuePath, payload, sendImmediately)
                 handler.post {
                     val sent = response.optBoolean("sent", false)
                     if (!sent) removePendingUserMessage(outgoingScope, payload.optString("id"))
@@ -7579,11 +7739,28 @@ class MainActivity : Activity() {
                     onResult?.invoke(sent)
                 }
             } catch (error: Exception) {
+                val ambiguous = onResult == null && isAmbiguousSubmissionFailure(error)
+                val saved = ambiguous && saveUnconfirmedSubmission(UnconfirmedSubmission(
+                    threadId, payload, outgoingFiles, outgoingScope, sendEndpoint))
                 handler.post {
-                    removePendingUserMessage(outgoingScope, payload.optString("id"))
-                    if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    val requestId = payload.optString("id")
+                    if (saved) {
+                        unconfirmedSubmissions[requestId] = UnconfirmedSubmission(threadId, payload,
+                            outgoingFiles, outgoingScope, sendEndpoint)
+                        updatePendingUserMessageState(outgoingScope, requestId,
+                            "发送状态未确认 · 点此重试", accepted = true)
+                        if (draftStorageKey() == outgoingScope) renderMessages(false)
+                    } else {
+                        removePendingUserMessage(outgoingScope, requestId)
+                        if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    }
                     if (sendConnection == connectionGeneration) {
-                        showStatus(error.message ?: "发送失败")
+                        showStatus(if (saved) {
+                            if (requestId in unconfirmedSubmissions) "连接中断，发送状态未确认；请点消息下方重试，避免重复输入"
+                            else "消息已在聊天记录中确认"
+                        }
+                            else if (ambiguous) "发送状态未确认，已恢复文字；请先核对聊天，避免重复发送"
+                            else error.message ?: "发送失败")
                         setSendBusy(false)
                     }
                     onResult?.invoke(null)
@@ -7591,6 +7768,30 @@ class MainActivity : Activity() {
             }
         }
     }
+
+    private fun postSubmissionWithRetry(api: RemoteApi, queuePath: String, payload: JSONObject,
+                                        sendImmediately: Boolean): JSONObject {
+        for (attempt in 0..1) {
+            try {
+                var response = api.post("$queuePath/submit", payload)
+                if (sendImmediately && !response.optBoolean("sent", false)) {
+                    // An explicit answer must reach an async question during
+                    // the running turn, rather than wait behind that turn.
+                    response = api.post("$queuePath/send-now", JSONObject().put("message_id", payload.optString("id")))
+                }
+                return response
+            } catch (error: Exception) {
+                if (attempt > 0 || !isAmbiguousSubmissionFailure(error)) throw error
+                // The server may already have accepted the first request.
+                // Reuse its ID so its queue receipt prevents a second send.
+            }
+        }
+        throw IOException("发送状态未确认")
+    }
+
+    private fun isAmbiguousSubmissionFailure(error: Exception): Boolean =
+        error is IOException && (error !is RemoteApiException ||
+            error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500)
 
     private fun setSendBusy(busy: Boolean) {
         sendBusy = busy
@@ -7607,22 +7808,23 @@ class MainActivity : Activity() {
         sendButton.setPixelAwareImageResource(if (retroTheme) iconResource(when {
             sendBusy -> "refresh"
             editingQueue -> "check"
+            hasDraft -> "send"
             running -> "pause"
             canContinue -> "play"
             else -> "send"
         }) else when {
             sendBusy -> R.drawable.ic_composer_wait
             editingQueue -> R.drawable.ic_composer_confirm
+            hasDraft -> R.drawable.ic_composer_send
             running -> R.drawable.ic_composer_pause
             canContinue -> R.drawable.ic_composer_continue
-            hasDraft -> R.drawable.ic_composer_send
             else -> R.drawable.ic_composer_send
         })
         sendButton.contentDescription = tr(when {
             editingQueue -> "确认修改排队消息"
+            hasDraft -> if (running) "发送消息到排队" else "发送消息"
             running -> "暂停当前回复"
             canContinue -> "继续刚才中断的回复"
-            hasDraft -> "发送消息"
             else -> "发送消息"
         })
         sendButton.imageTintList = retroIconTint(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
@@ -9770,7 +9972,7 @@ class MainActivity : Activity() {
 
     private fun flushDeferredMessageRender() {
         if (!messageRenderDeferred) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) return
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || messageScrollSettling || isEditingAssistantAnswer()) return
         val scrollToEnd = deferredMessageScrollToEnd
         val incrementalTurnId = deferredMessageTurnIds.singleOrNull().takeUnless { deferredMessageRequiresFullRender }
         messageRenderDeferred = false
@@ -12754,6 +12956,7 @@ class MainActivity : Activity() {
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
         private const val DEFAULT_VISIBLE_HISTORY_TURNS = 12
+        private const val INITIAL_VISIBLE_HISTORY_TURNS = 6
         private const val OPERATION_LOG_PAGE_SIZE = 50
         private const val MAX_VISIBLE_SIDEBAR_THREADS = 80
         private val OPERATION_PATH_KEYS = setOf(
