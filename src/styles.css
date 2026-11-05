@@ -31,7 +31,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (pointer: coarse) {
   :root[data-native-keyboard-insets="true"][data-composer-keyboard="true"] .remote-shell--android .remote-workspace { padding-bottom: var(--native-keyboard-inset); }
   :root[data-keyboard-transition="true"] .message-composer { backdrop-filter: none; -webkit-backdrop-filter: none; }
-  :root[data-keyboard-transition="true"] .message-composer--running::after { animation: none; filter: none; opacity: .28; }
+  :root[data-keyboard-transition="true"] .message-composer--running > .message-composer__breath { animation: none; filter: none; opacity: .28; }
 }
 @media (pointer: coarse) {
   :root:where([data-touch-landscape="true"]) { --device-font-offset: -2px; --mobile-font-offset: -2px; }
@@ -146,9 +146,10 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row:disabled { cursor: default; opacity: .62; }
 .thread-row__copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
 .thread-row__copy strong { overflow: hidden; color: inherit; font-size: calc(13.5px + var(--mobile-font-offset)); font-weight: 520; line-height: 1.6; text-overflow: ellipsis; white-space: nowrap; }
-.thread-row--replying::after { position: absolute; z-index: 0; inset: 0; border-radius: inherit; background: radial-gradient(ellipse 125% 140% at 50% 50%, color-mix(in srgb, currentColor 36%, transparent) 0%, color-mix(in srgb, currentColor 24%, transparent) 80%, color-mix(in srgb, currentColor 18%, transparent) 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent); content: ''; pointer-events: none; opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
-.thread-row--replying > * { position: relative; z-index: 1; }
-@media (prefers-reduced-motion: reduce) { .thread-row--replying::after { animation: none; opacity: .42; } }
+.thread-row > .thread-row__breath { position: absolute; z-index: 0; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; }
+.thread-row--replying > .thread-row__breath { background: radial-gradient(ellipse 125% 140% at 50% 50%, color-mix(in srgb, currentColor 36%, transparent) 0%, color-mix(in srgb, currentColor 24%, transparent) 80%, color-mix(in srgb, currentColor 18%, transparent) 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent); opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
+.thread-row--replying > :not(.thread-row__breath) { position: relative; z-index: 1; }
+@media (prefers-reduced-motion: reduce) { .thread-row--replying > .thread-row__breath { animation: none; opacity: .42; } }
 .thread-row__meta { display: inline-flex; flex: 0 0 auto; align-items: center; gap: 5px; }
 .thread-row__copy small { flex: 0 0 auto; color: #777e88; font-size: calc(11px + var(--mobile-font-offset)); }
 .thread-row__pin { flex: 0 0 auto; color: #d8b66f; }
@@ -928,14 +929,15 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-error button:disabled { cursor: not-allowed; opacity: .5; }
 .message-composer { container-name: message-composer; container-type: inline-size; position: relative; isolation: isolate; width: 100%; min-width: 0; margin: 0; padding: 11px 12px 9px; overflow: visible; border: 0; border-radius: 18px; background: linear-gradient(145deg, rgba(40, 44, 54, .88), rgba(24, 26, 32, .94) 54%, rgba(18, 20, 25, .97)); box-shadow: 0 20px 54px rgba(0, 0, 0, .34); backdrop-filter: blur(22px) saturate(135%); -webkit-backdrop-filter: blur(22px) saturate(135%); }
 .message-composer::before { position: absolute; z-index: -1; inset: 0; border-radius: inherit; background: radial-gradient(ellipse 85% 90% at 50% 50%, rgba(198, 208, 235, .035), transparent 100%); content: ''; pointer-events: none; }
-.message-composer--running::after { position: absolute; z-index: 0; inset: 1px; border-radius: inherit; background: radial-gradient(ellipse 160% 160% at 50% 50%, rgba(255, 255, 255, .42) 0%, rgba(255, 255, 255, .2) 58%, transparent 100%); content: ''; pointer-events: none; opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
+.message-composer > .message-composer__breath { position: absolute; z-index: 0; inset: 1px; border-radius: inherit; pointer-events: none; opacity: 0; }
+.message-composer--running > .message-composer__breath { background: radial-gradient(ellipse 160% 160% at 50% 50%, rgba(255, 255, 255, .42) 0%, rgba(255, 255, 255, .2) 58%, transparent 100%); opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
 @keyframes composer-fill-breathe { 0%, 100% { opacity: .18; } 50% { opacity: .72; } }
-.remote-shell--theme-light .message-composer--running::after { background: radial-gradient(ellipse 100% 100% at 50% 50%, rgba(65, 88, 135, .16), transparent 78%); }
-.remote-shell--theme-warm .message-composer--running::after { background: radial-gradient(ellipse 100% 100% at 50% 50%, rgba(130, 93, 61, .17), transparent 78%); }
-.remote-shell--theme-custom .message-composer--running::after { background: radial-gradient(ellipse 100% 100% at 50% 50%, color-mix(in srgb, var(--custom-theme-text-color) 18%, transparent), transparent 78%); }
-@media (prefers-reduced-motion: reduce) { .message-composer--running::after { animation: none; opacity: .42; } }
+.remote-shell--theme-light .message-composer--running > .message-composer__breath { background: radial-gradient(ellipse 100% 100% at 50% 50%, rgba(65, 88, 135, .16), transparent 78%); }
+.remote-shell--theme-warm .message-composer--running > .message-composer__breath { background: radial-gradient(ellipse 100% 100% at 50% 50%, rgba(130, 93, 61, .17), transparent 78%); }
+.remote-shell--theme-custom .message-composer--running > .message-composer__breath { background: radial-gradient(ellipse 100% 100% at 50% 50%, color-mix(in srgb, var(--custom-theme-text-color) 18%, transparent), transparent 78%); }
+@media (prefers-reduced-motion: reduce) { .message-composer--running > .message-composer__breath { animation: none; opacity: .42; } }
 .message-composer:focus-within { box-shadow: 0 20px 58px rgba(0, 0, 0, .4); }
-.message-composer > * { position: relative; z-index: 1; }
+.message-composer > :not(.message-composer__breath) { position: relative; z-index: 1; }
 .image-input { position: absolute; inset: 0; display: block; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .composer-images { display: flex; flex-wrap: wrap; gap: 7px; padding: 1px 1px 8px; }
 .composer-image { position: relative; display: block; width: 52px; height: 52px; }
@@ -2323,7 +2325,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .operation-log__actions button:hover, .remote-shell--theme-retro .operation-log__step-action:hover { color: #003f70; }
 .remote-shell--theme-retro .message-composer { border: 1px solid #8fa2b3; border-radius: 2px; background: #fff; box-shadow: none; }
 .remote-shell--theme-retro .message-composer:focus-within { border-color: #6486a2; box-shadow: none; }
-.remote-shell--theme-retro .message-composer::before, .remote-shell--theme-retro .message-composer--running::after { background: none; animation: none; }
+.remote-shell--theme-retro .message-composer::before, .remote-shell--theme-retro .message-composer--running > .message-composer__breath { background: none; animation: none; }
 .remote-shell--theme-retro .message-composer textarea { color: #20252b; font-family: Arial, Helvetica, sans-serif; }
 .remote-shell--theme-retro .composer-hint, .remote-shell--theme-retro .composer-file-change-summary { color: #5d6c78; }
 .remote-shell--theme-retro .composer-queue { border-color: #bbc5ce; border-radius: 2px; background: #f8fafb; }
@@ -3427,7 +3429,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .remote-shell--theme-pixel .message-composer:focus-within { border-color: transparent; border-image-source: url('/pixel-theme/frames/wide-panel.png'); box-shadow: none; }
 .remote-shell--theme-pixel .message-composer::before,
-.remote-shell--theme-pixel .message-composer--running::after { background: none; animation: none; }
+.remote-shell--theme-pixel .message-composer--running > .message-composer__breath { background: none; animation: none; }
 .remote-shell--theme-pixel .message-composer textarea { border: 0; background: transparent; color: var(--pixel-text); font-family: inherit; }
 .remote-shell--theme-pixel .message-composer textarea::placeholder { color: var(--pixel-muted); }
 .remote-shell--theme-pixel .send-button { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-blue); color: #fff; box-shadow: none; }

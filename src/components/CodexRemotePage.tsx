@@ -118,9 +118,20 @@ const connectionLabel = {
 }
 
 let replyBreathSyncFrame: number | null = null
+const pendingReplyBreathAnimations = new WeakSet<Animation>()
 
 function replyBreathAnimation(element: Element | null): Animation | null {
-  return element?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'composer-fill-breathe') ?? null
+  const layer = element?.querySelector<HTMLElement>(':scope > [data-reply-breath-layer]')
+  return layer?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'composer-fill-breathe') ?? null
+}
+
+function syncSidebarReplyBreatheWhenReady(animation: Animation) {
+  if (pendingReplyBreathAnimations.has(animation)) return
+  pendingReplyBreathAnimations.add(animation)
+  void animation.ready.then(() => {
+    pendingReplyBreathAnimations.delete(animation)
+    scheduleSidebarReplyBreatheSync()
+  }, () => { pendingReplyBreathAnimations.delete(animation) })
 }
 
 function syncSidebarReplyBreathe() {
@@ -129,14 +140,24 @@ function syncSidebarReplyBreathe() {
   if (rows.length === 0) return
   const rowAnimations = rows.map(replyBreathAnimation).filter((animation): animation is Animation => animation !== null)
   const composerAnimation = replyBreathAnimation(document.querySelector('.message-composer--running'))
-  const source = composerAnimation && (composerAnimation.startTime !== null || composerAnimation.currentTime !== null)
+  if (composerAnimation?.currentTime === null) syncSidebarReplyBreatheWhenReady(composerAnimation)
+  for (const animation of rowAnimations) {
+    if (animation.currentTime === null) syncSidebarReplyBreatheWhenReady(animation)
+  }
+  const source = composerAnimation?.currentTime != null
     ? composerAnimation
-    : rowAnimations[0]
+    : rowAnimations.find((animation) => animation.currentTime !== null)
   if (!source) return
+  const phase = source.currentTime
+  if (phase === null) return
   for (const animation of rowAnimations) {
     if (animation === source) continue
+    if (animation.currentTime === null) {
+      syncSidebarReplyBreatheWhenReady(animation)
+      continue
+    }
     if (source.startTime !== null) animation.startTime = source.startTime
-    else if (source.currentTime !== null) animation.currentTime = source.currentTime
+    else animation.currentTime = phase
   }
 }
 
@@ -2479,6 +2500,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleSidebarReplyBreatheSync() }}
         onSubmit={(event) => void send(event)}
       >
+      <span className="message-composer__breath" data-reply-breath-layer aria-hidden="true" />
       {editingQueuedMessageId ? (
         <div className="composer-edit-bar">
           <span>正在修改排队消息</span>
@@ -6528,6 +6550,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
                   else void selectThread(thread)
                 }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? '正在回复' : undefined}>
+                  <span className="thread-row__breath" data-reply-breath-layer aria-hidden="true" />
                   <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
                   <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label="有定时发送" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
                   {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
