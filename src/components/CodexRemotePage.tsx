@@ -295,7 +295,6 @@ const retroSidePanelDefaultWidth = 174.4
 const minComposerHeight = 45
 const maxComposerHeight = 260
 const defaultComposerHeight = 72
-const defaultClaudeComposerHeight = 52
 const compactLandscapeComposerHeight = 50
 const composerPreferencesStorageKey = 'codex-remote.composer-preferences'
 const threadComposerPreferencesStorageKey = 'codex-remote.thread-composer-preferences'
@@ -1243,8 +1242,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const [expandedFileChangesKey, setExpandedFileChangesKey] = useState<string | null>(null)
   const [composerHeight, setComposerHeight] = useState(() => {
     if (savedComposerHeight?.manuallyResized) return savedComposerHeight.height
-    if (typeof window === 'undefined') return composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
-    return isCompactLandscape() ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight
+    if (typeof window === 'undefined') return defaultComposerHeight
+    return isCompactLandscape() ? compactLandscapeComposerHeight : defaultComposerHeight
   })
   const [queuedMessagesExpanded, setQueuedMessagesExpanded] = useState(false)
   const [sendingQueuedId, setSendingQueuedId] = useState<string | null>(null)
@@ -1323,9 +1322,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     composerEngineRef.current = composerEngine
     const savedHeight = composerHeightMemory.current?.[composerEngine]
     composerHeightWasResized.current = savedHeight?.manuallyResized ?? false
-    setComposerHeight(savedHeight?.height ?? (compactLandscape
-      ? compactLandscapeComposerHeight
-      : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight))
+    setComposerHeight(savedHeight?.manuallyResized ? savedHeight.height
+      : compactLandscape ? compactLandscapeComposerHeight : defaultComposerHeight)
   }, [composerEngine, composerHeightMemory, compactLandscape])
 
   useEffect(() => {
@@ -1334,7 +1332,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const landscape = isCompactLandscape()
       setCompactLandscape(landscape)
       if (composerHeightWasResized.current) return
-      setComposerHeight(landscape ? compactLandscapeComposerHeight : composerEngine === 'claude-code' ? defaultClaudeComposerHeight : defaultComposerHeight)
+      setComposerHeight(landscape ? compactLandscapeComposerHeight : defaultComposerHeight)
     }
     syncComposerHeight()
     if (typeof mediaQuery.addEventListener === 'function') mediaQuery.addEventListener('change', syncComposerHeight)
