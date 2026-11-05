@@ -117,6 +117,14 @@ const connectionLabel = {
   unavailable: 'Codex 不可用',
 }
 
+const sidebarReplyBreatheDurationMs = 5500
+
+function syncSidebarReplyBreathe(element: HTMLButtonElement | null) {
+  if (!element) return
+  const phaseMs = Math.round(performance.now() % sidebarReplyBreatheDurationMs)
+  element.style.setProperty('--thread-row-breathe-delay', `-${phaseMs}ms`)
+}
+
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
 type ChatEngine = 'codex' | 'claude-code'
@@ -6483,7 +6491,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} onClick={(event) => {
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncSidebarReplyBreathe : undefined} onClick={(event) => {
                   const pending = threadLongPress.current
                   if (pending?.threadId === thread.id && pending.triggered) {
                     event.preventDefault()
