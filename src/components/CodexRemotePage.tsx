@@ -1126,7 +1126,6 @@ interface MessageComposerProps {
   fileChangeSummary: FileChangeSummary | null
   fileChangeSummaryKey: string | null
   reserveFileChangeSummarySpace: boolean
-  reserveQueuedMessageSpace: boolean
   showCodexPreferences: boolean
   isInterrupting: boolean
   writerConflict: boolean
@@ -1184,7 +1183,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   fileChangeSummary,
   fileChangeSummaryKey,
   reserveFileChangeSummarySpace,
-  reserveQueuedMessageSpace,
   showCodexPreferences,
   isInterrupting,
   writerConflict,
@@ -2546,10 +2544,6 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               )
             })}
           </div>
-        </div>
-      ) : reserveQueuedMessageSpace ? (
-        <div className="composer-queue composer-queue--collapsed composer-queue--placeholder" aria-hidden="true">
-          <span className="composer-queue__placeholder-label">已排队 0 条</span>
         </div>
       ) : null}
       {translation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
@@ -6595,7 +6589,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               fileChangeSummary={runningFileChangeSummary}
               fileChangeSummaryKey={activeRemote.runningTurnId}
               reserveFileChangeSummarySpace={openPaneIndexes.length > 1 && Boolean(hasRunningFileChangesInOpenPanes)}
-              reserveQueuedMessageSpace={openPaneIndexes.length > 1}
               showCodexPreferences={!isClaudeCodeThread}
               isInterrupting={activeRemote.isInterrupting}
               writerConflict={activeRemote.writerConflict}
