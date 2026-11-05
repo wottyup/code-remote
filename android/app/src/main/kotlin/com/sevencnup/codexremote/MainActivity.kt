@@ -47,6 +47,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
@@ -812,6 +813,13 @@ class MainActivity : Activity() {
 
     private var endpoint = ""
     private var token = ""
+    private data class LocalAndroidUpdate(val version: String, val filename: String, val sizeBytes: Long, val sha256: String)
+    private var updateDownloadVerifying = false
+    private var updateDownloadPromptedId = -1L
+    private var pendingUpdateInstallId = -1L
+    private val updateDownloadPoll = object : Runnable {
+        override fun run() = checkPendingUpdateDownload()
+    }
     private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
     private data class UnconfirmedSubmission(
         val threadId: String,
@@ -1207,6 +1215,14 @@ class MainActivity : Activity() {
         super.onResume()
         webPreviewView?.onResume()
         foreground = true
+        if (pendingUpdateInstallId > 0L) {
+            val installId = pendingUpdateInstallId
+            pendingUpdateInstallId = -1L
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                handler.post { openDownloadedAndroidUpdate(installId) }
+            }
+        }
+        handler.post(updateDownloadPoll)
         if (terminalOverlay != null) refreshTerminalHandoffStatus()
         activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
@@ -1241,6 +1257,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        handler.removeCallbacks(updateDownloadPoll)
         webPreviewView?.onPause()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
@@ -8959,7 +8976,9 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
         }, widthWrap())
-        about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
+        val currentVersion = if (appLanguage == "en") "Current version ${BuildConfig.VERSION_NAME}"
+            else "当前版本 ${BuildConfig.VERSION_NAME}"
+        about.addView(settingsActionRow("检查更新", currentVersion) { checkForUpdates() }, widthWrap())
         if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
     }
 
@@ -8980,47 +8999,189 @@ class MainActivity : Activity() {
     }
 
     private fun checkForUpdates() {
+        val updateEndpoint = endpoint
+        val updateToken = token
+        if (updateEndpoint.isBlank() || updateToken.isBlank()) {
+            showToast("请先连接电脑，再检查更新")
+            return
+        }
         showToast(tr("正在检查更新…"))
         io.execute {
             try {
                 val client = socketClient.newBuilder().callTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build()
                 val request = Request.Builder()
-                    .url("https://api.github.com/repos/sevencnup/code-remote/releases?per_page=30")
-                    .header("Accept", "application/vnd.github+json")
+                    .url("$updateEndpoint/api/v1/android/update")
+                    .header("Authorization", "Bearer $updateToken")
+                    .header("Accept", "application/json")
                     .header("User-Agent", "CodeRemote-Android/${BuildConfig.VERSION_NAME}")
                     .build()
                 client.newCall(request).execute().use { response ->
+                    if (response.code == 404) {
+                        handler.post { if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) showToast("本机尚无 Android 安装包") }
+                        return@use
+                    }
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                    val releases = JSONArray(response.body?.string().orEmpty())
-                    val candidates = (0 until releases.length()).mapNotNull { releases.optJSONObject(it) }
-                        .filter { !it.optBoolean("draft", false) }
-                        .mapNotNull { release ->
-                            val tag = release.optString("tag_name")
-                            if (parseAppVersion(tag) == null) null else tag to release.optString("html_url")
-                        }
-                    val latest = candidates.maxWithOrNull { a, b -> compareAppVersions(a.first, b.first) }
+                    val body = JSONObject(response.body?.string().orEmpty())
+                    val latest = LocalAndroidUpdate(
+                        body.getString("version"), body.getString("filename"), body.getLong("sizeBytes"), body.getString("sha256")
+                    )
+                    if (parseAppVersion(latest.version) == null ||
+                        latest.filename != "code-remote-android-${latest.version}-debug.apk" ||
+                        !latest.sha256.matches(Regex("[0-9a-f]{64}")) || latest.sizeBytes <= 0L
+                    ) throw IOException("Invalid Android update manifest")
                     handler.post {
-                        if (isFinishing || isDestroyed) return@post
+                        if (isFinishing || isDestroyed || endpoint != updateEndpoint || token != updateToken) return@post
                         when {
-                            latest == null -> showToast(tr("尚无公开发布的 Android 版本"))
-                            compareAppVersions(latest.first, BuildConfig.VERSION_NAME) <= 0 -> showToast(tr("当前已是最新发布版本"))
-                            else -> showConfirmDialog(
-                                tr("发现新版本"),
-                                tr("发现版本 ${latest.first}。打开发布页面查看安装包？"),
-                                tr("查看发布页"),
-                            ) {
-                                val url = latest.second
-                                if (url.startsWith("https://github.com/")) {
-                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            compareAppVersions(latest.version, BuildConfig.VERSION_NAME) <= 0 -> showToast("当前已是最新版本")
+                            prefs.getString(KEY_UPDATE_DOWNLOAD_VERSION, "") == latest.version &&
+                                prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L) > 0L -> {
+                                updateDownloadPromptedId = -1L
+                                showToast("正在查看已下载的更新")
+                                checkPendingUpdateDownload()
+                            }
+                            else -> {
+                                val size = formatDownloadSize(latest.sizeBytes)
+                                val message = if (appLanguage == "en")
+                                    "Version ${latest.version} is available ($size). Download it from this computer?"
+                                else "发现版本 ${latest.version}（$size）。从当前电脑下载更新？"
+                                showConfirmDialog(tr("发现新版本"), message, tr("下载更新")) {
+                                    startAndroidUpdateDownload(updateEndpoint, updateToken, latest)
                                 }
                             }
                         }
                     }
                 }
             } catch (error: Exception) {
-                handler.post { if (!isFinishing && !isDestroyed) showToast(tr("检查更新失败，请稍后重试")) }
+                handler.post {
+                    if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) {
+                        showToast(if (error.message == "HTTP 401") "配对已失效，请重新连接电脑" else "检查更新失败，请稍后重试")
+                    }
+                }
             }
         }
+    }
+
+    private fun startAndroidUpdateDownload(updateEndpoint: String, updateToken: String, update: LocalAndroidUpdate) {
+        if (endpoint != updateEndpoint || token != updateToken) return
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val destination = "code-remote-android-${update.version}-${System.currentTimeMillis()}.apk"
+        val request = DownloadManager.Request(Uri.parse(
+            "$updateEndpoint/api/v1/android/update/${Uri.encode(update.filename)}"
+        )).apply {
+            setTitle("Code Remote ${update.version}")
+            setDescription(tr("正在下载更新安装包"))
+            setMimeType("application/vnd.android.package-archive")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, destination)
+            addRequestHeader("Authorization", "Bearer $updateToken")
+        }
+        runCatching { manager.enqueue(request) }
+            .onSuccess { id ->
+                prefs.edit().putLong(KEY_UPDATE_DOWNLOAD_ID, id)
+                    .putString(KEY_UPDATE_DOWNLOAD_VERSION, update.version)
+                    .putString(KEY_UPDATE_DOWNLOAD_SHA256, update.sha256).apply()
+                updateDownloadPromptedId = -1L
+                showToast("已开始下载更新，请查看系统下载通知")
+                handler.post(updateDownloadPoll)
+            }
+            .onFailure { showToast("更新下载启动失败") }
+    }
+
+    private fun clearPendingUpdateDownload() {
+        prefs.edit().remove(KEY_UPDATE_DOWNLOAD_ID).remove(KEY_UPDATE_DOWNLOAD_VERSION)
+            .remove(KEY_UPDATE_DOWNLOAD_SHA256).apply()
+        handler.removeCallbacks(updateDownloadPoll)
+        updateDownloadPromptedId = -1L
+    }
+
+    private fun checkPendingUpdateDownload() {
+        handler.removeCallbacks(updateDownloadPoll)
+        if (!foreground) return
+        val id = prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L)
+        if (id <= 0L) return
+        val version = prefs.getString(KEY_UPDATE_DOWNLOAD_VERSION, "").orEmpty()
+        if (compareAppVersions(version, BuildConfig.VERSION_NAME) <= 0) {
+            clearPendingUpdateDownload()
+            return
+        }
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        val status = runCatching {
+            manager.query(DownloadManager.Query().setFilterById(id))?.use { result ->
+                if (result.moveToFirst()) result.getInt(result.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) else null
+            }
+        }.getOrNull()
+        when (status) {
+            DownloadManager.STATUS_SUCCESSFUL -> verifyDownloadedAndroidUpdate(manager, id, version)
+            DownloadManager.STATUS_FAILED, null -> {
+                clearPendingUpdateDownload()
+                showToast("更新下载失败，请重新检查更新")
+            }
+            else -> handler.postDelayed(updateDownloadPoll, 1_000L)
+        }
+    }
+
+    private fun verifyDownloadedAndroidUpdate(manager: DownloadManager, id: Long, version: String) {
+        if (updateDownloadVerifying || updateDownloadPromptedId == id) return
+        val expected = prefs.getString(KEY_UPDATE_DOWNLOAD_SHA256, "").orEmpty()
+        updateDownloadVerifying = true
+        io.execute {
+            val valid = runCatching {
+                val uri = manager.getUriForDownloadedFile(id) ?: throw IOException("Missing downloaded APK")
+                val digest = MessageDigest.getInstance("SHA-256")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                } ?: throw IOException("Cannot read downloaded APK")
+                digest.digest().joinToString("") { byte -> "%02x".format(byte) } == expected
+            }.getOrDefault(false)
+            handler.post {
+                updateDownloadVerifying = false
+                if (isFinishing || isDestroyed || prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L) != id) return@post
+                if (!valid) {
+                    manager.remove(id)
+                    clearPendingUpdateDownload()
+                    showToast("更新包校验失败，请重新下载")
+                } else if (foreground) {
+                    updateDownloadPromptedId = id
+                    val message = if (appLanguage == "en") "Version $version is ready. Install it now?"
+                        else "版本 $version 已下载完成，现在安装？"
+                    showConfirmDialog(tr("下载完成"), message, tr("安装")) { openDownloadedAndroidUpdate(id) }
+                }
+            }
+        }
+    }
+
+    private fun openDownloadedAndroidUpdate(id: Long) {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        val uri = manager.getUriForDownloadedFile(id)
+        if (uri == null) {
+            clearPendingUpdateDownload()
+            showToast("找不到已下载的文件")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            pendingUpdateInstallId = id
+            showToast("请允许 Code Remote 安装未知应用")
+            runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+            }.onFailure { showToast("无法打开安装授权设置") }
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { showToast("无法打开系统安装界面") }
     }
 
     private fun parseAppVersion(value: String): List<Int>? {
@@ -12918,6 +13079,9 @@ class MainActivity : Activity() {
         private const val PREFS = "codex_remote_mobile"
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_TOKEN = "token"
+        private const val KEY_UPDATE_DOWNLOAD_ID = "local_android_update_download_id"
+        private const val KEY_UPDATE_DOWNLOAD_VERSION = "local_android_update_download_version"
+        private const val KEY_UPDATE_DOWNLOAD_SHA256 = "local_android_update_download_sha256"
         private const val KEY_CONNECTION_PROFILES = "native_connection_profiles"
         private const val KEY_ACTIVE_CONNECTION_ID = "native_active_connection_id"
         private const val KEY_LEGACY_CONNECTION_ID = "native_legacy_connection_id"
