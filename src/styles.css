@@ -589,6 +589,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-filter-status { color: #8991a0; font-size: calc(10px + var(--mobile-font-offset)); }
 .cpa-usage-filter-status--error { color: #e59a9b; }
 .cpa-usage-range-tabs { display: inline-flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid rgba(146, 157, 184, .17); border-radius: 10px; background: rgba(10, 11, 14, .34); }
+.cpa-usage-source-tabs { justify-self: start; flex-wrap: wrap; max-width: 100%; }
+.cpa-usage-panel__sources { margin-bottom: 16px; }
 .cpa-usage-range-tabs button { min-height: 30px; padding: 0 11px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #929aaa; cursor: pointer; font: inherit; }
 .cpa-usage-range-tabs button:hover { color: #e8ebf3; }
 .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: rgba(170, 186, 255, .18); background: rgba(115, 132, 187, .2); color: #e2e7ff; }

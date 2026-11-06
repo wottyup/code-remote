@@ -1,6 +1,13 @@
+import { codexRemoteClient } from './codexRemoteClient'
+
+export type CPAUsageSource = 'cpamp' | 'codex-proxy'
+
 export interface CPAUsageSettings {
+  source: CPAUsageSource
   baseUrl: string
   managementKey: string
+  codexProxyBaseUrl: string
+  codexProxyApiKey: string
 }
 
 export type CPAUsageRange = 'today' | 'yesterday' | '7d' | '30d'
@@ -66,6 +73,8 @@ export interface CPAUsageAnalyticsResponse {
   filter_options?: {
     api_key_hashes?: string[]
   }
+  proxy_account_summary?: { total_accounts: number; active_accounts: number }
+  proxy_image_stats?: { input_tokens: number; output_tokens: number; success_requests: number; failed_requests: number }
 }
 
 export interface CPAUsageAnalyticsRequestOptions {
@@ -81,8 +90,11 @@ const settingsStorageKey = 'codex-remote.cpa-usage-settings'
 const analyticsPath = '/v0/management/monitoring/analytics'
 
 export const emptyCPAUsageSettings: CPAUsageSettings = {
+  source: 'cpamp',
   baseUrl: '',
   managementKey: '',
+  codexProxyBaseUrl: '',
+  codexProxyApiKey: '',
 }
 
 export function normalizeCPAUsageBaseUrl(value: string) {
@@ -103,6 +115,21 @@ export function normalizeCPAUsageBaseUrl(value: string) {
   return trimmed
 }
 
+export function normalizeCodexProxyBaseUrl(value: string) {
+  const trimmed = value.trim().replace(/\/+$/, '')
+  if (!trimmed) return ''
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    throw new Error('Codex Proxy 地址格式无效。')
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || /\s/.test(trimmed)) {
+    throw new Error('请填写 Codex Proxy 的 http(s) 服务地址，不包含账号、查询参数或片段。')
+  }
+  return trimmed
+}
+
 export function readCPAUsageSettings(): CPAUsageSettings {
   if (typeof window === 'undefined') return emptyCPAUsageSettings
   try {
@@ -110,8 +137,11 @@ export function readCPAUsageSettings(): CPAUsageSettings {
     if (!raw) return emptyCPAUsageSettings
     const value = JSON.parse(raw) as Record<string, unknown>
     return {
+      source: value.source === 'codex-proxy' ? 'codex-proxy' : 'cpamp',
       baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl : '',
       managementKey: typeof value.managementKey === 'string' ? value.managementKey : '',
+      codexProxyBaseUrl: typeof value.codexProxyBaseUrl === 'string' ? value.codexProxyBaseUrl : '',
+      codexProxyApiKey: typeof value.codexProxyApiKey === 'string' ? value.codexProxyApiKey : '',
     }
   } catch {
     return emptyCPAUsageSettings
@@ -228,4 +258,125 @@ export async function fetchCPAUsageAnalytics(
 
 export async function probeCPAUsageConnection(settings: CPAUsageSettings): Promise<void> {
   await fetchCPAUsageAnalytics(settings, 'today', undefined, { connectionProbe: true })
+}
+
+interface CodexProxySummary {
+  total_request_count: number
+  total_accounts: number
+  active_accounts: number
+}
+
+interface CodexProxyHistoryPoint {
+  timestamp: string
+  input_tokens: number
+  output_tokens: number
+  cached_tokens?: number
+  image_input_tokens?: number
+  image_output_tokens?: number
+  image_request_count?: number
+  image_request_failed_count?: number
+  estimated_cost_usd?: number
+  request_count: number
+}
+
+interface CodexProxyHistory { data_points: CodexProxyHistoryPoint[] }
+
+function finiteUsageNumber(value: unknown, label: string, optional = false): number {
+  if (optional && value === undefined) return 0
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throw new Error(`Codex Proxy 返回了无效的${label}数据。`)
+  }
+  return value
+}
+
+function codexProxyCredentials(settings: CPAUsageSettings) {
+  const baseUrl = normalizeCodexProxyBaseUrl(settings.codexProxyBaseUrl)
+  const apiKey = settings.codexProxyApiKey.trim()
+  if (!baseUrl) throw new Error('请先在设置中填写 Codex Proxy 地址。')
+  if (!apiKey) throw new Error('请先在设置中填写主 Proxy API Key。')
+  return { baseUrl, apiKey }
+}
+
+export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<void> {
+  const summary = await codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', codexProxyCredentials(settings))
+  finiteUsageNumber(summary?.total_request_count, '累计请求')
+}
+
+export async function fetchCodexProxyUsageAnalytics(
+  settings: CPAUsageSettings,
+  token: string,
+  range: CPAUsageRange,
+  signal?: AbortSignal,
+): Promise<CPAUsageAnalyticsResponse> {
+  const credentials = codexProxyCredentials(settings)
+  const now = new Date()
+  const { fromMs, toMs } = analyticsRangeBounds(range, now)
+  const hours = Math.min(744, Math.max(2, Math.ceil((now.getTime() - fromMs) / 3_600_000) + 2))
+  const [summary, history] = await Promise.all([
+    codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', credentials, signal),
+    codexRemoteClient.codexProxyUsage<CodexProxyHistory>(token, 'history', { ...credentials, hours }, signal),
+  ])
+  finiteUsageNumber(summary?.total_request_count, '累计请求')
+  const totalAccounts = finiteUsageNumber(summary.total_accounts, '账号总数')
+  const activeAccounts = finiteUsageNumber(summary.active_accounts, '活跃账号数')
+  if (!Array.isArray(history?.data_points)) throw new Error('Codex Proxy 返回了无效的历史数据。')
+
+  const daily = range === '7d' || range === '30d'
+  const buckets = new Map<number, CPAUsageTimelinePoint>()
+  const totals = { input: 0, output: 0, cached: 0, imageInput: 0, imageOutput: 0, imageRequests: 0, imageFailed: 0, calls: 0, cost: 0 }
+  for (const point of history.data_points) {
+    const timestamp = Date.parse(point.timestamp)
+    if (!Number.isFinite(timestamp)) throw new Error('Codex Proxy 返回了无效的统计时间。')
+    if (timestamp < fromMs || timestamp > toMs) continue
+    const input = finiteUsageNumber(point.input_tokens, '输入 Token')
+    const output = finiteUsageNumber(point.output_tokens, '输出 Token')
+    const cached = finiteUsageNumber(point.cached_tokens, '缓存 Token', true)
+    const imageInput = finiteUsageNumber(point.image_input_tokens, '图片输入 Token', true)
+    const imageOutput = finiteUsageNumber(point.image_output_tokens, '图片输出 Token', true)
+    const imageRequests = finiteUsageNumber(point.image_request_count, '图片请求', true)
+    const imageFailed = finiteUsageNumber(point.image_request_failed_count, '图片失败请求', true)
+    const calls = finiteUsageNumber(point.request_count, '请求数')
+    const cost = finiteUsageNumber(point.estimated_cost_usd, '估算金额', true)
+    totals.input += input
+    totals.output += output
+    totals.cached += cached
+    totals.imageInput += imageInput
+    totals.imageOutput += imageOutput
+    totals.imageRequests += imageRequests
+    totals.imageFailed += imageFailed
+    totals.calls += calls
+    totals.cost += cost
+    const date = new Date(timestamp)
+    if (daily) date.setHours(0, 0, 0, 0)
+    const bucketMs = daily ? date.getTime() : timestamp
+    const existing = buckets.get(bucketMs)
+    const tokens = input + output + imageInput + imageOutput
+    if (existing) {
+      existing.calls += calls
+      existing.tokens += tokens
+    } else {
+      buckets.set(bucketMs, {
+        bucket_ms: bucketMs, calls, tokens,
+        label: daily ? `${date.getMonth() + 1}/${date.getDate()}` : undefined,
+      })
+    }
+  }
+  return {
+    generated_at_ms: now.getTime(),
+    granularity: daily ? 'day' : 'hour',
+    summary: {
+      total_calls: totals.calls, success_calls: 0, failure_calls: 0,
+      input_tokens: totals.input, output_tokens: totals.output, cached_tokens: totals.cached,
+      cache_hit_rate: totals.input > 0 ? totals.cached / totals.input : 0,
+      reasoning_tokens: 0,
+      total_tokens: totals.input + totals.output + totals.imageInput + totals.imageOutput,
+      total_cost: totals.cost, success_rate: 0,
+    },
+    timeline: [...buckets.values()].sort((a, b) => a.bucket_ms - b.bucket_ms),
+    proxy_account_summary: { total_accounts: totalAccounts, active_accounts: activeAccounts },
+    proxy_image_stats: {
+      input_tokens: totals.imageInput, output_tokens: totals.imageOutput,
+      success_requests: totals.imageRequests, failed_requests: totals.imageFailed,
+    },
+  }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, ChartColumnIncreasing, Database, DollarSign, Filter, RefreshCw, Settings2, X } from 'lucide-react'
 import {
+  fetchCodexProxyUsageAnalytics,
   fetchCPAUsageAnalytics,
   type CPAUsageAccountStat,
   type CPAUsageAnalyticsSummary,
@@ -8,6 +9,7 @@ import {
   type CPAUsageModelStat,
   type CPAUsageRange,
   type CPAUsageSettings,
+  type CPAUsageSource,
   type CPAUsageTimelinePoint,
 } from '../lib/cpaUsageStats'
 
@@ -59,10 +61,14 @@ function UsageTimeline({ points }: { points: CPAUsageTimelinePoint[] }) {
 
 export function CPAUsageStatsPanel({
   settings,
+  token,
+  onSourceChange,
   onOpenSettings,
   onClose,
 }: {
   settings: CPAUsageSettings
+  token: string
+  onSourceChange: (source: CPAUsageSource) => void
   onOpenSettings: () => void
   onClose: () => void
 }) {
@@ -79,10 +85,10 @@ export function CPAUsageStatsPanel({
   useEffect(() => {
     setSelectedApiKeyHash('')
     setApiKeyHashes([])
-  }, [settings.baseUrl, settings.managementKey])
+  }, [settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey])
 
   useEffect(() => {
-    if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
+    if (settings.source !== 'cpamp' || !settings.baseUrl.trim() || !settings.managementKey.trim()) {
       setApiKeyHashes([])
       setFilterLoading(false)
       setFilterError(null)
@@ -105,10 +111,13 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setFilterLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, settings.baseUrl, settings.managementKey])
+  }, [range, refreshKey, settings.source, settings.baseUrl, settings.managementKey])
 
   useEffect(() => {
-    if (!settings.baseUrl.trim() || !settings.managementKey.trim()) {
+    const configured = settings.source === 'cpamp'
+      ? Boolean(settings.baseUrl.trim() && settings.managementKey.trim())
+      : Boolean(settings.codexProxyBaseUrl.trim() && settings.codexProxyApiKey.trim())
+    if (!configured) {
       setData(null)
       setLoading(false)
       setError(null)
@@ -118,9 +127,12 @@ export function CPAUsageStatsPanel({
     setData(null)
     setLoading(true)
     setError(null)
-    fetchCPAUsageAnalytics(settings, range, controller.signal, {
-      apiKeyHashes: selectedApiKeyHash ? [selectedApiKeyHash] : undefined,
-    })
+    const request = settings.source === 'codex-proxy'
+      ? fetchCodexProxyUsageAnalytics(settings, token, range, controller.signal)
+      : fetchCPAUsageAnalytics(settings, range, controller.signal, {
+        apiKeyHashes: selectedApiKeyHash ? [selectedApiKeyHash] : undefined,
+      })
+    request
       .then(setData)
       .catch((reason) => {
         if (!controller.signal.aborted) {
@@ -131,7 +143,7 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, selectedApiKeyHash, settings.baseUrl, settings.managementKey])
+  }, [range, refreshKey, selectedApiKeyHash, settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, token])
 
   const models = useMemo(
     () => [...(data?.model_stats ?? [])].sort((a, b) => b.total_tokens - a.total_tokens),
@@ -142,7 +154,10 @@ export function CPAUsageStatsPanel({
     [data?.account_stats],
   )
   const summary = data?.summary
-  const configured = Boolean(settings.baseUrl.trim() && settings.managementKey.trim())
+  const isCodexProxy = settings.source === 'codex-proxy'
+  const configured = isCodexProxy
+    ? Boolean(settings.codexProxyBaseUrl.trim() && settings.codexProxyApiKey.trim())
+    : Boolean(settings.baseUrl.trim() && settings.managementKey.trim())
   const hasStats = Boolean(summary?.total_calls || summary?.total_tokens || summary?.total_cost || models.length || accounts.length)
   const visibleApiKeyHashes = selectedApiKeyHash && !apiKeyHashes.includes(selectedApiKeyHash)
     ? [selectedApiKeyHash, ...apiKeyHashes]
@@ -154,7 +169,7 @@ export function CPAUsageStatsPanel({
         <div>
           <span className="theme-settings-panel__eyebrow">TOKEN USAGE</span>
           <h1>Token 用量统计</h1>
-          <p>数据来自你部署的 CPA-Manager-Plus Manager Server。</p>
+          <p>数据来自你在设置中选择的 {isCodexProxy ? 'Codex Proxy' : 'CPA-Manager-Plus'}。</p>
         </div>
         <div className="cpa-usage-panel__header-actions">
           <button className="icon-button theme-settings-panel__close" type="button" aria-label="刷新统计" title="刷新统计" disabled={!configured || loading} onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw size={16} className={loading ? 'spin' : undefined} /></button>
@@ -162,11 +177,15 @@ export function CPAUsageStatsPanel({
         </div>
       </header>
       <div className="theme-settings-panel__content cpa-usage-panel__content">
+        <div className="cpa-usage-range-tabs cpa-usage-source-tabs cpa-usage-panel__sources" role="group" aria-label="Token 用量数据源">
+          <button type="button" className={!isCodexProxy ? 'cpa-usage-range-tabs__active' : ''} aria-pressed={!isCodexProxy} onClick={() => onSourceChange('cpamp')}>CPA-Manager-Plus</button>
+          <button type="button" className={isCodexProxy ? 'cpa-usage-range-tabs__active' : ''} aria-pressed={isCodexProxy} onClick={() => onSourceChange('codex-proxy')}>Codex Proxy</button>
+        </div>
         {!configured ? (
           <section className="theme-settings-card cpa-usage-connect-prompt">
             <Database size={25} />
-            <h2>先连接你的 Manager Server</h2>
-            <p>填写部署域名和 Manager 密钥后，这里会显示该服务记录到的 Token 用量。</p>
+            <h2>先连接你的 {isCodexProxy ? 'Codex Proxy' : 'Manager Server'}</h2>
+            <p>在设置中填写服务地址和{isCodexProxy ? '主 Proxy API Key' : 'Manager 密钥'}后，这里会显示记录到的 Token 用量。</p>
             <button className="theme-notification-toggle theme-notification-toggle--enabled" type="button" onClick={onOpenSettings}><Settings2 size={14} />前往设置</button>
           </section>
         ) : (
@@ -183,29 +202,29 @@ export function CPAUsageStatsPanel({
                     <button className={range === value ? 'cpa-usage-range-tabs__active' : ''} key={value} type="button" aria-pressed={range === value} onClick={() => setRange(value)}>{label}</button>
                   ))}
                 </div>
-                <label className="cpa-usage-key-filter">
+                {!isCodexProxy ? <label className="cpa-usage-key-filter">
                   <Filter size={14} aria-hidden="true" />
                   <span>调用方密钥</span>
                   <select value={selectedApiKeyHash} aria-label="按调用方密钥筛选" onChange={(event) => setSelectedApiKeyHash(event.target.value)}>
                     <option value="">全部调用方密钥</option>
                     {visibleApiKeyHashes.map((hash) => <option value={hash} key={hash}>密钥 · {hash.slice(0, 8)}</option>)}
                   </select>
-                </label>
-                {filterLoading && !apiKeyHashes.length ? <span className="cpa-usage-filter-status">正在读取密钥…</span> : null}
-                {filterError ? <span className="cpa-usage-filter-status cpa-usage-filter-status--error" title={filterError}>密钥筛选项加载失败</span> : null}
+                </label> : null}
+                {!isCodexProxy && filterLoading && !apiKeyHashes.length ? <span className="cpa-usage-filter-status">正在读取密钥…</span> : null}
+                {!isCodexProxy && filterError ? <span className="cpa-usage-filter-status cpa-usage-filter-status--error" title={filterError}>密钥筛选项加载失败</span> : null}
               </div>
               {data?.generated_at_ms ? <span>更新于 {dateTimeFormatter.format(new Date(data.generated_at_ms))}</span> : null}
             </section>
             {error ? <div className="cpa-usage-error" role="alert"><strong>读取失败</strong><span>{error}</span><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>重试</button></div> : null}
             {loading && !data ? <div className="cpa-usage-loading"><RefreshCw size={16} className="spin" />正在读取统计…</div> : null}
-            {!error && !loading && !hasStats ? <div className="cpa-usage-empty">这个时间段还没有统计数据。确认 CPAMP Full Mode 已开启 usage collector，并且已有请求经过 CLIProxyAPI。</div> : null}
+            {!error && !loading && !hasStats ? <div className="cpa-usage-empty">{isCodexProxy ? '这个时间段还没有历史用量。Codex Proxy 只能统计启用快照记录后的请求。' : '这个时间段还没有统计数据。确认 CPAMP Full Mode 已开启 usage collector，并且已有请求经过 CLIProxyAPI。'}</div> : null}
             {summary ? (
               <>
                 <section className="cpa-usage-summary-grid" aria-label="Token 用量概览">
-                  <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--primary"><span><Activity size={14} />总 Token</span><strong>{count(summary.total_tokens)}</strong><small>{count(summary.total_calls)} 次请求</small></article>
-                  <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--cost"><span><DollarSign size={14} />金额</span><strong>{moneyFormatter.format(Number.isFinite(summary.total_cost) ? summary.total_cost : 0)}</strong><small>已配置单价模型</small></article>
-                  <article className="theme-settings-card cpa-usage-summary-card"><span>输入</span><strong>{count(summary.input_tokens)}</strong><small>input tokens</small></article>
-                  <article className="theme-settings-card cpa-usage-summary-card"><span>输出</span><strong>{count(summary.output_tokens)}</strong><small>output tokens</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--primary"><span><Activity size={14} />{isCodexProxy ? '总 Token（含图片）' : '总 Token'}</span><strong>{count(summary.total_tokens)}</strong><small>{count(summary.total_calls)} 次请求</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card cpa-usage-summary-card--cost"><span><DollarSign size={14} />{isCodexProxy ? '估算金额' : '金额'}</span><strong>{moneyFormatter.format(Number.isFinite(summary.total_cost) ? summary.total_cost : 0)}</strong><small>{isCodexProxy ? 'Codex Proxy 估算值' : '已配置单价模型'}</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card"><span>{isCodexProxy ? '文本输入' : '输入'}</span><strong>{count(summary.input_tokens)}</strong><small>input tokens</small></article>
+                  <article className="theme-settings-card cpa-usage-summary-card"><span>{isCodexProxy ? '文本输出' : '输出'}</span><strong>{count(summary.output_tokens)}</strong><small>output tokens</small></article>
                   <article className="theme-settings-card cpa-usage-summary-card">
                     <span>缓存</span>
                     <strong>{count(cachedTokenTotal(summary))}</strong>
@@ -215,14 +234,19 @@ export function CPAUsageStatsPanel({
                         : '缓存 Token'}
                     </small>
                   </article>
-                  <article className="theme-settings-card cpa-usage-summary-card"><span>推理</span><strong>{count(summary.reasoning_tokens)}</strong><small>reasoning tokens</small></article>
-                  <article className="theme-settings-card cpa-usage-summary-card"><span>失败请求</span><strong>{count(summary.failure_calls)}</strong><small>共 {count(summary.success_calls)} 次成功</small></article>
+                  {isCodexProxy ? <>
+                    <article className="theme-settings-card cpa-usage-summary-card"><span>图片 Token</span><strong>{count((data?.proxy_image_stats?.input_tokens ?? 0) + (data?.proxy_image_stats?.output_tokens ?? 0))}</strong><small>图片请求：成功 {count(data?.proxy_image_stats?.success_requests)} · 失败 {count(data?.proxy_image_stats?.failed_requests)}</small></article>
+                    <article className="theme-settings-card cpa-usage-summary-card"><span>活跃账号</span><strong>{count(data?.proxy_account_summary?.active_accounts)} / {count(data?.proxy_account_summary?.total_accounts)}</strong><small>当前状态，不受时间筛选影响</small></article>
+                  </> : <>
+                    <article className="theme-settings-card cpa-usage-summary-card"><span>推理</span><strong>{count(summary.reasoning_tokens)}</strong><small>reasoning tokens</small></article>
+                    <article className="theme-settings-card cpa-usage-summary-card"><span>失败请求</span><strong>{count(summary.failure_calls)}</strong><small>共 {count(summary.success_calls)} 次成功</small></article>
+                  </>}
                 </section>
                 <section className="theme-settings-card cpa-usage-section">
                   <div className="theme-settings-card__heading"><div><h2><ChartColumnIncreasing size={16} />Token 趋势</h2><p>按小时或天汇总，时间范围使用当前设备时区。</p></div></div>
                   <div className="cpa-usage-section__body"><UsageTimeline points={data?.timeline ?? []} /></div>
                 </section>
-                <div className="cpa-usage-breakdown-grid">
+                {!isCodexProxy ? <div className="cpa-usage-breakdown-grid">
                   <section className="theme-settings-card cpa-usage-section">
                     <div className="theme-settings-card__heading"><div><h2>按模型</h2><p>{models.length} 个模型</p></div></div>
                     {models.length ? <div className="cpa-usage-table-wrap"><table className="cpa-usage-table"><thead><tr><th>模型</th><th>请求</th><th>金额</th><th>Token</th></tr></thead><tbody>{models.map((model) => <tr key={model.model}><td title={model.model}>{model.model || '未知模型'}</td><td>{count(model.calls)}</td><td>{typeof model.cost === 'number' && Number.isFinite(model.cost) ? moneyFormatter.format(model.cost) : '—'}</td><td>{count(model.total_tokens)}</td></tr>)}</tbody></table></div> : <div className="cpa-usage-empty">暂无模型数据。</div>}
@@ -231,10 +255,12 @@ export function CPAUsageStatsPanel({
                     <div className="theme-settings-card__heading"><div><h2>按账号</h2><p>{accounts.length} 个接入账号</p></div></div>
                     {accounts.length ? <div className="cpa-usage-table-wrap"><table className="cpa-usage-table"><thead><tr><th>账号</th><th>请求</th><th>Token</th></tr></thead><tbody>{accounts.map((account) => <tr key={account.id}><td title={accountLabel(account)}><span>{accountLabel(account)}</span>{account.auth_provider_snapshot ? <small>{account.auth_provider_snapshot}</small> : null}</td><td>{count(account.calls)}</td><td>{count(account.total_tokens)}</td></tr>)}</tbody></table></div> : <div className="cpa-usage-empty">暂无账号数据。</div>}
                   </section>
-                </div>
+                </div> : null}
               </>
             ) : null}
-            <p className="theme-settings-hint cpa-usage-disclaimer">Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。</p>
+            <p className="theme-settings-hint cpa-usage-disclaimer">{isCodexProxy
+              ? 'Token 和估算金额来自 Codex Proxy 的历史快照；时间范围按小时近似，启用统计前的请求无法补回。该接口未提供按模型、按账号及推理 Token 的时间段明细。'
+              : 'Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。'}</p>
           </>
         )}
       </div>

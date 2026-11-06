@@ -6717,7 +6717,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {settingsOpen ? (
         <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
-        <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
+        <CPAUsageStatsPanel settings={cpaUsageSettings} token={token} onSourceChange={(source) => updateCPAUsageSettings({ ...cpaUsageSettings, source })} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -7230,7 +7230,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           <MCPApprovalsCard token={token} />
         </div>
         <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
-          <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+          <CPAUsageSettingsCard settings={cpaUsageSettings} token={token} onChange={onCPAUsageSettingsChange} />
         </div>
         <div id="settings-section-translation" className="theme-settings-panel__section" hidden={activeSection !== 'translation'}>
           <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
