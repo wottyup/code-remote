@@ -4185,15 +4185,13 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-settings-panel--navigation .theme-settings-panel__close { border: 0; border-image: none; background: transparent; box-shadow: none; }
 .theme-settings-panel--navigation .theme-settings-panel__close:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
 .theme-settings-panel--navigation .theme-settings-panel__layout { display: grid; grid-template-columns: 228px minmax(0, 1fr); width: min(100%, 1280px); height: 100%; min-height: 0; margin-inline: auto; }
-.theme-settings-panel--navigation .theme-settings-panel__nav { min-width: 0; min-height: 0; padding: 26px 12px 34px; overflow: auto; border-right: 1px solid var(--settings-inner-rule); background: var(--settings-inner-surface); }
+.theme-settings-panel--navigation .theme-settings-panel__nav { min-width: 0; min-height: 0; padding: 26px 12px 34px; overflow: auto; border-right: 1px solid var(--settings-inner-rule); background: transparent; }
 .theme-settings-panel__nav-group + .theme-settings-panel__nav-group { margin-top: 23px; }
 .theme-settings-panel__nav-group > h2 { margin: 0 10px 8px; color: inherit; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; line-height: 1.4; opacity: .62; }
-.theme-settings-panel__nav-item { display: flex; width: 100%; min-height: 42px; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid transparent; border-radius: 9px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: calc(13px + var(--mobile-font-offset)); text-align: left; }
+.theme-settings-panel__nav-item { display: flex; width: 100%; min-height: 42px; align-items: center; gap: 10px; padding: 8px 11px; border: 0; border-radius: 9px; background: transparent; color: inherit; cursor: pointer; font: inherit; font-size: calc(13px + var(--mobile-font-offset)); text-align: left; }
 .theme-settings-panel__nav-item + .theme-settings-panel__nav-item { margin-top: 3px; }
 .theme-settings-panel__nav-item:hover { background: color-mix(in srgb, var(--settings-nav-accent) 10%, transparent); }
-.theme-settings-panel__nav-item--active, .theme-settings-panel__nav-item--active:hover { border-color: var(--settings-nav-accent); background: color-mix(in srgb, var(--settings-nav-accent) 16%, transparent); font-weight: 650; }
-.remote-shell--theme-dark .theme-settings-panel--navigation .theme-settings-panel__nav-item--active,
-.remote-shell--theme-light .theme-settings-panel--navigation .theme-settings-panel__nav-item--active { background: var(--settings-inner-surface); }
+.theme-settings-panel__nav-item--active, .theme-settings-panel__nav-item--active:hover { background: color-mix(in srgb, var(--settings-nav-accent) 16%, transparent); font-weight: 650; }
 .theme-settings-panel__nav-item:focus-visible { outline: 2px solid var(--settings-nav-accent); outline-offset: 2px; }
 .theme-settings-panel__nav-item > svg { flex: 0 0 auto; opacity: .78; }
 .theme-settings-panel__nav-item--active > svg { opacity: 1; }
