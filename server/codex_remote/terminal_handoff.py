@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import socket
 import stat
 import sys
@@ -20,6 +21,41 @@ MAX_SCREEN_LENGTH = 16_000
 MAX_WAIT_MS = 5_000
 MANUAL_INPUT_SETTLE_SECONDS = 3
 MANUAL_TOOL_WAIT_SECONDS = 15
+PASSIVE_TERMINAL_REPORT = re.compile(
+    r"(?:"
+    r"\x1b\[<\d+;\d+;\d+[Mm]"  # SGR mouse press, release and wheel
+    r"|\x1b\[M.{3}"  # legacy X10 mouse report
+    r"|\x1b\[[IO]"  # focus in and out
+    r"|\x1b\[[0-9;]*R"  # cursor position report
+    r"|\x1b\[[?>]?[0-9;]*[cn]"  # device attributes and status reports
+    r"|\x1b\[[0-9;]*t"  # window size report
+    r"|\x1b\[\?[0-9;]+\$y"  # terminal mode report
+    r")",
+    re.DOTALL,
+)
+
+
+def _is_passive_terminal_report(value: str) -> bool:
+    offset = 0
+    while offset < len(value):
+        if value.startswith("\x1bP", offset):
+            end = value.find("\x1b\\", offset + 2)
+            if end < 0:
+                return False
+            offset = end + 2
+            continue
+        if value.startswith("\x1b]", offset):
+            string_end = value.find("\x1b\\", offset + 2)
+            bell = value.find("\x07", offset + 2, string_end if string_end >= 0 else len(value))
+            if bell < 0 and string_end < 0:
+                return False
+            offset = bell + 1 if bell >= 0 else string_end + 2
+            continue
+        match = PASSIVE_TERMINAL_REPORT.match(value, offset)
+        if match is None:
+            return False
+        offset = match.end()
+    return bool(value)
 
 
 class TerminalHandoffError(RuntimeError):
@@ -114,7 +150,7 @@ class TerminalHandoffBroker:
 
     def _require_manual_input_finished(self, thread_id: str) -> None:
         if self._manual_input_active(thread_id):
-            raise TerminalHandoffError("用户正在终端手动输入，请等待操作完成后再重试。")
+            raise TerminalHandoffError("终端有尚未提交的手动输入，请在终端按回车或 Ctrl+C 后重试。")
 
     async def _wait_for_manual_input(self, thread_id: str) -> None:
         deadline = time.monotonic() + MANUAL_TOOL_WAIT_SECONDS
@@ -122,7 +158,7 @@ class TerminalHandoffBroker:
             if thread_id not in self._enabled:
                 raise TerminalHandoffError("用户已收回终端控制权，本次操作未执行。")
             if time.monotonic() >= deadline:
-                raise TerminalHandoffError("用户仍在终端手动输入，请稍后重试。")
+                raise TerminalHandoffError("终端有尚未提交的手动输入，请在终端按回车或 Ctrl+C 后重试。")
             await asyncio.sleep(0.2)
 
     async def write_manual_input(self, thread_id: str, value: str, write: Callable[[str], Awaitable[None]]) -> None:
@@ -133,6 +169,12 @@ class TerminalHandoffBroker:
             return
         submitted = "\r" in value or "\n" in value or value == "\x03"
         async with self._input_locks.setdefault(thread_id, asyncio.Lock()):
+            if _is_passive_terminal_report(value):
+                # xterm sends protocol replies and tmux mouse reports through
+                # the same onData channel as typing. Forward them without
+                # mistaking a click or automatic reply for a partial password.
+                await write(value)
+                return
             # Store only a deadline, never the user's terminal input or password.
             # An unfinished password must not become an AI command target after an idle timeout.
             self._manual_input_until[thread_id] = (
