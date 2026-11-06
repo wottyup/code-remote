@@ -515,10 +515,14 @@ class SharedQueueService:
             self.store.delete_thread(thread_id)
             await self.changed(thread_id)
 
-    async def _read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
+    async def _read_thread(
+        self, thread_id: str, *, include_turns: bool = True, tail_turns: int | None = None,
+    ) -> dict[str, Any]:
         if is_claude_thread_id(thread_id) and self.claude is not None:
-            return await self.claude.read_thread(thread_id, include_turns=include_turns)
-        return await self.codex.read_thread(thread_id, include_turns=include_turns)
+            if include_turns and tail_turns == 1:
+                return await self.claude.queue_turn_snapshot(thread_id)
+            return await self.claude.read_thread(thread_id, include_turns=include_turns, tail_turns=tail_turns)
+        return await self.codex.read_thread(thread_id, include_turns=include_turns, tail_turns=tail_turns)
 
     async def _active_turn_id(self, thread_id: str) -> str | None:
         if is_claude_thread_id(thread_id) and self.claude is not None:
@@ -734,11 +738,17 @@ class SharedQueueService:
                 return
             # Recovery of an existing queue still checks the last turn and
             # barrier; an explicit new submission may release a stopped turn.
-            thread = await self._read_thread(thread_id)
+            thread = await self._read_thread(thread_id, tail_turns=1)
             turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
             latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
             barrier = self.store.barrier(thread_id)
             if barrier:
+                if not latest or latest.get("id") != barrier:
+                    # Older barriers need their exact status, which may be
+                    # outside the bounded latest-turn snapshot.
+                    thread = await self._read_thread(thread_id)
+                    turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []
+                    latest = turns[-1] if turns and isinstance(turns[-1], dict) else None
                 waited = next((turn for turn in turns if isinstance(turn, dict) and turn.get("id") == barrier), None)
                 if not waited:
                     await self._block(thread_id, "等待确认上一条回复，暂不自动发送")
@@ -853,7 +863,7 @@ class SharedQueueService:
             # Older App Server versions may omit the summary status. Fall back
             # conservatively rather than treating an unknown status as idle.
             if not busy:
-                thread = await self._read_thread(thread_id)
+                thread = await self._read_thread(thread_id, tail_turns=1)
                 status = thread.get("status")
                 status_type = status.get("type") if isinstance(status, dict) else None
                 turns = thread.get("turns") if isinstance(thread.get("turns"), list) else []

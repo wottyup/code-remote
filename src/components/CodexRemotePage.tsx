@@ -72,7 +72,7 @@ import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposer
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
-import { earlierMessageWindow, recentMessageWindow, visibleMessageStart } from '../lib/messageWindow'
+import { earlierTurnMessageWindow, recentTurnMessageWindow, visibleTurnMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
 import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { readActiveSettingsSection, saveActiveSettingsSection, type SettingsSectionId } from '../lib/settingsSectionState'
@@ -4330,9 +4330,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
       ?? (remote.activeThread?.id === approvalThreadId ? remote.activeThread : null)
     : null
   const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? '其他对话' : null
-  const [messageWindow, setMessageWindow] = useState(() => recentMessageWindow(activeThreadId ?? null, remote.messages.length))
-  const visibleStartIndex = visibleMessageStart(messageWindow, activeThreadId ?? null, remote.messages.length)
-  const visibleMessages = remote.messages.slice(visibleStartIndex)
+  const [messageWindow, setMessageWindow] = useState(() => recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
+  const visibleStartIndex = visibleTurnMessageStart(messageWindow, activeThreadId ?? null, remote.messages)
+  const visibleMessages = useMemo(() => remote.messages.slice(visibleStartIndex), [remote.messages, visibleStartIndex])
   const insertChangedFileIntoConversation = useCallback((path: string) => {
     const fileReference = workspaceFileReference(remote.activeThread?.cwd || remote.runtime.workspace, path)
     onActivate()
@@ -4479,18 +4479,18 @@ const RemoteChatPane = memo(function RemoteChatPane({
     setShowScrollToBottom((current) => current === showScrollToBottom ? current : showScrollToBottom)
     if (atBottom) {
       setMessageWindow((current) => current.threadId === activeThreadId && !current.anchoredToLatest
-        ? recentMessageWindow(activeThreadId ?? null, remote.messages.length)
+        ? recentTurnMessageWindow(activeThreadId ?? null, remote.messages)
         : current)
     }
-  }, [activeThreadId, remote.messages.length])
+  }, [activeThreadId, remote.messages])
 
   const scrollToBottom = useCallback(() => {
     followMessageStream.current = true
     upwardMessageScrollIntentUntil.current = 0
     setShowScrollToBottom(false)
-    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
+    setMessageWindow(recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
     positionMessageStreamAtBottom()
-  }, [activeThreadId, positionMessageStreamAtBottom, remote.messages.length])
+  }, [activeThreadId, positionMessageStreamAtBottom, remote.messages])
 
   const loadEarlierMessages = useCallback(() => {
     if (visibleStartIndex === 0) return
@@ -4506,14 +4506,14 @@ const RemoteChatPane = memo(function RemoteChatPane({
     forceMessageStreamBottomTimer.current = undefined
     scrollAnimationFrame.current = undefined
     setShowScrollToBottom(true)
-    setMessageWindow((current) => earlierMessageWindow(current, activeThreadId ?? null, remote.messages.length))
-  }, [activeThreadId, remote.messages.length, visibleStartIndex])
+    setMessageWindow((current) => earlierTurnMessageWindow(current, activeThreadId ?? null, remote.messages))
+  }, [activeThreadId, remote.messages, visibleStartIndex])
 
   useLayoutEffect(() => {
     if (!active) return
     forceMessageStreamToBottom(activeThreadId)
     olderMessageScrollAnchor.current = null
-    setMessageWindow(recentMessageWindow(activeThreadId ?? null, remote.messages.length))
+    setMessageWindow(recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
   }, [active, activeThreadId, forceMessageStreamToBottom])
 
   useLayoutEffect(() => {
@@ -4529,6 +4529,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     lastObservedUserMessage.current = { threadId: activeThreadId ?? null, messageId: latestUserMessageId }
     if (!active || !activeThreadId || remote.loadingHistory || previous.threadId !== activeThreadId) return
     if (!latestUserMessageId || latestUserMessageId === previous.messageId) return
+    setMessageWindow(recentTurnMessageWindow(activeThreadId, remote.messages))
     forceMessageStreamToBottom(activeThreadId)
   }, [active, activeThreadId, forceMessageStreamToBottom, remote.loadingHistory, remote.messages])
 
@@ -4592,8 +4593,15 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const engineSwitchLabel = claudeCodeUnavailable
     ? 'Claude Code 不可用'
     : `切换到 ${targetEngineLabel} 聊天`
-  const streamingAssistant = [...remote.messages].reverse().find((message) => message.role === 'assistant' && message.streaming)
-  const hasStreamingAssistant = remote.messages.some((message) => message.role === 'assistant' && message.streaming)
+  let streamingAssistant: CodexMessage | undefined
+  for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
+    const message = remote.messages[index]
+    if (message.role === 'assistant' && message.streaming) {
+      streamingAssistant = message
+      break
+    }
+  }
+  const hasStreamingAssistant = Boolean(streamingAssistant)
   const streamingStartedAt = streamingAssistant?.replyStartedAt ? Date.parse(streamingAssistant.replyStartedAt) : Number.NaN
   const activeTurnStartedAt = remote.turnStartedAt ?? (Number.isFinite(streamingStartedAt) ? streamingStartedAt : null)
   const runningOperations = remote.runningTurnId ? remote.operationsByTurn[remote.runningTurnId] ?? emptyOperations : emptyOperations
@@ -4602,18 +4610,18 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const currentRunningOperation = [...runningOperations].reverse().find((operation) => operation.status === 'running') ?? null
   const lastMessageIndexByTurn = useMemo(() => {
     const indexes = new Map<string, number>()
-    remote.messages.forEach((message, index) => {
-      if (message.turnId) indexes.set(message.turnId, index)
+    visibleMessages.forEach((message, index) => {
+      if (message.turnId) indexes.set(message.turnId, visibleStartIndex + index)
     })
     return indexes
-  }, [remote.messages])
+  }, [visibleMessages, visibleStartIndex])
   const lastAssistantMessageIndexByTurn = useMemo(() => {
     const indexes = new Map<string, number>()
-    remote.messages.forEach((message, index) => {
-      if (message.role === 'assistant' && message.turnId) indexes.set(message.turnId, index)
+    visibleMessages.forEach((message, index) => {
+      if (message.role === 'assistant' && message.turnId) indexes.set(message.turnId, visibleStartIndex + index)
     })
     return indexes
-  }, [remote.messages])
+  }, [visibleMessages, visibleStartIndex])
   const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
   return (
     <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
@@ -4695,7 +4703,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
             </div>
           ) : null}
           {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>查看更早消息（还有 {visibleStartIndex} 条）</button> : null}
+          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>查看更早对话（还有 {visibleStartIndex} 条消息）</button> : null}
           {visibleMessages.map((message, visibleIndex) => {
             const index = visibleStartIndex + visibleIndex
             const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId

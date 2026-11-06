@@ -546,13 +546,15 @@ class CodexAppServer:
         compact: bool = False,
     ) -> dict[str, Any]:
         active_before = self._active_turn_ids.get(thread_id)
-        history_limit = tail_turns if include_turns else 1
-        history_thread = await asyncio.to_thread(
-            self._history.read_thread,
-            thread_id,
-            tail_turns=history_limit,
-            **({"compact": True} if compact else {}),
-        )
+        history_thread = None
+        if include_turns or not self.connected:
+            history_limit = tail_turns if include_turns else 1
+            history_thread = await asyncio.to_thread(
+                self._history.read_thread,
+                thread_id,
+                tail_turns=history_limit,
+                **({"compact": True} if compact else {}),
+            )
         runtime_turn_id = self._active_turn_ids.get(thread_id)
         thread: dict[str, Any] | None = None
         read_error: CodexRuntimeError | None = None
@@ -560,6 +562,7 @@ class CodexAppServer:
             # Busy/idle decisions must come from the live App Server. The
             # rollout parser can see a stale inProgress tail after a completed
             # Windows turn and incorrectly keep every later message queued.
+            # Do not parse history first when only the live status is needed.
             try:
                 result = await self.request("thread/read", {"threadId": thread_id, "includeTurns": False})
                 candidate = result.get("thread")
