@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_remote.claude_native_history import scan_native_sessions
+from code_remote.claude_native_history import scan_native_sessions
 
 
 class ClaudeNativeHistoryScanTests(unittest.TestCase):
@@ -26,7 +26,7 @@ class ClaudeNativeHistoryScanTests(unittest.TestCase):
             }) + "\n", encoding="utf-8")
             stat = path.stat()
 
-            with patch("codex_remote.claude_native_history.read_native_session") as read_session:
+            with patch("code_remote.claude_native_history.read_native_session") as read_session:
                 sessions = scan_native_sessions(
                     home, project, {session_id: (str(path), stat.st_mtime_ns)}, set(),
                 )

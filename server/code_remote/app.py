@@ -1183,7 +1183,7 @@ def workspace_file_save(base: Path, relative_path: str, content: str, expected_r
         original_mode = stat.S_IMODE(candidate.stat().st_mode)
         with tempfile.NamedTemporaryFile(
             mode="wb",
-            prefix=".codex-remote-",
+            prefix=".code-remote-",
             suffix=".tmp",
             dir=candidate.parent,
             delete=False,
@@ -1519,7 +1519,7 @@ def tail_thread_history(response: dict[str, Any], limit: int | None) -> dict[str
 class PairingAuth:
     def __init__(self, state_path: Path | None = None) -> None:
         self.code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
-        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
+        configured_path = os.environ.get("CODE_REMOTE_AUTH_FILE")
         self.state_path = state_path or self._default_state_path()
         state_exists = self.state_path.is_file()
         self.token_hashes = self._load_token_hashes(self.state_path)
@@ -1532,11 +1532,11 @@ class PairingAuth:
 
     @staticmethod
     def _default_state_path() -> Path:
-        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
+        configured_path = os.environ.get("CODE_REMOTE_AUTH_FILE")
         if configured_path:
             return Path(configured_path).expanduser()
         if os.name == "nt":
-            configured_home = os.environ.get("CODEX_REMOTE_HOME")
+            configured_home = os.environ.get("CODE_REMOTE_HOME")
             if configured_home:
                 remote_home = Path(configured_home).expanduser()
             else:
@@ -1674,17 +1674,17 @@ def create_app(
     project_root = Path(__file__).resolve().parents[2]
     configured_workspace = resolve_default_workspace(
         project_root,
-        configured=workspace or (Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None),
+        configured=workspace or (Path(os.environ["CODE_REMOTE_WORKSPACE"]) if os.environ.get("CODE_REMOTE_WORKSPACE") else None),
     )
-    codex_executable = codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex")
-    claude_executable = os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude")
+    codex_executable = codex_command or os.environ.get("CODE_REMOTE_COMMAND", "codex")
+    claude_executable = os.environ.get("CODE_REMOTE_CLAUDE_COMMAND", "claude")
     app_server = CodexAppServer(codex_executable, configured_workspace)
     auth = PairingAuth()
     try:
         auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as error:
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
-    state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
+    state_path = Path(os.environ.get("CODE_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     translation = TranslationService(auth.state_path.parent / "translation.json", codex_executable, claude_executable)
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
     remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
@@ -1707,7 +1707,7 @@ def create_app(
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = prepare_message_image_directory(auth.state_path.parent)
     image_storage_lock = threading.Lock()
-    runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
+    runtime_directory = Path(tempfile.mkdtemp(prefix="code-remote-runtime-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
     terminal_handoff = TerminalHandoffBroker(runtime_directory / "terminal.sock")

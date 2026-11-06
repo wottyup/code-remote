@@ -6,7 +6,7 @@ import unittest
 from urllib.error import HTTPError
 from unittest.mock import patch
 
-from codex_remote.codex_proxy_usage import CodexProxyUsageError, fetch_usage, normalize_base_url
+from code_remote.codex_proxy_usage import CodexProxyUsageError, fetch_usage, normalize_base_url
 
 
 class _Response(io.BytesIO):
@@ -34,7 +34,7 @@ class CodexProxyUsageTests(unittest.TestCase):
                 self.assertions = []
 
         opener = Opener()
-        with patch("codex_remote.codex_proxy_usage.build_opener", return_value=opener):
+        with patch("code_remote.codex_proxy_usage.build_opener", return_value=opener):
             result = fetch_usage("http://127.0.0.1:8080/", "private-key", "history", 48)
         self.assertEqual(result, {"data_points": []})
         self.assertEqual(opener.assertions, [
@@ -46,7 +46,7 @@ class CodexProxyUsageTests(unittest.TestCase):
             def open(self, request, timeout):
                 raise HTTPError(request.full_url, 401, "private-key", {}, io.BytesIO(b"private-key"))
 
-        with patch("codex_remote.codex_proxy_usage.build_opener", return_value=Opener()):
+        with patch("code_remote.codex_proxy_usage.build_opener", return_value=Opener()):
             with self.assertRaises(CodexProxyUsageError) as raised:
                 fetch_usage("http://127.0.0.1:8080", "private-key", "summary")
         self.assertNotIn("private-key", str(raised.exception))

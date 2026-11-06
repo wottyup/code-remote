@@ -14,15 +14,15 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-TMUX_SOCKET_NAME = "codex-remote"
-TMUX_SESSION_PREFIX = "codex-remote-"
-TMUX_KEEPER_SESSION_NAME = "codex-remote-keeper"
-TMUX_LAST_USED_OPTION = "@codex_remote_last_used"
+TMUX_SOCKET_NAME = "code-remote"
+TMUX_SESSION_PREFIX = "code-remote-"
+TMUX_KEEPER_SESSION_NAME = "code-remote-keeper"
+TMUX_LAST_USED_OPTION = "@code_remote_last_used"
 TMUX_HISTORY_LIMIT = 5_000
 TMUX_IDLE_TIMEOUT_SECONDS = 30 * 60
 TMUX_MAX_DETACHED_SESSIONS = 10
 TMUX_CLEANUP_INTERVAL_SECONDS = 60
-TMUX_ANDROID_COMPACT_PROMPT_OPTION = "@codex_remote_android_compact_prompt"
+TMUX_ANDROID_COMPACT_PROMPT_OPTION = "@code_remote_android_compact_prompt"
 
 
 def tmux_session_name_for_thread(thread_id: str) -> str:

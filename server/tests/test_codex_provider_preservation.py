@@ -3,7 +3,7 @@ import tomllib
 import unittest
 from pathlib import Path
 
-from codex_remote.native_engine_config import NativeEngineConfigStore, NativeEngineConfigError
+from code_remote.native_engine_config import NativeEngineConfigStore, NativeEngineConfigError
 
 
 class CodexProviderPreservationTests(unittest.TestCase):

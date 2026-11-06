@@ -663,7 +663,7 @@ class ClaudeCodeServer:
                 python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
                 mcp_config = {"mcpServers": {"code_remote_terminal": {
                     "command": sys.executable,
-                    "args": ["-m", "codex_remote.terminal_handoff"],
+                    "args": ["-m", "code_remote.terminal_handoff"],
                     "env": {
                         "PYTHONPATH": python_path,
                         "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),

@@ -6,23 +6,23 @@ import os
 from pathlib import Path
 from unittest.mock import patch
 
-from codex_remote.app import PairingAuth
+from code_remote.app import PairingAuth
 
 
 class PairingAuthTests(unittest.TestCase):
     def test_windows_default_state_uses_local_app_data_or_configured_home(self) -> None:
         with (
-            patch("codex_remote.app.os.name", "nt"),
+            patch("code_remote.app.os.name", "nt"),
             patch.dict(os.environ, {"LOCALAPPDATA": "C:/Users/test/AppData/Local"}, clear=False),
-            patch.dict(os.environ, {"CODEX_REMOTE_HOME": "", "CODEX_REMOTE_AUTH_FILE": ""}, clear=False),
+            patch.dict(os.environ, {"CODE_REMOTE_HOME": "", "CODE_REMOTE_AUTH_FILE": ""}, clear=False),
         ):
             self.assertEqual(
                 Path("C:/Users/test/AppData/Local/CodexRemote/trusted-devices.json"),
                 PairingAuth._default_state_path(),
             )
         with (
-            patch("codex_remote.app.os.name", "nt"),
-            patch.dict(os.environ, {"CODEX_REMOTE_HOME": "C:/UserWritable/RemoteData", "CODEX_REMOTE_AUTH_FILE": ""}, clear=False),
+            patch("code_remote.app.os.name", "nt"),
+            patch.dict(os.environ, {"CODE_REMOTE_HOME": "C:/UserWritable/RemoteData", "CODE_REMOTE_AUTH_FILE": ""}, clear=False),
         ):
             self.assertEqual(
                 Path("C:/UserWritable/RemoteData/trusted-devices.json"),
@@ -81,9 +81,9 @@ class PairingAuthTests(unittest.TestCase):
             auth = PairingAuth(state_path)
 
             with (
-                patch("codex_remote.app.os.name", "nt"),
-                patch("codex_remote.app.tempfile.mkstemp", side_effect=AssertionError("must not use mkstemp")),
-                patch("codex_remote.app.os.replace", side_effect=AssertionError("must not replace state file")),
+                patch("code_remote.app.os.name", "nt"),
+                patch("code_remote.app.tempfile.mkstemp", side_effect=AssertionError("must not use mkstemp")),
+                patch("code_remote.app.os.replace", side_effect=AssertionError("must not replace state file")),
             ):
                 token = auth.pair(auth.code)
 

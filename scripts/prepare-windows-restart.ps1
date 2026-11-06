@@ -15,7 +15,7 @@ $processes = @(Get-CimInstance Win32_Process)
 $backend = @($processes | Where-Object {
     $_.Name -eq 'python.exe' -and $_.ExecutablePath -and
     $_.ExecutablePath.Equals($backendExe, [StringComparison]::OrdinalIgnoreCase) -and
-    $_.CommandLine -match '(^|\s)codex_remote\.main(\s|$)'
+    $_.CommandLine -match '(^|\s)code_remote\.main(\s|$)'
 })
 $vites = @($processes | Where-Object {
     $_.Name -eq 'node.exe' -and $_.CommandLine -and

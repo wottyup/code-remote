@@ -16,7 +16,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "server"))
 
-from codex_remote.codex_history import CodexHistoryStore  # noqa: E402
+from code_remote.codex_history import CodexHistoryStore  # noqa: E402
 
 
 ACTIVE_STATUSES = {"active", "inProgress", "running", "started"}
@@ -52,7 +52,7 @@ def active_turns() -> list[str]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--unit", default="codex-remote.service")
+    parser.add_argument("--unit", default="code-remote.service")
     parser.add_argument("--expected-pid", type=int, required=True)
     parser.add_argument("--wait-seconds", type=int, default=1800)
     parser.add_argument("--check-only", action="store_true")

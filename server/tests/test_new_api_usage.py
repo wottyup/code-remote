@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 from urllib.error import HTTPError
 
-from codex_remote.new_api_usage import NewAPIUsageError, fetch_usage
+from code_remote.new_api_usage import NewAPIUsageError, fetch_usage
 
 
 class _Response(io.BytesIO):
@@ -32,7 +32,7 @@ class NewAPIUsageTests(unittest.TestCase):
                 return _Response(json.dumps(payload).encode())
 
         opener = Opener()
-        with patch("codex_remote.new_api_usage.build_opener", return_value=opener):
+        with patch("code_remote.new_api_usage.build_opener", return_value=opener):
             result = fetch_usage("https://example.com/new-api/", "nap_secret", 1700000000, 1700003600)
         self.assertEqual(result["quota_per_unit"], 500000)
         self.assertEqual(result["rows"][0]["token_used"], 25)
@@ -53,10 +53,10 @@ class NewAPIUsageTests(unittest.TestCase):
                 return _Response(json.dumps({"success": True, "data": data}).encode())
 
         enabled = Opener(True)
-        with patch("codex_remote.new_api_usage.build_opener", return_value=enabled):
+        with patch("code_remote.new_api_usage.build_opener", return_value=enabled):
             self.assertEqual(fetch_usage("http://localhost:3000", "nap_secret", 1700000000, 1700003600)["rows"], [])
         disabled = Opener(False)
-        with patch("codex_remote.new_api_usage.build_opener", return_value=disabled):
+        with patch("code_remote.new_api_usage.build_opener", return_value=disabled):
             with self.assertRaisesRegex(NewAPIUsageError, "开启数据导出"):
                 fetch_usage("http://localhost:3000", "nap_secret", 1700000000, 1700003600)
         self.assertEqual(disabled.calls, 1)
@@ -69,7 +69,7 @@ class NewAPIUsageTests(unittest.TestCase):
             def open(self, request, timeout):
                 raise HTTPError(request.full_url, 403, "nap_secret", {}, io.BytesIO(b"nap_secret"))
 
-        with patch("codex_remote.new_api_usage.build_opener", return_value=Opener()):
+        with patch("code_remote.new_api_usage.build_opener", return_value=Opener()):
             with self.assertRaises(NewAPIUsageError) as raised:
                 fetch_usage("http://localhost:3000", "nap_secret", 1700000000, 1700003600)
         self.assertNotIn("nap_secret", str(raised.exception))

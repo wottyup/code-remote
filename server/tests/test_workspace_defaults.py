@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from codex_remote.app import resolve_default_workspace
+from code_remote.app import resolve_default_workspace
 
 
 class DefaultWorkspaceTests(unittest.TestCase):
