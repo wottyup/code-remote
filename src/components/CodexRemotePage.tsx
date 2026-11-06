@@ -1,5 +1,7 @@
 import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { createContext, useContext } from 'react'
+import { ClaudeReplyText } from './ClaudeReplyText'
 import { isCompactLandscape, isMobileLayout, mobileLayoutChangedEvent, mobileLayoutMediaQuery } from '../lib/mobileLayout'
 import {
   AlertTriangle,
@@ -7452,7 +7454,9 @@ function renderMessageInlineLinks(value: string, keyPrefix: string, preferWebUrl
     : part.value)
 }
 
-function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: boolean): ReactNode[] {
+const ClaudeFormattingContext = createContext(false)
+
+function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: boolean, claudeFormatting = false): ReactNode[] {
   const lines = value.replace(/\r\n?/g, '\n').split('\n')
   const elements: ReactNode[] = []
   let plainLines: string[] = []
@@ -7463,7 +7467,9 @@ function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: 
   const flushPlainText = () => {
     if (plainLines.length === 0) return
     const textKey = `${keyPrefix}-text-${plainIndex++}`
-    elements.push(<div className="chat-message__text" key={textKey}>{renderMessageInlineLinks(plainLines.join('\n'), textKey, preferWebUrlLabel)}</div>)
+    elements.push(claudeFormatting
+      ? <ClaudeReplyText key={textKey} text={plainLines.join('\n')} />
+      : <div className="chat-message__text" key={textKey}>{renderMessageInlineLinks(plainLines.join('\n'), textKey, preferWebUrlLabel)}</div>)
     plainLines = []
   }
 
@@ -7496,6 +7502,7 @@ function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: 
 }
 
 const MessageContent = memo(function MessageContent({ text, hideStandaloneSeparators = false, preferWebUrlLabel = false }: { text: string; hideStandaloneSeparators?: boolean; preferWebUrlLabel?: boolean }) {
+  const claudeFormatting = useContext(ClaudeFormattingContext)
   const codePattern = /```([^\n]*)\n([\s\S]*?)```/g
   const blocks: Array<{ type: 'text' | 'code'; value: string; language?: string }> = []
   let cursor = 0
@@ -7512,8 +7519,13 @@ const MessageContent = memo(function MessageContent({ text, hideStandaloneSepara
     <div className="chat-message__content">
       {blocks.map((block, index) => {
         if (block.type === 'code') return <CodeBlock key={`code-${index}`} value={block.value} language={block.language} />
-        const value = hideStandaloneSeparators ? stripStandaloneSeparators(block.value) : block.value
-        return value ? renderMessageText(value, `text-${index}`, preferWebUrlLabel) : null
+        // Claude can leave whitespace-only text around tool calls. Display the
+        // same paragraph spacing during streaming and after history refresh;
+        // code blocks and user-authored whitespace remain untouched.
+        const value = hideStandaloneSeparators
+          ? stripStandaloneSeparators(block.value).replace(/\r\n?/g, '\n').replace(/\n(?:[\t ]*\n){2,}/g, '\n\n').trim()
+          : block.value
+        return value ? renderMessageText(value, `text-${index}`, preferWebUrlLabel, claudeFormatting) : null
       })}
     </div>
   )
@@ -8194,6 +8206,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     : renderedText ? <MessageContent text={renderedText} hideStandaloneSeparators={message.role === 'assistant'} preferWebUrlLabel={preferWebUrlLabel} /> : null
 
   return (
+    <ClaudeFormattingContext.Provider value={message.role === 'assistant' && assistantName === 'Claude Code'}>
     <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
       <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
       <div className="chat-message__body">
@@ -8225,5 +8238,6 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
         </div>
       ) : null}
     </article>
+    </ClaudeFormattingContext.Provider>
   )
 })
