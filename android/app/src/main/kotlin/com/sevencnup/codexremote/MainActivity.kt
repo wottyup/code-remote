@@ -1797,9 +1797,17 @@ class MainActivity : Activity() {
         updateQueuePanelVisibility()
     }
 
-    private fun composerInputHeightKey(): String = connectionScopedKey("composer_input_height_$currentMode")
+    private fun composerInputHeightKey(): String = "composer_input_height_global"
 
-    private fun savedComposerInputHeightDp(): Int = prefs.getInt(composerInputHeightKey(), 72).coerceIn(45, 260)
+    private fun savedComposerInputHeightDp(): Int {
+        val key = composerInputHeightKey()
+        if (!prefs.contains(key)) {
+            val legacyKey = connectionScopedKey("composer_input_height_$currentMode")
+            val previousHeight = if (prefs.contains(legacyKey)) prefs.getInt(legacyKey, 72) else 72
+            prefs.edit().putInt(key, previousHeight.coerceIn(45, 260)).apply()
+        }
+        return prefs.getInt(key, 72).coerceIn(45, 260)
+    }
 
     private fun restoreComposerInputHeight() {
         if (!::composerInputFrame.isInitialized) return
