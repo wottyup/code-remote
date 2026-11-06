@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 CLAUDE_THREAD_PREFIX = "claude:"
 CLAUDE_EFFORT_LEVELS = {"low", "medium", "high", "xhigh", "max"}
 CLAUDE_PERMISSION_MODES = {"default", "manual", "acceptEdits", "auto", "dontAsk", "plan"}
+# Claude 子进程退出后可能不关闭 stdout。进程退出后给流一段宽限去排空
+# 剩余缓冲，排不完也强制收尾，避免轮次永久卡在 inProgress。
+CLAUDE_DRAIN_GRACE_SECONDS = 3.0
 
 
 class ClaudeCodeError(RuntimeError):
@@ -701,8 +704,27 @@ class ClaudeCodeServer:
 
             assert process.stdout is not None
             received_init = False
+            exit_task = asyncio.create_task(process.wait())
             while True:
-                line = await process.stdout.readline()
+                line_task = asyncio.ensure_future(process.stdout.readline())
+                done, _pending = await asyncio.wait(
+                    {line_task, exit_task}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if line_task not in done:
+                    # CLI 已退出但可能未关闭 stdout；排空剩余缓冲，超时则收尾，
+                    # 避免轮次永久卡在 inProgress。
+                    try:
+                        line = await asyncio.wait_for(
+                            asyncio.shield(line_task), timeout=CLAUDE_DRAIN_GRACE_SECONDS
+                        )
+                    except asyncio.TimeoutError:
+                        line_task.cancel()
+                        break
+                else:
+                    try:
+                        line = line_task.result()
+                    except Exception:
+                        break
                 if not line:
                     break
                 try:
@@ -778,7 +800,7 @@ class ClaudeCodeServer:
                     if record.get("is_error") is True:
                         result_error = "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
 
-            return_code = await process.wait()
+            return_code = await exit_task
             if thread_id in self._interrupts:
                 result_error = None
             elif return_code != 0 and result_error is None:
