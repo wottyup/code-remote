@@ -305,7 +305,7 @@ const networkRetryDelaysMs = [300, 900, 1_800]
 const webSocketConnectionTimeoutMs = 60_000
 const webSocketOpenTimeoutMs = 15_000
 const heartbeatIntervalMs = 25_000
-const heartbeatTimeoutMs = 12_000
+const heartbeatTimeoutMs = 20_000
 
 export function isAmbiguousNetworkFailure(reason: unknown) {
   if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
