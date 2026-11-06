@@ -9199,7 +9199,7 @@ class MainActivity : Activity() {
             languageSection.addView(row, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(5) })
         }
 
-        translationSettingsBody = section("聊天翻译", "输入中文时预览英文并发送英文；AI 回复可查看中文译文。")
+        translationSettingsBody = section("聊天翻译")
         renderTranslationSettings()
         refreshTranslationConfiguration()
 
@@ -9406,35 +9406,43 @@ class MainActivity : Activity() {
     private fun renderTranslationSettings() {
         val body = translationSettingsBody ?: return
         body.removeAllViews()
-        val configuredModels = configuredTranslationChoices().filter { it.model.isNotBlank() }
-        body.addView(label("翻译模型和密钥沿用当前电脑的网页版配置；手机只保存开关与选择。", 11, MUTED).apply {
-            setPadding(dp(2), 0, dp(2), dp(5))
+        body.addView(label("翻译配置来自当前电脑，手机可单独选择模型。", 11, MUTED).apply {
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(dp(2), dp(2), dp(2), dp(8))
         }, widthWrap())
-        body.addView(label("网页版当前选中的配置保存在浏览器；手机可在下方直接选电脑已保存的模型。", 11, MUTED).apply {
-            setPadding(dp(2), 0, dp(2), dp(5))
+        val sourceName = connectionProfiles.firstOrNull { it.id == activeConnectionId }?.name
+            ?.takeIf { it.isNotBlank() } ?: connectionName(endpoint).ifBlank { tr("当前电脑") }
+        val sourceStatus = translationConfigurationStatus?.takeUnless { translationConfigurationError }
+        val sourceText = "${tr("配置来源")}：$sourceName" + sourceStatus?.let { " · ${tr(it)}" }.orEmpty()
+        body.addView(label(sourceText, 10, SUBTLE, translateUi = false).apply {
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(dp(2), 0, dp(2), dp(4))
         }, widthWrap())
-        translationConfigurationStatus?.let { status ->
-            body.addView(label(status, 11, if (translationConfigurationError) WARNING else SUBTLE).apply {
-                setPadding(dp(2), 0, dp(2), dp(5))
-            }, widthWrap())
+        if (translationConfigurationError) {
+            translationConfigurationStatus?.let { status ->
+                body.addView(label(status, 11, WARNING).apply {
+                    setLineSpacing(dp(2).toFloat(), 1f)
+                    setPadding(dp(2), dp(4), dp(2), dp(4))
+                }, widthWrap())
+            }
         }
-        if (configuredModels.isNotEmpty()) {
-            val modelsText = configuredModels.take(3).joinToString(" / ") { "${translationProviderName(it.provider)} · ${it.name}" }
-            body.addView(label("${tr("电脑端模型")}：$modelsText", 11, SUBTLE, translateUi = false).apply {
-                setPadding(dp(2), 0, dp(2), dp(5))
-            }, widthWrap())
+        fun addTranslationRow(row: View, startsGroup: Boolean = false) {
+            row.minimumHeight = dp(52)
+            body.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+                topMargin = dp(if (startsGroup) 12 else 4)
+            })
         }
-        body.addView(settingsActionRow("启用聊天翻译", if (translationEnabled()) "已开启" else "已关闭") {
+        addTranslationRow(settingsActionRow("启用聊天翻译", if (translationEnabled()) "已开启" else "已关闭") {
             prefs.edit().putBoolean(connectionScopedKey(KEY_TRANSLATION_ENABLED), !translationEnabled()).apply()
             renderTranslationSettings()
             scheduleTranslationPreview()
             markTranslationDisplayDirty()
-        }, widthWrap())
-        body.addView(settingsActionRow("优先显示译文", if (showTranslatedMessages()) "已开启" else "已关闭") {
+        })
+        addTranslationRow(settingsActionRow("优先显示译文", if (showTranslatedMessages()) "已开启" else "已关闭") {
             prefs.edit().putBoolean(connectionScopedKey(KEY_TRANSLATION_SHOW_TRANSLATED), !showTranslatedMessages()).apply()
             renderTranslationSettings()
             markTranslationDisplayDirty()
-        }.apply { isEnabled = translationEnabled(); alpha = if (translationEnabled()) 1f else .55f }, widthWrap())
+        }.apply { isEnabled = translationEnabled(); alpha = if (translationEnabled()) 1f else .55f })
         val styleRow = settingsActionRow("英文表达", if (translationStyle() == "formal") "正式" else "自然") {}
         styleRow.setOnClickListener {
             showChoicePopup(styleRow, "英文表达", listOf("natural" to tr("自然"), "formal" to tr("正式")), translationStyle()) { value ->
@@ -9444,7 +9452,7 @@ class MainActivity : Activity() {
                 markTranslationDisplayDirty()
             }
         }
-        body.addView(styleRow, widthWrap())
+        addTranslationRow(styleRow)
         val provider = translationProvider()
         val providerRow = settingsActionRow("翻译引擎", translationProviderName(provider)) {}
         providerRow.setOnClickListener {
@@ -9460,7 +9468,7 @@ class MainActivity : Activity() {
                 markTranslationDisplayDirty()
             }
         }
-        body.addView(providerRow, widthWrap())
+        addTranslationRow(providerRow, startsGroup = true)
         val selectedProfile = selectedTranslationProfile(provider)
         val profileLabel = selectedProfile?.optString("name")?.takeIf { it.isNotBlank() }
             ?: if (translationConfigurationEndpoint == endpoint && translationProfileId(provider) != null) "配置已删除" else "正在读取配置…"
@@ -9483,10 +9491,10 @@ class MainActivity : Activity() {
                 markTranslationDisplayDirty()
             }
         }
-        body.addView(profileRow, widthWrap())
-        body.addView(settingsActionRow("刷新翻译配置", "从当前电脑读取网页版已保存的模型配置") {
+        addTranslationRow(profileRow)
+        addTranslationRow(settingsActionRow("刷新翻译配置", "从当前电脑读取网页版已保存的模型配置") {
             refreshTranslationConfiguration()
-        }, widthWrap())
+        })
     }
 
     private fun refreshTranslationConfiguration() {
@@ -9509,7 +9517,7 @@ class MainActivity : Activity() {
                 }
             }
             translationConfigurationStatus = if (configuredTranslationChoices().isEmpty())
-                "当前电脑没有可用的翻译配置。" else "电脑端配置已更新，点“使用的配置”可选择模型。"
+                "当前电脑没有可用的翻译配置。" else "配置已更新"
             translationConfigurationError = configuredTranslationChoices().isEmpty()
             translationRevision++
             translationPreviewKey = ""

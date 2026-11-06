@@ -43,6 +43,8 @@ internal object UiEnglish {
         "配对已失效，请重新连接电脑" to "Pairing expired. Reconnect to the computer",
         "聊天翻译" to "Chat translation",
         "英文发送预览" to "English send preview",
+        "翻译配置来自当前电脑，手机可单独选择模型。" to "Translation settings come from this computer. Choose a model for this phone.",
+        "配置来源" to "Configuration source", "当前电脑" to "Current computer", "配置已更新" to "Settings updated",
         "输入中文时预览英文并发送英文；AI 回复可查看中文译文。" to "Preview and send English from Chinese drafts; view Chinese translations of AI replies.",
         "翻译模型和密钥沿用当前电脑的网页版配置；手机只保存开关与选择。" to "Models and keys come from this computer's web settings. This phone saves only your choices.",
         "网页版当前选中的配置保存在浏览器；手机可在下方直接选电脑已保存的模型。" to "The web app's current selection stays in that browser. Choose a saved model below for this phone.",
