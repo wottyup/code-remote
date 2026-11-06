@@ -6138,6 +6138,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   async function openConcurrentThread(thread: CodexThread) {
     setThreadContextMenu(null)
+    setSidebarOpen(false)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
       requestComposerFocusForThread(thread.id)
