@@ -2895,6 +2895,10 @@ function concurrentPaneLimit() {
   return mobileLayout ? 3 : maxConcurrentPaneCount
 }
 
+function shouldAutoFocusComposer() {
+  return !isMobileLayout() && !window.CodexRemoteAndroid?.changeEndpoint
+}
+
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
@@ -4228,6 +4232,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const upwardMessageScrollIntentUntil = useRef(0)
   const messageTouchY = useRef<number | null>(null)
   const messageScrollbarPointer = useRef<{ id: number; y: number } | null>(null)
+  const focusComposerAfterPaneClick = useRef(false)
   const [showScrollToBottom, setShowScrollToBottom] = useState(false)
   const choiceReplyTarget = useRef(remote)
   useLayoutEffect(() => {
@@ -4623,8 +4628,22 @@ const RemoteChatPane = memo(function RemoteChatPane({
     return indexes
   }, [visibleMessages, visibleStartIndex])
   const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
+  const handlePanePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
+    const target = event.target
+    focusComposerAfterPaneClick.current = !active && event.pointerType === 'mouse' && event.button === 0
+      && target instanceof Element
+      && !target.closest('a, button, input, textarea, select, label, [contenteditable="true"], [role="button"], [role="radio"], [role="checkbox"], [role="option"], .terminal-dialog, .chat-overlay-panel')
+    onActivate()
+  }
+  const handlePaneClick = (event: ReactMouseEvent<HTMLElement>) => {
+    if (!focusComposerAfterPaneClick.current) return
+    focusComposerAfterPaneClick.current = false
+    const selection = window.getSelection()
+    if (selection && !selection.isCollapsed && selection.anchorNode && event.currentTarget.contains(selection.anchorNode)) return
+    window.requestAnimationFrame(() => composerHandle.current?.focusInput())
+  }
   return (
-    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={onActivate}>
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={handlePanePointerDown} onClick={handlePaneClick}>
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -5504,6 +5523,19 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     focusComposerAfterThreadSwitch.current = null
     composerHandle.current?.focusInput()
   }, [activeThreadId])
+  function requestComposerFocusForThread(threadId: string) {
+    if (!shouldAutoFocusComposer()) {
+      focusComposerAfterThreadSwitch.current = null
+      return
+    }
+    focusComposerAfterThreadSwitch.current = threadId
+    if (activeThreadId !== threadId) return
+    window.requestAnimationFrame(() => {
+      if (focusComposerAfterThreadSwitch.current !== threadId) return
+      focusComposerAfterThreadSwitch.current = null
+      composerHandle.current?.focusInput()
+    })
+  }
   const activeWorkspaceDraft = workspaceDraftSnapshot?.scope === composerDraftScope
     ? workspaceDraftSnapshot.draft
     : readComposerDraft(composerDraftScope)
@@ -6053,8 +6085,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     await createThreadForPane(selectedPaneIndex)
   }
 
-  async function selectThread(thread: CodexThread, options?: SelectThreadOptions, focusComposer = false) {
-    focusComposerAfterThreadSwitch.current = focusComposer ? thread.id : null
+  async function selectThread(thread: CodexThread, options?: SelectThreadOptions, focusComposer = true) {
+    if (focusComposer) requestComposerFocusForThread(thread.id)
+    else focusComposerAfterThreadSwitch.current = null
     setSidebarOpen(false)
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
@@ -6096,6 +6129,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setThreadContextMenu(null)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
+      requestComposerFocusForThread(thread.id)
       setSelectedPaneIndex(existingPane)
       return
     }
@@ -6105,6 +6139,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       showPaneNotice(`最多同时打开 ${paneLimit} 个对话窗口`)
       return
     }
+    requestComposerFocusForThread(thread.id)
     setOpenPaneIndexes((current) => [...current, freePane])
     setSelectedPaneIndex(freePane)
     await remotes[freePane].selectThread(thread)
