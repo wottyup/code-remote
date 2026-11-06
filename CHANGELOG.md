@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.107.2-dev.5] - 修复 Claude 后台任务占用输出时对话无法继续
+
 ## [0.107.2-dev.4] - 清除系统可见的 codex 名称残留，统一为 code-remote（保留引擎/Android/存储兼容标识）
 
 ## [0.107.2-dev.3] - 修复 Claude 对话回复后永久卡住：进程退出未关 stdout 时自动收尾

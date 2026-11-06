@@ -37,10 +37,15 @@ class FakeProcess:
         self.stdout = ControlledOutput()
         self.stdin = None
         self.returncode = None
+        self.exited = asyncio.Event()
 
     async def wait(self) -> int:
+        await self.exited.wait()
+        return self.returncode
+
+    def finish(self) -> None:
         self.returncode = 0
-        return 0
+        self.exited.set()
 
 
 class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
@@ -64,6 +69,7 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.events.clear()
 
     async def asyncTearDown(self) -> None:
+        self.process.finish()
         await self.process.stdout.lines.put(b"")
         await asyncio.wait_for(asyncio.gather(*tuple(self.server._tasks.values())), 2)
         await self.server.close()
@@ -162,6 +168,7 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
         await self.event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}})
         await self.process.stdout.send({"type": "result", "result": "Hello world", "is_error": False})
         self.assertEqual(self.visible_text(), "Hello world")
+        self.process.finish()
         await self.process.stdout.lines.put(b"")
         await asyncio.wait_for(asyncio.gather(*tuple(self.server._tasks.values())), 2)
         history = await self.server.read_thread(self.thread["id"])

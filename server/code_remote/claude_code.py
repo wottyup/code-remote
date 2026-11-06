@@ -29,6 +29,7 @@ CLAUDE_PERMISSION_MODES = {"default", "manual", "acceptEdits", "auto", "dontAsk"
 # Claude 子进程退出后可能不关闭 stdout。进程退出后给流一段宽限去排空
 # 剩余缓冲，排不完也强制收尾，避免轮次永久卡在 inProgress。
 CLAUDE_DRAIN_GRACE_SECONDS = 3.0
+CLAUDE_EXIT_POLL_SECONDS = 0.1
 
 
 class ClaudeCodeError(RuntimeError):
@@ -57,6 +58,23 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _wait_for_claude_process_exit(process: asyncio.subprocess.Process) -> int:
+    # asyncio's already-started Process.wait() can wait for inherited pipes to
+    # close even after the main process has exited. returncode is set earlier.
+    while True:
+        if process.returncode is not None:
+            return process.returncode
+        await asyncio.sleep(CLAUDE_EXIT_POLL_SECONDS)
+
+
+async def _drain_claude_stdout(stream: asyncio.StreamReader) -> None:
+    # A descendant may keep writing after the CLI exits. Continue consuming
+    # its pipe so the background process cannot block on a full stdout buffer.
+    with suppress(OSError, ValueError):
+        while await stream.read(64 * 1024):
+            pass
+
+
 class ClaudeCodeServer:
     """Owns Claude Code CLI sessions and projects them into Code Remote threads."""
 
@@ -79,6 +97,7 @@ class ClaudeCodeServer:
         self._native_home = Path(os.environ.get("CLAUDE_CONFIG_DIR", Path.home() / ".claude")).expanduser().resolve()
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._processes: dict[str, asyncio.subprocess.Process] = {}
+        self._stdout_drain_tasks: set[asyncio.Task[None]] = set()
         self._interrupts: set[str] = set()
         self._live_replies: dict[str, dict[str, Any]] = {}
         self._live_terminal_items: dict[str, dict[str, dict[str, Any]]] = {}
@@ -638,6 +657,8 @@ class ClaudeCodeServer:
         result_error: str | None = None
         completed_at = _now()
         process: asyncio.subprocess.Process | None = None
+        exit_task: asyncio.Task[int] | None = None
+        line_task: asyncio.Task[bytes] | None = None
         try:
             row = self._row(thread_id)
             started = bool(row["started"])
@@ -704,9 +725,9 @@ class ClaudeCodeServer:
 
             assert process.stdout is not None
             received_init = False
-            exit_task = asyncio.create_task(process.wait())
+            exit_task = asyncio.create_task(_wait_for_claude_process_exit(process))
             while True:
-                line_task = asyncio.ensure_future(process.stdout.readline())
+                line_task = asyncio.create_task(process.stdout.readline())
                 done, _pending = await asyncio.wait(
                     {line_task, exit_task}, return_when=asyncio.FIRST_COMPLETED
                 )
@@ -719,6 +740,10 @@ class ClaudeCodeServer:
                         )
                     except asyncio.TimeoutError:
                         line_task.cancel()
+                        await asyncio.gather(line_task, return_exceptions=True)
+                        drain_task = asyncio.create_task(_drain_claude_stdout(process.stdout))
+                        self._stdout_drain_tasks.add(drain_task)
+                        drain_task.add_done_callback(self._stdout_drain_tasks.discard)
                         break
                 else:
                     try:
@@ -820,6 +845,12 @@ class ClaudeCodeServer:
             logger.exception("Claude Code turn failed for %s", thread_id)
             result_error = "Claude Code 无法完成回复，请检查本机 CLI 和工作目录。"
         finally:
+            pending = [task for task in (line_task, exit_task) if task is not None]
+            for task in pending:
+                if not task.done():
+                    task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             completed_at = _now()
             if process and process.returncode is None:
                 await self._terminate_process(process)
@@ -1001,4 +1032,8 @@ class ClaudeCodeServer:
         for task in tuple(self._tasks.values()):
             task.cancel()
         await asyncio.gather(*tuple(self._tasks.values()), return_exceptions=True)
+        drains = tuple(self._stdout_drain_tasks)
+        for task in drains:
+            task.cancel()
+        await asyncio.gather(*drains, return_exceptions=True)
         self._connection.close()
