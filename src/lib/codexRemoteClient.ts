@@ -60,6 +60,71 @@ export interface TranslationConfigInput {
   model?: string
 }
 
+export type NativeEngine = 'codex' | 'claude'
+export type NativeConfigApplyStatus = 'reloaded' | 'pending' | 'next_connect' | 'failed' | 'next_turn' | 'unchanged' | 'saved'
+export type NativeEngineProtocol = 'responses' | 'anthropic' | 'chat'
+export type ClaudeModelRole = 'sonnet' | 'opus' | 'fable' | 'haiku'
+export interface NativeModelMapping { displayName: string; model: string }
+export interface NativeEngineProfile {
+  id: string
+  name: string
+  baseUrl: string
+  hasKey: boolean
+  authMode: 'bearer' | 'api_key'
+  protocol: NativeEngineProtocol
+  model: string
+  models: Partial<Record<ClaudeModelRole, NativeModelMapping>>
+}
+export interface NativeEngineProfileInput extends Omit<NativeEngineProfile, 'id' | 'hasKey'> {
+  profileId?: string
+  apiKey: string
+  expectedRevision: string
+  expectedNativeRevision?: string
+  apply?: boolean
+}
+export interface NativeEngineConnectionResult {
+  ok: boolean
+  results: Array<{ model: string; ok: boolean; latencyMs: number; message: string }>
+}
+
+export interface NativeEngineConfig {
+  engine: NativeEngine
+  path: string
+  exists: boolean
+  baseUrl: string
+  hasKey: boolean
+  authMode: 'bearer' | 'api_key'
+  enabled: boolean
+  currentProvider: string
+  revision: string
+  reloadPending: boolean
+  protocol: NativeEngineProtocol
+  model: string
+  models: Partial<Record<ClaudeModelRole, NativeModelMapping>>
+  profilesRevision: string
+  profiles: NativeEngineProfile[]
+  activeProfileId: string | null
+  viaGateway?: boolean
+  supportedProtocols?: NativeEngineProtocol[]
+}
+
+export interface NativeEngineProfileSaveResult {
+  profileId: string
+  applied: boolean
+  applyError?: string
+  applyStatus: NativeConfigApplyStatus
+  config: NativeEngineConfig
+}
+
+export interface NativeEngineConfigSaveResult {
+  engine: NativeEngine
+  path: string
+  revision: string
+  changed: boolean
+  applyStatus: NativeConfigApplyStatus
+  reloadPending: boolean
+}
+
 export const maxWorkspaceUploadFileSize = 512 * 1024 * 1024
 
 export interface WorkspaceUploadProgress {
@@ -106,6 +171,8 @@ export interface CodexMessage {
   sourceItemId?: string
   role: 'user' | 'assistant'
   text: string
+  model?: string
+  effort?: string
   originalText?: string
   createdAt: string
   sentAt?: string
@@ -468,6 +535,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
     const turn = turnValue as Record<string, unknown>
     if (!Array.isArray(turn.items)) continue
     const turnId = typeof turn.id === 'string' ? turn.id : undefined
+    const turnModel = typeof turn.model === 'string' && turn.model ? turn.model : undefined
+    const turnEffort = typeof turn.effort === 'string' && turn.effort
+      ? turn.effort
+      : typeof turn.reasoningEffort === 'string' && turn.reasoningEffort ? turn.reasoningEffort : undefined
     const turnStartedAt = parsedTimestampFromFields(turn, 'startedAt', 'started_at', 'startedAtMs', 'started_at_ms', 'createdAt', 'created_at')
     const turnCompletedAt = parsedTimestampFromFields(turn, 'completedAt', 'completed_at', 'completedAtMs', 'completed_at_ms')
     const replyDurationMs = turnStartedAt && turnCompletedAt
@@ -479,6 +550,10 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
       const item = itemValue as Record<string, unknown>
       const itemType = typeof item.type === 'string' ? item.type.replace(/[-_]/g, '').toLowerCase() : ''
       if (itemType !== 'usermessage' && itemType !== 'agentmessage') continue
+      const itemModel = typeof item.model === 'string' && item.model ? item.model : turnModel
+      const itemEffort = typeof item.effort === 'string' && item.effort
+        ? item.effort
+        : typeof item.reasoningEffort === 'string' && item.reasoningEffort ? item.reasoningEffort : turnEffort
       const questions = itemType === 'agentmessage' ? parseStructuredAssistantQuestions(item.questions) : []
       const rawText = itemType === 'usermessage' ? plainText(item.content) : plainText(item.text)
         || questions.map((group) => [group.question, ...group.options.map((option) => `- ${option}`)].join('\n')).join('\n\n')
@@ -510,6 +585,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
           assistantMessage.completedTextLength = assistantMessage.text.length
         }
         if (!itemComplete) assistantMessage.streaming = true
+        if (!assistantMessage.model && itemModel) assistantMessage.model = itemModel
+        if (!assistantMessage.effort && itemEffort) assistantMessage.effort = itemEffort
         if (questions.length > 0) {
           assistantMessage.questions = questions
           assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
@@ -523,6 +600,8 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         id: typeof item.id === 'string' ? item.id : `${String(turn.id ?? 'turn')}-${messages.length}`,
         role: itemType === 'usermessage' ? 'user' : 'assistant',
         text,
+        ...(itemType === 'agentmessage' && itemModel ? { model: itemModel } : {}),
+        ...(itemType === 'agentmessage' && itemEffort ? { effort: itemEffort } : {}),
         createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt ?? turn.started_at),
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),
@@ -739,6 +818,44 @@ export const codexRemoteClient = {
   },
   claudeStatus(token: string) {
     return request<{ available: boolean; error: string | null }>(token, '/api/v1/claude/status', undefined, { timeoutMs: 10_000, networkRetries: 0 })
+  },
+  nativeEngineConfig(token: string, engine: NativeEngine, signal?: AbortSignal) {
+    return request<NativeEngineConfig>(token, `/api/v1/native-config/${engine}`, { cache: 'no-store', signal }, { networkRetries: 0 })
+  },
+  saveNativeEngineProfile(token: string, engine: NativeEngine, input: NativeEngineProfileInput) {
+    return request<NativeEngineProfileSaveResult>(token, `/api/v1/native-config/${engine}/profiles`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input),
+    }, { networkRetries: 0, timeoutMs: 90_000 })
+  },
+  deleteNativeEngineProfile(token: string, engine: NativeEngine, profileId: string, expectedRevision: string) {
+    return request<NativeEngineConfig>(token, `/api/v1/native-config/${engine}/profiles/${encodeURIComponent(profileId)}`, {
+      method: 'DELETE', cache: 'no-store', body: JSON.stringify({ expectedRevision }),
+    }, { networkRetries: 0 })
+  },
+  testNativeEngineProfile(token: string, engine: NativeEngine, input: NativeEngineProfileInput, signal?: AbortSignal) {
+    return request<NativeEngineConnectionResult>(token, `/api/v1/native-config/${engine}/test`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input), signal,
+    }, { networkRetries: 0, timeoutMs: 55_000 })
+  },
+  claudeModels(token: string) {
+    return request<Array<{ value: string; label: string; model?: string }>>(token, '/api/v1/claude/models', {
+      cache: 'no-store',
+    }, { networkRetries: 0 })
+  },
+  saveNativeEngineConfig(token: string, engine: NativeEngine, input: {
+    baseUrl: string
+    apiKey: string
+    authMode: 'bearer' | 'api_key'
+    expectedRevision: string
+  }) {
+    return request<NativeEngineConfigSaveResult>(token, `/api/v1/native-config/${engine}`, {
+      method: 'POST', cache: 'no-store', body: JSON.stringify(input),
+    }, { networkRetries: 0 })
+  },
+  reloadNativeCodexConfig(token: string) {
+    return request<{ applyStatus: NativeConfigApplyStatus; reloadPending: boolean }>(token, '/api/v1/native-config/codex/reload', {
+      method: 'POST', cache: 'no-store',
+    }, { networkRetries: 0 })
   },
   translationConfig(token: string) {
     return request<TranslationConfigResponse>(token, '/api/v1/codex/translation/config')

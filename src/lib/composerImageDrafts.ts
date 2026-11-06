@@ -18,6 +18,8 @@ interface ComposerImageDraftRecord {
 
 let databasePromise: Promise<IDBDatabase> | null = null
 let imageDraftWriteQueue: Promise<void> = Promise.resolve()
+let nextImageDraftWrite = 0
+const latestImageDraftWriteByScope = new Map<string, number>()
 const pendingImageDraftMoves = new Map<string, Promise<CodexImageAttachment[]>>()
 const imageDraftSubscribers = new Map<string, Set<(images: CodexImageAttachment[]) => void>>()
 const pendingImageDraftTargets = new Map<string, string>()
@@ -112,6 +114,8 @@ export async function readComposerImageDraft(scope: string) {
 
 export function saveComposerImageDraft(scope: string, value: CodexImageAttachment[]) {
   const images = validImages(value)
+  const writeId = ++nextImageDraftWrite
+  latestImageDraftWriteByScope.set(scope, writeId)
   const write = imageDraftWriteQueue.then(async () => {
     const database = await openDatabase()
     const transaction = database.transaction(storeName, 'readwrite')
@@ -120,6 +124,13 @@ export function saveComposerImageDraft(scope: string, value: CodexImageAttachmen
     if (images.length > 0) store.put({ scope, images } satisfies ComposerImageDraftRecord)
     else store.delete(scope)
     await completed
+  }).then(() => {
+    if (latestImageDraftWriteByScope.get(scope) !== writeId) return
+    latestImageDraftWriteByScope.delete(scope)
+    publishImageDraft(scope, images)
+  }, (reason: unknown) => {
+    if (latestImageDraftWriteByScope.get(scope) === writeId) latestImageDraftWriteByScope.delete(scope)
+    throw reason
   })
   imageDraftWriteQueue = write.catch(() => undefined)
   return write
@@ -135,7 +146,6 @@ export function moveComposerImageDraft(sourceScope: string, targetScope: string)
       .slice(0, maxImagesPerTurn)
     await saveComposerImageDraft(targetScope, mergedImages)
     await saveComposerImageDraft(sourceScope, [])
-    publishImageDraft(targetScope, mergedImages)
     return mergedImages
   })()
   pendingImageDraftMoves.set(targetScope, move)

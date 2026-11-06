@@ -26,6 +26,8 @@ from typing import Any, Literal
 from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect, status
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -53,6 +55,10 @@ from .codex_app_server import (
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
+from .native_engine_config import NativeEngineConfigError, NativeEngineConfigStore
+from .native_engine_profiles import NativeEngineProfiles
+from .native_engine_gateway import NativeEngineGateway
+from .native_engine_connection import check_connection as check_native_connection
 from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 from .terminal_handoff import TerminalHandoffBroker, TerminalHandoffError
@@ -155,6 +161,36 @@ class TranslationRequest(BaseModel):
     target: Literal["zh", "en"]
     style: Literal["natural", "formal"] = "natural"
     text: str = Field(max_length=30_000)
+
+
+class NativeEngineConfigSaveRequest(BaseModel):
+    baseUrl: str
+    apiKey: str = ""
+    authMode: Literal["bearer", "api_key"] = "bearer"
+    expectedRevision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class NativeEngineModelMapping(BaseModel):
+    displayName: str = Field(default="", max_length=80)
+    model: str = Field(default="", max_length=256)
+
+
+class NativeEngineProfileRequest(BaseModel):
+    profileId: str | None = Field(default=None, max_length=100)
+    name: str = Field(max_length=80)
+    baseUrl: str = Field(max_length=2048)
+    apiKey: str = ""
+    protocol: Literal["responses", "anthropic", "chat"]
+    authMode: Literal["bearer", "api_key"] = "bearer"
+    model: str = Field(default="", max_length=256)
+    models: dict[str, NativeEngineModelMapping] = Field(default_factory=dict, max_length=4)
+    expectedRevision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expectedNativeRevision: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    apply: bool = False
+
+
+class NativeEngineProfileDeleteRequest(BaseModel):
+    expectedRevision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class PairingStateError(RuntimeError):
@@ -1616,7 +1652,10 @@ class PairingAuth:
         return True
 
 
-def create_app(workspace: Path | None = None, codex_command: str | None = None) -> FastAPI:
+def create_app(
+    workspace: Path | None = None, codex_command: str | None = None, *,
+    native_gateway_url: str = "http://127.0.0.1:18766",
+) -> FastAPI:
     project_root = Path(__file__).resolve().parents[2]
     configured_workspace = resolve_default_workspace(
         project_root,
@@ -1642,6 +1681,14 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         state_path.parent / "claude-code.sqlite3",
         app_server._emit,
     )
+    native_config = NativeEngineConfigStore(
+        app_server._history_home / "config.toml",
+        claude_code._native_home / "settings.json",
+    )
+    native_gateway = NativeEngineGateway(auth.state_path.parent, native_config, native_gateway_url)
+    native_profiles = NativeEngineProfiles(auth.state_path.parent, native_config, native_gateway)
+    native_connection_slots = asyncio.Semaphore(5)
+    codex_config_reload_pending = False
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = prepare_message_image_directory(auth.state_path.parent)
     image_storage_lock = threading.Lock()
@@ -1795,7 +1842,7 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.97.2-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.103.12-dev.3", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1807,6 +1854,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     app.state.mcp_approvals = mcp_approvals
     app.state.terminal_handoff = terminal_handoff
     app.state.translation = translation
+    app.state.native_config = native_config
+    app.state.native_profiles = native_profiles
+    app.state.native_gateway = native_gateway
     browser_history_sync = BrowserHistorySync()
     app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=5)
     app.add_middleware(
@@ -1818,6 +1868,13 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
         allow_headers=["Authorization", "Content-Type"],
     )
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request: Request, error: RequestValidationError):
+        if request.url.path.startswith("/api/v1/native-config/"):
+            # Pydantic's default error body can echo the submitted API key.
+            return JSONResponse({"detail": "配置字段无效或缺失，请检查填写内容后重试。"}, status_code=422)
+        return await request_validation_exception_handler(request, error)
+
     @app.middleware("http")
     async def require_pairing(request: Request, call_next):
         ticket_download = request.method == "GET" and request.url.path.startswith("/api/v1/codex/workspace/download/")
@@ -1826,7 +1883,11 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
             token = authorization.removeprefix("Bearer ").strip()
             if not auth.accepts(token):
                 return JSONResponse({"detail": "需要配对码"}, status_code=status.HTTP_401_UNAUTHORIZED)
-        return await call_next(request)
+        response = await call_next(request)
+        if request.url.path.startswith("/api/v1/native-config/"):
+            response.headers["Cache-Control"] = "private, no-store"
+            response.headers["Pragma"] = "no-cache"
+        return response
 
     async def run_idempotent_request(
         operation: str,
@@ -1851,6 +1912,106 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.post("/native-api/{engine}/{connection_id}/v1/{endpoint:path}")
+    async def native_api_gateway(engine: Literal["codex", "claude"], connection_id: str, endpoint: str, request: Request):
+        return await native_gateway.handle(engine, connection_id, endpoint, request)
+
+    async def apply_codex_config() -> dict[str, Any]:
+        nonlocal codex_config_reload_pending
+        try:
+            result = await app_server.reload_config_if_idle()
+        except CodexRuntimeError:
+            codex_config_reload_pending = True
+            return {"applyStatus": "failed", "reloadPending": True}
+        codex_config_reload_pending = result == "busy"
+        return {
+            "applyStatus": "pending" if result == "busy" else result,
+            "reloadPending": codex_config_reload_pending,
+        }
+
+    @app.get("/api/v1/native-config/{engine}")
+    async def read_native_config(engine: Literal["codex", "claude"]) -> dict[str, Any]:
+        try:
+            result = await asyncio.to_thread(native_profiles.read, engine)
+        except NativeEngineConfigError as error:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(error)) from error
+        return {**result, "reloadPending": codex_config_reload_pending if engine == "codex" else False}
+
+    @app.post("/api/v1/native-config/{engine}/profiles")
+    async def save_native_profile(engine: Literal["codex", "claude"], body: NativeEngineProfileRequest) -> dict[str, Any]:
+        nonlocal codex_config_reload_pending
+        try:
+            result = await asyncio.to_thread(
+                native_profiles.save, engine, body.model_dump(), body.expectedRevision,
+                apply=body.apply, expected_native=body.expectedNativeRevision,
+            )
+        except NativeEngineConfigError as error:
+            raise HTTPException(status_code=409 if error.conflict else 400, detail=str(error)) from error
+        applied = result["applied"]
+        if result.get("applyError"):
+            apply_result = {"applyStatus": "failed"}
+        elif not applied:
+            apply_result = {"applyStatus": "saved"}
+        elif engine == "claude":
+            apply_result = {"applyStatus": "next_turn"}
+        else:
+            codex_config_reload_pending = codex_config_reload_pending or result["changed"]
+            apply_result = await apply_codex_config() if codex_config_reload_pending else {"applyStatus": "unchanged"}
+        pending = codex_config_reload_pending if engine == "codex" else False
+        result["config"]["reloadPending"] = pending
+        if applied:
+            await app_server._emit({"type": "notification", "method": "nativeConfig/changed", "params": {"engine": engine, "model": result["config"]["model"]}})
+        return {**result, **apply_result, "reloadPending": pending}
+
+    @app.delete("/api/v1/native-config/{engine}/profiles/{profile_id}")
+    async def delete_native_profile(engine: Literal["codex", "claude"], profile_id: str, body: NativeEngineProfileDeleteRequest) -> dict[str, Any]:
+        try:
+            result = await asyncio.to_thread(native_profiles.delete, engine, profile_id, body.expectedRevision)
+        except NativeEngineConfigError as error:
+            raise HTTPException(status_code=409 if error.conflict else 400, detail=str(error)) from error
+        return {**result, "reloadPending": codex_config_reload_pending if engine == "codex" else False}
+
+    @app.post("/api/v1/native-config/{engine}/test")
+    async def test_native_profile(engine: Literal["codex", "claude"], body: NativeEngineProfileRequest) -> dict[str, Any]:
+        try:
+            draft = await asyncio.to_thread(native_profiles.connection_draft, engine, body.model_dump(), body.expectedRevision)
+            return await asyncio.wait_for(check_native_connection(draft, native_connection_slots), timeout=45)
+        except NativeEngineConfigError as error:
+            raise HTTPException(status_code=409 if error.conflict else 400, detail=str(error)) from error
+        except TimeoutError:
+            raise HTTPException(status_code=504, detail="连通性测试超时，请稍后重试。") from None
+
+    @app.get("/api/v1/claude/models")
+    async def list_claude_models() -> list[dict[str, str]]:
+        try:
+            return await asyncio.to_thread(native_config.claude_model_options)
+        except NativeEngineConfigError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.post("/api/v1/native-config/{engine}")
+    async def save_native_config(engine: Literal["codex", "claude"], body: NativeEngineConfigSaveRequest) -> dict[str, Any]:
+        nonlocal codex_config_reload_pending
+        try:
+            result = await asyncio.to_thread(
+                native_config.save, engine, body.baseUrl, body.apiKey, body.authMode, body.expectedRevision,
+            )
+        except NativeEngineConfigError as error:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT if error.conflict else status.HTTP_400_BAD_REQUEST,
+                detail=str(error),
+            ) from error
+        if engine == "claude":
+            return {**result, "applyStatus": "next_turn", "reloadPending": False}
+        if result["changed"]:
+            codex_config_reload_pending = True
+        if not codex_config_reload_pending:
+            return {**result, "applyStatus": "unchanged", "reloadPending": False}
+        return {**result, **await apply_codex_config()}
+
+    @app.post("/api/v1/native-config/codex/reload")
+    async def reload_native_codex_config() -> dict[str, Any]:
+        return await apply_codex_config()
 
     @app.get("/api/v1/codex/translation/config")
     async def translation_config() -> dict[str, Any]:
@@ -2093,7 +2254,20 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
     @app.get("/api/v1/codex/models")
     async def list_models() -> list[dict[str, Any]]:
         try:
-            return await app_server.list_models()
+            models = await app_server.list_models()
+            try:
+                config = await asyncio.to_thread(native_config.read, "codex")
+            except NativeEngineConfigError:
+                return models
+            if config["enabled"] and config["model"]:
+                model_id = config["model"]
+                configured = next((model for model in models if model.get("model", model.get("id")) == model_id), None)
+                selected = {**(configured or {
+                    "id": model_id, "model": model_id, "displayName": model_id,
+                    "supportedReasoningEfforts": [], "inputModalities": ["text"],
+                }), "isDefault": True}
+                return [selected, *[{**model, "isDefault": False} for model in models if model.get("model", model.get("id")) != model_id]]
+            return models
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
@@ -2825,7 +2999,9 @@ def create_app(workspace: Path | None = None, codex_command: str | None = None) 
                 if not isinstance(payload, dict):
                     continue
                 if payload.get("type") == "input" and isinstance(payload.get("data"), str):
-                    if not thread_id or not terminal_handoff.is_enabled(thread_id):
+                    if thread_id:
+                        await terminal_handoff.write_manual_input(thread_id, payload["data"], terminal_session.write)
+                    else:
                         await terminal_session.write(payload["data"])
                 elif payload.get("type") == "resize":
                     await terminal_session.resize(payload.get("columns"), payload.get("rows"))

@@ -122,7 +122,9 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
     elif item_type == "agentmessage":
         # Async questions are delivered as assistant messages while the turn
         # remains active. Keep their UI data on both history and live events.
-        result.update(_pick(item, ("text", "phase", "delivery", "questions")))
+        result.update(_pick(item, (
+            "text", "phase", "delivery", "questions", "model", "effort", "reasoningEffort", "reasoning_effort",
+        )))
     elif item_type == "filechange":
         result["changes"] = browser_changes(item.get("changes", []))
     elif item_type == "imageview":
@@ -168,7 +170,10 @@ def browser_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def browser_turn(turn: dict[str, Any], *, include_items: bool) -> dict[str, Any]:
-    result = _pick(turn, ("id", "threadId", "status", "startedAt", "completedAt", "durationMs", "error"))
+    result = _pick(turn, (
+        "id", "threadId", "status", "startedAt", "completedAt", "durationMs", "error",
+        "model", "effort", "reasoningEffort", "reasoning_effort",
+    ))
     if include_items:
         result["items"] = [
             browser_item(item)
@@ -187,7 +192,7 @@ def browser_thread(thread: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-_GLOBAL_NOTIFICATIONS = {"thread/name/updated", "thread/deleted", "turn/started", "turn/completed"}
+_GLOBAL_NOTIFICATIONS = {"thread/name/updated", "thread/deleted", "turn/started", "turn/completed", "nativeConfig/changed"}
 _DETAIL_NOTIFICATIONS = {
     "item/started", "item/completed", "item/agentMessage/delta",
     "item/fileChange/patchUpdated", "turn/workspaceChanges", "turn/plan/updated",
@@ -222,4 +227,6 @@ def browser_event(event: dict[str, Any], *, thread_id: str | None = None, filter
         result["changes"] = browser_changes(params.get("changes", []))
     elif method == "thread/name/updated":
         result.update(_pick(params, ("threadName",)))
+    elif method == "nativeConfig/changed":
+        result.update(_pick(params, ("engine", "model")))
     return {"type": "notification", "method": method, "params": result}

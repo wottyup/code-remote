@@ -145,8 +145,6 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
   const [handoffEnabled, setHandoffEnabled] = useState(false)
   const [handoffBusy, setHandoffBusy] = useState(false)
   const [handoffError, setHandoffError] = useState('')
-  const handoffEnabledRef = useRef(handoffEnabled)
-  handoffEnabledRef.current = handoffEnabled
   const [shellName, setShellName] = useState('')
   const [workingDirectory, setWorkingDirectory] = useState(cwd ?? '')
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -529,7 +527,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
       send({ type: 'input', data })
     }
     const dispatchInput = (data: string) => {
-      if (!visibleRef.current || handoffEnabledRef.current) return
+      if (!visibleRef.current) return
       clearSelectionSnapshot()
       const modifier = activeModifierRef.current
       sendInput(applyTerminalModifier(data, modifier))
@@ -875,7 +873,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected' || handoffEnabled}
+              disabled={status !== 'connected'}
               onPointerDown={(event) => {
                 event.preventDefault()
                 sendQuickInput('\x1b')
@@ -887,7 +885,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected' || handoffEnabled}
+              disabled={status !== 'connected'}
               onPointerDown={(event) => {
                 event.preventDefault()
                 sendQuickInput('\t')
@@ -901,7 +899,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                 className="terminal-dialog__navigation-button"
                 type="button"
                 key={modifier}
-                disabled={status !== 'connected' || handoffEnabled}
+                disabled={status !== 'connected'}
                 aria-pressed={activeModifier === modifier}
                 onPointerDown={(event) => {
                   event.preventDefault()
@@ -915,7 +913,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected' || handoffEnabled}
+              disabled={status !== 'connected'}
               aria-label="粘贴到终端"
               title="粘贴到终端"
               onPointerDown={(event) => {
@@ -929,7 +927,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             <button
               className="terminal-dialog__navigation-button"
               type="button"
-              disabled={status !== 'connected' || handoffEnabled}
+              disabled={status !== 'connected'}
               aria-label="终端回车"
               title="终端回车"
               onPointerDown={(event) => {
@@ -947,7 +945,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                 className="terminal-dialog__navigation-button"
                 type="button"
                 key={label}
-                disabled={status !== 'connected' || handoffEnabled}
+                disabled={status !== 'connected'}
                 aria-label={`终端${label}`}
                 title={code === 'Backspace' ? '终端退格，长按连续删除' : `终端${label}，长按连续输入`}
                 onPointerDown={(event) => beginControlRepeat(event, code)}
@@ -997,7 +995,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
     >
       <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
       {handoffError ? <div className="terminal-dialog__paste-hint" role="alert">{handoffError}</div> : null}
-      {handoffEnabled && !handoffError ? <div className="terminal-dialog__paste-hint" role="status">AI 控制中。关闭终端后在聊天发送任务；要手动输入请先收回控制。</div> : null}
+      {handoffEnabled && !handoffError ? <div className="terminal-dialog__paste-hint" role="status">AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。</div> : null}
       {runError ? <div className="terminal-dialog__paste-hint" role="alert">{runError}</div> : null}
       {desktopPasteHintVisible ? (
         <div className="terminal-dialog__paste-hint" role="status">
@@ -1026,7 +1024,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
           <button
             type="button"
             role="menuitem"
-            disabled={status !== 'connected' || handoffEnabled || Boolean(contextMenu.text)}
+            disabled={status !== 'connected' || Boolean(contextMenu.text)}
             onClick={() => void pasteIntoTerminal()}
           >
             <ClipboardPaste size={14} />

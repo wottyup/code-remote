@@ -1,3 +1,5 @@
+import { parseMarkdownTableBlock } from './markdownTableParser.mjs'
+
 function escapeMarkdownCell(value: string) {
   return value
     .replace(/\\/g, '\\\\')
@@ -46,6 +48,24 @@ function tableRowsFromPlainText(text: string) {
   return rows
 }
 
+function markdownTableFromPlainText(text: string) {
+  const normalized = text.replace(/\r\n?/g, '\n').trim()
+  const lines = normalized.split('\n')
+  let index = 0
+  let foundTable = false
+  while (index < lines.length) {
+    if (!lines[index].trim()) {
+      index += 1
+      continue
+    }
+    const table = parseMarkdownTableBlock(lines, index)
+    if (!table) return null
+    foundTable = true
+    index = table.nextLine
+  }
+  return foundTable ? normalized : null
+}
+
 export function clipboardTableToMarkdown(html: string, plainText: string) {
   const htmlTables = tableRowsFromHtml(html)
   if (htmlTables.length > 0) {
@@ -56,5 +76,5 @@ export function clipboardTableToMarkdown(html: string, plainText: string) {
   }
 
   const plainRows = tableRowsFromPlainText(plainText)
-  return plainRows ? toMarkdownTable(plainRows) : null
+  return plainRows ? toMarkdownTable(plainRows) : markdownTableFromPlainText(plainText)
 }

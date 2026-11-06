@@ -4776,6 +4776,8 @@ class MainActivity : Activity() {
         }
         val columnCount = maxOf(1, rows.maxOfOrNull { it.size } ?: 1)
         val cellWidth = maxOf(dp(120), (maximumWidth - dp(1)) / columnCount)
+        val tableWidth = ((cellWidth.toLong() + dp(1)) * columnCount + dp(1))
+            .coerceAtMost(Int.MAX_VALUE.toLong() / 4).toInt()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val copyText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.first.toString() } }
         card.addView(copyActionButton("复制表格", "表格", copyText),
@@ -4807,10 +4809,83 @@ class MainActivity : Activity() {
             }
             grid.addView(row)
         }
-        card.addView(HorizontalScrollView(this).apply {
+        val tableScroll = object : HorizontalScrollView(this) {
+            private val touchSlop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
+            private val minFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMinimumFlingVelocity
+            private val maxFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMaximumFlingVelocity
+            private var startX = 0f
+            private var startY = 0f
+            private var previousX = 0f
+            private var draggingTable = false
+            private var velocityTracker: VelocityTracker? = null
+
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.x
+                        startY = event.y
+                        previousX = event.x
+                        draggingTable = false
+                        velocityTracker?.recycle()
+                        velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                        if (canScrollHorizontally(-1) || canScrollHorizontally(1)) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        velocityTracker?.addMovement(event)
+                        val deltaX = event.x - startX
+                        val deltaY = event.y - startY
+                        if (!draggingTable && (canScrollHorizontally(-1) || canScrollHorizontally(1)) &&
+                            abs(deltaX) > touchSlop && abs(deltaX) > abs(deltaY) * 1.25f &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            draggingTable = true
+                            val cancel = MotionEvent.obtain(event)
+                            cancel.action = MotionEvent.ACTION_CANCEL
+                            super.dispatchTouchEvent(cancel)
+                            cancel.recycle()
+                        }
+                        if (draggingTable) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            val pixels = (previousX - event.x).toInt()
+                            if (pixels != 0) {
+                                scrollBy(pixels, 0)
+                                previousX -= pixels
+                            }
+                            return true
+                        }
+                        if (abs(deltaY) > touchSlop && abs(deltaY) > abs(deltaX) &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            val handled = super.dispatchTouchEvent(event)
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return handled
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val wasDragging = draggingTable
+                        if (wasDragging && event.actionMasked == MotionEvent.ACTION_UP) {
+                            velocityTracker?.addMovement(event)
+                            velocityTracker?.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                            val velocity = velocityTracker?.xVelocity ?: 0f
+                            if (abs(velocity) >= minFlingVelocity) fling(-velocity.toInt())
+                        }
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        velocityTracker?.recycle()
+                        velocityTracker = null
+                        draggingTable = false
+                        if (wasDragging) return true
+                    }
+                }
+                return super.dispatchTouchEvent(event)
+            }
+        }.apply {
             isHorizontalScrollBarEnabled = false
-            addView(grid, FrameLayout.LayoutParams(WRAP, WRAP))
-        }, LinearLayout.LayoutParams(MATCH, WRAP))
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(grid, FrameLayout.LayoutParams(tableWidth, WRAP))
+        }
+        card.addView(tableScroll, LinearLayout.LayoutParams(MATCH, WRAP))
         return card
     }
 
@@ -6120,11 +6195,31 @@ class MainActivity : Activity() {
                     }.apply {
                         isVerticalScrollBarEnabled = false
                         overScrollMode = View.OVER_SCROLL_NEVER
+                        isNestedScrollingEnabled = true
                         background = rounded(PANEL_INSET, dp(6), BORDER, dp(1))
                         addView(label(output, 11, TEXT, translateUi = false, pixelize = false).apply {
                             typeface = Typeface.MONOSPACE
                             setPadding(dp(8), dp(6), dp(8), dp(6))
                         })
+                        var previousY = 0f
+                        setOnTouchListener { view, event ->
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    previousY = event.y
+                                    view.parent?.requestDisallowInterceptTouchEvent(
+                                        view.canScrollVertically(-1) || view.canScrollVertically(1),
+                                    )
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    val direction = if (event.y < previousY) 1 else -1
+                                    view.parent?.requestDisallowInterceptTouchEvent(view.canScrollVertically(direction))
+                                    previousY = event.y
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                            false
+                        }
                     }
                     copy.addView(outputScroll, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
                 }
@@ -10580,7 +10675,7 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
-        terminalHandoffHint = label("AI 控制中。关闭终端后在聊天发送任务；要手动输入请先收回控制。", 10, SUBTLE).apply {
+        terminalHandoffHint = label("AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。", 10, SUBTLE).apply {
             visibility = View.GONE
             setPadding(dp(3), 0, dp(3), dp(4))
         }
@@ -10689,10 +10784,6 @@ class MainActivity : Activity() {
     }
 
     private fun focusTerminalInput() {
-        if (terminalHandoffEnabled || terminalHandoffBusy) {
-            showToast("AI 控制中，请先收回终端控制权")
-            return
-        }
         val input = terminalInputSink ?: return
         if (!terminalReady) {
             terminalInputFocusPending = true
@@ -10778,7 +10869,7 @@ class MainActivity : Activity() {
             setTextColor(if (terminalHandoffEnabled) ACCENT else SUBTLE)
         }
         terminalHandoffHint?.visibility = if (terminalHandoffEnabled) View.VISIBLE else View.GONE
-        val allowManualInput = !terminalHandoffEnabled && !terminalHandoffBusy
+        val allowManualInput = terminalReady
         if (!allowManualInput) {
             terminalInputFocusPending = false
             terminalInputSink?.let { input ->
@@ -10815,7 +10906,7 @@ class MainActivity : Activity() {
             if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
             terminalHandoffBusy = false
             applyTerminalHandoffStatus(result)
-            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，请在聊天发送任务" else "已收回终端控制权")
+            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，需要密码时可直接输入" else "已收回终端控制权")
             scheduleTerminalHandoffRefresh()
         }, { error ->
             if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
@@ -11072,7 +11163,7 @@ class MainActivity : Activity() {
     }
 
     private fun sendTerminalInput(value: String): Boolean {
-        if (!terminalReady || terminalHandoffEnabled || terminalHandoffBusy) return false
+        if (!terminalReady) return false
         val sent = terminalSocket?.send(JSONObject().put("type", "input").put("data", value).toString()) == true
         if (!sent) terminalReady = false
         return sent
