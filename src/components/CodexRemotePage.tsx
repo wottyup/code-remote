@@ -125,35 +125,42 @@ function replyBreathAnimation(element: Element | null): Animation | null {
   return layer?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'composer-fill-breathe') ?? null
 }
 
-function syncSidebarReplyBreatheWhenReady(animation: Animation) {
+function paneBorderBreathAnimation(): Animation | null {
+  const layer = document.querySelector<HTMLElement>('.conversation-pane--active.conversation-pane--replying > [data-pane-border-breath-layer]')
+  return layer?.getAnimations().find((animation) => (animation as CSSAnimation).animationName === 'pane-border-breathe') ?? null
+}
+
+function syncReplyBreatheWhenReady(animation: Animation) {
   if (pendingReplyBreathAnimations.has(animation)) return
   pendingReplyBreathAnimations.add(animation)
   void animation.ready.then(() => {
     pendingReplyBreathAnimations.delete(animation)
-    scheduleSidebarReplyBreatheSync()
+    scheduleReplyBreatheSync()
   }, () => { pendingReplyBreathAnimations.delete(animation) })
 }
 
-function syncSidebarReplyBreathe() {
+function syncReplyBreathe() {
   replyBreathSyncFrame = null
   const rows = Array.from(document.querySelectorAll<HTMLElement>('.thread-row--replying'))
-  if (rows.length === 0) return
   const rowAnimations = rows.map(replyBreathAnimation).filter((animation): animation is Animation => animation !== null)
+  const borderAnimation = paneBorderBreathAnimation()
+  const syncedAnimations = borderAnimation ? [...rowAnimations, borderAnimation] : rowAnimations
+  if (syncedAnimations.length === 0) return
   const composerAnimation = replyBreathAnimation(document.querySelector('.message-composer--running'))
-  if (composerAnimation?.currentTime === null) syncSidebarReplyBreatheWhenReady(composerAnimation)
-  for (const animation of rowAnimations) {
-    if (animation.currentTime === null) syncSidebarReplyBreatheWhenReady(animation)
+  if (composerAnimation?.currentTime === null) syncReplyBreatheWhenReady(composerAnimation)
+  for (const animation of syncedAnimations) {
+    if (animation.currentTime === null) syncReplyBreatheWhenReady(animation)
   }
   const source = composerAnimation?.currentTime != null
     ? composerAnimation
-    : rowAnimations.find((animation) => animation.currentTime !== null)
+    : syncedAnimations.find((animation) => animation.currentTime !== null)
   if (!source) return
   const phase = source.currentTime
   if (phase === null) return
-  for (const animation of rowAnimations) {
+  for (const animation of syncedAnimations) {
     if (animation === source) continue
     if (animation.currentTime === null) {
-      syncSidebarReplyBreatheWhenReady(animation)
+      syncReplyBreatheWhenReady(animation)
       continue
     }
     if (source.startTime !== null) animation.startTime = source.startTime
@@ -161,13 +168,13 @@ function syncSidebarReplyBreathe() {
   }
 }
 
-function scheduleSidebarReplyBreatheSync() {
+function scheduleReplyBreatheSync() {
   if (replyBreathSyncFrame !== null) return
-  replyBreathSyncFrame = requestAnimationFrame(syncSidebarReplyBreathe)
+  replyBreathSyncFrame = requestAnimationFrame(syncReplyBreathe)
 }
 
 function syncReplyBreatheOnMount(element: HTMLElement | null) {
-  if (element) scheduleSidebarReplyBreatheSync()
+  if (element) scheduleReplyBreatheSync()
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
@@ -2497,7 +2504,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <form
         className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
         ref={isReplying ? syncReplyBreatheOnMount : undefined}
-        onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleSidebarReplyBreatheSync() }}
+        onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }}
         onSubmit={(event) => void send(event)}
       >
       <span className="message-composer__breath" data-reply-breath-layer aria-hidden="true" />
@@ -4628,6 +4635,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     return indexes
   }, [visibleMessages, visibleStartIndex])
   const choiceStartIndex = useMemo(() => assistantChoiceStartIndex(remote.messages), [remote.messages])
+  const isPaneReplying = remote.isRunning || remote.runningTurnId !== null || remote.messages[remote.messages.length - 1]?.streaming === true
   const handlePanePointerDown = (event: ReactPointerEvent<HTMLElement>) => {
     const target = event.target
     focusComposerAfterPaneClick.current = !active && event.pointerType === 'mouse' && event.button === 0
@@ -4643,7 +4651,8 @@ const RemoteChatPane = memo(function RemoteChatPane({
     window.requestAnimationFrame(() => composerHandle.current?.focusInput())
   }
   return (
-    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}`} onPointerDown={handlePanePointerDown} onClick={handlePaneClick}>
+    <main className={`remote-chat conversation-pane${remote.activeEngine === 'claude-code' ? ' remote-chat--claude' : ''}${active ? ' conversation-pane--selected' : ''}${active && showActiveFrame ? ' conversation-pane--active' : ''}${isPaneReplying ? ' conversation-pane--replying' : ''}`} onPointerDown={handlePanePointerDown} onClick={handlePaneClick}>
+      {showActiveFrame ? <span className="conversation-pane__breath" data-pane-border-breath-layer aria-hidden="true" ref={active && isPaneReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'pane-border-breathe') scheduleReplyBreatheSync() }} /> : null}
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
@@ -6582,7 +6591,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               const threadEngine = thread.engine === 'claude-code' ? 'claude-code' : 'codex'
               const threadEngineLabel = threadEngine === 'claude-code' ? 'Claude Code' : 'Codex'
               return (
-                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleSidebarReplyBreatheSync() }} onClick={(event) => {
+                <button className={'thread-row' + (isActive ? ' thread-row--active' : '') + (isSelected ? ' thread-row--selected' : '') + (paneIndex !== undefined ? ' thread-row--open' : '') + (isReplying ? ' thread-row--replying' : '')} type="button" key={thread.id} ref={isReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }} onClick={(event) => {
                   const pending = threadLongPress.current
                   if (pending?.threadId === thread.id && pending.triggered) {
                     event.preventDefault()
