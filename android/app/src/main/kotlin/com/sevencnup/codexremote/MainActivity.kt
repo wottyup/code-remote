@@ -7732,7 +7732,7 @@ class MainActivity : Activity() {
                 .ifBlank { item.optString("requestText") }
             val queueMessageTextColor = if (pixelTheme) PIXEL_INK else TEXT
             card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, queueMessageTextColor, translateUi = false).apply {
-                maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
+                maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
             }, widthWrap())
             val images = item.optJSONArray("images")
             if (images != null && images.length() > 0) {
