@@ -611,6 +611,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-timeline__bar { display: block; width: min(72%, 22px); min-height: 0; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, #9aafff, #6578c4); }
 .cpa-usage-timeline__item small { overflow: hidden; color: #7d8594; font-size: 9px; line-height: 1.25; text-align: center; text-overflow: ellipsis; }
 .cpa-usage-breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.cpa-usage-breakdown-grid--single { grid-template-columns: minmax(0, 1fr); }
 .cpa-usage-table-wrap { width: 100%; overflow-x: auto; }
 .cpa-usage-table { width: 100%; border-collapse: collapse; font-size: calc(11px + var(--mobile-font-offset)); text-align: left; }
 .cpa-usage-table th, .cpa-usage-table td { padding: 11px 15px; border-bottom: 1px solid rgba(146, 157, 184, .12); }

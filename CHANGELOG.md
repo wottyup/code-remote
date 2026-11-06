@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.107.0-dev.1] - Token 用量查询新增 New API 数据源
+
 ## [0.106.0-dev.1] - Token 用量查询新增 Codex Proxy 数据源
 
 ## [0.105.0-dev.1] - Android 聊天复用电脑端翻译配置，支持中英互译对话

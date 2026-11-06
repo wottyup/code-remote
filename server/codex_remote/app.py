@@ -64,6 +64,7 @@ from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tm
 from .terminal_handoff import TerminalHandoffBroker, TerminalHandoffError
 from .translation import TranslationError, TranslationService
 from .codex_proxy_usage import CodexProxyUsageError, fetch_usage as fetch_codex_proxy_usage
+from .new_api_usage import NewAPIUsageError, fetch_usage as fetch_new_api_usage
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,13 @@ class CodexProxyUsageRequest(BaseModel):
     baseUrl: str = Field(max_length=2048)
     apiKey: str = Field(max_length=2048)
     hours: int = Field(default=24, ge=1, le=744)
+
+
+class NewAPIUsageRequest(BaseModel):
+    baseUrl: str = Field(max_length=2048)
+    accessToken: str = Field(max_length=2048)
+    startTimestamp: int = Field(gt=0)
+    endTimestamp: int = Field(gt=0)
 
 
 class NativeEngineConfigSaveRequest(BaseModel):
@@ -1849,7 +1857,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.106.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.107.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1877,7 +1885,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
-        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/codex-proxy/")):
+        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/")):
             # Pydantic's default error body can echo the submitted API key.
             return JSONResponse({"detail": "配置字段无效或缺失，请检查填写内容后重试。"}, status_code=422)
         return await request_validation_exception_handler(request, error)
@@ -1891,7 +1899,7 @@ def create_app(
             if not auth.accepts(token):
                 return JSONResponse({"detail": "需要配对码"}, status_code=status.HTTP_401_UNAUTHORIZED)
         response = await call_next(request)
-        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/codex-proxy/")):
+        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/")):
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Pragma"] = "no-cache"
         return response
@@ -2087,6 +2095,13 @@ def create_app(
         try:
             return await asyncio.to_thread(fetch_codex_proxy_usage, body.baseUrl, body.apiKey, kind, body.hours)
         except CodexProxyUsageError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/usage/new-api")
+    async def new_api_usage(body: NewAPIUsageRequest) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(fetch_new_api_usage, body.baseUrl, body.accessToken, body.startTimestamp, body.endTimestamp)
+        except NewAPIUsageError as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.post("/api/v1/pair")
