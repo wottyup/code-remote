@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>侧边栏与输入框呼吸同步演示</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #101114; color: #e9ebef; font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
+    button { font: inherit; }
+    .layout { display: grid; grid-template-columns: minmax(250px, 290px) minmax(0, 1fr); min-height: 100vh; }
+    .sidebar { padding: 24px 14px; border-right: 1px solid #30343d; background: #15171b; }
+    .brand { display: flex; align-items: center; gap: 9px; margin: 0 8px 25px; font-weight: 700; letter-spacing: .03em; }
+    .brand-mark { display: grid; width: 28px; height: 28px; place-items: center; border-radius: 8px; background: #3d528b; color: white; }
+    .sidebar h2 { margin: 0 8px 10px; color: #949baa; font-size: 12px; font-weight: 600; }
+    .thread-row { position: relative; isolation: isolate; display: flex; align-items: center; gap: 6px; min-height: 46px; margin: 3px 0; border-radius: 9px; color: #b9bec8; }
+    .thread-row--active { background: rgba(83, 100, 153, .22); box-shadow: inset 0 0 0 1px #8296ce; color: #f0f1f3; }
+    .thread-row > .thread-row__breath { position: absolute; z-index: 0; inset: 0; border-radius: inherit; pointer-events: none; opacity: 0; }
+    .thread-row--replying > .thread-row__breath { background: radial-gradient(ellipse 125% 140% at 50% 50%, color-mix(in srgb, currentColor 36%, transparent) 0%, color-mix(in srgb, currentColor 24%, transparent) 80%, color-mix(in srgb, currentColor 18%, transparent) 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 24%, transparent); opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
+    .thread-row > :not(.thread-row__breath) { position: relative; z-index: 1; }
+    .thread-main { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; min-height: 46px; padding: 4px 8px; border: 0; background: transparent; color: inherit; cursor: pointer; text-align: left; }
+    .thread-icon { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 6px; background: rgba(113, 136, 194, .22); color: #aabdf0; font-size: 12px; font-weight: 700; }
+    .thread-copy { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: 5px; }
+    .thread-copy strong { overflow: hidden; font-size: 13.5px; font-weight: 520; text-overflow: ellipsis; white-space: nowrap; }
+    .thread-copy small { flex: 0 0 auto; color: #8d95a4; font-size: 11px; }
+    .thread-toggle { margin-right: 7px; padding: 3px 6px; border: 1px solid #454c5a; border-radius: 5px; background: #252a33; color: #d3d9e5; cursor: pointer; font-size: 11px; }
+    .thread-toggle:hover { background: #333b4a; }
+    .content { display: flex; flex-direction: column; gap: 20px; min-width: 0; padding: clamp(25px, 5vw, 70px); }
+    .content header { max-width: 620px; }
+    h1 { margin: 0 0 10px; font-size: clamp(21px, 3vw, 30px); line-height: 1.2; }
+    p { margin: 0; color: #aab1bf; }
+    .controls { display: flex; flex-wrap: wrap; gap: 9px; }
+    .controls button { padding: 8px 13px; border: 1px solid #667bb1; border-radius: 8px; background: #344879; color: #f6f8ff; cursor: pointer; }
+    .controls button:hover { background: #425a96; }
+    .controls button:last-child { border-color: #4b505c; background: #282c34; }
+    .current-topic { margin-top: auto; color: #c4cad6; font-size: 12px; }
+    .message-composer { position: relative; isolation: isolate; max-width: 750px; min-height: 145px; padding: 18px; border-radius: 18px; background: linear-gradient(145deg, rgba(40, 44, 54, .88), rgba(24, 26, 32, .94) 54%, rgba(18, 20, 25, .97)); box-shadow: 0 20px 54px rgba(0, 0, 0, .34); }
+    .message-composer > .message-composer__breath { position: absolute; z-index: 0; inset: 1px; border-radius: inherit; pointer-events: none; opacity: 0; }
+    .message-composer--running > .message-composer__breath { background: radial-gradient(ellipse 160% 160% at 50% 50%, rgba(255, 255, 255, .42) 0%, rgba(255, 255, 255, .2) 58%, transparent 100%); opacity: .18; animation: composer-fill-breathe 5.5s ease-in-out infinite; }
+    .message-composer > :not(.message-composer__breath) { position: relative; z-index: 1; }
+    .message-composer textarea { display: block; width: 100%; height: 65px; resize: none; border: 0; outline: 0; background: transparent; color: #eef1f6; font: inherit; }
+    .composer-footer { display: flex; align-items: center; justify-content: space-between; color: #a6aeba; font-size: 12px; }
+    .status { color: #aecaeb; }
+    @keyframes composer-fill-breathe { 0%, 100% { opacity: .18; } 50% { opacity: .72; } }
+    @media (prefers-reduced-motion: reduce) {
+      .thread-row--replying > .thread-row__breath, .message-composer--running > .message-composer__breath { animation: none; opacity: .42; }
+    }
+    @media (max-width: 660px) {
+      .layout { grid-template-columns: 1fr; }
+      .sidebar { border-right: 0; border-bottom: 1px solid #30343d; }
+      .content { min-height: 55vh; padding: 24px 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">C</span><span>Code Remote · 呼吸演示</span></div>
+      <h2>对话列表</h2>
+      <div class="thread-row thread-row--active thread-row--replying" data-thread="a">
+        <span class="thread-row__breath" data-reply-breath-layer aria-hidden="true"></span>
+        <button class="thread-main" type="button" data-select="a"><span class="thread-icon">C</span><span class="thread-copy"><strong>当前正在回复的话题</strong><small data-status>回复中</small></span></button>
+        <button class="thread-toggle" type="button" data-toggle="a">停止</button>
+      </div>
+      <div class="thread-row" data-thread="b">
+        <span class="thread-row__breath" data-reply-breath-layer aria-hidden="true"></span>
+        <button class="thread-main" type="button" data-select="b"><span class="thread-icon">C</span><span class="thread-copy"><strong>稍后开始的话题</strong><small data-status>待命</small></span></button>
+        <button class="thread-toggle" type="button" data-toggle="b">开始</button>
+      </div>
+      <div class="thread-row" data-thread="c">
+        <span class="thread-row__breath" data-reply-breath-layer aria-hidden="true"></span>
+        <button class="thread-main" type="button" data-select="c"><span class="thread-icon">C</span><span class="thread-copy"><strong>第三个并发话题</strong><small data-status>待命</small></span></button>
+        <button class="thread-toggle" type="button" data-toggle="c">开始</button>
+      </div>
+    </aside>
+    <main class="content">
+      <header>
+        <h1>侧边栏跟随输入框呼吸</h1>
+        <p>点击“错时启动”，观察后来开始回复的话题是否与当前话题的输入框一起变亮、变暗。点击左侧话题可切换当前输入框。</p>
+      </header>
+      <div class="controls">
+        <button type="button" id="stagger">错时启动其他话题</button>
+        <button type="button" id="stop-all">全部停止</button>
+      </div>
+      <div class="current-topic" id="current-topic">当前话题：当前正在回复的话题</div>
+      <form class="message-composer message-composer--running" id="composer" onsubmit="return false">
+        <span class="message-composer__breath" data-reply-breath-layer aria-hidden="true"></span>
+        <textarea placeholder="这个演示不会发送消息"></textarea>
+        <div class="composer-footer"><span>当前话题的输入框</span><span class="status" id="composer-status">正在回复</span></div>
+      </form>
+    </main>
+  </div>
+  <script>
+    const running = new Map([['a', true], ['b', false], ['c', false]])
+    const titles = { a: '当前正在回复的话题', b: '稍后开始的话题', c: '第三个并发话题' }
+    const composer = document.querySelector('#composer')
+    let selected = 'a'
+    let syncFrame = null
+    const waiting = new WeakSet()
+    const staggerTimers = []
+
+    function breathAnimation(element) {
+      return element?.querySelector(':scope > [data-reply-breath-layer]')?.getAnimations().find((animation) => animation.animationName === 'composer-fill-breathe') ?? null
+    }
+
+    function syncWhenReady(animation) {
+      if (waiting.has(animation)) return
+      waiting.add(animation)
+      animation.ready.then(() => {
+        waiting.delete(animation)
+        scheduleSync()
+      }, () => waiting.delete(animation))
+    }
+
+    function syncRows() {
+      syncFrame = null
+      const rows = [...document.querySelectorAll('.thread-row--replying')]
+      const animations = rows.map(breathAnimation).filter(Boolean)
+      const inputAnimation = breathAnimation(document.querySelector('.message-composer--running'))
+      if (inputAnimation?.currentTime === null) syncWhenReady(inputAnimation)
+      for (const animation of animations) if (animation.currentTime === null) syncWhenReady(animation)
+      const source = inputAnimation?.currentTime != null ? inputAnimation : animations.find((animation) => animation.currentTime !== null)
+      const phase = source?.currentTime
+      if (phase == null) return
+      for (const animation of animations) {
+        if (animation !== source && animation.currentTime !== null) {
+          if (source.startTime !== null) animation.startTime = source.startTime
+          else animation.currentTime = phase
+        }
+      }
+    }
+
+    function scheduleSync() {
+      if (syncFrame !== null) return
+      syncFrame = requestAnimationFrame(syncRows)
+    }
+
+    function render(resetComposer = false) {
+      for (const row of document.querySelectorAll('[data-thread]')) {
+        const id = row.dataset.thread
+        row.classList.toggle('thread-row--active', id === selected)
+        row.classList.toggle('thread-row--replying', running.get(id))
+        row.querySelector('[data-status]').textContent = running.get(id) ? '回复中' : '待命'
+        row.querySelector('[data-toggle]').textContent = running.get(id) ? '停止' : '开始'
+      }
+      if (resetComposer) {
+        composer.classList.remove('message-composer--running')
+        void composer.offsetWidth
+      }
+      composer.classList.toggle('message-composer--running', running.get(selected))
+      document.querySelector('#current-topic').textContent = `当前话题：${titles[selected]}`
+      document.querySelector('#composer-status').textContent = running.get(selected) ? '正在回复' : '未回复'
+      scheduleSync()
+    }
+
+    document.querySelector('.sidebar').addEventListener('click', (event) => {
+      const toggle = event.target.closest('[data-toggle]')
+      if (toggle) {
+        const id = toggle.dataset.toggle
+        running.set(id, !running.get(id))
+        render()
+        return
+      }
+      const select = event.target.closest('[data-select]')
+      if (select && select.dataset.select !== selected) {
+        selected = select.dataset.select
+        render(true)
+      }
+    })
+    document.addEventListener('animationstart', (event) => {
+      if (event.animationName === 'composer-fill-breathe') scheduleSync()
+    })
+    document.querySelector('#stagger').addEventListener('click', () => {
+      staggerTimers.splice(0).forEach(clearTimeout)
+      running.set('a', true)
+      running.set('b', false)
+      running.set('c', false)
+      selected = 'a'
+      render(true)
+      staggerTimers.push(setTimeout(() => { running.set('b', true); render() }, 1300))
+      staggerTimers.push(setTimeout(() => { running.set('c', true); render() }, 2600))
+    })
+    document.querySelector('#stop-all').addEventListener('click', () => {
+      staggerTimers.splice(0).forEach(clearTimeout)
+      for (const id of running.keys()) running.set(id, false)
+      render()
+    })
+    scheduleSync()
+  </script>
+</body>
+</html>

@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import os
 import sqlite3
 import threading
 from collections import OrderedDict
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -122,6 +124,16 @@ def _normalise_item(item: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+@dataclass
+class _TurnMetadataSnapshot:
+    revision: str
+    device: int
+    inode: int
+    size: int
+    offset: int
+    metadata: dict[str, dict[str, str]]
+
+
 class CodexHistoryStore:
     """Read Codex's on-disk session index and JSONL history as a compatibility fallback."""
 
@@ -137,6 +149,7 @@ class CodexHistoryStore:
         self._internal_thread_ids: set[str] = set()
         self._projection_lock = threading.RLock()
         self._browser_items: OrderedDict[tuple[str, str, str, int], dict[str, Any]] = OrderedDict()
+        self._turn_metadata_cache: dict[str, _TurnMetadataSnapshot] = {}
 
     def list_threads(self) -> list[dict[str, Any]]:
         entries = self._load_index_entries()
@@ -220,6 +233,73 @@ class CodexHistoryStore:
         self._path_index = None
         self._index_entries = None
         self._internal_thread_ids = set()
+        self._turn_metadata_cache.clear()
+
+    def _read_turn_metadata(self, path: Path, source_revision: str) -> dict[str, dict[str, str]]:
+        """Read model and reasoning metadata omitted by the SQLite projection.
+
+        The compact browser history path is intentionally built from the local
+        projection database, but that database does not retain ``turn_context``
+        records. Cache the last complete line offset so an append only reads
+        new records instead of walking the entire conversation again.
+        """
+        cache_key = str(path)
+        cached = self._turn_metadata_cache.get(cache_key)
+        try:
+            with path.open("rb") as lines:
+                file_stat = os.fstat(lines.fileno())
+                actual_revision = f"{file_stat.st_mtime_ns}:{file_stat.st_size}"
+                if (cached is not None and cached.revision == source_revision == actual_revision
+                    and cached.device == file_stat.st_dev and cached.inode == file_stat.st_ino
+                    and cached.size == file_stat.st_size):
+                    return cached.metadata
+                appended = (cached is not None and cached.device == file_stat.st_dev
+                    and cached.inode == file_stat.st_ino and file_stat.st_size > cached.size)
+                metadata_by_turn = dict(cached.metadata) if appended and cached is not None else {}
+                if appended and cached is not None:
+                    lines.seek(cached.offset)
+                complete_offset = lines.tell()
+                while raw_line := lines.readline():
+                    if not raw_line.endswith(b"\n"):
+                        break
+                    complete_offset = lines.tell()
+                    if b'"turn_context"' not in raw_line:
+                        continue
+                    try:
+                        envelope = json.loads(raw_line.decode("utf-8", errors="replace"))
+                    except json.JSONDecodeError:
+                        continue
+                    if not isinstance(envelope, dict) or envelope.get("type") != "turn_context":
+                        continue
+                    payload = envelope.get("payload")
+                    if not isinstance(payload, dict):
+                        continue
+                    turn_id = payload.get("turn_id", payload.get("turnId"))
+                    if not isinstance(turn_id, str) or not turn_id:
+                        continue
+                    metadata: dict[str, str] = {}
+                    model = payload.get("model")
+                    if isinstance(model, str) and model:
+                        metadata["model"] = model
+                    effort = payload.get(
+                        "effort",
+                        payload.get("reasoning_effort", payload.get("reasoningEffort")),
+                    )
+                    if isinstance(effort, str) and effort:
+                        metadata["effort"] = effort
+                    if metadata:
+                        metadata_by_turn[turn_id] = {**metadata_by_turn.get(turn_id, {}), **metadata}
+                self._turn_metadata_cache[cache_key] = _TurnMetadataSnapshot(
+                    revision=actual_revision,
+                    device=file_stat.st_dev,
+                    inode=file_stat.st_ino,
+                    size=file_stat.st_size,
+                    offset=complete_offset,
+                    metadata=metadata_by_turn,
+                )
+                return metadata_by_turn
+        except OSError:
+            return {}
 
     def thread_revision(self, thread_id: str) -> str | None:
         path = self._load_path_index().get(thread_id)
@@ -302,6 +382,7 @@ class CodexHistoryStore:
         latest_user_text = projected.get("preview", "") if projected else ""
         first_time: str | None = None
         model: str | None = None
+        turn_metadata: dict[str, dict[str, str]] = {}
         active_turn_id: str | None = turn_order[-1] if turn_order else None
 
         try:
@@ -336,6 +417,20 @@ class CodexHistoryStore:
                     candidate_model = payload.get("model")
                     if isinstance(candidate_model, str) and candidate_model:
                         model = candidate_model
+                    context_turn_id = payload.get("turn_id", payload.get("turnId"))
+                    if not isinstance(context_turn_id, str) or not context_turn_id:
+                        context_turn_id = active_turn_id
+                    metadata: dict[str, str] = {}
+                    if isinstance(candidate_model, str) and candidate_model:
+                        metadata["model"] = candidate_model
+                    candidate_effort = payload.get("effort", payload.get("reasoning_effort"))
+                    if isinstance(candidate_effort, str) and candidate_effort:
+                        metadata["effort"] = candidate_effort
+                    if context_turn_id and metadata:
+                        turn_metadata[context_turn_id] = metadata
+                        existing_turn = turns.get(context_turn_id)
+                        if existing_turn is not None:
+                            existing_turn.update(metadata)
 
                 event_type = payload.get("type")
                 turn_id = payload.get("turn_id")
@@ -359,10 +454,13 @@ class CodexHistoryStore:
                         "completedAt": None,
                         "durationMs": None,
                     }
+                    turn.update(turn_metadata.get(turn_id, {}))
                     turns[turn_id] = turn
                     turn_order.append(turn_id)
                 elif turn.get("startedAt") is None and timestamp:
                     turn["startedAt"] = timestamp
+                if turn_metadata.get(turn_id):
+                    turn.update(turn_metadata[turn_id])
 
                 if event_type == "item_completed":
                     item = payload.get("item")
@@ -486,7 +584,9 @@ class CodexHistoryStore:
             return None
         bounded_limit = max(1, min(int(limit), 100)) if limit is not None else -1
         try:
-            rollout_size = path.stat().st_size
+            source_stat = path.stat()
+            rollout_size = source_stat.st_size
+            source_revision = f"{source_stat.st_mtime_ns}:{source_stat.st_size}"
             with closing(sqlite3.connect(
                 f"file:{self.history_index.as_posix()}?mode=ro", uri=True, timeout=5,
             )) as connection:
@@ -523,8 +623,8 @@ class CodexHistoryStore:
                 if turn_ids:
                     compact_filter = "AND lower(item_type) NOT IN ('reasoning', 'plan')" if compact else ""
                     payload_column = "" if compact else ", item_json"
-                    item_rows = connection.execute(
-                        f"""SELECT turn_id, item_id, created_at_ms, updated_at_ordinal {payload_column}
+                    item_rows = list(connection.execute(
+                        f"""SELECT rowid, turn_id, item_id, created_at_ms, updated_at_ordinal {payload_column}
                             FROM thread_items
                             WHERE thread_id = ? AND turn_id IN (
                                 SELECT turn_id FROM thread_turns WHERE thread_id = ?
@@ -532,32 +632,40 @@ class CodexHistoryStore:
                             ) {compact_filter}
                             ORDER BY rollout_ordinal, updated_at_ordinal""",
                         (thread_id, thread_id, bounded_limit),
-                    )
-                    for row in item_rows:
-                        key = (thread_id, row["turn_id"], row["item_id"], row["updated_at_ordinal"])
-                        cached = self._browser_items.get(key) if compact else None
-                        if cached is not None:
-                            self._browser_items.move_to_end(key)
-                            items_by_turn[row["turn_id"]].append(browser_item(cached))
-                            continue
-                        raw = connection.execute(
-                            "SELECT item_json FROM thread_items WHERE thread_id = ? AND turn_id = ? AND item_id = ?",
-                            (thread_id, row["turn_id"], row["item_id"]),
-                        ).fetchone()[0] if compact else row["item_json"]
-                        try:
-                            item = json.loads(raw)
-                        except (json.JSONDecodeError, TypeError):
-                            continue
-                        if not isinstance(item, dict):
-                            continue
-                        normalized = _normalise_item(item)
-                        normalized.setdefault("createdAt", _iso_time(row["created_at_ms"]))
-                        if compact:
-                            normalized = browser_item(normalized)
-                            self._browser_items[key] = normalized
-                            while len(self._browser_items) > 20_000:
-                                self._browser_items.popitem(last=False)
-                        items_by_turn[row["turn_id"]].append(browser_item(normalized) if compact else normalized)
+                    ))
+                    # Fetch uncached payloads in bounded groups. The warm
+                    # cache still avoids reading large JSON blobs entirely.
+                    for start in range(0, len(item_rows), 400):
+                        batch = item_rows[start:start + 400]
+                        missing = [row["rowid"] for row in batch if compact and (
+                            thread_id, row["turn_id"], row["item_id"], row["updated_at_ordinal"]
+                        ) not in self._browser_items]
+                        payloads = dict(connection.execute(
+                            f"SELECT rowid, item_json FROM thread_items WHERE rowid IN ({','.join('?' for _ in missing)})",
+                            missing,
+                        )) if missing else {}
+                        for row in batch:
+                            key = (thread_id, row["turn_id"], row["item_id"], row["updated_at_ordinal"])
+                            cached = self._browser_items.get(key) if compact else None
+                            if cached is not None:
+                                self._browser_items.move_to_end(key)
+                                items_by_turn[row["turn_id"]].append(browser_item(cached))
+                                continue
+                            raw = payloads.get(row["rowid"]) if compact else row["item_json"]
+                            try:
+                                item = json.loads(raw)
+                            except (json.JSONDecodeError, TypeError):
+                                continue
+                            if not isinstance(item, dict):
+                                continue
+                            normalized = _normalise_item(item)
+                            normalized.setdefault("createdAt", _iso_time(row["created_at_ms"]))
+                            if compact:
+                                normalized = browser_item(normalized)
+                                self._browser_items[key] = normalized
+                                while len(self._browser_items) > 20_000:
+                                    self._browser_items.popitem(last=False)
+                            items_by_turn[row["turn_id"]].append(browser_item(normalized) if compact else normalized)
         except (OSError, sqlite3.Error, TypeError, ValueError):
             return None
 
@@ -583,6 +691,12 @@ class CodexHistoryStore:
                 "completedAt": completed_at,
                 "durationMs": row["duration_ms"],
             })
+
+        turn_metadata = self._read_turn_metadata(path, source_revision)
+        for turn in turns:
+            metadata = turn_metadata.get(turn["id"])
+            if metadata:
+                turn.update(metadata)
 
         session_meta = self._read_file_summary(path) or {}
         latest_user_text = ""
@@ -612,6 +726,7 @@ class CodexHistoryStore:
             "originator": session_meta.get("originator"),
             "source": session_meta.get("source"),
             "cliVersion": session_meta.get("cli_version"),
+            "model": next((turn.get("model") for turn in reversed(turns) if turn.get("model")), None),
             "status": {"type": turns[-1].get("status", "completed")} if turns else {"type": "notLoaded"},
             "turns": turns,
             "totalTurns": total_turns,

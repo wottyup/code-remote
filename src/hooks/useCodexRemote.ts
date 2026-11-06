@@ -93,6 +93,7 @@ export interface CodexFileChange {
 export interface QueuedTurnMessage {
   id: string
   text: string
+  originalText?: string
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -122,6 +123,7 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 
 interface SendMessageInput {
   prompt: string
+  originalText?: string
   continuePaused?: boolean
   sendImmediately?: boolean
   onDeliveryStatus?: (status: 'sent' | 'queued' | 'unverified') => void
@@ -143,7 +145,42 @@ interface PendingTurnDelivery {
   acknowledged: boolean
   completedTurnIds: Set<string>
   previousMessageIds: ReadonlySet<string>
+  model?: string
+  effort?: string
   resolveReceipt?: (result: { turn_id: string | null; completed: boolean }) => void
+}
+
+type TurnDisplayPreferences = Pick<CodexMessage, 'model' | 'effort'>
+
+function rememberTurnDisplayPreferences(
+  preferencesByTurn: Map<string, TurnDisplayPreferences>,
+  turnId: string | null | undefined,
+  preferences: TurnDisplayPreferences,
+) {
+  if (!turnId || (!preferences.model && !preferences.effort)) return
+  const previous = preferencesByTurn.get(turnId)
+  const model = preferences.model && preferences.model !== 'default' ? preferences.model : previous?.model ?? preferences.model
+  const effort = preferences.effort && preferences.effort !== 'default' ? preferences.effort : previous?.effort ?? preferences.effort
+  preferencesByTurn.set(turnId, {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+  while (preferencesByTurn.size > 512) {
+    const oldest = preferencesByTurn.keys().next().value
+    if (!oldest) break
+    preferencesByTurn.delete(oldest)
+  }
+}
+
+function applyTurnDisplayPreferences(messages: CodexMessage[], turnId: string | null | undefined, preferences: TurnDisplayPreferences | undefined) {
+  if (!turnId || (!preferences?.model && !preferences?.effort)) return messages
+  return messages.map((message) => message.role === 'assistant' && message.turnId === turnId
+    ? {
+      ...message,
+      ...(preferences.model && !message.model ? { model: preferences.model } : {}),
+      ...(preferences.effort && !message.effort ? { effort: preferences.effort } : {}),
+    }
+    : message)
 }
 
 type FileChangesByTurn = Record<string, CodexFileChange[]>
@@ -289,6 +326,9 @@ function readPersistedActiveThreadCache(threadId: string | null): PersistedActiv
         ...(typeof message.sourceItemId === 'string' ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text: message.text,
+        ...(typeof message.model === 'string' && message.model ? { model: message.model } : {}),
+        ...(typeof message.effort === 'string' && message.effort ? { effort: message.effort } : {}),
+        ...(typeof message.originalText === 'string' ? { originalText: message.originalText } : {}),
         createdAt: message.createdAt,
         ...(typeof message.sentAt === 'string' ? { sentAt: message.sentAt } : {}),
         ...(typeof message.replyStartedAt === 'string' ? { replyStartedAt: message.replyStartedAt } : {}),
@@ -340,6 +380,9 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.sourceItemId ? { sourceItemId: message.sourceItemId } : {}),
         role: message.role,
         text,
+        ...(message.model ? { model: message.model } : {}),
+        ...(message.effort ? { effort: message.effort } : {}),
+        ...(message.originalText ? { originalText: message.originalText } : {}),
         createdAt: message.createdAt,
         ...(message.sentAt ? { sentAt: message.sentAt } : {}),
         ...(message.replyStartedAt ? { replyStartedAt: message.replyStartedAt } : {}),
@@ -354,7 +397,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
         ...(message.choicePromptText ? { choicePromptText: message.choicePromptText } : {}),
         ...(message.choiceDelivery ? { choiceDelivery: message.choiceDelivery } : {}),
       } as CodexMessage
-      const messageCharacters = text.length + 128
+      const messageCharacters = text.length + (message.originalText?.length ?? 0) + 128
       if (cachedMessages.length > 0 && cachedCharacters + messageCharacters > maxCachedHistoryCharacters) break
       cachedMessages.unshift(compactMessage)
       cachedCharacters += messageCharacters
@@ -373,7 +416,7 @@ function persistActiveThreadCache(thread: CodexThread, messages: CodexMessage[])
 function cachedMessageCharacters(message: CodexMessage) {
   const imageCharacters = message.images?.reduce((total, image) => total + image.name.length + image.previewUrl.length, 0) ?? 0
   const documentCharacters = message.documents?.reduce((total, document) => total + document.name.length + document.content.length, 0) ?? 0
-  return message.text.length + imageCharacters + documentCharacters + 128
+  return message.text.length + (message.originalText?.length ?? 0) + imageCharacters + documentCharacters + 128
 }
 
 function cachedHistoryCharacters(messages: CodexMessage[]) {
@@ -435,7 +478,7 @@ function threadTimestamp(thread: CodexThread) {
   return 0
 }
 
-function threadIsRunning(thread: CodexThread) {
+export function threadIsRunning(thread: CodexThread) {
   return ['active', 'inProgress', 'running', 'started'].includes(thread.status?.type ?? '')
 }
 
@@ -476,6 +519,7 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
   return {
     id: queuedMessageId(),
     text,
+    ...(input.originalText && input.originalText !== text ? { originalText: input.originalText } : {}),
     requestText: queuedRequestText(text, documents),
     images: input.images,
     ...(documents.length > 0 ? { documents } : {}),
@@ -526,6 +570,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const payload = value as Record<string, unknown>
   const id = typeof payload.id === 'string' ? payload.id : ''
   const text = typeof payload.text === 'string' ? payload.text : ''
+  const originalText = typeof payload.originalText === 'string' && payload.originalText.length <= 30_000 ? payload.originalText : undefined
   const createdAt = typeof payload.createdAt === 'string' ? payload.createdAt : ''
   if (!id || id.length > 256 || !createdAt || createdAt.length > 128) return null
   const images = Array.isArray(payload.images)
@@ -568,6 +613,7 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   return {
     id,
     text,
+    ...(originalText && originalText !== text ? { originalText } : {}),
     requestText: queuedRequestText(text, documents),
     images,
     ...(documents.length > 0 ? { documents } : {}),
@@ -676,6 +722,7 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
     id: payload.id,
     role: 'user',
     text: payload.text,
+    ...(payload.originalText ? { originalText: payload.originalText } : {}),
     images: payload.images.map((image) => ({ name: image.name, previewUrl: `data:${image.mediaType};base64,${image.data}` })),
     ...(payload.documents?.length ? { documents: payload.documents.map((document) => ({ ...document, charCount: document.content.length })) } : {}),
     createdAt: payload.createdAt,
@@ -685,17 +732,46 @@ function localMessageFromQueuedPayload(payload: QueuedTurnPayload, turnId?: stri
 }
 
 function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
-  const previousImageMessages = current.filter((message) => message.role === 'user' && message.images?.length)
-  const used = new Set<string>()
+  const byId = new Map<string, CodexMessage>()
+  const byTurnText = new Map<string, CodexMessage[]>()
+  const imageMessagesByText = new Map<string, CodexMessage[]>()
+  const imageOffsets = new Map<string, number>()
+  const usedImageIds = new Set<string>()
+  const turnTextKey = (message: CodexMessage, text: string) => JSON.stringify([message.role, message.turnId, text])
+  for (const message of current) {
+    if (!byId.has(message.id)) byId.set(message.id, message)
+    if (message.turnId) {
+      const key = turnTextKey(message, message.text)
+      const candidates = byTurnText.get(key) ?? []
+      candidates.push(message)
+      byTurnText.set(key, candidates)
+      if (message.role === 'user') {
+        const requestText = queuedRequestText(message.text, message.documents)
+        if (requestText !== message.text) {
+          const requestKey = turnTextKey(message, requestText)
+          const requestCandidates = byTurnText.get(requestKey) ?? []
+          requestCandidates.push(message)
+          byTurnText.set(requestKey, requestCandidates)
+        }
+      }
+    }
+    if (message.role === 'user' && message.images?.length) {
+      const imageMessages = imageMessagesByText.get(message.text) ?? []
+      imageMessages.push(message)
+      imageMessagesByText.set(message.text, imageMessages)
+    }
+  }
   return next.map((message) => {
-    const previous = current.find((candidate) => candidate.id === message.id)
-      ?? (message.turnId ? current.find((candidate) => candidate.role === message.role
-        && candidate.turnId === message.turnId
-        && (candidate.text === message.text || (message.role === 'user' && sameQueuedMessageHistoryContent(message, candidate)))) : undefined)
+    const previous = byId.get(message.id)
+      ?? (message.turnId ? byTurnText.get(turnTextKey(message, message.text))?.find((candidate) => candidate.text === message.text
+        || (message.role === 'user' && sameQueuedMessageHistoryContent(message, candidate))) : undefined)
     let nextMessage = message
     if (previous) {
       nextMessage = {
         ...message,
+        ...(!message.model && previous.model ? { model: previous.model } : {}),
+        ...(!message.effort && previous.effort ? { effort: previous.effort } : {}),
+        ...(!message.originalText && previous.originalText ? { originalText: previous.originalText } : {}),
         ...(!message.sentAt && previous.sentAt ? { sentAt: previous.sentAt } : {}),
         ...(!message.replyStartedAt && previous.replyStartedAt ? { replyStartedAt: previous.replyStartedAt } : {}),
         ...(message.replyDurationMs === undefined && previous.replyDurationMs !== undefined
@@ -710,9 +786,13 @@ function preserveCurrentImages(next: CodexMessage[], current: CodexMessage[]) {
       }
     }
     if (message.role !== 'user' || message.images?.length) return nextMessage
-    const previousImageMessage = previousImageMessages.find((candidate) => !used.has(candidate.id) && candidate.text === message.text)
+    const imageMessages = imageMessagesByText.get(message.text) ?? []
+    let imageOffset = imageOffsets.get(message.text) ?? 0
+    while (imageOffset < imageMessages.length && usedImageIds.has(imageMessages[imageOffset].id)) imageOffset += 1
+    const previousImageMessage = imageMessages[imageOffset]
     if (!previousImageMessage) return nextMessage
-    used.add(previousImageMessage.id)
+    imageOffsets.set(message.text, imageOffset + 1)
+    usedImageIds.add(previousImageMessage.id)
     return { ...nextMessage, images: previousImageMessage.images }
   })
 }
@@ -725,6 +805,9 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.sourceItemId === candidate.sourceItemId
       && message.role === candidate.role
       && message.text === candidate.text
+      && message.model === candidate.model
+      && message.effort === candidate.effort
+      && message.originalText === candidate.originalText
       && message.turnId === candidate.turnId
       && message.sentAt === candidate.sentAt
       && message.replyStartedAt === candidate.replyStartedAt
@@ -1467,6 +1550,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const streamingAssistantChoice = useRef<Pick<CodexMessage, 'questions' | 'choiceItemId' | 'choicePromptText' | 'choiceDelivery'> | null>(null)
   const streamingCompletedItems = useRef(new Set<string>())
   const retiredAssistantItems = useRef({ turnId: null as string | null, ids: new Set<string>() })
+  const turnDisplayPreferences = useRef(new Map<string, TurnDisplayPreferences>())
   const observedUserItems = useRef(new Map<string, CodexMessage>())
   const streamingRenderTimer = useRef<number | undefined>(undefined)
   const streamingRenderGeneration = useRef(0)
@@ -1781,7 +1865,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         // assistant bubble after the active thread has already changed.
         if (!synchronous && renderGeneration !== streamingRenderGeneration.current) return current
         const collapsed = collapseAssistantMessagesForTurn(current, turnId, messageId, text, replyStartedAt, completedText)
-        const next = choice ? collapsed.map((message) => message.id === messageId ? { ...message, ...choice } : message) : collapsed
+        const withPreferences = applyTurnDisplayPreferences(collapsed, turnId, turnDisplayPreferences.current.get(turnId ?? ''))
+        const next = choice ? withPreferences.map((message) => message.id === messageId ? { ...message, ...choice } : message) : withPreferences
         const tail = current.at(-1)
         if (tail?.role === 'assistant' && tail.id === messageId && tail.streaming && (!turnId || tail.turnId === turnId)) return next
         return sameMessages(current, next) ? current : next
@@ -2336,6 +2421,21 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [loadModels, onUnauthorized, token])
 
+  useEffect(() => {
+    if (!enabled || !loadModels) return
+    const onConfigChanged = (event: Event) => {
+      const detail = (event as CustomEvent<{ engine?: string; model?: string }>).detail
+      if (detail?.engine !== 'codex') return
+      void refreshModels().then((next) => {
+        if (detail.model && next?.some((model) => (model.model ?? model.id) === detail.model)) {
+          window.dispatchEvent(new CustomEvent('codex-remote:native-models-loaded', { detail }))
+        }
+      })
+    }
+    window.addEventListener('codex-remote:native-config-changed', onConfigChanged)
+    return () => window.removeEventListener('codex-remote:native-config-changed', onConfigChanged)
+  }, [enabled, loadModels, refreshModels])
+
   const loadThread = useCallback(async (
     threadId: string,
     revision = historyRevision.current,
@@ -2369,6 +2469,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         return true
       }
       const loadedMessages = messagesFromThread(thread)
+      for (const message of loadedMessages) {
+        if (message.role === 'assistant' && message.turnId) {
+          rememberTurnDisplayPreferences(turnDisplayPreferences.current, message.turnId, {
+            ...(message.model ? { model: message.model } : {}),
+            ...(message.effort ? { effort: message.effort } : {}),
+          })
+        }
+      }
       const knownMessages = mergeObservedUserMessages(messagesRef.current, observedUserItems.current.values())
       if (historyMissingCurrentUserMessages(
         preserveCurrentImages(loadedMessages, knownMessages),
@@ -2480,16 +2588,23 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           ? current.filter((message) => !deliveredQueuedIds.has(message.id))
           : current
         const loaded = preserveLocalQueuedMessages(preserveCurrentImages(messagesWithLocalTiming, remainingLocalMessages), remainingLocalMessages)
-        const next = runningMessageId
-          ? collapseAssistantMessagesForTurn(
-            loaded,
-            latestTurnId,
-            runningMessageId,
-            streamedText,
-            undefined,
-            completedText,
-          )
+        const loadedWithPreferences = runningMessageId
+          ? applyTurnDisplayPreferences(loaded, latestTurnId, turnDisplayPreferences.current.get(latestTurnId ?? ''))
           : loaded
+        const next = runningMessageId
+          ? applyTurnDisplayPreferences(
+            collapseAssistantMessagesForTurn(
+              loadedWithPreferences,
+              latestTurnId,
+              runningMessageId,
+              streamedText,
+              undefined,
+              completedText,
+            ),
+            latestTurnId,
+            turnDisplayPreferences.current.get(latestTurnId ?? ''),
+          )
+          : loadedWithPreferences
         return sameMessages(current, next) ? current : next
       })
       // Rebuild every turn's card from thread/read after a reconnect or hot
@@ -2725,6 +2840,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (delivery && delivery.threadId === threadId) {
       delivery.acknowledged = true
       delivery.turnId = turnId
+      rememberTurnDisplayPreferences(turnDisplayPreferences.current, turnId, {
+        ...(delivery.model ? { model: delivery.model } : {}),
+        ...(delivery.effort ? { effort: delivery.effort } : {}),
+      })
       delivery.resolveReceipt?.({ turn_id: turnId, completed: turnId !== null && delivery.completedTurnIds.has(turnId) })
     }
     if (!turnId || activeThreadId.current !== threadId) return
@@ -2741,6 +2860,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     send: () => Promise<{ turn_id: string | null }>,
     previousMessageIds: ReadonlySet<string> = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
       ? [message.id, message.sourceItemId] : [message.id])),
+    preferences: TurnDisplayPreferences = {},
   ) => {
     const delivery: PendingTurnDelivery = {
       threadId,
@@ -2748,6 +2868,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       acknowledged: false,
       completedTurnIds: new Set(),
       previousMessageIds,
+      ...preferences,
     }
     const receipt = new Promise<{ turn_id: string | null; completed: boolean }>((resolve) => {
       delivery.resolveReceipt = resolve
@@ -2802,7 +2923,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       resumedThreadId.current = threadId
       return start()
     }
-  }, previousMessageIds), [requestTurnDelivery, token])
+  }, previousMessageIds, {
+    model: payload.model ?? payload.claudeModel ?? 'default',
+    effort: payload.effort ?? payload.claudeEffort ?? 'default',
+  }), [requestTurnDelivery, token])
 
   const appendQueuedMessageToActiveThread = useCallback((threadId: string, payload: QueuedTurnPayload, turnId?: string | null) => {
     if (activeThreadId.current !== threadId) return
@@ -2845,8 +2969,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const streamMessageId = streamingAssistantMessageId.current
       const streamedText = streamingAssistantText(streamingAssistantParts.current)
       if (!turnId || !streamMessageId || !streamedText) return next
-      return collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText, undefined,
-        completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current))
+      return applyTurnDisplayPreferences(
+        collapseAssistantMessagesForTurn(next, turnId, streamMessageId, streamedText, undefined,
+          completedAssistantText(streamingAssistantParts.current, streamingCompletedItems.current)),
+        turnId,
+        turnDisplayPreferences.current.get(turnId),
+      )
     })
   }, [])
 
@@ -2864,7 +2992,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return true
   }, [queueRecoveryReadyThreadId])
 
-  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
     const text = input.prompt.trim()
@@ -2878,6 +3006,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         ? {
           ...message,
           text,
+          originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
           requestText: queuedRequestText(text, documents),
           images,
           ...(documents.length > 0 ? { documents } : { documents: undefined }),
@@ -3148,7 +3277,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return began
   }, [sharedQueueAction])
 
-  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
     if (!threadId || !previous) return false
@@ -3158,6 +3287,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const result = await codexRemoteClient.updateQueuedMessage(token, threadId, {
         ...previous,
         text,
+        originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
         requestText: queuedRequestText(text, documents),
         images: input.images,
         documents,
@@ -3284,26 +3414,29 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     restoringThreadId.current = threadId
     if (messagesRef.current.length === 0) setLoadingHistory(true)
     try {
-      await refreshThreads()
+      const threadListRefresh = refreshThreads()
       let cached = threadHistoryCache.current.get(threadId) ?? null
       if (!cached?.complete) cached = await restorePersistentThreadCache(threadId) ?? cached
       if (activeThreadId.current !== threadId) return
 
-      const latestThread = threadListRef.current.find((candidate) => candidate.id === threadId)
       if (cached && messagesRef.current.length === 0) {
-        const mergedThread = latestThread ? { ...cached.thread, ...latestThread } : cached.thread
-        setActiveThread(mergedThread)
+        const mergedThread = threadListRef.current.find((candidate) => candidate.id === threadId)
+        const visibleThread = mergedThread ? { ...cached.thread, ...mergedThread } : cached.thread
+        setActiveThread(visibleThread)
         setMessages(cached.messages)
         setFileChangesByTurn(cached.fileChangesByTurn)
         operationsByTurnRef.current = cached.operationsByTurn
         setOperationsByTurn(cached.operationsByTurn)
         activityTimelineByTurnRef.current = cached.activityTimelineByTurn
         setActivityTimelineByTurn(cached.activityTimelineByTurn)
-        setIsRunning(Boolean(cached.running || (latestThread && threadIsRunning(latestThread))))
+        setIsRunning(Boolean(cached.running || (mergedThread && threadIsRunning(mergedThread))))
         setActiveTurnId(cached.running ? cached.turnId : null)
         setLoadingHistory(false)
       }
 
+      await threadListRefresh
+      if (activeThreadId.current !== threadId) return
+      const latestThread = threadListRef.current.find((candidate) => candidate.id === threadId)
       const hasQueuedMessages = Boolean(queuedMessagesByThreadRef.current[threadId]?.length)
       const metadataIsFresh = (
         (threadListLoadedRef.current && Date.now() - threadListFetchedAtRef.current <= threadMetadataFreshnessMs)
@@ -3454,6 +3587,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
     if (event.type !== 'notification' || !event.method) return
 
+    if (event.method === 'nativeConfig/changed') {
+      if (loadModels) window.dispatchEvent(new CustomEvent('codex-remote:native-config-changed', { detail: event.params }))
+      return
+    }
+
     // A subscription update and in-flight events can cross on the wire. Keep
     // lightweight lifecycle notifications, but defer rendering missed details
     // to the single history reconciliation on foreground recovery.
@@ -3468,6 +3606,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const eventTurnId = typeof eventTurn?.id === 'string'
       ? eventTurn.id
       : typeof params.turnId === 'string' ? params.turnId : null
+    rememberTurnDisplayPreferences(turnDisplayPreferences.current, eventTurnId, {
+      ...(typeof eventTurn?.model === 'string' && eventTurn.model ? { model: eventTurn.model } : {}),
+      ...(typeof eventTurn?.effort === 'string' && eventTurn.effort
+        ? { effort: eventTurn.effort }
+        : typeof eventTurn?.reasoningEffort === 'string' && eventTurn.reasoningEffort ? { effort: eventTurn.reasoningEffort } : {}),
+    })
     const applyRemoteUserItem = (item: Record<string, unknown> | undefined, turnId: string | null) => {
       if (!activeThreadId.current) return
       const itemId = typeof item?.id === 'string' ? item.id : undefined
@@ -3541,9 +3685,15 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (retiredAssistantItems.current.turnId === (eventTurnId ?? activeTurnId.current)
       && typeof assistantItemId === 'string' && retiredAssistantItems.current.ids.has(assistantItemId)) return
     if (eventThreadId && (event.method === 'turn/started' || event.method === 'turn/completed')) {
+      const status = { type: event.method === 'turn/started' ? 'active' : 'idle' }
       codexRemoteClient.updateThreadListEntry(token, eventThreadId, {
-        status: { type: event.method === 'turn/started' ? 'active' : 'idle' },
+        status,
       })
+      if (loadThreads && threadListRef.current.some((thread) => thread.id === eventThreadId)) {
+        const next = threadListRef.current.map((thread) => thread.id === eventThreadId ? { ...thread, status } : thread)
+        threadListRef.current = next
+        setThreads(next)
+      }
     }
     // Older app-server notifications can omit threadId on item deltas. When
     // that happens, use the active turn as the second routing key so a second
@@ -3871,7 +4021,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       scheduleStreamingAssistantRender()
       return
     }
-  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadThread, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
+  }, [addFileChangeToTurn, applyActiveThreadMetadata, applyThreadName, applyTurnDelivery, cacheThreadSnapshot, clearThreadCompletion, commitTurnActivityMessage, commitTurnOperation, dispatchInterrupt, finalizeTurnOperations, finalizeVisibleStreamingTurn, finishTurnTimer, isBackground, loadModels, loadThread, loadThreads, markThreadCompletion, persistActiveThread, prefetchThread, refreshServerQueue, refreshThreadForRemoteMessage, refreshThreads, removeDeletedThread, resetStreamingAssistant, scheduleHistoryReconciliation, scheduleMetadataRefresh, scheduleStreamingAssistantRender, setActiveTurnId, setConnectionState, setHandoffState, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateCachedThreadRunState, verifyQueuedThreadAndAdvance])
   const handleEventRef = useRef(handleEvent)
   handleEventRef.current = handleEvent
 
@@ -3922,6 +4072,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           void restoreActiveThread()
           if (activeThreadId.current) void refreshServerQueue(activeThreadId.current)
           if (loadThreads) void refreshThreads()
+          if (loadModels) void refreshModels()
         } else if (nextState === 'disconnected' || nextState === 'unavailable') {
           if (retryTimer !== undefined || isBackground()) return
           retryTimer = window.setTimeout(() => {

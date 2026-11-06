@@ -1,12 +1,11 @@
 import { useEffect, useState } from 'react'
-import { Check, ChevronDown, LoaderCircle, Link2, Trash2 } from 'lucide-react'
+import { Check, LoaderCircle, Link2, Trash2 } from 'lucide-react'
 import {
   emptyCPAUsageSettings,
   normalizeCPAUsageBaseUrl,
   probeCPAUsageConnection,
   type CPAUsageSettings,
 } from '../lib/cpaUsageStats'
-import { readSettingsSectionOpen, saveSettingsSectionOpen } from '../lib/settingsSectionState'
 
 export function CPAUsageSettingsCard({
   settings,
@@ -62,15 +61,10 @@ export function CPAUsageSettingsCard({
   }
 
   return (
-    <details
-      className="theme-settings-card theme-settings-card--collapsible"
-      open={readSettingsSectionOpen('cpa-manager')}
-      onToggle={(event) => saveSettingsSectionOpen('cpa-manager', event.currentTarget.open)}
-    >
-      <summary className="theme-settings-card__heading theme-settings-card__summary">
-        <div><h2><Link2 size={16} />CPA Manager Server 接入</h2><p>测试 Full Mode 统计接口连通性，并连接 Token 用量数据源。</p></div>
-        <span className="theme-settings-card__summary-actions"><ChevronDown className="theme-settings-card__chevron" size={18} aria-hidden="true" /></span>
-      </summary>
+    <section className="theme-settings-card theme-settings-card--page" aria-label="token使用量查询">
+      <div className="theme-settings-card__heading">
+        <div><h2><Link2 size={16} />token使用量查询</h2><p>测试 Full Mode 统计接口连通性，并连接 Token 用量数据源。</p></div>
+      </div>
       <div className="theme-custom-controls cpa-usage-settings-controls">
         <label className="theme-control-row theme-control-row--stacked">
           <span><strong>Manager Server 地址</strong><small>填写服务根地址或反向代理前缀，不要带 /management.html，例如 https://example.com/cpamp。</small></span>
@@ -113,6 +107,6 @@ export function CPAUsageSettingsCard({
         {message ? <p className={`cpa-usage-settings-message${message.error ? ' cpa-usage-settings-message--error' : ''}`} role={message.error ? 'alert' : 'status'}>{message.text}</p> : null}
       </div>
       <p className="theme-settings-hint">地址和管理密钥保存在当前浏览器；密钥只通过 Authorization Bearer 请求头发送，不会放进 URL。Full Mode 才提供持久化历史统计；跨域时 Manager Server 需要允许当前网页来源。</p>
-    </details>
+    </section>
   )
 }

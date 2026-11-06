@@ -47,6 +47,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.provider.OpenableColumns
 import android.text.InputType
 import android.text.Layout
@@ -481,33 +482,44 @@ private class ComposerGlowDrawable(
     private val centerOpacity: Float,
 ) : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val rect = RectF()
+    private val clipPath = Path()
     private var drawableAlpha = 0
 
     fun currentIntensity(): Float = drawableAlpha / 255f
 
     fun setIntensity(value: Float) {
-        drawableAlpha = (value.coerceIn(0f, 1f) * 255).roundToInt()
+        val nextAlpha = (value.coerceIn(0f, 1f) * 255).roundToInt()
+        if (drawableAlpha == nextAlpha) return
+        drawableAlpha = nextAlpha
         invalidateSelf()
     }
 
-    override fun draw(canvas: Canvas) {
-        val rect = RectF(bounds)
+    override fun onBoundsChange(bounds: Rect) {
+        rect.set(bounds)
+        clipPath.reset()
         if (rect.isEmpty) return
-        val checkpoint = canvas.save()
-        canvas.clipPath(Path().apply { addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW) })
-        paint.alpha = drawableAlpha
+        clipPath.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
         paint.shader = RadialGradient(
             rect.centerX(), rect.top, max(rect.width() * .92f, rect.height() * 1.15f),
             intArrayOf(withAlpha(color, centerOpacity), withAlpha(color, centerOpacity * .44f), Color.TRANSPARENT),
             floatArrayOf(0f, .43f, 1f), Shader.TileMode.CLAMP,
         )
+    }
+
+    override fun draw(canvas: Canvas) {
+        if (rect.isEmpty || drawableAlpha == 0) return
+        val checkpoint = canvas.save()
+        canvas.clipPath(clipPath)
+        paint.alpha = drawableAlpha
         canvas.drawRect(rect, paint)
-        paint.shader = null
         canvas.restoreToCount(checkpoint)
     }
 
     override fun setAlpha(alpha: Int) {
-        drawableAlpha = alpha.coerceIn(0, 255)
+        val nextAlpha = alpha.coerceIn(0, 255)
+        if (drawableAlpha == nextAlpha) return
+        drawableAlpha = nextAlpha
         invalidateSelf()
     }
 
@@ -801,10 +813,25 @@ class MainActivity : Activity() {
 
     private var endpoint = ""
     private var token = ""
+    private data class LocalAndroidUpdate(val version: String, val filename: String, val sizeBytes: Long, val sha256: String)
+    private var updateDownloadVerifying = false
+    private var updateDownloadPromptedId = -1L
+    private var pendingUpdateInstallId = -1L
+    private val updateDownloadPoll = object : Runnable {
+        override fun run() = checkPendingUpdateDownload()
+    }
     private data class ConnectionProfile(val id: String, val name: String, val endpoint: String, val token: String)
+    private data class UnconfirmedSubmission(
+        val threadId: String,
+        val payload: JSONObject,
+        val files: List<JSONObject>,
+        val scope: String,
+        val endpoint: String,
+    )
     private val connectionProfiles = mutableListOf<ConnectionProfile>()
     private val draftFilesByScope = mutableMapOf<String, MutableList<JSONObject>>()
     private val pendingUserMessages = mutableMapOf<String, MutableList<JSONObject>>()
+    private val unconfirmedSubmissions = mutableMapOf<String, UnconfirmedSubmission>()
     private val remoteUserMessageOverlays = mutableMapOf<String, LinkedHashMap<String, JSONObject>>()
     private val finishedTurnStates = linkedMapOf<String, JSONObject>()
     private val pendingLiveTurnIds = mutableMapOf<String, String>()
@@ -891,9 +918,10 @@ class MainActivity : Activity() {
     private var queueTouchActive = false
     private var queueRenderDirty = false
     private var expandedOperationIds = mutableSetOf<String>()
+    private val revealedTerminalOutputLogIds = mutableSetOf<String>()
     private val operationPageIndexes = mutableMapOf<String, Int>()
     private var expandedFileChangeIds = mutableSetOf<String>()
-    private var visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+    private var visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
     private var selectedFiles = mutableListOf<JSONObject>()
     private var queueEditItem: JSONObject? = null
     private var queueEditThreadId: String? = null
@@ -935,6 +963,21 @@ class MainActivity : Activity() {
     private var terminalOutputScroll: ScrollView? = null
     private var terminalStatusView: TextView? = null
     private var terminalInputSink: TerminalInputSink? = null
+    private var terminalHandoffButton: TextView? = null
+    private var terminalHandoffHint: TextView? = null
+    private var terminalKeyboardButton: TextView? = null
+    private val terminalShortcutButtons = mutableListOf<TextView>()
+    private var terminalHandoffLoaded = false
+    private var terminalHandoffSupported = false
+    @Volatile private var terminalHandoffEnabled = false
+    private var terminalHandoffBusy = false
+    private var terminalHandoffRequestPending = false
+    private var terminalHandoffReason = ""
+    private var terminalHandoffGeneration = 0L
+    private var terminalHandoffRevision = 0L
+    private val terminalHandoffPoll = object : Runnable {
+        override fun run() { refreshTerminalHandoffStatus() }
+    }
     private var terminalResizeRunnable: Runnable? = null
     private var terminalRenderRunnable: Runnable? = null
     private var terminalInputFocusPending = false
@@ -975,6 +1018,11 @@ class MainActivity : Activity() {
     private var imeFollowScrollQueued = false
     private var messageNearBottomBeforeIme = false
     private var messageTouchActive = false
+    private var messageScrollSettling = false
+    private val messageScrollIdle = Runnable {
+        messageScrollSettling = false
+        flushDeferredMessageRender()
+    }
     private var followMessageBottom = true
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
@@ -1122,6 +1170,7 @@ class MainActivity : Activity() {
             openChatHome()
             verifySavedConnection(homeAlreadyOpen = true)
         } else showConnectionPage()
+        recoverUnconfirmedSubmissions()
         intent?.takeIf { it.hasExtra(EXTRA_THREAD_ID) }?.let { launchIntent ->
             handler.post { navigateNotification(launchIntent) }
         }
@@ -1166,6 +1215,15 @@ class MainActivity : Activity() {
         super.onResume()
         webPreviewView?.onResume()
         foreground = true
+        if (pendingUpdateInstallId > 0L) {
+            val installId = pendingUpdateInstallId
+            pendingUpdateInstallId = -1L
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageManager.canRequestPackageInstalls()) {
+                handler.post { openDownloadedAndroidUpdate(installId) }
+            }
+        }
+        handler.post(updateDownloadPoll)
+        if (terminalOverlay != null) refreshTerminalHandoffStatus()
         activeActivityText?.let(::startActivityShimmer)
         if (token.isNotBlank()) {
             val now = System.currentTimeMillis()
@@ -1199,6 +1257,7 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        handler.removeCallbacks(updateDownloadPoll)
         webPreviewView?.onPause()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
@@ -1206,8 +1265,11 @@ class MainActivity : Activity() {
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
         backgroundedAt = System.currentTimeMillis()
+        handler.removeCallbacks(terminalHandoffPoll)
         handler.removeCallbacks(refreshRunnable)
         handler.removeCallbacks(activeThreadRefreshRunnable)
+        handler.removeCallbacks(messageScrollIdle)
+        messageScrollSettling = false
         activeThreadRefreshScheduled = false
         if (!prefs.getBoolean(KEY_SYSTEM_NOTIFICATIONS_ENABLED, false)) {
             handler.removeCallbacks(socketHeartbeatRunnable)
@@ -1332,6 +1394,7 @@ class MainActivity : Activity() {
             if (restoreSettingsScrollY != null) showSettings(restoreSettingsScrollY)
             return
         }
+        if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
         connectionGeneration++
         sidebarSelectionMode = false
@@ -1493,7 +1556,7 @@ class MainActivity : Activity() {
         historyLoadingThreadId = null
         historyLoadError = null
         historySelectionGeneration += 1
-        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+        visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         handler.removeCallbacks(activeThreadRefreshRunnable)
         activeThreadRefreshScheduled = false
         lastActiveThreadRefreshAt = 0L
@@ -1520,6 +1583,9 @@ class MainActivity : Activity() {
         workspaceGestureActive = false
         workspacePendingRender = null
         closeTerminal()
+        handler.removeCallbacks(messageScrollIdle)
+        messageTouchActive = false
+        messageScrollSettling = false
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
@@ -1796,17 +1862,25 @@ class MainActivity : Activity() {
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
             if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
+            if (messageScrollSettling && !messageTouchActive) {
+                handler.removeCallbacks(messageScrollIdle)
+                handler.postDelayed(messageScrollIdle, 160L)
+            }
             updateScrollToBottomButton()
         }
         messageScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     messageTouchActive = true
+                    messageScrollSettling = true
+                    handler.removeCallbacks(messageScrollIdle)
                     if (imeInsetVisible) imeFollowMessageBottom = false
                     else messageNearBottomBeforeIme = isMessageListNearBottom()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     messageTouchActive = false
+                    handler.removeCallbacks(messageScrollIdle)
+                    handler.postDelayed(messageScrollIdle, 160L)
                     messageScroll.post { if (isMessageListNearBottom()) followMessageBottom = true }
                 }
             }
@@ -2133,6 +2207,7 @@ class MainActivity : Activity() {
             setOnClickListener {
                 when {
                     queueEditItem != null -> finishQueueEdit(true)
+                    composerInput.text.isNotBlank() || selectedFiles.isNotEmpty() -> sendCurrentMessage()
                     running -> interruptTurn()
                     activeThreadId?.let { threadTitleKey(it) in pausedThreadKeys } == true -> continueInterruptedTurn()
                     else -> sendCurrentMessage()
@@ -3408,6 +3483,7 @@ class MainActivity : Activity() {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
         val id = thread.optString("id")
         if (id.isBlank()) return
+        if (terminalOverlay != null && terminalThreadId != id) closeTerminal()
         val existingHistory = activeThread?.takeIf { activeThreadId == id && it.optJSONArray("turns") != null }
         val memoryHistory = historyMemoryCache[id]
         val diskHistory = if (eagerDiskCache && existingHistory == null && memoryHistory == null) {
@@ -3430,7 +3506,7 @@ class MainActivity : Activity() {
         historyLoadingThreadId = if (hasCachedHistory || knownEmptyThread) null else id
         historyLoadError = null
         historySelectionGeneration += 1
-        visibleHistoryTurnCount = DEFAULT_VISIBLE_HISTORY_TURNS
+        visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
         prefs.edit().putString(KEY_MODE, currentMode).putString(activeThreadStorageKey(currentMode), id).apply()
         running = isThreadRunning(activeThread ?: thread)
@@ -3896,12 +3972,13 @@ class MainActivity : Activity() {
 
     private fun renderMessages(scrollToEnd: Boolean, incrementalTurnId: String? = null) {
         if (!::messageList.isInitialized) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) {
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || messageScrollSettling || isEditingAssistantAnswer()) {
             messageRenderDeferred = true
             deferredMessageScrollToEnd = deferredMessageScrollToEnd || scrollToEnd
             if (incrementalTurnId == null) deferredMessageRequiresFullRender = true else deferredMessageTurnIds.add(incrementalTurnId)
             return
         }
+        val renderStartedAt = SystemClock.uptimeMillis()
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
         val restoreChoiceKey = assistantChoiceFocusedKey
@@ -4062,7 +4139,7 @@ class MainActivity : Activity() {
             (thread.optInt("totalTurns", turns.length()) - turns.length()).coerceAtLeast(0)
         } else 0
         if (effectiveIncrementalTurnId == null && (firstVisibleTurnIndex > 0 || remoteHiddenTurnCount > 0)) {
-            val hiddenTurnCount = if (remoteHiddenTurnCount > 0) remoteHiddenTurnCount else firstVisibleTurnIndex
+            val hiddenTurnCount = remoteHiddenTurnCount + firstVisibleTurnIndex
             messageList.addView(label(if (remoteHiddenTurnCount > 0) "加载更早的 $hiddenTurnCount 轮对话" else "显示更早的 $hiddenTurnCount 轮对话", 11, ACCENT, true).apply {
                 gravity = Gravity.CENTER
                 setPadding(dp(12), dp(10), dp(12), dp(10))
@@ -4215,10 +4292,7 @@ class MainActivity : Activity() {
                 }
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
                 if (item.optBoolean("_pending", false)) {
-                    messageColumn.addView(label(item.optString("_pendingState", "发送中…"), 10, MUTED).apply {
-                        gravity = Gravity.END
-                        setPadding(0, dp(3), dp(2), 0)
-                    }, LinearLayout.LayoutParams(WRAP, WRAP))
+                    messageColumn.addView(pendingStateLabel(item), LinearLayout.LayoutParams(WRAP, WRAP))
                 }
                 item.optString("_displayTime").takeIf { it.isNotBlank() }?.let { displayTime ->
                     messageColumn.addView(label(displayTime, 10, MUTED).apply {
@@ -4327,6 +4401,10 @@ class MainActivity : Activity() {
         }
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
+        val renderDurationMs = SystemClock.uptimeMillis() - renderStartedAt
+        if (renderDurationMs > 48L) {
+            android.util.Log.w("CodeRemoteRender", "chat render took ${renderDurationMs}ms; incremental=${effectiveIncrementalTurnId != null}; rows=${messageList.childCount}")
+        }
     }
 
     private fun startActivityShimmer(view: TextView) {
@@ -4368,9 +4446,11 @@ class MainActivity : Activity() {
         scrollToBottomButton.visibility = if (distanceToBottom > dp(96)) View.VISIBLE else View.GONE
     }
 
-    private fun addPendingUserMessage(scope: String, payload: JSONObject, files: List<JSONObject>) {
+    private fun addPendingUserMessage(scope: String, payload: JSONObject, files: List<JSONObject>,
+                                      state: String = "发送中…", accepted: Boolean = false,
+                                      displayImmediately: Boolean = true, captureKnownIds: Boolean = true) {
         val knownIds = JSONArray()
-        activeThread?.optJSONArray("turns")?.let { turns ->
+        activeThread?.takeIf { captureKnownIds && draftStorageKey() == scope }?.optJSONArray("turns")?.let { turns ->
             for (turnIndex in 0 until turns.length()) {
                 val items = turns.optJSONObject(turnIndex)?.optJSONArray("items") ?: continue
                 for (itemIndex in 0 until items.length()) {
@@ -4395,9 +4475,9 @@ class MainActivity : Activity() {
             .put("_matchText", payload.optString("requestText").trim())
             .put("_imageCount", files.count { it.optString("kind") == "image" })
             .put("_knownUserIds", knownIds).put("_pending", true)
-            .put("_pendingState", "发送中…").put("_accepted", false).put("_animate", true)
+            .put("_pendingState", state).put("_accepted", accepted).put("_animate", displayImmediately)
         pendingUserMessages.getOrPut(scope) { mutableListOf() }.add(item)
-        if (draftStorageKey() == scope) appendPendingBubble(item)
+        if (displayImmediately && draftStorageKey() == scope) appendPendingBubble(item)
     }
 
     private fun appendPendingBubble(item: JSONObject) {
@@ -4435,10 +4515,7 @@ class MainActivity : Activity() {
         }
         addMessageImages(bubble, item, maxBubbleWidth)
         column.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
-        column.addView(label("发送中…", 10, MUTED).apply {
-            gravity = Gravity.END
-            setPadding(0, dp(3), dp(2), 0)
-        }, LinearLayout.LayoutParams(WRAP, WRAP))
+        column.addView(pendingStateLabel(item), LinearLayout.LayoutParams(WRAP, WRAP))
         row.addView(column, LinearLayout.LayoutParams(WRAP, WRAP))
         messageList.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
         row.animate().alpha(1f).translationY(0f).setDuration(170).start()
@@ -4473,6 +4550,11 @@ class MainActivity : Activity() {
             }
         }
         if (remaining.isEmpty()) pendingUserMessages.remove(scope) else pendingUserMessages[scope] = remaining.toMutableList()
+        pending.filterNot { it in remaining }.forEach { item ->
+            val requestId = item.optString("id")
+            unconfirmedSubmissions.remove(requestId)
+            io.execute { removeSavedUnconfirmedSubmission(requestId) }
+        }
         remaining.forEach { messages += "user" to it }
     }
 
@@ -4541,17 +4623,137 @@ class MainActivity : Activity() {
     }
 
     private fun removePendingUserMessage(scope: String, requestId: String) {
+        unconfirmedSubmissions.remove(requestId)
+        io.execute { removeSavedUnconfirmedSubmission(requestId) }
         pendingUserMessages[scope]?.removeAll { it.optString("id") == requestId }
         if (pendingUserMessages[scope]?.isEmpty() == true) pendingUserMessages.remove(scope)
-        if (draftStorageKey() == scope) renderMessages(false)
+        if (draftStorageKey() == scope && ::messageList.isInitialized) {
+            val tag = TAG_MESSAGE_TURN_PREFIX + "pending-" + requestId
+            for (index in messageList.childCount - 1 downTo 0) {
+                if (messageList.getChildAt(index).tag == tag) messageList.removeViewAt(index)
+            }
+            messageScroll.post { updateScrollToBottomButton() }
+        }
     }
 
     private fun markPendingUserMessageAccepted(scope: String, requestId: String) {
-        pendingUserMessages[scope]?.firstOrNull { it.optString("id") == requestId }?.apply {
-            put("_accepted", true)
-            put("_pendingState", "同步中…")
+        unconfirmedSubmissions.remove(requestId)
+        io.execute { removeSavedUnconfirmedSubmission(requestId) }
+        updatePendingUserMessageState(scope, requestId, "同步中…", accepted = true)
+    }
+
+    private fun pendingStateLabel(item: JSONObject): TextView = label(item.optString("_pendingState", "发送中…"), 10, MUTED).apply {
+        gravity = Gravity.END
+        setPadding(0, dp(3), dp(2), 0)
+        val requestId = item.optString("id")
+        isEnabled = unconfirmedSubmissions.containsKey(requestId)
+        if (isEnabled) {
+            minimumHeight = dp(32)
+            setPadding(dp(8), dp(5), dp(8), dp(5))
         }
-        if (draftStorageKey() == scope) renderMessages(false)
+        setOnClickListener { retryUnconfirmedSubmission(requestId) }
+    }
+
+    private fun updatePendingUserMessageState(scope: String, requestId: String, state: String, accepted: Boolean) {
+        pendingUserMessages[scope]?.firstOrNull { it.optString("id") == requestId }?.apply {
+            put("_accepted", accepted)
+            put("_pendingState", state)
+        }
+        if (draftStorageKey() != scope || !::messageList.isInitialized) return
+        val tag = TAG_MESSAGE_TURN_PREFIX + "pending-" + requestId
+        for (index in messageList.childCount - 1 downTo 0) {
+            val row = messageList.getChildAt(index)
+            if (row.tag != tag) continue
+            val column = (row as? ViewGroup)?.getChildAt(0) as? ViewGroup
+            val status = column?.getChildAt(1) as? TextView
+            status?.text = state
+            status?.isEnabled = unconfirmedSubmissions.containsKey(requestId)
+            if (status?.isEnabled == true) {
+                status.minimumHeight = dp(32)
+                status.setPadding(dp(8), dp(5), dp(8), dp(5))
+            }
+        }
+    }
+
+    private fun retryUnconfirmedSubmission(requestId: String) {
+        val pending = unconfirmedSubmissions[requestId] ?: return
+        if (sendBusy) return
+        if (draftStorageKey() != pending.scope || endpoint != pending.endpoint) {
+            showStatus("请切回原聊天后重试发送")
+            return
+        }
+        updatePendingUserMessageState(pending.scope, requestId, "正在重新确认…", accepted = true)
+        submitPayload(pending.threadId, pending.payload, pending.files, pending.scope,
+            connectionGeneration, endpoint, token)
+    }
+
+    private fun unconfirmedSubmissionFile(requestId: String): File {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(requestId.toByteArray(StandardCharsets.UTF_8))
+            .joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+        return File(File(filesDir, "unconfirmed_submissions"), "$digest.json")
+    }
+
+    private fun saveUnconfirmedSubmission(submission: UnconfirmedSubmission): Boolean = try {
+        val requestId = submission.payload.optString("id")
+        val file = unconfirmedSubmissionFile(requestId)
+        if (!file.parentFile.exists() && !file.parentFile.mkdirs()) throw IOException("无法创建待确认消息目录")
+        val wrapper = JSONObject()
+            .put("threadId", submission.threadId)
+            .put("scope", submission.scope)
+            .put("endpoint", submission.endpoint)
+            .put("payload", submission.payload)
+            .put("files", JSONArray(submission.files))
+        val temporary = File(file.parentFile, file.name + ".tmp")
+        FileOutputStream(temporary).use { output ->
+            output.write(wrapper.toString().toByteArray(StandardCharsets.UTF_8))
+        }
+        if (!temporary.renameTo(file)) {
+            file.delete()
+            if (!temporary.renameTo(file)) throw IOException("无法保存待确认消息")
+        }
+        true
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun removeSavedUnconfirmedSubmission(requestId: String) {
+        runCatching { unconfirmedSubmissionFile(requestId).delete() }
+    }
+
+    private fun recoverUnconfirmedSubmissions() {
+        io.execute {
+            val directory = File(filesDir, "unconfirmed_submissions")
+            val recovered = directory.listFiles()?.filter { it.isFile && it.name.endsWith(".json") }
+                ?.mapNotNull { file ->
+                    runCatching {
+                        val wrapper = JSONObject(file.readText(Charsets.UTF_8))
+                        val payload = wrapper.getJSONObject("payload")
+                        val files = wrapper.optJSONArray("files") ?: JSONArray()
+                        val requestId = payload.getString("id")
+                        val submission = UnconfirmedSubmission(
+                            wrapper.getString("threadId"), payload,
+                            (0 until files.length()).mapNotNull(files::optJSONObject),
+                            wrapper.getString("scope"), wrapper.getString("endpoint"),
+                        )
+                        requestId to submission
+                    }.getOrNull()
+                }.orEmpty()
+            if (recovered.isEmpty()) return@execute
+            handler.post {
+                var rerender = false
+                recovered.forEach { (requestId, submission) ->
+                    if (requestId in unconfirmedSubmissions ||
+                        pendingUserMessages[submission.scope]?.any { it.optString("id") == requestId } == true) return@forEach
+                    unconfirmedSubmissions[requestId] = submission
+                    addPendingUserMessage(submission.scope, submission.payload, submission.files,
+                        state = "上次发送未确认 · 点此重试", accepted = true,
+                        displayImmediately = false, captureKnownIds = false)
+                    if (draftStorageKey() == submission.scope) rerender = true
+                }
+                if (rerender) renderMessages(false)
+            }
+        }
     }
 
     private fun runningActivityText(operation: JSONObject?): String {
@@ -4565,6 +4767,9 @@ class MainActivity : Activity() {
             "查看文件" -> "正在读取"
             "搜索文件" -> "正在搜索文件"
             "执行命令" -> "正在运行"
+            "在远端终端执行" -> "正在运行"
+            "读取远端终端" -> "正在读取"
+            "中断远端命令" -> "正在运行"
             "修改文件" -> "正在修改文件"
             "搜索资料" -> "正在搜索文件"
             "查看图片" -> "正在查看图片"
@@ -4611,6 +4816,11 @@ class MainActivity : Activity() {
 
     private fun activityLabelForItem(item: JSONObject?): String {
         if (item == null) return "正在思考"
+        if (isRemoteTerminalOperation(item)) return when (operationLabel(item)) {
+            "读取远端终端" -> "正在读取远端终端"
+            "中断远端命令" -> "正在中断远端命令"
+            else -> "正在远端终端执行"
+        }
         return when (normalizedType(item.optString("type"))) {
             "reasoning" -> "正在思考"
             "plan" -> "正在整理执行计划"
@@ -4748,6 +4958,8 @@ class MainActivity : Activity() {
         }
         val columnCount = maxOf(1, rows.maxOfOrNull { it.size } ?: 1)
         val cellWidth = maxOf(dp(120), (maximumWidth - dp(1)) / columnCount)
+        val tableWidth = ((cellWidth.toLong() + dp(1)) * columnCount + dp(1))
+            .coerceAtMost(Int.MAX_VALUE.toLong() / 4).toInt()
         val card = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val copyText = rows.joinToString("\n") { row -> row.joinToString("\t") { it.first.toString() } }
         card.addView(copyActionButton("复制表格", "表格", copyText),
@@ -4779,10 +4991,83 @@ class MainActivity : Activity() {
             }
             grid.addView(row)
         }
-        card.addView(HorizontalScrollView(this).apply {
+        val tableScroll = object : HorizontalScrollView(this) {
+            private val touchSlop = ViewConfiguration.get(this@MainActivity).scaledTouchSlop
+            private val minFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMinimumFlingVelocity
+            private val maxFlingVelocity = ViewConfiguration.get(this@MainActivity).scaledMaximumFlingVelocity
+            private var startX = 0f
+            private var startY = 0f
+            private var previousX = 0f
+            private var draggingTable = false
+            private var velocityTracker: VelocityTracker? = null
+
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        startX = event.x
+                        startY = event.y
+                        previousX = event.x
+                        draggingTable = false
+                        velocityTracker?.recycle()
+                        velocityTracker = VelocityTracker.obtain().apply { addMovement(event) }
+                        if (canScrollHorizontally(-1) || canScrollHorizontally(1)) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                        }
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        velocityTracker?.addMovement(event)
+                        val deltaX = event.x - startX
+                        val deltaY = event.y - startY
+                        if (!draggingTable && (canScrollHorizontally(-1) || canScrollHorizontally(1)) &&
+                            abs(deltaX) > touchSlop && abs(deltaX) > abs(deltaY) * 1.25f &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            draggingTable = true
+                            val cancel = MotionEvent.obtain(event)
+                            cancel.action = MotionEvent.ACTION_CANCEL
+                            super.dispatchTouchEvent(cancel)
+                            cancel.recycle()
+                        }
+                        if (draggingTable) {
+                            parent?.requestDisallowInterceptTouchEvent(true)
+                            val pixels = (previousX - event.x).toInt()
+                            if (pixels != 0) {
+                                scrollBy(pixels, 0)
+                                previousX -= pixels
+                            }
+                            return true
+                        }
+                        if (abs(deltaY) > touchSlop && abs(deltaY) > abs(deltaX) &&
+                            event.eventTime - event.downTime < ViewConfiguration.getLongPressTimeout()
+                        ) {
+                            val handled = super.dispatchTouchEvent(event)
+                            parent?.requestDisallowInterceptTouchEvent(false)
+                            return handled
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        val wasDragging = draggingTable
+                        if (wasDragging && event.actionMasked == MotionEvent.ACTION_UP) {
+                            velocityTracker?.addMovement(event)
+                            velocityTracker?.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
+                            val velocity = velocityTracker?.xVelocity ?: 0f
+                            if (abs(velocity) >= minFlingVelocity) fling(-velocity.toInt())
+                        }
+                        parent?.requestDisallowInterceptTouchEvent(false)
+                        velocityTracker?.recycle()
+                        velocityTracker = null
+                        draggingTable = false
+                        if (wasDragging) return true
+                    }
+                }
+                return super.dispatchTouchEvent(event)
+            }
+        }.apply {
             isHorizontalScrollBarEnabled = false
-            addView(grid, FrameLayout.LayoutParams(WRAP, WRAP))
-        }, LinearLayout.LayoutParams(MATCH, WRAP))
+            overScrollMode = View.OVER_SCROLL_NEVER
+            addView(grid, FrameLayout.LayoutParams(tableWidth, WRAP))
+        }
+        card.addView(tableScroll, LinearLayout.LayoutParams(MATCH, WRAP))
         return card
     }
 
@@ -5967,6 +6252,10 @@ class MainActivity : Activity() {
                 ?: operation.optString("id").takeIf { it.isNotBlank() }
         } ?: "empty"
         val logId = "$turnId:$operationKey"
+        if (logId !in revealedTerminalOutputLogIds && operations.any { isRemoteTerminalOperation(it) && it.optString("terminalOutput").isNotBlank() }) {
+            revealedTerminalOutputLogIds.add(logId)
+            expandedOperationIds.add(logId)
+        }
         val failed = operations.count { normalizedOperationStatus(it) == "failed" }
         val runningCount = operations.count { normalizedOperationStatus(it) == "running" }
         val statusText = when {
@@ -6077,6 +6366,46 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.END
                 maxWidth = (maximumWidth - dp(42)).coerceAtLeast(dp(110))
             }, widthWrap())
+            if (isRemoteTerminalOperation(operation)) {
+                val output = operation.optString("terminalOutput").takeLast(8_000)
+                    .replace(Regex("[\\u0000-\\u0008\\u000b-\\u001f\\u007f]"), "")
+                if (output.isNotBlank()) {
+                    val outputScroll = object : ScrollView(this) {
+                        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+                            super.onMeasure(widthMeasureSpec, View.MeasureSpec.makeMeasureSpec(dp(210), View.MeasureSpec.AT_MOST))
+                        }
+                    }.apply {
+                        isVerticalScrollBarEnabled = false
+                        overScrollMode = View.OVER_SCROLL_NEVER
+                        isNestedScrollingEnabled = true
+                        background = rounded(PANEL_INSET, dp(6), BORDER, dp(1))
+                        addView(label(output, 11, TEXT, translateUi = false, pixelize = false).apply {
+                            typeface = Typeface.MONOSPACE
+                            setPadding(dp(8), dp(6), dp(8), dp(6))
+                        })
+                        var previousY = 0f
+                        setOnTouchListener { view, event ->
+                            when (event.actionMasked) {
+                                MotionEvent.ACTION_DOWN -> {
+                                    previousY = event.y
+                                    view.parent?.requestDisallowInterceptTouchEvent(
+                                        view.canScrollVertically(-1) || view.canScrollVertically(1),
+                                    )
+                                }
+                                MotionEvent.ACTION_MOVE -> {
+                                    val direction = if (event.y < previousY) 1 else -1
+                                    view.parent?.requestDisallowInterceptTouchEvent(view.canScrollVertically(direction))
+                                    previousY = event.y
+                                }
+                                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                                    view.parent?.requestDisallowInterceptTouchEvent(false)
+                            }
+                            false
+                        }
+                    }
+                    copy.addView(outputScroll, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(4) })
+                }
+            }
             if (paths.isNotEmpty() && changedFiles.isEmpty()) {
                 val path = paths.first()
                 val imagePath = isWorkspaceImagePath(path)
@@ -6139,6 +6468,15 @@ class MainActivity : Activity() {
 
     private fun operationLabel(operation: JSONObject): String {
         val type = normalizedType(operation.optString("type"))
+        if (isRemoteTerminalOperation(operation)) {
+            val tool = listOf(operation.optString("tool"), operation.optString("name"))
+                .joinToString(" ").lowercase(Locale.ROOT)
+            return when {
+                "interrupt_command" in tool -> "中断远端命令"
+                "read_terminal" in tool -> "读取远端终端"
+                else -> "在远端终端执行"
+            }
+        }
         if (type == "commandexecution") {
             val command = operation.optString("command")
             return when {
@@ -6175,7 +6513,9 @@ class MainActivity : Activity() {
 
     private fun operationDetail(operation: JSONObject, knownPaths: List<String>? = null): String {
         val type = normalizedType(operation.optString("type"))
-        val raw = when (type) {
+        val raw = if (isRemoteTerminalOperation(operation) && operation.optString("terminalCommand").isNotBlank()) {
+            operation.optString("terminalCommand")
+        } else when (type) {
             "commandexecution" -> operation.optString("command")
             "websearch" -> operation.optString("query")
             "filechange" -> (knownPaths ?: operationPaths(operation)).take(3).joinToString("、")
@@ -6187,6 +6527,11 @@ class MainActivity : Activity() {
             .trim()
             .let { if (it.length > 120) it.take(119) + "…" else it }
     }
+
+    private fun isRemoteTerminalOperation(operation: JSONObject): Boolean =
+        normalizedType(operation.optString("type")) in setOf("mcptoolcall", "dynamictoolcall", "collabagenttoolcall") &&
+            listOf(operation.optString("server"), operation.optString("tool"), operation.optString("name"))
+                .any { "code_remote_terminal" in it.lowercase(Locale.ROOT) }
 
     private fun operationPaths(value: Any?, depth: Int = 0, output: LinkedHashSet<String> = linkedSetOf()): List<String> {
         if (depth > 4 || value == null || output.size >= 8) return output.toList()
@@ -7386,12 +7731,7 @@ class MainActivity : Activity() {
             try {
                 val api = RemoteApi(sendEndpoint, sendToken)
                 val queuePath = "/api/v1/codex/queue/${RemoteApi.encodePath(threadId)}"
-                var response = api.post("$queuePath/submit", payload)
-                if (sendImmediately && !response.optBoolean("sent", false)) {
-                    // An explicit answer must reach an async question during
-                    // the running turn, rather than wait behind that turn.
-                    response = api.post("$queuePath/send-now", JSONObject().put("message_id", payload.optString("id")))
-                }
+                val response = postSubmissionWithRetry(api, queuePath, payload, sendImmediately)
                 handler.post {
                     val sent = response.optBoolean("sent", false)
                     if (!sent) removePendingUserMessage(outgoingScope, payload.optString("id"))
@@ -7416,11 +7756,28 @@ class MainActivity : Activity() {
                     onResult?.invoke(sent)
                 }
             } catch (error: Exception) {
+                val ambiguous = onResult == null && isAmbiguousSubmissionFailure(error)
+                val saved = ambiguous && saveUnconfirmedSubmission(UnconfirmedSubmission(
+                    threadId, payload, outgoingFiles, outgoingScope, sendEndpoint))
                 handler.post {
-                    removePendingUserMessage(outgoingScope, payload.optString("id"))
-                    if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    val requestId = payload.optString("id")
+                    if (saved) {
+                        unconfirmedSubmissions[requestId] = UnconfirmedSubmission(threadId, payload,
+                            outgoingFiles, outgoingScope, sendEndpoint)
+                        updatePendingUserMessageState(outgoingScope, requestId,
+                            "发送状态未确认 · 点此重试", accepted = true)
+                        if (draftStorageKey() == outgoingScope) renderMessages(false)
+                    } else {
+                        removePendingUserMessage(outgoingScope, requestId)
+                        if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    }
                     if (sendConnection == connectionGeneration) {
-                        showStatus(error.message ?: "发送失败")
+                        showStatus(if (saved) {
+                            if (requestId in unconfirmedSubmissions) "连接中断，发送状态未确认；请点消息下方重试，避免重复输入"
+                            else "消息已在聊天记录中确认"
+                        }
+                            else if (ambiguous) "发送状态未确认，已恢复文字；请先核对聊天，避免重复发送"
+                            else error.message ?: "发送失败")
                         setSendBusy(false)
                     }
                     onResult?.invoke(null)
@@ -7428,6 +7785,30 @@ class MainActivity : Activity() {
             }
         }
     }
+
+    private fun postSubmissionWithRetry(api: RemoteApi, queuePath: String, payload: JSONObject,
+                                        sendImmediately: Boolean): JSONObject {
+        for (attempt in 0..1) {
+            try {
+                var response = api.post("$queuePath/submit", payload)
+                if (sendImmediately && !response.optBoolean("sent", false)) {
+                    // An explicit answer must reach an async question during
+                    // the running turn, rather than wait behind that turn.
+                    response = api.post("$queuePath/send-now", JSONObject().put("message_id", payload.optString("id")))
+                }
+                return response
+            } catch (error: Exception) {
+                if (attempt > 0 || !isAmbiguousSubmissionFailure(error)) throw error
+                // The server may already have accepted the first request.
+                // Reuse its ID so its queue receipt prevents a second send.
+            }
+        }
+        throw IOException("发送状态未确认")
+    }
+
+    private fun isAmbiguousSubmissionFailure(error: Exception): Boolean =
+        error is IOException && (error !is RemoteApiException ||
+            error.statusCode == 408 || error.statusCode == 429 || error.statusCode >= 500)
 
     private fun setSendBusy(busy: Boolean) {
         sendBusy = busy
@@ -7444,22 +7825,23 @@ class MainActivity : Activity() {
         sendButton.setPixelAwareImageResource(if (retroTheme) iconResource(when {
             sendBusy -> "refresh"
             editingQueue -> "check"
+            hasDraft -> "send"
             running -> "pause"
             canContinue -> "play"
             else -> "send"
         }) else when {
             sendBusy -> R.drawable.ic_composer_wait
             editingQueue -> R.drawable.ic_composer_confirm
+            hasDraft -> R.drawable.ic_composer_send
             running -> R.drawable.ic_composer_pause
             canContinue -> R.drawable.ic_composer_continue
-            hasDraft -> R.drawable.ic_composer_send
             else -> R.drawable.ic_composer_send
         })
         sendButton.contentDescription = tr(when {
             editingQueue -> "确认修改排队消息"
+            hasDraft -> if (running) "发送消息到排队" else "发送消息"
             running -> "暂停当前回复"
             canContinue -> "继续刚才中断的回复"
-            hasDraft -> "发送消息"
             else -> "发送消息"
         })
         sendButton.imageTintList = retroIconTint(if (lightTheme) Color.WHITE else Color.rgb(35, 38, 43))
@@ -7799,6 +8181,7 @@ class MainActivity : Activity() {
             showToast(claudeStatusMessage)
             return
         }
+        if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
         activeThreadId?.let { prefs.edit().putString(activeThreadStorageKey(previousMode), it).apply() }
         currentMode = targetMode
@@ -8593,7 +8976,9 @@ class MainActivity : Activity() {
                 ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
         }, widthWrap())
-        about.addView(settingsActionRow("检查更新", "当前版本 ${BuildConfig.VERSION_NAME}") { checkForUpdates() }, widthWrap())
+        val currentVersion = if (appLanguage == "en") "Current version ${BuildConfig.VERSION_NAME}"
+            else "当前版本 ${BuildConfig.VERSION_NAME}"
+        about.addView(settingsActionRow("检查更新", currentVersion) { checkForUpdates() }, widthWrap())
         if (restoreScrollY > 0) scroll.post { scroll.scrollTo(0, restoreScrollY) }
     }
 
@@ -8614,47 +8999,189 @@ class MainActivity : Activity() {
     }
 
     private fun checkForUpdates() {
+        val updateEndpoint = endpoint
+        val updateToken = token
+        if (updateEndpoint.isBlank() || updateToken.isBlank()) {
+            showToast("请先连接电脑，再检查更新")
+            return
+        }
         showToast(tr("正在检查更新…"))
         io.execute {
             try {
                 val client = socketClient.newBuilder().callTimeout(10, TimeUnit.SECONDS).readTimeout(10, TimeUnit.SECONDS).build()
                 val request = Request.Builder()
-                    .url("https://api.github.com/repos/sevencnup/code-remote/releases?per_page=30")
-                    .header("Accept", "application/vnd.github+json")
+                    .url("$updateEndpoint/api/v1/android/update")
+                    .header("Authorization", "Bearer $updateToken")
+                    .header("Accept", "application/json")
                     .header("User-Agent", "CodeRemote-Android/${BuildConfig.VERSION_NAME}")
                     .build()
                 client.newCall(request).execute().use { response ->
+                    if (response.code == 404) {
+                        handler.post { if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) showToast("本机尚无 Android 安装包") }
+                        return@use
+                    }
                     if (!response.isSuccessful) throw IOException("HTTP ${response.code}")
-                    val releases = JSONArray(response.body?.string().orEmpty())
-                    val candidates = (0 until releases.length()).mapNotNull { releases.optJSONObject(it) }
-                        .filter { !it.optBoolean("draft", false) }
-                        .mapNotNull { release ->
-                            val tag = release.optString("tag_name")
-                            if (parseAppVersion(tag) == null) null else tag to release.optString("html_url")
-                        }
-                    val latest = candidates.maxWithOrNull { a, b -> compareAppVersions(a.first, b.first) }
+                    val body = JSONObject(response.body?.string().orEmpty())
+                    val latest = LocalAndroidUpdate(
+                        body.getString("version"), body.getString("filename"), body.getLong("sizeBytes"), body.getString("sha256")
+                    )
+                    if (parseAppVersion(latest.version) == null ||
+                        latest.filename != "code-remote-android-${latest.version}-debug.apk" ||
+                        !latest.sha256.matches(Regex("[0-9a-f]{64}")) || latest.sizeBytes <= 0L
+                    ) throw IOException("Invalid Android update manifest")
                     handler.post {
-                        if (isFinishing || isDestroyed) return@post
+                        if (isFinishing || isDestroyed || endpoint != updateEndpoint || token != updateToken) return@post
                         when {
-                            latest == null -> showToast(tr("尚无公开发布的 Android 版本"))
-                            compareAppVersions(latest.first, BuildConfig.VERSION_NAME) <= 0 -> showToast(tr("当前已是最新发布版本"))
-                            else -> showConfirmDialog(
-                                tr("发现新版本"),
-                                tr("发现版本 ${latest.first}。打开发布页面查看安装包？"),
-                                tr("查看发布页"),
-                            ) {
-                                val url = latest.second
-                                if (url.startsWith("https://github.com/")) {
-                                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            compareAppVersions(latest.version, BuildConfig.VERSION_NAME) <= 0 -> showToast("当前已是最新版本")
+                            prefs.getString(KEY_UPDATE_DOWNLOAD_VERSION, "") == latest.version &&
+                                prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L) > 0L -> {
+                                updateDownloadPromptedId = -1L
+                                showToast("正在查看已下载的更新")
+                                checkPendingUpdateDownload()
+                            }
+                            else -> {
+                                val size = formatDownloadSize(latest.sizeBytes)
+                                val message = if (appLanguage == "en")
+                                    "Version ${latest.version} is available ($size). Download it from this computer?"
+                                else "发现版本 ${latest.version}（$size）。从当前电脑下载更新？"
+                                showConfirmDialog(tr("发现新版本"), message, tr("下载更新")) {
+                                    startAndroidUpdateDownload(updateEndpoint, updateToken, latest)
                                 }
                             }
                         }
                     }
                 }
             } catch (error: Exception) {
-                handler.post { if (!isFinishing && !isDestroyed) showToast(tr("检查更新失败，请稍后重试")) }
+                handler.post {
+                    if (!isFinishing && !isDestroyed && endpoint == updateEndpoint) {
+                        showToast(if (error.message == "HTTP 401") "配对已失效，请重新连接电脑" else "检查更新失败，请稍后重试")
+                    }
+                }
             }
         }
+    }
+
+    private fun startAndroidUpdateDownload(updateEndpoint: String, updateToken: String, update: LocalAndroidUpdate) {
+        if (endpoint != updateEndpoint || token != updateToken) return
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (manager == null) {
+            showToast("系统下载服务不可用")
+            return
+        }
+        val destination = "code-remote-android-${update.version}-${System.currentTimeMillis()}.apk"
+        val request = DownloadManager.Request(Uri.parse(
+            "$updateEndpoint/api/v1/android/update/${Uri.encode(update.filename)}"
+        )).apply {
+            setTitle("Code Remote ${update.version}")
+            setDescription(tr("正在下载更新安装包"))
+            setMimeType("application/vnd.android.package-archive")
+            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+            setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, destination)
+            addRequestHeader("Authorization", "Bearer $updateToken")
+        }
+        runCatching { manager.enqueue(request) }
+            .onSuccess { id ->
+                prefs.edit().putLong(KEY_UPDATE_DOWNLOAD_ID, id)
+                    .putString(KEY_UPDATE_DOWNLOAD_VERSION, update.version)
+                    .putString(KEY_UPDATE_DOWNLOAD_SHA256, update.sha256).apply()
+                updateDownloadPromptedId = -1L
+                showToast("已开始下载更新，请查看系统下载通知")
+                handler.post(updateDownloadPoll)
+            }
+            .onFailure { showToast("更新下载启动失败") }
+    }
+
+    private fun clearPendingUpdateDownload() {
+        prefs.edit().remove(KEY_UPDATE_DOWNLOAD_ID).remove(KEY_UPDATE_DOWNLOAD_VERSION)
+            .remove(KEY_UPDATE_DOWNLOAD_SHA256).apply()
+        handler.removeCallbacks(updateDownloadPoll)
+        updateDownloadPromptedId = -1L
+    }
+
+    private fun checkPendingUpdateDownload() {
+        handler.removeCallbacks(updateDownloadPoll)
+        if (!foreground) return
+        val id = prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L)
+        if (id <= 0L) return
+        val version = prefs.getString(KEY_UPDATE_DOWNLOAD_VERSION, "").orEmpty()
+        if (compareAppVersions(version, BuildConfig.VERSION_NAME) <= 0) {
+            clearPendingUpdateDownload()
+            return
+        }
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        val status = runCatching {
+            manager.query(DownloadManager.Query().setFilterById(id))?.use { result ->
+                if (result.moveToFirst()) result.getInt(result.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS)) else null
+            }
+        }.getOrNull()
+        when (status) {
+            DownloadManager.STATUS_SUCCESSFUL -> verifyDownloadedAndroidUpdate(manager, id, version)
+            DownloadManager.STATUS_FAILED, null -> {
+                clearPendingUpdateDownload()
+                showToast("更新下载失败，请重新检查更新")
+            }
+            else -> handler.postDelayed(updateDownloadPoll, 1_000L)
+        }
+    }
+
+    private fun verifyDownloadedAndroidUpdate(manager: DownloadManager, id: Long, version: String) {
+        if (updateDownloadVerifying || updateDownloadPromptedId == id) return
+        val expected = prefs.getString(KEY_UPDATE_DOWNLOAD_SHA256, "").orEmpty()
+        updateDownloadVerifying = true
+        io.execute {
+            val valid = runCatching {
+                val uri = manager.getUriForDownloadedFile(id) ?: throw IOException("Missing downloaded APK")
+                val digest = MessageDigest.getInstance("SHA-256")
+                contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(64 * 1024)
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        digest.update(buffer, 0, count)
+                    }
+                } ?: throw IOException("Cannot read downloaded APK")
+                digest.digest().joinToString("") { byte -> "%02x".format(byte) } == expected
+            }.getOrDefault(false)
+            handler.post {
+                updateDownloadVerifying = false
+                if (isFinishing || isDestroyed || prefs.getLong(KEY_UPDATE_DOWNLOAD_ID, -1L) != id) return@post
+                if (!valid) {
+                    manager.remove(id)
+                    clearPendingUpdateDownload()
+                    showToast("更新包校验失败，请重新下载")
+                } else if (foreground) {
+                    updateDownloadPromptedId = id
+                    val message = if (appLanguage == "en") "Version $version is ready. Install it now?"
+                        else "版本 $version 已下载完成，现在安装？"
+                    showConfirmDialog(tr("下载完成"), message, tr("安装")) { openDownloadedAndroidUpdate(id) }
+                }
+            }
+        }
+    }
+
+    private fun openDownloadedAndroidUpdate(id: Long) {
+        val manager = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+        val uri = manager.getUriForDownloadedFile(id)
+        if (uri == null) {
+            clearPendingUpdateDownload()
+            showToast("找不到已下载的文件")
+            return
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !packageManager.canRequestPackageInstalls()) {
+            pendingUpdateInstallId = id
+            showToast("请允许 Code Remote 安装未知应用")
+            runCatching {
+                startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:$packageName")))
+            }.onFailure { showToast("无法打开安装授权设置") }
+            return
+        }
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure { showToast("无法打开系统安装界面") }
     }
 
     private fun parseAppVersion(value: String): List<Int>? {
@@ -9606,7 +10133,7 @@ class MainActivity : Activity() {
 
     private fun flushDeferredMessageRender() {
         if (!messageRenderDeferred) return
-        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || isEditingAssistantAnswer()) return
+        if (sidebarVisible || workspaceVisible || sidebarGestureActive || workspaceGestureActive || sidebarAnimator?.isRunning == true || workspaceAnimator?.isRunning == true || messageScrollSettling || isEditingAssistantAnswer()) return
         val scrollToEnd = deferredMessageScrollToEnd
         val incrementalTurnId = deferredMessageTurnIds.singleOrNull().takeUnless { deferredMessageRequiresFullRender }
         messageRenderDeferred = false
@@ -10443,6 +10970,15 @@ class MainActivity : Activity() {
 
     private fun showTerminal(isolated: Boolean = false) {
         if (terminalOverlay != null) return
+        terminalHandoffGeneration++
+        terminalHandoffLoaded = false
+        terminalHandoffSupported = false
+        terminalHandoffEnabled = false
+        terminalHandoffBusy = false
+        terminalHandoffRequestPending = false
+        terminalHandoffReason = ""
+        terminalHandoffRevision = 0L
+        terminalShortcutButtons.clear()
         terminalShellName = null
         preferencePopup?.dismiss()
         (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
@@ -10479,7 +11015,18 @@ class MainActivity : Activity() {
             imageTintList = retroIconTint(SUBTLE)
             contentDescription = "本机终端"
         }, LinearLayout.LayoutParams(dp(if (retroTheme) 22 else 18), dp(if (retroTheme) 22 else 18)).apply { rightMargin = dp(7) })
-        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true), LinearLayout.LayoutParams(0, dp(48), 1f))
+        header.addView(label("本机终端", if (retroTheme) 18 else 13, if (retroTheme) ANDROID1_TITLE_TEXT else TEXT, true).apply {
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
+        terminalHandoffButton = smallButton("正在查询…") { toggleTerminalHandoff() }.apply {
+            visibility = if (terminalThreadId == null) View.GONE else View.VISIBLE
+            minWidth = dp(70)
+            maxWidth = dp(110)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        header.addView(terminalHandoffButton, LinearLayout.LayoutParams(WRAP, dp(32)).apply { rightMargin = dp(5) })
         header.addView(iconButton("close", "关闭终端") { closeTerminal() }.apply {
             if (retroTheme) {
                 imageTintList = null
@@ -10491,6 +11038,11 @@ class MainActivity : Activity() {
             setPadding(dp(3), 0, dp(3), dp(4))
         }
         shell.addView(terminalStatusView, widthWrap())
+        terminalHandoffHint = label("AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。", 10, SUBTLE).apply {
+            visibility = View.GONE
+            setPadding(dp(3), 0, dp(3), dp(4))
+        }
+        shell.addView(terminalHandoffHint, LinearLayout.LayoutParams(MATCH, WRAP))
         terminalOutput = TerminalOutputView(this).apply {
             textSize = adjustedTextSize(12)
             setTag(R.id.base_text_size, 12f)
@@ -10545,7 +11097,9 @@ class MainActivity : Activity() {
         shell.addView(terminalContent, LinearLayout.LayoutParams(MATCH, 0, 1f).apply { topMargin = dp(4); bottomMargin = dp(4) })
         val arrows = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER }
         listOf("←" to "\u001b[D", "↑" to "\u001b[A", "↓" to "\u001b[B", "→" to "\u001b[C", "Tab" to "\t", "Esc" to "\u001b", "Ctrl+C" to "\u0003").forEach { (label, value) ->
-            arrows.addView(smallButton(label) { sendTerminalInput(value) }, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
+            val shortcut = smallButton(label) { sendTerminalInput(value) }
+            terminalShortcutButtons.add(shortcut)
+            arrows.addView(shortcut, LinearLayout.LayoutParams(0, dp(32), 1f).apply { leftMargin = dp(2); rightMargin = dp(2) })
         }
         shell.addView(arrows, widthWrap())
         val transferRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
@@ -10561,7 +11115,8 @@ class MainActivity : Activity() {
             }
         }, LinearLayout.LayoutParams(WRAP, dp(32)))
         transferRow.addView(View(this), LinearLayout.LayoutParams(0, MATCH, 1f))
-        transferRow.addView(smallButton("键盘") { focusTerminalInput() }, LinearLayout.LayoutParams(dp(50), dp(36)))
+        terminalKeyboardButton = smallButton("键盘") { focusTerminalInput() }
+        transferRow.addView(terminalKeyboardButton, LinearLayout.LayoutParams(dp(50), dp(36)))
         shell.addView(transferRow, LinearLayout.LayoutParams(MATCH, dp(36)))
         terminalInputSink = TerminalInputSink(this, ::sendTerminalInput).apply {
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -10588,6 +11143,7 @@ class MainActivity : Activity() {
             scheduleTerminalRender()
         }
         connectTerminal()
+        refreshTerminalHandoffStatus()
     }
 
     private fun focusTerminalInput() {
@@ -10612,6 +11168,116 @@ class MainActivity : Activity() {
                     ?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
             }
         }
+    }
+
+    private fun terminalHandoffPath(threadId: String): String =
+        "/api/v1/codex/terminal/handoff/${RemoteApi.encodePath(threadId)}"
+
+    private fun scheduleTerminalHandoffRefresh() {
+        handler.removeCallbacks(terminalHandoffPoll)
+        if (foreground && terminalOverlay != null && terminalThreadId != null) {
+            handler.postDelayed(terminalHandoffPoll, 10_000L)
+        }
+    }
+
+    private fun refreshTerminalHandoffStatus() {
+        val threadId = terminalThreadId ?: return
+        if (!foreground || terminalOverlay == null) return
+        if (terminalHandoffRequestPending || terminalHandoffBusy) {
+            scheduleTerminalHandoffRefresh()
+            return
+        }
+        val generation = terminalHandoffGeneration
+        val revision = terminalHandoffRevision
+        terminalHandoffRequestPending = true
+        runApi({ RemoteApi(endpoint, token).get(terminalHandoffPath(threadId)) }, { result ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffRequestPending = false
+            if (revision == terminalHandoffRevision && !terminalHandoffBusy) applyTerminalHandoffStatus(result)
+            scheduleTerminalHandoffRefresh()
+        }, { error ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffRequestPending = false
+            if (!terminalHandoffLoaded) {
+                terminalHandoffLoaded = true
+                terminalHandoffSupported = false
+                terminalHandoffReason = error.message ?: "无法查询终端接管状态"
+                renderTerminalHandoffControl()
+            }
+            scheduleTerminalHandoffRefresh()
+        })
+    }
+
+    private fun applyTerminalHandoffStatus(result: JSONObject) {
+        terminalHandoffLoaded = true
+        terminalHandoffSupported = result.optBoolean("supported")
+        terminalHandoffEnabled = terminalHandoffSupported && result.optBoolean("enabled")
+        terminalHandoffReason = result.optString("reason")
+        renderTerminalHandoffControl()
+    }
+
+    private fun renderTerminalHandoffControl() {
+        terminalHandoffButton?.apply {
+            val caption = when {
+                terminalHandoffBusy -> "正在切换…"
+                !terminalHandoffLoaded -> "正在查询…"
+                !terminalHandoffSupported -> "AI 接管不可用"
+                terminalHandoffEnabled -> "收回控制"
+                else -> "交给 AI"
+            }
+            text = tr(caption)
+            contentDescription = tr(caption)
+            isEnabled = terminalHandoffLoaded && !terminalHandoffBusy
+            alpha = if (isEnabled) 1f else 0.6f
+            setTextColor(if (terminalHandoffEnabled) ACCENT else SUBTLE)
+        }
+        terminalHandoffHint?.visibility = if (terminalHandoffEnabled) View.VISIBLE else View.GONE
+        val allowManualInput = terminalReady
+        if (!allowManualInput) {
+            terminalInputFocusPending = false
+            terminalInputSink?.let { input ->
+                (getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.hideSoftInputFromWindow(input.windowToken, 0)
+                input.clearFocus()
+            }
+        }
+        terminalInputSink?.isEnabled = allowManualInput
+        terminalKeyboardButton?.apply { isEnabled = allowManualInput; alpha = if (allowManualInput) 1f else 0.45f }
+        terminalShortcutButtons.forEach { shortcut ->
+            shortcut.isEnabled = allowManualInput
+            shortcut.alpha = if (allowManualInput) 1f else 0.45f
+        }
+    }
+
+    private fun toggleTerminalHandoff() {
+        val threadId = terminalThreadId ?: return
+        if (terminalHandoffBusy || !terminalHandoffLoaded) return
+        if (!terminalHandoffSupported) {
+            showToast(terminalHandoffReason.ifBlank { "当前服务不支持终端交给 AI" })
+            return
+        }
+        if (!terminalHandoffEnabled && (!terminalReady || !terminalPersistent)) {
+            showToast(if (!terminalReady) "终端连接中，请稍等" else "请先打开当前聊天的持久终端")
+            return
+        }
+        val generation = terminalHandoffGeneration
+        val enable = !terminalHandoffEnabled
+        terminalHandoffRevision++
+        terminalHandoffBusy = true
+        renderTerminalHandoffControl()
+        runApi({ RemoteApi(endpoint, token).post(terminalHandoffPath(threadId), JSONObject().put("enabled", enable)) }, { result ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffBusy = false
+            applyTerminalHandoffStatus(result)
+            if (terminalHandoffEnabled == enable) showToast(if (enable) "AI 已接管终端，需要密码时可直接输入" else "已收回终端控制权")
+            scheduleTerminalHandoffRefresh()
+        }, { error ->
+            if (generation != terminalHandoffGeneration || terminalThreadId != threadId) return@runApi
+            terminalHandoffBusy = false
+            renderTerminalHandoffControl()
+            showToast(error.message ?: "切换终端控制权失败")
+            refreshTerminalHandoffStatus()
+        })
     }
 
     private fun positionTerminalOverlay() {
@@ -10688,6 +11354,8 @@ class MainActivity : Activity() {
 
     private fun closeTerminal() {
         val shell = terminalOverlay ?: return
+        terminalHandoffGeneration++
+        handler.removeCallbacks(terminalHandoffPoll)
         terminalScreenKey?.let { key ->
             terminalScreenCache[key] = terminalScreen to terminalPersistent
             while (terminalScreenCache.size > 8) terminalScreenCache.remove(terminalScreenCache.keys.first())
@@ -10721,6 +11389,16 @@ class MainActivity : Activity() {
         terminalOutput = null
         terminalOutputScroll = null
         terminalStatusView = null
+        terminalHandoffButton = null
+        terminalHandoffHint = null
+        terminalKeyboardButton = null
+        terminalShortcutButtons.clear()
+        terminalHandoffLoaded = false
+        terminalHandoffSupported = false
+        terminalHandoffEnabled = false
+        terminalHandoffBusy = false
+        terminalHandoffRequestPending = false
+        terminalHandoffReason = ""
         terminalImeVisible = false
         terminalLockedImeInset = 0
         terminalLockedContentBottom = 0
@@ -10757,6 +11435,8 @@ class MainActivity : Activity() {
                                 if (terminalSocket !== webSocket) return@post
                                 terminalShellName = shellName
                                 terminalPersistent = event.optBoolean("persistent")
+                                renderTerminalHandoffControl()
+                                refreshTerminalHandoffStatus()
                                 updateTerminalDimensions(forceSend = true)
                                 scheduleTerminalRender()
                                 if (terminalInputFocusPending) focusTerminalInput()
@@ -10783,6 +11463,7 @@ class MainActivity : Activity() {
                             terminalReady = false
                             updateTerminalStatus("终端会话已结束", WARNING)
                             appendTerminal("\n[终端已退出]\n", webSocket)
+                            handler.post { if (terminalSocket === webSocket) refreshTerminalHandoffStatus() }
                         }
                     }
                 } catch (_: JSONException) { }
@@ -11438,6 +12119,7 @@ class MainActivity : Activity() {
         val targetConnection = intent.getStringExtra(EXTRA_CONNECTION_ID)
         if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) switchConnection(targetConnection)
         if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) return
+        if (terminalOverlay != null && terminalThreadId != threadId) closeTerminal()
         val thread = findThread(threadId)
         if (thread != null) selectThread(thread) else {
             activeThreadId = threadId
@@ -12397,6 +13079,9 @@ class MainActivity : Activity() {
         private const val PREFS = "codex_remote_mobile"
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_TOKEN = "token"
+        private const val KEY_UPDATE_DOWNLOAD_ID = "local_android_update_download_id"
+        private const val KEY_UPDATE_DOWNLOAD_VERSION = "local_android_update_download_version"
+        private const val KEY_UPDATE_DOWNLOAD_SHA256 = "local_android_update_download_sha256"
         private const val KEY_CONNECTION_PROFILES = "native_connection_profiles"
         private const val KEY_ACTIVE_CONNECTION_ID = "native_active_connection_id"
         private const val KEY_LEGACY_CONNECTION_ID = "native_legacy_connection_id"
@@ -12435,6 +13120,7 @@ class MainActivity : Activity() {
         private const val TAG_MESSAGE_TURN_PREFIX = "message_turn:"
         private const val TAG_MESSAGE_DYNAMIC = "message_dynamic"
         private const val DEFAULT_VISIBLE_HISTORY_TURNS = 12
+        private const val INITIAL_VISIBLE_HISTORY_TURNS = 6
         private const val OPERATION_LOG_PAGE_SIZE = 50
         private const val MAX_VISIBLE_SIDEBAR_THREADS = 80
         private val OPERATION_PATH_KEYS = setOf(

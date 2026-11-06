@@ -156,9 +156,13 @@ class ClaudeCodeServer:
             "error": None if available else "找不到 Claude Code CLI。",
         }
 
-    def _row(self, thread_id: str) -> sqlite3.Row:
+    def _row(self, thread_id: str, *, include_messages: bool = True) -> sqlite3.Row:
+        fields = "*" if include_messages else (
+            "thread_id, name, preview, cwd, created_at, updated_at, running_turn_id, "
+            "native_source, native_mtime_ns"
+        )
         row = self._connection.execute(
-            "SELECT * FROM claude_threads WHERE thread_id = ?", (thread_id,),
+            f"SELECT {fields} FROM claude_threads WHERE thread_id = ?", (thread_id,),
         ).fetchone()
         if row is None:
             raise ClaudeThreadNotFoundError("找不到这条 Claude Code 对话。")
@@ -183,7 +187,8 @@ class ClaudeCodeServer:
 
     def list_threads(self) -> list[dict[str, Any]]:
         rows = self._connection.execute(
-            "SELECT * FROM claude_threads ORDER BY updated_at DESC",
+            "SELECT thread_id, name, preview, cwd, created_at, updated_at, running_turn_id, "
+            "native_source, native_mtime_ns FROM claude_threads ORDER BY updated_at DESC",
         ).fetchall()
         return [self._summary(row) for row in rows]
 
@@ -322,12 +327,14 @@ class ClaudeCodeServer:
         await self._notify_threads_changed()
         return self._summary(self._row(thread_id))
 
-    async def read_thread(self, thread_id: str, *, include_turns: bool = True) -> dict[str, Any]:
+    async def read_thread(
+        self, thread_id: str, *, include_turns: bool = True, tail_turns: int | None = None,
+    ) -> dict[str, Any]:
         if not is_claude_thread_id(thread_id):
             raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
         # Known sessions are indexed by the thread list refresh. Avoid scanning
         # every native project file again when opening one specific session.
-        row = self._row(thread_id)
+        row = self._row(thread_id, include_messages=include_turns)
         result = self._summary(row)
         if not include_turns:
             return result
@@ -335,6 +342,15 @@ class ClaudeCodeServer:
             messages = json.loads(row["messages_json"])
         except (TypeError, json.JSONDecodeError):
             messages = []
+        if tail_turns is not None and isinstance(messages, list):
+            recent_ids: set[str] = set()
+            for message in reversed(messages):
+                if not isinstance(message, dict) or not isinstance(message.get("turnId"), str):
+                    continue
+                recent_ids.add(message["turnId"])
+                if len(recent_ids) >= max(1, tail_turns):
+                    break
+            messages = [message for message in messages if isinstance(message, dict) and message.get("turnId") in recent_ids]
         result["turns"] = self._turns(messages)
         running_turn_id = row["running_turn_id"]
         if running_turn_id:
@@ -349,6 +365,46 @@ class ClaudeCodeServer:
                         "id": reply["id"], "type": "agentMessage", "text": reply["text"],
                         "createdAt": reply["createdAt"], "status": "inProgress",
                     })
+        return result
+
+    async def queue_turn_snapshot(self, thread_id: str) -> dict[str, Any]:
+        """Read the latest turn's status without decoding the whole message array."""
+        if not is_claude_thread_id(thread_id):
+            raise ClaudeThreadNotFoundError("Claude Code 对话编号无效。")
+        try:
+            row = self._connection.execute(
+                "SELECT thread_id, name, preview, cwd, created_at, updated_at, running_turn_id, "
+                "native_source, native_mtime_ns, "
+                "json_extract(messages_json, '$[#-1]') AS latest_message "
+                "FROM claude_threads WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            # Older SQLite builds may lack JSON extraction; retain the normal
+            # history reader as a compatible fallback.
+            return await self.read_thread(thread_id, tail_turns=1)
+        if row is None:
+            raise ClaudeThreadNotFoundError("找不到这条 Claude Code 对话。")
+        result = self._summary(row)
+        raw_message = row["latest_message"]
+        if raw_message is None:
+            result["turns"] = []
+            return result
+        try:
+            latest_message = json.loads(raw_message)
+        except (TypeError, json.JSONDecodeError):
+            return await self.read_thread(thread_id, tail_turns=1)
+        if not isinstance(latest_message, dict) or latest_message.get("role") != "assistant":
+            # A trailing user/tool entry cannot prove an earlier assistant in
+            # the same turn did not stop or fail.
+            return await self.read_thread(thread_id, tail_turns=1)
+        turns = self._turns([latest_message])
+        if not turns:
+            return await self.read_thread(thread_id, tail_turns=1)
+        if row["running_turn_id"] == turns[0]["id"]:
+            turns[0]["status"] = "inProgress"
+            turns[0].pop("completedAt", None)
+        result["turns"] = turns
         return result
 
     @staticmethod
@@ -373,8 +429,17 @@ class ClaudeCodeServer:
                     "completedAt": message.get("completedAt"),
                     "items": [],
                 }
+                for field in ("model", "effort"):
+                    value = message.get(field)
+                    if isinstance(value, str) and value:
+                        turn[field] = value
                 by_id[turn_id] = turn
                 turns.append(turn)
+            else:
+                for field in ("model", "effort"):
+                    value = message.get(field)
+                    if isinstance(value, str) and value and field not in turn:
+                        turn[field] = value
             if role == "tool":
                 tool_item = message.get("item")
                 if isinstance(tool_item, dict):
@@ -444,7 +509,7 @@ class ClaudeCodeServer:
     async def active_turn_id(self, thread_id: str) -> str | None:
         if not is_claude_thread_id(thread_id):
             return None
-        return self._row(thread_id)["running_turn_id"]
+        return self._row(thread_id, include_messages=False)["running_turn_id"]
 
     async def start_turn(
         self,
@@ -495,7 +560,13 @@ class ClaudeCodeServer:
                 "text": display_text,
                 "createdAt": created_at,
                 "turnId": turn_id,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             })
+            turn_metadata = {
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
+            }
             preview = " ".join(display_text.split())[:400]
             name = row["name"]
             if name == "新对话" and preview:
@@ -517,6 +588,7 @@ class ClaudeCodeServer:
                 "method": "turn/started",
                 "params": {"threadId": thread_id, "turn": {
                     "id": turn_id, "threadId": thread_id, "status": "inProgress", "startedAt": created_at,
+                    **turn_metadata,
                 }},
             })
             await self.emit({
@@ -739,7 +811,7 @@ class ClaudeCodeServer:
                 with suppress(Exception):
                     await self._emit_delta(thread_id, turn_id, assistant_item_id, final_text)
             with suppress(Exception):
-                await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status)
+                await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status, model, effort)
             reply = self._live_replies.get(thread_id)
             if reply and reply["turnId"] == turn_id:
                 self._live_replies.pop(thread_id, None)
@@ -796,6 +868,8 @@ class ClaudeCodeServer:
         text: str,
         completed_at: str,
         status: str,
+        model: str | None,
+        effort: str | None,
     ) -> None:
         row = self._row(thread_id)
         try:
@@ -813,6 +887,8 @@ class ClaudeCodeServer:
                 "completedAt": completed_at,
                 "turnId": turn_id,
                 "status": status,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             })
         preview = row["preview"]
         if text.strip():
@@ -824,7 +900,11 @@ class ClaudeCodeServer:
                 (preview, completed_at, json.dumps(messages, ensure_ascii=False), thread_id),
             )
         await self._notify_threads_changed()
-        item = {"id": assistant_item_id, "type": "agentMessage", "text": text, "status": status}
+        item = {
+            "id": assistant_item_id, "type": "agentMessage", "text": text, "status": status,
+            "model": model if model and model != "default" else "default",
+            "effort": effort or "default",
+        }
         await self.emit({
             "type": "notification", "method": "item/completed",
             "params": {"threadId": thread_id, "turnId": turn_id, "item": item},
@@ -833,6 +913,8 @@ class ClaudeCodeServer:
             "type": "notification", "method": "turn/completed",
             "params": {"threadId": thread_id, "turn": {
                 "id": turn_id, "threadId": thread_id, "status": status, "completedAt": completed_at,
+                "model": model if model and model != "default" else "default",
+                "effort": effort or "default",
             }},
         })
 
