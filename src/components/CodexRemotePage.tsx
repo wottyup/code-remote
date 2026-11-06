@@ -6141,6 +6141,10 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     setSidebarOpen(false)
     const existingPane = paneIndexForThread(thread.id)
     if (existingPane !== undefined) {
+      if (existingPane === selectedPaneIndex) {
+        showPaneNotice('这条对话已在当前窗口；请从左侧选择另一条对话并发打开')
+        return
+      }
       requestComposerFocusForThread(thread.id)
       setSelectedPaneIndex(existingPane)
       return
