@@ -1130,6 +1130,7 @@ class MainActivity : Activity() {
     private lateinit var queueEditBar: LinearLayout
     private lateinit var attachmentScroll: HorizontalScrollView
     private lateinit var attachmentStrip: LinearLayout
+    private lateinit var composerInputFrame: FrameLayout
     private lateinit var sidebarNewThreadButton: LinearLayout
     private lateinit var sidebarNewThreadIcon: ImageView
     private lateinit var sidebarNewThreadLabel: TextView
@@ -1793,11 +1794,29 @@ class MainActivity : Activity() {
     }
 
     private fun updateQueueEditLayout() {
-        if (::composerInput.isInitialized) {
-            val visibleLines = if (imeInsetVisible && queueEditItem != null) 3 else 5
-            if (composerInput.maxLines != visibleLines) composerInput.maxLines = visibleLines
-        }
         updateQueuePanelVisibility()
+    }
+
+    private fun composerInputHeightKey(): String = connectionScopedKey("composer_input_height_$currentMode")
+
+    private fun savedComposerInputHeightDp(): Int = prefs.getInt(composerInputHeightKey(), 72).coerceIn(45, 260)
+
+    private fun restoreComposerInputHeight() {
+        if (!::composerInputFrame.isInitialized) return
+        composerInputFrame.layoutParams = composerInputFrame.layoutParams?.apply {
+            height = dp(savedComposerInputHeightDp())
+        } ?: return
+        composerInputFrame.requestLayout()
+    }
+
+    private fun setComposerInputHeight(heightDp: Int, save: Boolean = false) {
+        if (!::composerInputFrame.isInitialized) return
+        val safeHeight = heightDp.coerceIn(45, 260)
+        composerInputFrame.layoutParams = composerInputFrame.layoutParams?.apply {
+            height = dp(safeHeight)
+        } ?: return
+        composerInputFrame.requestLayout()
+        if (save) prefs.edit().putInt(composerInputHeightKey(), safeHeight).apply()
     }
 
     private fun updateQueuePanelVisibility() {
@@ -2212,13 +2231,13 @@ class MainActivity : Activity() {
         composer.addView(queueEditBar, LinearLayout.LayoutParams(MATCH, dp(32)))
         composerInput = editField("发送消息…", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES or InputType.TYPE_TEXT_FLAG_MULTI_LINE).apply {
             minHeight = dp(44)
-            maxLines = 5
+            maxLines = Int.MAX_VALUE
             gravity = Gravity.TOP or Gravity.START
             setHorizontallyScrolling(false)
             isVerticalScrollBarEnabled = false
             overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
             imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_ACTION_SEND
-            setPadding(dp(2), dp(5), dp(2), dp(4))
+            setPadding(dp(36), dp(5), dp(2), dp(4))
             setLineSpacing(dp(2).toFloat(), 1.25f)
             background = null
             setOnFocusChangeListener { _, hasFocus ->
@@ -2253,6 +2272,62 @@ class MainActivity : Activity() {
                 scheduleTranslationPreview()
             })
         }
+        composerInputFrame = FrameLayout(this).apply {
+            clipChildren = true
+            clipToPadding = true
+            addView(composerInput, FrameLayout.LayoutParams(MATCH, MATCH))
+            val resizeGlyph = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                isFocusable = false
+                isClickable = false
+                for (icon in listOf("chevron_up", "chevron_down")) {
+                    addView(ImageView(this@MainActivity).apply {
+                        scaleType = ImageView.ScaleType.FIT_CENTER
+                        setPixelAwareImageResource(iconResource(icon))
+                        imageTintList = retroIconTint(MUTED)
+                    }, LinearLayout.LayoutParams(dp(12), dp(9)))
+                }
+            }
+            val resizeHandle = FrameLayout(this@MainActivity).apply {
+                contentDescription = "上下拖动调整输入框高度"
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
+                isFocusable = true
+                isClickable = true
+                setBackground(if (retroTheme) android1SegmentButtonBackground() else rounded(Color.TRANSPARENT, dp(6)))
+                addView(resizeGlyph, FrameLayout.LayoutParams(dp(24), dp(20), Gravity.CENTER))
+                var dragStartY = 0f
+                var dragStartHeightDp = 72
+                setOnTouchListener { view, event ->
+                    val density = resources.displayMetrics.density
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            view.parent?.requestDisallowInterceptTouchEvent(true)
+                            val currentHeight = composerInputFrame.height.takeIf { it > 0 }
+                                ?: composerInputFrame.layoutParams.height
+                            dragStartY = event.rawY
+                            dragStartHeightDp = (currentHeight / density).toInt()
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            setComposerInputHeight((dragStartHeightDp - (event.rawY - dragStartY) / density).toInt())
+                            true
+                        }
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                            val finalHeight = (composerInputFrame.layoutParams.height / density).toInt()
+                            setComposerInputHeight(finalHeight, save = true)
+                            dragStartY = 0f
+                            dragStartHeightDp = savedComposerInputHeightDp()
+                            true
+                        }
+                        else -> true
+                    }
+                }
+            }
+            addView(resizeHandle, FrameLayout.LayoutParams(dp(36), dp(30), Gravity.TOP or Gravity.START))
+        }
+        composerInputFrame.layoutParams = LinearLayout.LayoutParams(MATCH, dp(savedComposerInputHeightDp()))
         attachmentStrip = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -2281,7 +2356,7 @@ class MainActivity : Activity() {
             background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
         }
         composer.addView(translationPreviewView, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
-        composer.addView(composerInput, LinearLayout.LayoutParams(MATCH, WRAP))
+        composer.addView(composerInputFrame, LinearLayout.LayoutParams(MATCH, dp(savedComposerInputHeightDp())))
 
         if (retroTheme) {
             composer.addView(View(this).apply { setBackgroundColor(BORDER) }, LinearLayout.LayoutParams(MATCH, dp(1)).apply {
@@ -3629,6 +3704,7 @@ class MainActivity : Activity() {
         historySelectionGeneration += 1
         visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
+        restoreComposerInputHeight()
         prefs.edit().putString(KEY_MODE, currentMode).putString(activeThreadStorageKey(currentMode), id).apply()
         running = isThreadRunning(activeThread ?: thread)
         pendingApproval = null
@@ -8499,6 +8575,7 @@ class MainActivity : Activity() {
         persistCurrentDraft()
         activeThreadId?.let { prefs.edit().putString(activeThreadStorageKey(previousMode), it).apply() }
         currentMode = targetMode
+        restoreComposerInputHeight()
         sidebarSelectionMode = false
         selectedSidebarThreadIds.clear()
         prefs.edit().putString(KEY_MODE, currentMode).apply()
