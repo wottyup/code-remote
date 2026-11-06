@@ -1065,6 +1065,11 @@ class MainActivity : Activity() {
         flushDeferredMessageRender()
     }
     private var followMessageBottom = true
+    private var pendingInitialBottomThreadId: String? = null
+    private var bottomRestoreScheduledView: ScrollView? = null
+    private var bottomRestoreScheduledSelection = -1L
+    private var messageScrollTouchGeneration = 0L
+    private var messageRenderScrollGeneration = 0L
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
     private var completionNoticeDismissRunnable: Runnable? = null
@@ -1647,6 +1652,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(messageScrollIdle)
         messageTouchActive = false
         messageScrollSettling = false
+        pendingInitialBottomThreadId = null
+        bottomRestoreScheduledView = null
+        bottomRestoreScheduledSelection = -1L
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
@@ -1805,6 +1813,36 @@ class MainActivity : Activity() {
         return distanceToBottom <= dp(180)
     }
 
+    private fun restoreMessageBottomAfterLayout(threadId: String) {
+        val scroll = messageScroll
+        val selection = historySelectionGeneration
+        if (bottomRestoreScheduledView === scroll && bottomRestoreScheduledSelection == selection) return
+        val list = messageList
+        val connection = connectionGeneration
+        val observer = scroll.viewTreeObserver
+        if (!observer.isAlive) return
+        bottomRestoreScheduledView = scroll
+        bottomRestoreScheduledSelection = selection
+        observer.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (observer.isAlive) observer.removeOnPreDrawListener(this)
+                if (bottomRestoreScheduledView === scroll && bottomRestoreScheduledSelection == selection) {
+                    bottomRestoreScheduledView = null
+                    bottomRestoreScheduledSelection = -1L
+                }
+                if (connection != connectionGeneration || selection != historySelectionGeneration ||
+                    activeThreadId != threadId || messageScroll !== scroll || messageList !== list ||
+                    pendingInitialBottomThreadId != threadId || !followMessageBottom) return true
+                scroll.scrollTo(0, list.height)
+                updateScrollToBottomButton()
+                if (historyLoadingThreadId != threadId && activeThread?.optJSONArray("turns") != null) {
+                    pendingInitialBottomThreadId = null
+                }
+                return true
+            }
+        })
+    }
+
     private fun scheduleImeMessageBottomFollow() {
         if (imeFollowScrollQueued || !::messageScroll.isInitialized || !::messageList.isInitialized) return
         imeFollowScrollQueued = true
@@ -1922,7 +1960,10 @@ class MainActivity : Activity() {
         })
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
-            if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
+            if (messageTouchActive && !isMessageListNearBottom()) {
+                followMessageBottom = false
+                pendingInitialBottomThreadId = null
+            }
             if (messageScrollSettling && !messageTouchActive) {
                 handler.removeCallbacks(messageScrollIdle)
                 handler.postDelayed(messageScrollIdle, 160L)
@@ -1937,6 +1978,7 @@ class MainActivity : Activity() {
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     messageTouchActive = true
+                    messageScrollTouchGeneration++
                     messageScrollSettling = true
                     handler.removeCallbacks(messageScrollIdle)
                     if (imeInsetVisible) imeFollowMessageBottom = false
@@ -3597,6 +3639,7 @@ class MainActivity : Activity() {
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         restoreCurrentDraftFiles()
         followMessageBottom = true
+        pendingInitialBottomThreadId = id
         renderMessages(true)
         translatedInputThreadId = null
         translatedInputEntries = JSONArray()
@@ -4547,9 +4590,23 @@ class MainActivity : Activity() {
             activeActivityStartedAt = 0L
             activeActivityTimerTurnId = null
         }
-        messageScroll.post {
-            if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
-            else messageScroll.scrollTo(0, previousScrollY)
+        val renderedScroll = messageScroll
+        val renderedList = messageList
+        val renderedThreadId = activeThreadId
+        val renderedConnection = connectionGeneration
+        val renderedSelection = historySelectionGeneration
+        val renderedTouchGeneration = messageScrollTouchGeneration
+        val renderedScrollGeneration = ++messageRenderScrollGeneration
+        val restoreInitialBottom = renderedThreadId != null && pendingInitialBottomThreadId == renderedThreadId && followMessageBottom
+        if (restoreInitialBottom) restoreMessageBottomAfterLayout(renderedThreadId)
+        renderedScroll.post {
+            if (renderedConnection != connectionGeneration || renderedSelection != historySelectionGeneration ||
+                renderedThreadId != activeThreadId || renderedScroll !== messageScroll || renderedList !== messageList ||
+                renderedTouchGeneration != messageScrollTouchGeneration ||
+                renderedScrollGeneration != messageRenderScrollGeneration) return@post
+            val shouldFollowBottom = scrollToEnd || wasNearEnd || restoreInitialBottom
+            if (shouldFollowBottom && followMessageBottom) renderedScroll.scrollTo(0, renderedList.height)
+            else if (!shouldFollowBottom) renderedScroll.scrollTo(0, previousScrollY)
             updateScrollToBottomButton()
             if (showTranslatedMessages()) requestVisibleAssistantTranslations()
         }
@@ -10791,7 +10848,14 @@ class MainActivity : Activity() {
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
         deferredMessageTurnIds.clear()
-        handler.post { renderMessages(scrollToEnd, incrementalTurnId) }
+        val connection = connectionGeneration
+        val threadId = activeThreadId
+        val scroll = messageScroll
+        handler.post {
+            if (connection == connectionGeneration && threadId == activeThreadId && scroll === messageScroll) {
+                renderMessages(scrollToEnd, incrementalTurnId)
+            }
+        }
     }
 
     private fun handleWorkspaceBack(): Boolean {
