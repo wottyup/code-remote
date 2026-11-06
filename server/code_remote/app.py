@@ -1863,7 +1863,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.107.2-dev.7", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.108.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth

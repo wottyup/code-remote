@@ -497,6 +497,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-control-row small { color: #858b95; font-size: calc(11px + var(--mobile-font-offset)); }
 .theme-color-input { display: inline-flex; align-items: center; gap: 8px; flex: 0 0 auto; }
 .theme-color-input input { width: 34px; height: 28px; padding: 2px; border: 1px solid rgba(146, 157, 184, .25); border-radius: 7px; background: #1d2027; cursor: pointer; }
+.theme-color-input input:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .theme-color-input code { color: #9ea8ba; font: 11px ui-monospace, SFMono-Regular, Menlo, monospace; font-size: calc(11px + var(--mobile-font-offset)); }
 .theme-range-input { display: flex; min-width: min(260px, 45%); align-items: center; gap: 10px; }
 .theme-range-input input { min-width: 0; flex: 1; accent-color: #aabaff; }
@@ -723,7 +724,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .message-stream__content { display: flex; min-width: 0; min-height: 100%; flex-direction: column; gap: 16px; padding-top: 32px; }
 .message-stream__content--loading { height: 100%; min-height: 100%; justify-content: center; padding-top: 0; }
 .message-stream__content--loading .loading-state { width: 100%; min-height: 0; text-align: center; }
-.message-stream__older { align-self: center; min-height: 30px; padding: 5px 12px; border: 1px solid var(--custom-theme-border, rgba(128, 128, 128, .38)); border-radius: 999px; background: var(--custom-theme-control, rgba(128, 128, 128, .16)); color: inherit; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); }
+.message-stream__older { align-self: center; min-height: 30px; padding: 5px 12px; border: 1px solid rgba(128, 128, 128, .38); border-radius: 999px; background: rgba(128, 128, 128, .16); color: inherit; cursor: pointer; font-size: calc(14px + var(--mobile-font-offset)); }
 .message-stream__older:hover { border-color: currentColor; }
 /* Browsers kept open across older hot updates can retain these removed nodes.
    Hide them defensively so an obsolete reply timer cannot draw a full-width line. */
@@ -1732,6 +1733,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .chat-message__timing, .remote-shell--theme-custom .chat-message__sent-at, .remote-shell--theme-custom .chat-message__assistant-settings { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .running-indicator__elapsed { color: var(--custom-theme-text-color); opacity: .72; }
 .remote-shell--theme-custom .chat-message--user .chat-message__body { background: var(--custom-theme-surface); box-shadow: none; }
+.remote-shell--theme-custom .message-stream__older { border-color: var(--custom-theme-border); background: var(--custom-theme-control); }
 .remote-shell--theme-custom .message-composer { border: 1px solid var(--custom-theme-border); background: var(--custom-theme-control); box-shadow: none; backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .message-composer:focus-within { border-color: color-mix(in srgb, var(--custom-theme-text-color) 58%, transparent); }
 .remote-shell--theme-custom .message-composer textarea { color: var(--custom-theme-text-color); }
@@ -1791,7 +1793,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .theme-option { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-menu__trigger:hover:not(:disabled), .remote-shell--theme-custom .composer-menu--open .composer-menu__trigger { border: 0; background: transparent; }
 .remote-shell--theme-custom .composer-menu__trigger > svg, .remote-shell--theme-custom .composer-menu__label { color: var(--custom-theme-text-color); opacity: .72; }
-.remote-shell--theme-custom .composer-menu__popover { border-color: var(--custom-theme-border); background: color-mix(in srgb, var(--custom-theme-background) 92%, transparent); box-shadow: 0 16px 35px rgba(0, 0, 0, .28); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
+.remote-shell--theme-custom .composer-menu__popover { border-color: var(--custom-theme-border); background: color-mix(in srgb, var(--custom-theme-module-color) 92%, transparent); box-shadow: 0 16px 35px rgba(0, 0, 0, .28); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .composer-schedule-panel { color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .composer-schedule-panel__label, .remote-shell--theme-custom .composer-schedule-panel > small { color: var(--custom-theme-text-color); opacity: .78; }
 .remote-shell--theme-custom .composer-schedule-panel__input { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
@@ -3692,7 +3694,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-warm { --context-menu-hover-bg: #f2e5d5; --context-menu-hover-text: #4a392b; --context-menu-hover-border: #d8bfa4; }
 .remote-shell--theme-custom :is(.thread-context-menu, .terminal-context-menu),
-:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-custom { --context-menu-hover-bg: color-mix(in srgb, var(--custom-theme-text-color) 22%, var(--custom-theme-background)); --context-menu-hover-text: var(--custom-theme-text-color); --context-menu-hover-border: color-mix(in srgb, var(--custom-theme-text-color) 42%, transparent); }
+:is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-custom { --context-menu-hover-bg: color-mix(in srgb, var(--custom-theme-text-color) 22%, var(--custom-theme-module-color)); --context-menu-hover-text: var(--custom-theme-text-color); --context-menu-hover-border: color-mix(in srgb, var(--custom-theme-text-color) 42%, transparent); }
 .remote-shell--theme-retro :is(.thread-context-menu, .terminal-context-menu),
 :is(.thread-context-menu, .terminal-context-menu).remote-shell--theme-retro,
 .workspace-file-context-menu--retro { --context-menu-hover-bg: #000080; --context-menu-hover-text: #fff; --context-menu-hover-border: #000080; }
@@ -4133,7 +4135,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .theme-settings-panel { --translation-menu-control: #fff; --translation-menu-popup: #fff; --translation-menu-text: #20252b; --translation-menu-border: #8fa2b3; --translation-menu-selected: #1d4e78; --translation-menu-selected-text: #fff; --translation-menu-scheme: light; }
 .remote-shell--theme-pixel .theme-settings-panel { --translation-menu-control: var(--pixel-panel-inset); --translation-menu-popup: #0b1522; --translation-menu-text: var(--pixel-text); --translation-menu-border: var(--pixel-border-shadow); --translation-menu-selected: var(--pixel-cream); --translation-menu-selected-text: var(--pixel-ink); --translation-menu-scheme: dark; }
 .remote-shell--theme-chinese-retro .theme-settings-panel { --translation-menu-control: #f5fdff; --translation-menu-popup: #f5fdff; --translation-menu-text: #293c39; --translation-menu-border: #8abac4; --translation-menu-selected: #24515a; --translation-menu-selected-text: #fff; --translation-menu-scheme: light; }
-.remote-shell--theme-custom .theme-settings-panel { --translation-menu-control: var(--custom-theme-control); --translation-menu-popup: var(--custom-theme-background); --translation-menu-text: var(--custom-theme-text-color); --translation-menu-border: var(--custom-theme-border); --translation-menu-selected: var(--custom-theme-text-color); --translation-menu-selected-text: var(--custom-theme-background); --translation-menu-scheme: var(--custom-theme-native-color-scheme); }
+.remote-shell--theme-custom .theme-settings-panel { --translation-menu-control: var(--custom-theme-control); --translation-menu-popup: var(--custom-theme-module-color); --translation-menu-text: var(--custom-theme-text-color); --translation-menu-border: var(--custom-theme-border); --translation-menu-selected: var(--custom-theme-text-color); --translation-menu-selected-text: var(--custom-theme-module-color); --translation-menu-scheme: var(--custom-theme-native-color-scheme); }
 .remote-shell .theme-settings-panel .translation-settings__field select { border-color: var(--translation-menu-border); background: var(--translation-menu-control); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
 .remote-shell .theme-settings-panel .translation-settings__field select option { background: var(--translation-menu-popup); color: var(--translation-menu-text); color-scheme: var(--translation-menu-scheme); }
 .remote-shell .theme-settings-panel .translation-settings__field select option:is(:checked, :hover) { background: var(--translation-menu-selected); color: var(--translation-menu-selected-text); }

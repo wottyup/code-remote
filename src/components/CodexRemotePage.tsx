@@ -78,7 +78,7 @@ import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierTurnMessageWindow, recentTurnMessageWindow, visibleTurnMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
-import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeModuleTransparency, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { readActiveSettingsSection, saveActiveSettingsSection, type SettingsSectionId } from '../lib/settingsSectionState'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
@@ -7348,6 +7348,18 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
               <label className="theme-control-row">
                 <span><strong>背景颜色</strong><small>作为半透明面板背后的底色。</small></span>
                 <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label="自定义背景颜色" /><code>{preferences.customBackgroundColor}</code></span>
+              </label>
+              <div className="theme-control-row">
+                <span><strong>模块颜色</strong><small>应用于侧栏、输入框、卡片和菜单。</small></span>
+                <span className="theme-color-input">
+                  <input type="color" value={preferences.customModuleColor ?? preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customModuleColor: normalizeHexColor(event.target.value, preferences.customModuleColor ?? preferences.customBackgroundColor) })} aria-label="自定义模块颜色" />
+                  <code>{preferences.customModuleColor ?? preferences.customBackgroundColor}</code>
+                  {preferences.customModuleColor ? <button className="theme-image-clear" type="button" onClick={() => onChange({ ...preferences, customModuleColor: undefined })}>跟随背景</button> : <small>跟随背景</small>}
+                </span>
+              </div>
+              <label className="theme-control-row theme-control-row--stacked">
+                <span><strong>模块透明度</strong><small>调整界面模块的透明程度，0% 为实色。</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customModuleTransparency} onChange={(event) => onChange({ ...preferences, customModuleTransparency: normalizeModuleTransparency(Number(event.target.value)) })} aria-label="自定义模块透明度" /><output>{preferences.customModuleTransparency}%</output></span>
               </label>
               <label className="theme-control-row">
                 <span><strong>字体颜色</strong><small>应用于工作区界面文字和控件。</small></span>
