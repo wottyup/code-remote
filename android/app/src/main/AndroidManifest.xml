@@ -8,15 +8,17 @@
 
     <application
         android:allowBackup="false"
-        android:icon="@mipmap/ic_launcher"
+        android:icon="@mipmap/ic_package"
         android:label="Code Remote"
-        android:roundIcon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_package"
         android:supportsRtl="true"
         android:theme="@style/AppTheme"
         android:usesCleartextTraffic="true"
         android:enableOnBackInvokedCallback="true">
+        <!-- The launcher keeps its calibrated scale independently of the package installer icon. -->
         <activity
             android:name=".MainActivity"
+            android:icon="@mipmap/ic_launcher"
             android:launchMode="singleTop"
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize"
             android:windowSoftInputMode="adjustResize"

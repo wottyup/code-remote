@@ -15,14 +15,7 @@ from urllib.parse import urlsplit
 
 MAX_CONFIG_BYTES = 512 * 1024
 MAX_KEY_BYTES = 8 * 1024
-MANAGED_PROVIDER = "code_remote_settings"
-BEGIN_MARKER = "# BEGIN CODE REMOTE API CONFIG"
-END_MARKER = "# END CODE REMOTE API CONFIG"
-MANAGED_BLOCK = re.compile(
-    rf"(?ms)^{re.escape(BEGIN_MARKER)}\r?\n.*?^{re.escape(END_MARKER)}(?:\r?\n|$)"
-)
 TABLE_HEADER = re.compile(r"^\s*\[{1,2}[^\]\r\n]+\]{1,2}\s*(?:#.*)?$")
-ROOT_PROVIDER = re.compile(r"^\s*model_provider\s*=")
 CLAUDE_MODEL_ROLES = ("sonnet", "opus", "fable", "haiku")
 NATIVE_PROTOCOLS = {"codex": "responses", "claude": "anthropic"}
 
@@ -125,11 +118,14 @@ class NativeEngineConfigStore:
         return key
 
     @staticmethod
-    def _codex_provider(parsed: dict, *, active: bool = False) -> dict:
+    def _codex_provider(parsed: dict) -> dict:
         providers = parsed.get("model_providers", {})
         if not isinstance(providers, dict):
             raise NativeEngineConfigError("Codex 的 model_providers 配置格式无效。")
-        provider = providers.get(parsed.get("model_provider", "openai") if active else MANAGED_PROVIDER, {})
+        provider_name = parsed.get("model_provider", "openai")
+        if not isinstance(provider_name, str) or not provider_name:
+            raise NativeEngineConfigError("Codex 提供方名称无效。")
+        provider = providers.get(provider_name, {})
         if not isinstance(provider, dict):
             raise NativeEngineConfigError("Codex 的托管提供方配置格式无效。")
         return provider
@@ -149,7 +145,7 @@ class NativeEngineConfigStore:
         if "model" in parsed and not isinstance(parsed["model"], str):
             raise NativeEngineConfigError("本机默认模型名称必须是文本。")
         if engine == "codex":
-            provider = self._codex_provider(parsed, active=True)
+            provider = self._codex_provider(parsed)
             current_provider = parsed.get("model_provider", "openai")
             return {
                 "engine": engine,
@@ -158,7 +154,7 @@ class NativeEngineConfigStore:
                 "baseUrl": provider.get("base_url") if isinstance(provider.get("base_url"), str) else "",
                 "hasKey": isinstance(provider.get("experimental_bearer_token"), str) and bool(provider.get("experimental_bearer_token")),
                 "authMode": "bearer",
-                "enabled": current_provider == MANAGED_PROVIDER,
+                "enabled": bool(provider.get("base_url") and provider.get("experimental_bearer_token")),
                 "currentProvider": current_provider if isinstance(current_provider, str) else "",
                 "revision": self._revision(path, data),
                 "protocol": provider.get("wire_api", "responses"),
@@ -204,7 +200,7 @@ class NativeEngineConfigStore:
                 raise NativeEngineConfigError("本机配置正在被修改，请稍后重新读取。", conflict=True)
             _, parsed = self._parse(engine, data)
             if engine == "codex":
-                provider = self._codex_provider(parsed, active=True)
+                provider = self._codex_provider(parsed)
                 key = provider.get("experimental_bearer_token", "")
             else:
                 env = self._claude_env(parsed)
@@ -228,28 +224,14 @@ class NativeEngineConfigStore:
 
     @staticmethod
     def _codex_content(text: str, parsed: dict, url: str, key: str, model: str | None = None) -> bytes:
-        matches = list(MANAGED_BLOCK.finditer(text))
-        if len(matches) > 1 or text.count(BEGIN_MARKER) != len(matches) or text.count(END_MARKER) != len(matches):
-            raise NativeEngineConfigError("Codex 托管配置块已被手动修改，请在本机修复后重试。")
-        if not matches and MANAGED_PROVIDER in parsed.get("model_providers", {}):
-            raise NativeEngineConfigError("Codex 的保留提供方名称已被占用，请在本机重命名该提供方。")
-        if matches:
-            match = matches[0]
-            text = text[:match.start()] + text[match.end():]
-
+        provider_name = parsed.get("model_provider", "openai")
+        if not isinstance(provider_name, str) or not provider_name:
+            raise NativeEngineConfigError("Codex 提供方名称无效。")
+        provider = NativeEngineConfigStore._codex_provider(parsed)
         newline = "\r\n" if "\r\n" in text else "\n"
         if text and not text.endswith(("\n", "\r")):
             text += newline
         lines = text.splitlines(keepends=True)
-        root_end = next((index for index, line in enumerate(lines) if TABLE_HEADER.match(line)), len(lines))
-        root_assignments = [index for index in range(root_end) if ROOT_PROVIDER.match(lines[index])]
-        if len(root_assignments) > 1 or (parsed.get("model_provider") is not None and not root_assignments):
-            raise NativeEngineConfigError("Codex 默认提供方的写法无法安全更新，请在本机编辑。")
-        assignment = f'model_provider = "{MANAGED_PROVIDER}"{newline}'
-        if root_assignments:
-            lines[root_assignments[0]] = assignment
-        else:
-            lines.insert(root_end, assignment + newline)
         if model is not None:
             root_end = next((index for index, line in enumerate(lines) if TABLE_HEADER.match(line)), len(lines))
             model_assignments = [index for index in range(root_end) if re.match(r"^\s*model\s*=", lines[index])]
@@ -260,39 +242,55 @@ class NativeEngineConfigStore:
                 lines[model_assignments[0]] = model_line
             else:
                 lines.insert(root_end, model_line)
+        # Locate the exact provider table with the TOML parser, including quoted
+        # names. Validate the full result before writing to reject misleading
+        # headers or assignments inside multiline strings.
+        headers = [index for index, line in enumerate(lines) if TABLE_HEADER.match(line)]
+        target = []
+        for index in headers:
+            try:
+                header = tomllib.loads(lines[index] + "\n__code_remote_probe__ = true\n")
+            except tomllib.TOMLDecodeError:
+                continue
+            if header == {"model_providers": {provider_name: {"__code_remote_probe__": True}}}:
+                target.append(index)
+        if len(target) > 1:
+            raise NativeEngineConfigError("Codex 提供方配置无法安全更新，请在本机编辑。")
+        changes = {"base_url": url, "experimental_bearer_token": key}
+        if target:
+            start = target[0]
+            end = next((index for index in headers if index > start), len(lines))
+            section = lines[start + 1:end]
+            for field, value in changes.items():
+                assignments = [index for index, line in enumerate(section)
+                               if re.match(rf"^\s*{field}\s*=", line)]
+                if len(assignments) > 1 or (field in provider and not assignments):
+                    raise NativeEngineConfigError("Codex 提供方字段无法安全更新，请在本机编辑。")
+                assignment = f"{field} = {json.dumps(value, ensure_ascii=False)}{newline}"
+                if assignments:
+                    section[assignments[0]] = assignment
+                else:
+                    section.append(assignment)
+            lines[start + 1:end] = section
+        else:
+            if provider:
+                raise NativeEngineConfigError("Codex 提供方配置无法安全更新，请在本机编辑。")
+            changes.update(name=provider_name, wire_api="responses", requires_openai_auth=False)
+            lines.append(newline + f"[model_providers.{json.dumps(provider_name, ensure_ascii=False)}]" + newline)
+            lines.extend(f"{field} = {json.dumps(value, ensure_ascii=False)}{newline}"
+                         for field, value in changes.items())
         result = "".join(lines)
-        if result and not result.endswith(("\n", "\r")):
-            result += newline
-        if result and not result.endswith(newline * 2):
-            result += newline
-        result += newline.join((
-            BEGIN_MARKER,
-            f"[model_providers.{MANAGED_PROVIDER}]",
-            'name = "Code Remote API"',
-            f"base_url = {json.dumps(url, ensure_ascii=False)}",
-            'wire_api = "responses"',
-            f"experimental_bearer_token = {json.dumps(key, ensure_ascii=False)}",
-            "requires_openai_auth = false",
-            END_MARKER,
-            "",
-        ))
         try:
             updated = tomllib.loads(result)
         except tomllib.TOMLDecodeError as error:
             raise NativeEngineConfigError("Codex 配置格式无法安全更新，请在本机编辑。") from error
-        if updated.get("model_provider") != MANAGED_PROVIDER:
-            raise NativeEngineConfigError("Codex 默认提供方未能更新。")
-        # Refuse edits that would change unrelated values (for example a root
-        # assignment hidden inside a multiline TOML string).
-        before, after = dict(parsed), dict(updated)
-        for config in (before, after):
-            config.pop("model_provider", None)
-            if model is not None:
-                config.pop("model", None)
-            providers = dict(config.get("model_providers", {}))
-            providers.pop(MANAGED_PROVIDER, None)
-            config["model_providers"] = providers
-        if before != after or (model is not None and updated.get("model") != model):
+        expected = dict(parsed)
+        providers = dict(parsed.get("model_providers", {}))
+        providers[provider_name] = {**provider, **changes}
+        expected["model_providers"] = providers
+        if model is not None:
+            expected["model"] = model
+        if updated != expected:
             raise NativeEngineConfigError("Codex 配置包含无法安全更新的写法，请在本机编辑。")
         return result.encode("utf-8")
 

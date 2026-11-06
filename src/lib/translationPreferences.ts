@@ -8,7 +8,7 @@ export interface TranslationPreferences {
   style: TranslationStyle
 }
 
-const key = 'codex-remote.translation-preferences'
+export const translationPreferencesStorageKey = 'codex-remote.translation-preferences'
 const providers = new Set<TranslationProvider>(['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat', 'anthropic', 'responses'])
 
 export const defaultTranslationPreferences: TranslationPreferences = {
@@ -19,9 +19,9 @@ export const defaultTranslationPreferences: TranslationPreferences = {
   style: 'natural',
 }
 
-export function readTranslationPreferences(): TranslationPreferences {
+export function readTranslationPreferencesIfAvailable(): TranslationPreferences | null {
   try {
-    const value = window.localStorage.getItem(key)
+    const value = window.localStorage.getItem(translationPreferencesStorageKey)
     if (!value) return defaultTranslationPreferences
     const parsed = JSON.parse(value) as Partial<TranslationPreferences>
     const profileIds: TranslationPreferences['profileIds'] = {}
@@ -39,8 +39,12 @@ export function readTranslationPreferences(): TranslationPreferences {
       style: parsed.style === 'formal' ? 'formal' : 'natural',
     }
   } catch {
-    return defaultTranslationPreferences
+    return null
   }
+}
+
+export function readTranslationPreferences(): TranslationPreferences {
+  return readTranslationPreferencesIfAvailable() ?? defaultTranslationPreferences
 }
 
 export function selectedTranslationProfileId(value: TranslationPreferences) {
@@ -49,7 +53,7 @@ export function selectedTranslationProfileId(value: TranslationPreferences) {
 
 export function saveTranslationPreferences(value: TranslationPreferences) {
   try {
-    window.localStorage.setItem(key, JSON.stringify(value))
+    window.localStorage.setItem(translationPreferencesStorageKey, JSON.stringify(value))
   } catch {
     // The current page can still use the selected provider.
   }

@@ -900,6 +900,16 @@ export const codexRemoteClient = {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 180_000 })
   },
+  codexProxyUsage<T>(token: string, kind: 'summary' | 'history', input: { baseUrl: string; apiKey: string; hours?: number }, signal?: AbortSignal) {
+    return request<T>(token, `/api/v1/codex/usage/codex-proxy/${kind}`, {
+      method: 'POST', body: JSON.stringify(input), signal,
+    }, { timeoutMs: 30_000 })
+  },
+  newAPIUsage<T>(token: string, input: { baseUrl: string; accessToken: string; startTimestamp: number; endTimestamp: number }, signal?: AbortSignal) {
+    return request<T>(token, '/api/v1/codex/usage/new-api', {
+      method: 'POST', body: JSON.stringify(input), signal,
+    }, { timeoutMs: 60_000 })
+  },
   translatedInputs(token: string, threadId: string) {
     return request<{ messages: Array<{ requestId: string; turnId: string; sentText: string; originalText: string }> }>(
       token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/translated-inputs`, undefined,

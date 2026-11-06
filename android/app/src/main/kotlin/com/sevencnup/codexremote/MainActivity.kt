@@ -731,6 +731,8 @@ class MainActivity : Activity() {
     private val ERROR: Int get() = if (lightTheme) Color.rgb(173, 48, 57) else Color.rgb(229, 135, 142)
     private val handler = Handler(Looper.getMainLooper())
     private val io: ExecutorService = Executors.newFixedThreadPool(3)
+    private val translationIo: ExecutorService = Executors.newFixedThreadPool(3)
+    private val translationSendIo: ExecutorService = Executors.newFixedThreadPool(2)
     private val socketClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -813,6 +815,45 @@ class MainActivity : Activity() {
 
     private var endpoint = ""
     private var token = ""
+    private data class TranslationRequestSpec(
+        val endpoint: String, val token: String, val provider: String, val profileId: String?,
+        val style: String, val source: String, val target: String, val text: String,
+    )
+    private data class TranslationProfileChoice(
+        val provider: String, val id: String, val name: String, val model: String,
+    ) {
+        val key: String get() = "$provider\u0000$id"
+    }
+    private data class AssistantTranslationTarget(
+        val holder: LinearLayout, val original: LinearLayout, val text: String, val width: Int,
+        var expanded: Boolean = false,
+    )
+    private var translationConfiguration: JSONObject? = null
+    private var translationConfigurationEndpoint = ""
+    private var translationConfigurationStatus: String? = null
+    private var translationConfigurationError = false
+    private var translationRefreshGeneration = 0L
+    private var translationRevision = 0L
+    private var translationSettingsBody: LinearLayout? = null
+    private var translationDisplayDirty = false
+    private var translationPreviewView: TextView? = null
+    private var translationPreviewRunnable: Runnable? = null
+    private var translationPreviewKey = ""
+    private var translationPreviewValue: String? = null
+    private var translationSendGeneration = 0L
+    private var translationSendPending = false
+    private val assistantTranslationCache = object : LinkedHashMap<String, String>(32, .75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, String>?): Boolean = size > 80
+    }
+    private val assistantTranslationErrors = mutableMapOf<String, String>()
+    private val assistantTranslationPending = mutableSetOf<String>()
+    private val assistantTranslationSpecs = mutableMapOf<String, TranslationRequestSpec>()
+    private val assistantTranslationTargets = mutableMapOf<String, MutableList<AssistantTranslationTarget>>()
+    private val assistantTranslationScan = Runnable { requestVisibleAssistantTranslations() }
+    private var translatedInputThreadId: String? = null
+    private var translatedInputEntries = JSONArray()
+    private var translatedInputMarker = ""
+    private var translatedInputFetchInFlight = false
     private data class LocalAndroidUpdate(val version: String, val filename: String, val sizeBytes: Long, val sha256: String)
     private var updateDownloadVerifying = false
     private var updateDownloadPromptedId = -1L
@@ -1024,6 +1065,11 @@ class MainActivity : Activity() {
         flushDeferredMessageRender()
     }
     private var followMessageBottom = true
+    private var pendingInitialBottomThreadId: String? = null
+    private var bottomRestoreScheduledView: ScrollView? = null
+    private var bottomRestoreScheduledSelection = -1L
+    private var messageScrollTouchGeneration = 0L
+    private var messageRenderScrollGeneration = 0L
     private var completionNoticeThreadId: String? = null
     private var completionNoticeEngine: String? = null
     private var completionNoticeDismissRunnable: Runnable? = null
@@ -1300,6 +1346,8 @@ class MainActivity : Activity() {
         closingSocket?.close(1000, "activity destroyed")
         terminalSocket?.close(1000, "terminal closed")
         io.shutdownNow()
+        translationIo.shutdownNow()
+        translationSendIo.shutdownNow()
         super.onDestroy()
     }
 
@@ -1403,6 +1451,24 @@ class MainActivity : Activity() {
         activeConnectionId = profile.id
         endpoint = profile.endpoint
         token = profile.token
+        translationConfiguration = null
+        translationConfigurationEndpoint = ""
+        translationConfigurationStatus = null
+        translationConfigurationError = false
+        translationRefreshGeneration++
+        translationRevision++
+        translationPreviewKey = ""
+        translationPreviewValue = null
+        translationSendGeneration++
+        translationSendPending = false
+        assistantTranslationCache.clear()
+        assistantTranslationErrors.clear()
+        assistantTranslationPending.clear()
+        assistantTranslationSpecs.clear()
+        assistantTranslationTargets.clear()
+        translatedInputThreadId = null
+        translatedInputEntries = JSONArray()
+        translatedInputMarker = ""
         activeThreadId = null
         activeThread = null
         selectedFiles = draftFilesByScope[draftStorageKey()]?.toMutableList() ?: mutableListOf()
@@ -1586,6 +1652,9 @@ class MainActivity : Activity() {
         handler.removeCallbacks(messageScrollIdle)
         messageTouchActive = false
         messageScrollSettling = false
+        pendingInitialBottomThreadId = null
+        bottomRestoreScheduledView = null
+        bottomRestoreScheduledSelection = -1L
         messageRenderDeferred = false
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
@@ -1744,6 +1813,36 @@ class MainActivity : Activity() {
         return distanceToBottom <= dp(180)
     }
 
+    private fun restoreMessageBottomAfterLayout(threadId: String) {
+        val scroll = messageScroll
+        val selection = historySelectionGeneration
+        if (bottomRestoreScheduledView === scroll && bottomRestoreScheduledSelection == selection) return
+        val list = messageList
+        val connection = connectionGeneration
+        val observer = scroll.viewTreeObserver
+        if (!observer.isAlive) return
+        bottomRestoreScheduledView = scroll
+        bottomRestoreScheduledSelection = selection
+        observer.addOnPreDrawListener(object : android.view.ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (observer.isAlive) observer.removeOnPreDrawListener(this)
+                if (bottomRestoreScheduledView === scroll && bottomRestoreScheduledSelection == selection) {
+                    bottomRestoreScheduledView = null
+                    bottomRestoreScheduledSelection = -1L
+                }
+                if (connection != connectionGeneration || selection != historySelectionGeneration ||
+                    activeThreadId != threadId || messageScroll !== scroll || messageList !== list ||
+                    pendingInitialBottomThreadId != threadId || !followMessageBottom) return true
+                scroll.scrollTo(0, list.height)
+                updateScrollToBottomButton()
+                if (historyLoadingThreadId != threadId && activeThread?.optJSONArray("turns") != null) {
+                    pendingInitialBottomThreadId = null
+                }
+                return true
+            }
+        })
+    }
+
     private fun scheduleImeMessageBottomFollow() {
         if (imeFollowScrollQueued || !::messageScroll.isInitialized || !::messageList.isInitialized) return
         imeFollowScrollQueued = true
@@ -1861,17 +1960,25 @@ class MainActivity : Activity() {
         })
         messageScroll.setOnScrollChangeListener { _, _, _, _, _ ->
             if (!imeInsetVisible) messageNearBottomBeforeIme = isMessageListNearBottom()
-            if (messageTouchActive && !isMessageListNearBottom()) followMessageBottom = false
+            if (messageTouchActive && !isMessageListNearBottom()) {
+                followMessageBottom = false
+                pendingInitialBottomThreadId = null
+            }
             if (messageScrollSettling && !messageTouchActive) {
                 handler.removeCallbacks(messageScrollIdle)
                 handler.postDelayed(messageScrollIdle, 160L)
             }
             updateScrollToBottomButton()
+            if (showTranslatedMessages()) {
+                handler.removeCallbacks(assistantTranslationScan)
+                handler.postDelayed(assistantTranslationScan, 180L)
+            }
         }
         messageScroll.setOnTouchListener { _, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     messageTouchActive = true
+                    messageScrollTouchGeneration++
                     messageScrollSettling = true
                     handler.removeCallbacks(messageScrollIdle)
                     if (imeInsetVisible) imeFollowMessageBottom = false
@@ -2136,8 +2243,14 @@ class MainActivity : Activity() {
                 } else false
             }
             addTextChangedListener(SimpleTextWatcher { value ->
+                if (translationSendPending) {
+                    translationSendPending = false
+                    translationSendGeneration++
+                    setSendBusy(false)
+                }
                 if (queueEditItem == null) prefs.edit().putString(draftStorageKey(), value).apply()
                 updateSendButton()
+                scheduleTranslationPreview()
             })
         }
         attachmentStrip = LinearLayout(this).apply {
@@ -2160,6 +2273,14 @@ class MainActivity : Activity() {
         composer.addView(attachmentScroll, LinearLayout.LayoutParams(MATCH, dp(60)).apply {
             bottomMargin = dp(3)
         })
+        translationPreviewView = label("", 11, SUBTLE, translateUi = false).apply {
+            visibility = View.GONE
+            maxLines = 4
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(9), dp(7), dp(9), dp(7))
+            background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
+        }
+        composer.addView(translationPreviewView, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
         composer.addView(composerInput, LinearLayout.LayoutParams(MATCH, WRAP))
 
         if (retroTheme) {
@@ -3518,7 +3639,12 @@ class MainActivity : Activity() {
         composerInput.setText(prefs.getString(draftStorageKey(), ""))
         restoreCurrentDraftFiles()
         followMessageBottom = true
+        pendingInitialBottomThreadId = id
         renderMessages(true)
+        translatedInputThreadId = null
+        translatedInputEntries = JSONArray()
+        translatedInputMarker = ""
+        requestTranslatedInputMetadata(force = true, retryOnce = true)
         if (!knownEmptyThread) {
             if (hasCachedHistory) refreshActiveThread(false) else loadThreadHistoryCacheThenRefresh(id)
         }
@@ -3787,10 +3913,13 @@ class MainActivity : Activity() {
                     val wasLoadingHistory = historyLoadingThreadId == threadId
                     historyLoadingThreadId = null
                     historyLoadError = null
+                    val wasRunning = running
                     running = isThreadRunning(resolved)
                     if (!running) clearLiveActivity()
                     renderHeader()
-                    if (historyChanged || wasLoadingHistory) renderMessages(false, if (wasLoadingHistory) null else incrementalTurnId)
+                    if (historyChanged || wasLoadingHistory || wasRunning != running)
+                        renderMessages(false, if (wasLoadingHistory || wasRunning != running) null else incrementalTurnId)
+                    if (historyChanged || wasLoadingHistory) requestTranslatedInputMetadata(retryOnce = true)
                     updateComposerFileChanges()
                     io.execute { writeThreadHistoryCache(threadId, resolved, newRevision, profileId) }
                 }
@@ -3995,6 +4124,8 @@ class MainActivity : Activity() {
         val effectiveIncrementalTurnId = incrementalTurnId?.takeIf { useIncrementalRender }
         if (effectiveIncrementalTurnId == null) {
             messageList.removeAllViews()
+            assistantTranslationTargets.clear()
+            assistantTranslationSpecs.clear()
         } else {
             val turnTag = "$TAG_MESSAGE_TURN_PREFIX$effectiveIncrementalTurnId"
             for (childIndex in messageList.childCount - 1 downTo 0) {
@@ -4034,6 +4165,8 @@ class MainActivity : Activity() {
                     }
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
+                        val messageModel = assistantMetadataField(item, turn, "model")
+                        val messageEffort = assistantMetadataField(item, turn, "effort", "reasoningEffort", "reasoning_effort")
                         if (assistantMessageQuestions(item).isNotEmpty()) {
                             // A question is a separate interactive item. Later
                             // commentary must not overwrite its identity/data.
@@ -4041,6 +4174,8 @@ class MainActivity : Activity() {
                             messages += "assistant" to shallowCopyObject(item)
                                 .put("_turnId", turnId)
                                 .put("_displayTime", messageTime(item, turn, true))
+                                .putOpt("_model", messageModel)
+                                .putOpt("_effort", messageEffort)
                             continue
                         }
                         if (text.isNotBlank()) {
@@ -4048,12 +4183,16 @@ class MainActivity : Activity() {
                                 .put("_turnId", turnId)
                                 .put("_duration", turn.optLong("durationMs", 0))
                                 .put("_displayTime", messageTime(item, turn, true))
+                                .putOpt("_model", messageModel)
+                                .putOpt("_effort", messageEffort)
                                 .put("_activityTimeline", JSONArray())
                                 .also {
                                     assistantTextBuilders[it] = StringBuilder()
                                     assistantInTurn = it
                                     messages += "assistant" to it
                                 }
+                            if (message.optString("_model").isBlank()) message.putOpt("_model", messageModel)
+                            if (message.optString("_effort").isBlank()) message.putOpt("_effort", messageEffort)
                             val assistantBuilder = assistantTextBuilders.getOrPut(message) { StringBuilder() }
                             if (assistantBuilder.isNotEmpty()) assistantBuilder.append("\n\n")
                             assistantBuilder.append(text)
@@ -4168,6 +4307,20 @@ class MainActivity : Activity() {
         }
 
         val renderedFileChangeTurns = mutableSetOf<String>()
+        val usedTranslatedRequestIds = mutableSetOf<String>()
+        val directUserMessageIds = messages.asSequence().filter { it.first == "user" }
+            .map { it.second.optString("id") }.filter { it.isNotBlank() }.toSet()
+        val translatedByRequestId = HashMap<String, JSONObject>()
+        val translatedByTurnAndText = HashMap<String, MutableList<JSONObject>>()
+        if (translatedInputThreadId == activeThreadId) {
+            for (index in 0 until translatedInputEntries.length()) {
+                val entry = translatedInputEntries.optJSONObject(index) ?: continue
+                entry.optString("requestId").takeIf { it.isNotBlank() }?.let { translatedByRequestId[it] = entry }
+                translatedByTurnAndText.getOrPut("${entry.optString("turnId")}\u0000${entry.optString("sentText")}") {
+                    mutableListOf()
+                }.add(entry)
+            }
+        }
         fun appendTurnSummary(turnId: String) {
             if (!renderedFileChangeTurns.add(turnId)) return
             if (running && turnId == turns.optJSONObject(turns.length() - 1)?.optString("id")) return
@@ -4244,19 +4397,32 @@ class MainActivity : Activity() {
             val firstChoiceOffset = choiceGroups.firstOrNull()?.question?.let { rawText.indexOf(it) } ?: -1
             val hideChoiceText = explicitQuestions.isNotEmpty() || (firstChoiceOffset >= 0 && rawText.take(firstChoiceOffset)
                 .replace(Regex("""[\s#>*_\d.)、-]"""), "").isEmpty())
+            val originalUserText = if (role == "user") originalUserMessageText(item, rawText,
+                usedTranslatedRequestIds, directUserMessageIds, translatedByRequestId, translatedByTurnAndText) else null
             val parsedUserText = if (role == "user") parseUserMessageText(rawText) else null
-            val text = parsedUserText?.visibleText ?: rawText
+            val text = if (role == "user" && !showTranslatedMessages() && originalUserText != null)
+                parseUserMessageText(originalUserText).visibleText else parsedUserText?.visibleText ?: rawText
             val documentAttachments = parsedUserText?.documentAttachments.orEmpty()
+            val assistantTranslationEligible = role == "assistant" && showTranslatedMessages() &&
+                !hideChoiceText && choiceGroups.isEmpty() && text.isNotBlank() && text.length <= 30_000 &&
+                containsEnglish(text) && (!running || item.optString("_turnId") != turns.optJSONObject(turns.length() - 1)?.optString("id"))
             val hasImage = item.optJSONArray("content")?.let { parts ->
                 (0 until parts.length()).any { index ->
                     normalizedType(parts.optJSONObject(index)?.optString("type").orEmpty()) in setOf("image", "localimage")
                 }
             } == true
             if (role == "assistant" && item.optJSONArray("_activityTimeline") != null) {
-                addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)), hideChoiceText)
+                addAssistantTimeline(bubble, item, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)),
+                    hideChoiceText || assistantTranslationEligible)
+                if (assistantTranslationEligible) addAssistantTranslation(bubble, text,
+                    (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
             } else if (text.isNotBlank() || documentAttachments.isNotEmpty() || !hasImage) {
                 if (role == "assistant") {
-                    if (!hideChoiceText) addAssistantMarkdown(bubble, text, (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120)))
+                    if (!hideChoiceText) {
+                        val width = (maxBubbleWidth - dp(6)).coerceAtLeast(dp(120))
+                        if (assistantTranslationEligible) addAssistantTranslation(bubble, text, width)
+                        else addAssistantMarkdown(bubble, text, width)
+                    }
                 } else {
                     addTextDocumentAttachmentCards(bubble, documentAttachments, maxBubbleWidth)
                     val contentColor = if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_FOREGROUND else CODEX_USER_MESSAGE_TEXT
@@ -4300,7 +4466,21 @@ class MainActivity : Activity() {
                         setPadding(0, dp(3), dp(2), 0)
                     }, LinearLayout.LayoutParams(WRAP, WRAP))
                 }
-                messageCopyAction(rawText)?.let { action ->
+                if (originalUserText != null) {
+                    val alternateText = if (showTranslatedMessages()) originalUserText else parsedUserText?.visibleText ?: rawText
+                    val alternate = label(alternateText, 12, SUBTLE, translateUi = false).apply {
+                        visibility = View.GONE
+                        setTextIsSelectable(true)
+                        setPadding(dp(8), dp(5), dp(8), dp(5))
+                    }
+                    val toggle = label(if (showTranslatedMessages()) "查看中文原文" else "查看英文发送内容", 10, MUTED, true).apply {
+                        setPadding(dp(4), dp(4), dp(4), dp(4))
+                        setOnClickListener { alternate.visibility = if (alternate.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+                    }
+                    messageColumn.addView(toggle, LinearLayout.LayoutParams(WRAP, WRAP))
+                    messageColumn.addView(alternate, LinearLayout.LayoutParams(WRAP, WRAP))
+                }
+                messageCopyAction(text)?.let { action ->
                     messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
@@ -4310,7 +4490,7 @@ class MainActivity : Activity() {
                     gravity = Gravity.START
                 }
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
-                messageCopyAction(text)?.let { action ->
+                if (!assistantTranslationEligible) messageCopyAction(text)?.let { action ->
                     messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
                 }
                 if (choiceGroups.isNotEmpty()) {
@@ -4325,6 +4505,22 @@ class MainActivity : Activity() {
                         item.optString("_turnId"), item.optString("id"),
                         currentQuestion, explicitQuestions.isNotEmpty()),
                         LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
+                }
+                val turnComplete = !running || item.optString("_turnId") != turns.optJSONObject(turns.length() - 1)?.optString("id")
+                if (turnComplete) {
+                    val model = item.optString("_model").takeIf { it.isNotBlank() && it != "null" }
+                    val effort = item.optString("_effort").takeIf { it.isNotBlank() && it != "null" }
+                    if (model != null || effort != null) {
+                        val details = listOfNotNull(
+                            model?.let { "${tr("模型")} ${assistantModelDisplay(it)}" },
+                            effort?.let { "${tr("思考")} ${assistantEffortDisplay(it)}" },
+                        ).joinToString(" · ")
+                        messageColumn.addView(label(details, 10, MUTED, translateUi = false).apply {
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            setPadding(dp(3), dp(3), dp(3), 0)
+                        }, LinearLayout.LayoutParams(WRAP, WRAP))
+                    }
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             }
@@ -4394,10 +4590,25 @@ class MainActivity : Activity() {
             activeActivityStartedAt = 0L
             activeActivityTimerTurnId = null
         }
-        messageScroll.post {
-            if (scrollToEnd || wasNearEnd) messageScroll.scrollTo(0, messageList.height)
-            else messageScroll.scrollTo(0, previousScrollY)
+        val renderedScroll = messageScroll
+        val renderedList = messageList
+        val renderedThreadId = activeThreadId
+        val renderedConnection = connectionGeneration
+        val renderedSelection = historySelectionGeneration
+        val renderedTouchGeneration = messageScrollTouchGeneration
+        val renderedScrollGeneration = ++messageRenderScrollGeneration
+        val restoreInitialBottom = renderedThreadId != null && pendingInitialBottomThreadId == renderedThreadId && followMessageBottom
+        if (restoreInitialBottom) restoreMessageBottomAfterLayout(renderedThreadId)
+        renderedScroll.post {
+            if (renderedConnection != connectionGeneration || renderedSelection != historySelectionGeneration ||
+                renderedThreadId != activeThreadId || renderedScroll !== messageScroll || renderedList !== messageList ||
+                renderedTouchGeneration != messageScrollTouchGeneration ||
+                renderedScrollGeneration != messageRenderScrollGeneration) return@post
+            val shouldFollowBottom = scrollToEnd || wasNearEnd || restoreInitialBottom
+            if (shouldFollowBottom && followMessageBottom) renderedScroll.scrollTo(0, renderedList.height)
+            else if (!shouldFollowBottom) renderedScroll.scrollTo(0, previousScrollY)
             updateScrollToBottomButton()
+            if (showTranslatedMessages()) requestVisibleAssistantTranslations()
         }
         updateComposerRunningGlow(running)
         updateComposerFileChanges()
@@ -4471,6 +4682,7 @@ class MainActivity : Activity() {
         }
         val item = JSONObject().put("id", payload.optString("id"))
             .put("content", content).put("_turnId", "pending-${payload.optString("id")}")
+            .putOpt("originalText", payload.optString("originalText").takeIf { it.isNotBlank() })
             .put("_displayTime", formatMessageTime(payload.optString("createdAt")))
             .put("_matchText", payload.optString("requestText").trim())
             .put("_imageCount", files.count { it.optString("kind") == "image" })
@@ -4502,7 +4714,8 @@ class MainActivity : Activity() {
         }
         val rawText = messageText(item, "user")
         val parsedText = parseUserMessageText(rawText)
-        val text = parsedText.visibleText
+        val text = if (!showTranslatedMessages()) item.optString("originalText").takeIf { it.isNotBlank() }
+            ?: parsedText.visibleText else parsedText.visibleText
         addTextDocumentAttachmentCards(bubble, parsedText.documentAttachments, maxBubbleWidth)
         if (text.isNotBlank()) {
             val content = label(text, 14, if (currentMode == "claude-code") CLAUDE_USER_MESSAGE_TEXT else CODEX_USER_MESSAGE_TEXT, translateUi = false).apply {
@@ -4890,6 +5103,88 @@ class MainActivity : Activity() {
             val markdown = part.markdown.orEmpty()
             if (markdown.isBlank()) return@forEach
             addSelectableMarkdown(container, markdown, maximumWidth)
+        }
+    }
+
+    private fun addAssistantTranslation(container: LinearLayout, english: String, width: Int) {
+        val original = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        addAssistantMarkdown(original, english, width)
+        container.addView(original, LinearLayout.LayoutParams(MATCH, WRAP))
+        val holder = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(9), dp(7), dp(9), dp(7))
+            background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
+        }
+        container.addView(holder, LinearLayout.LayoutParams(width, WRAP).apply { topMargin = dp(6) })
+        val spec = translationSpec(english, "en", "zh")
+        val key = translationKey(spec)
+        assistantTranslationSpecs[key] = spec
+        val target = AssistantTranslationTarget(holder, original, english, width)
+        assistantTranslationTargets.getOrPut(key) { mutableListOf() }.add(target)
+        renderAssistantTranslationTarget(key, target)
+    }
+
+    private fun renderAssistantTranslationTarget(key: String, target: AssistantTranslationTarget) {
+        val holder = target.holder
+        holder.removeAllViews()
+        val translated = assistantTranslationCache[key]
+        val error = assistantTranslationErrors[key]
+        if (translated != null) {
+            target.original.visibility = if (target.expanded) View.VISIBLE else View.GONE
+            val heading = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+            heading.addView(label("中文译文", 11, TEXT, true), LinearLayout.LayoutParams(0, WRAP, 1f))
+            heading.addView(label(if (target.expanded) "收起英文原文" else "查看英文原文", 10, MUTED, true).apply {
+                setPadding(dp(6), dp(3), dp(6), dp(3))
+                setOnClickListener {
+                    target.expanded = !target.expanded
+                    renderAssistantTranslationTarget(key, target)
+                }
+            }, LinearLayout.LayoutParams(WRAP, WRAP))
+            holder.addView(heading, LinearLayout.LayoutParams(MATCH, WRAP).apply { bottomMargin = dp(4) })
+            addAssistantMarkdown(holder, translated, (target.width - dp(18)).coerceAtLeast(dp(100)))
+            messageCopyAction(translated)?.let { holder.addView(it, LinearLayout.LayoutParams(WRAP, dp(30))) }
+        } else if (error != null) {
+            target.original.visibility = View.VISIBLE
+            holder.addView(label(error, 11, WARNING, translateUi = false), widthWrap())
+            holder.addView(label("重试翻译", 11, ACCENT, true).apply {
+                setPadding(0, dp(5), 0, 0)
+                setOnClickListener {
+                    assistantTranslationErrors.remove(key)
+                    renderAssistantTranslationTarget(key, target)
+                    requestVisibleAssistantTranslations()
+                }
+            }, widthWrap())
+        } else {
+            holder.addView(label("回复已生成，正在翻译…", 11, MUTED), widthWrap())
+        }
+    }
+
+    private fun requestVisibleAssistantTranslations() {
+        if (!showTranslatedMessages() || settingsOverlay != null || !::messageScroll.isInitialized) return
+        for ((key, targets) in assistantTranslationTargets) {
+            targets.removeAll { !it.holder.isAttachedToWindow }
+            if (targets.isEmpty() || key in assistantTranslationCache || key in assistantTranslationErrors ||
+                key in assistantTranslationPending) continue
+            if (assistantTranslationPending.size >= 2) break
+            val visible = targets.any { it.holder.getGlobalVisibleRect(Rect()) }
+            if (!visible) continue
+            val spec = assistantTranslationSpecs[key] ?: continue
+            val connection = connectionGeneration
+            assistantTranslationPending += key
+            translationIo.execute {
+                val result = runCatching { translateText(spec) }
+                handler.post {
+                    assistantTranslationPending.remove(key)
+                    if (isFinishing || isDestroyed || connection != connectionGeneration) return@post
+                    result.onSuccess { assistantTranslationCache[key] = it }
+                        .onFailure { assistantTranslationErrors[key] = it.message ?: "翻译失败。" }
+                    assistantTranslationTargets[key]?.filter { it.holder.isAttachedToWindow }
+                        ?.forEach { renderAssistantTranslationTarget(key, it) }
+                    requestVisibleAssistantTranslations()
+                }
+            }
         }
     }
 
@@ -7356,7 +7651,9 @@ class MainActivity : Activity() {
                     elevation = dp(1).toFloat()
                 }
             }
-            val text = item.optString("text").ifBlank { item.optString("requestText") }
+            val text = (if (showTranslatedMessages()) item.optString("text")
+                else item.optString("originalText").ifBlank { item.optString("text") })
+                .ifBlank { item.optString("requestText") }
             val queueMessageTextColor = if (pixelTheme) PIXEL_INK else TEXT
             card.addView(label("${index + 1}.  ${text.ifBlank { tr("（附件消息）") }}", 12, queueMessageTextColor, translateUi = false).apply {
                 maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END; setTextIsSelectable(true)
@@ -7526,14 +7823,17 @@ class MainActivity : Activity() {
         }.show()
     }
 
-    private fun scheduleCurrentMessage(scheduledAt: String) {
+    private fun scheduleCurrentMessage(scheduledAt: String, translatedText: String? = null) {
         if (queueEditPending || sendBusy || queueEditItem != null) return
         android.view.inputmethod.BaseInputConnection.removeComposingSpans(composerInput.text)
         val text = composerInput.text.toString().trim()
         if (text.isBlank() && selectedFiles.isEmpty()) return
+        if (translatedText == null && translateDraftBeforeSubmit(text) { scheduleCurrentMessage(scheduledAt, it) }) return
         val threadId = activeThreadId
         val requestId = UUID.randomUUID().toString()
-        val payload = queuedPayload(text, requestId).put("scheduledAt", scheduledAt)
+        val outgoingText = translatedText ?: text
+        val payload = queuedPayload(outgoingText, requestId).put("scheduledAt", scheduledAt)
+        if (outgoingText != text) payload.put("originalText", text)
         val outgoingFiles = selectedFiles.toList()
         val outgoingScope = draftStorageKey()
         val sendConnection = connectionGeneration
@@ -7601,7 +7901,7 @@ class MainActivity : Activity() {
                 }
             } catch (error: Exception) {
                 handler.post {
-                    restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                    restoreFailedMessage(outgoingScope, payload.optString("originalText", payload.optString("text")), outgoingFiles)
                     if (sendConnection == connectionGeneration) {
                         setSendBusy(false)
                         showStatus(error.message ?: "定时发送加入排队失败")
@@ -7620,17 +7920,23 @@ class MainActivity : Activity() {
         null
     }
 
-    private fun sendCurrentMessage() {
+    private fun sendCurrentMessage(translatedText: String? = null) {
         if (queueEditPending || sendBusy) return
         if (queueEditItem != null) { finishQueueEdit(true); return }
         android.view.inputmethod.BaseInputConnection.removeComposingSpans(composerInput.text)
         val text = composerInput.text.toString().trim()
         if (text.isBlank() && selectedFiles.isEmpty()) return
+        if (translatedText == null && translateDraftBeforeSubmit(text) { sendCurrentMessage(it) }) return
         val threadId = activeThreadId
         val requestId = UUID.randomUUID().toString()
-        val payload = queuedPayload(text, requestId)
+        val outgoingText = translatedText ?: text
+        val payload = queuedPayload(outgoingText, requestId)
+        if (outgoingText != text) payload.put("originalText", text)
         val outgoingFiles = selectedFiles.toList()
         val outgoingScope = draftStorageKey()
+        val expectedToQueue = threadId != null && (running || activeThread?.let(::isThreadRunning) == true ||
+            queuedMessages.length() > 0 || threadTitleKey(threadId) in pausedThreadKeys ||
+            terminalThreadId == threadId && terminalHandoffEnabled)
         val sendConnection = connectionGeneration
         val sendEndpoint = endpoint
         val sendToken = token
@@ -7641,7 +7947,7 @@ class MainActivity : Activity() {
         selectedFiles.clear()
         draftFilesByScope.remove(outgoingScope)
         renderAttachmentStrip()
-        addPendingUserMessage(outgoingScope, payload, outgoingFiles)
+        if (!expectedToQueue) addPendingUserMessage(outgoingScope, payload, outgoingFiles)
         if (threadId == null) {
             io.execute {
                 try {
@@ -7764,12 +8070,17 @@ class MainActivity : Activity() {
                     if (saved) {
                         unconfirmedSubmissions[requestId] = UnconfirmedSubmission(threadId, payload,
                             outgoingFiles, outgoingScope, sendEndpoint)
+                        if (pendingUserMessages[outgoingScope].orEmpty().none { it.optString("id") == requestId }) {
+                            addPendingUserMessage(outgoingScope, payload, outgoingFiles,
+                                displayImmediately = sendConnection == connectionGeneration && draftStorageKey() == outgoingScope)
+                        }
                         updatePendingUserMessageState(outgoingScope, requestId,
                             "发送状态未确认 · 点此重试", accepted = true)
                         if (draftStorageKey() == outgoingScope) renderMessages(false)
                     } else {
                         removePendingUserMessage(outgoingScope, requestId)
-                        if (onResult == null) restoreFailedMessage(outgoingScope, payload.optString("text"), outgoingFiles)
+                        if (onResult == null) restoreFailedMessage(outgoingScope,
+                            payload.optString("originalText", payload.optString("text")), outgoingFiles)
                     }
                     if (sendConnection == connectionGeneration) {
                         showStatus(if (saved) {
@@ -8008,7 +8319,7 @@ class MainActivity : Activity() {
                     listOf("model", "effort", "claudeModel", "claudeEffort", "approvalPolicy", "claudePermissionMode").forEach { key ->
                         queueEditPreferences[key] = item.optString(key).takeIf { it.isNotBlank() }
                     }
-                    composerInput.setText(item.optString("text"))
+                    composerInput.setText(item.optString("originalText").ifBlank { item.optString("text") })
                     composerInput.setSelection(composerInput.text.length)
                     selectedFiles.clear()
                     item.optJSONArray("images")?.let { images ->
@@ -8043,7 +8354,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun finishQueueEdit(save: Boolean) {
+    private fun finishQueueEdit(save: Boolean, translatedText: String? = null) {
         val item = queueEditItem ?: return
         val threadId = queueEditThreadId ?: return
         val ownerId = queueEditOwnerId ?: return
@@ -8053,11 +8364,14 @@ class MainActivity : Activity() {
             showStatus("消息内容和附件不能同时为空")
             return
         }
+        if (save && translatedText == null && translateDraftBeforeSubmit(text) { finishQueueEdit(true, it) }) return
         val updated = if (save) {
-            val payload = queuedPayload(text, item.optString("id"))
+            val outgoingText = translatedText ?: text
+            val payload = queuedPayload(outgoingText, item.optString("id"))
             shallowCopyObject(item).apply {
-                put("text", text)
+                put("text", outgoingText)
                 put("requestText", payload.optString("requestText"))
+                if (outgoingText != text) put("originalText", text) else remove("originalText")
                 put("images", payload.optJSONArray("images"))
                 put("documents", payload.optJSONArray("documents"))
                 listOf("model", "effort", "claudeModel", "claudeEffort", "approvalPolicy", "claudePermissionMode").forEach { key ->
@@ -8885,6 +9199,10 @@ class MainActivity : Activity() {
             languageSection.addView(row, LinearLayout.LayoutParams(MATCH, dp(42)).apply { topMargin = dp(5) })
         }
 
+        translationSettingsBody = section("聊天翻译")
+        renderTranslationSettings()
+        refreshTranslationConfiguration()
+
         val notifications = section("系统通知", "应用在后台时提醒回复完成；通知不包含聊天正文。")
         val notificationRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -8996,6 +9314,404 @@ class MainActivity : Activity() {
         settingsOverlay = null
         settingsScroll = null
         settingsNotificationButton = null
+        translationSettingsBody = null
+        if (translationDisplayDirty && activeThreadId != null) renderMessages(false)
+        translationDisplayDirty = false
+        if (showTranslatedMessages()) handler.post(assistantTranslationScan)
+    }
+
+    private fun markTranslationDisplayDirty() {
+        if (settingsOverlay != null) translationDisplayDirty = true
+        else if (::messageList.isInitialized) renderMessages(false)
+    }
+
+    private fun translationEnabled(): Boolean = prefs.getBoolean(connectionScopedKey(KEY_TRANSLATION_ENABLED), false)
+
+    private fun showTranslatedMessages(): Boolean = translationEnabled() &&
+        prefs.getBoolean(connectionScopedKey(KEY_TRANSLATION_SHOW_TRANSLATED), false)
+
+    private fun translationProvider(): String {
+        prefs.getString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), null)
+            ?.takeIf { it in TRANSLATION_PROVIDERS }?.let { return it }
+        val providers = translationConfiguration?.takeIf { translationConfigurationEndpoint == endpoint }
+            ?.optJSONObject("providers")
+        TRANSLATION_PROVIDERS.firstOrNull { provider ->
+            val profiles = providers?.optJSONObject(provider)?.optJSONArray("profiles") ?: return@firstOrNull false
+            (0 until profiles.length()).any { profiles.optJSONObject(it)?.let { profile ->
+                profile.optBoolean("configured") && profile.optString("model").isNotBlank()
+            } == true }
+        }?.let { return it }
+        return TRANSLATION_PROVIDERS.firstOrNull { provider ->
+            val profiles = providers?.optJSONObject(provider)?.optJSONArray("profiles") ?: return@firstOrNull false
+            (0 until profiles.length()).any { profiles.optJSONObject(it)?.optBoolean("configured") == true }
+        } ?: "microsoft"
+    }
+
+    private fun translationProfileId(provider: String = translationProvider()): String? =
+        prefs.getString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX$provider"), null)?.takeIf { it.isNotBlank() }
+            ?: translationProfiles(provider)?.let { profiles ->
+                (0 until profiles.length()).mapNotNull(profiles::optJSONObject)
+                    .firstOrNull { it.optBoolean("configured") && it.optString("model").isNotBlank() }
+                    ?.optString("id")?.takeIf(String::isNotBlank)
+            }
+
+    private fun translationStyle(): String =
+        if (prefs.getString(connectionScopedKey(KEY_TRANSLATION_STYLE), "natural") == "formal") "formal" else "natural"
+
+    private fun translationProviderName(provider: String): String = when (provider) {
+        "google" -> "Google Translate"
+        "microsoft" -> "Microsoft Translator"
+        "deepl" -> "DeepL"
+        "codex" -> "Codex"
+        "claude" -> "Claude Code"
+        "chat" -> "Chat Completions"
+        "anthropic" -> "Anthropic"
+        "responses" -> "OpenAI Responses"
+        else -> provider
+    }
+
+    private fun translationProfiles(provider: String): JSONArray? =
+        translationConfiguration?.takeIf { translationConfigurationEndpoint == endpoint }
+            ?.optJSONObject("providers")?.optJSONObject(provider)?.optJSONArray("profiles")
+
+    private fun selectedTranslationProfile(provider: String): JSONObject? {
+        val profiles = translationProfiles(provider) ?: return null
+        val selectedId = translationProfileId(provider)
+        for (index in 0 until profiles.length()) {
+            val profile = profiles.optJSONObject(index) ?: continue
+            if (profile.optString("id") == (selectedId ?: "$provider-default")) return profile
+        }
+        return if (selectedId == null) profiles.optJSONObject(0) else null
+    }
+
+    private fun configuredTranslationChoices(): List<TranslationProfileChoice> {
+        val providers = translationConfiguration?.takeIf { translationConfigurationEndpoint == endpoint }
+            ?.optJSONObject("providers") ?: return emptyList()
+        return TRANSLATION_PROVIDERS.flatMap { provider ->
+            val profiles = providers.optJSONObject(provider)?.optJSONArray("profiles") ?: return@flatMap emptyList()
+            (0 until profiles.length()).mapNotNull { index ->
+                profiles.optJSONObject(index)?.takeIf { it.optBoolean("configured") }?.let { profile ->
+                    TranslationProfileChoice(provider, profile.optString("id"),
+                        profile.optString("name").ifBlank { profile.optString("id") }, profile.optString("model"))
+                }
+            }
+        }.sortedWith(compareByDescending<TranslationProfileChoice> { it.model.isNotBlank() }
+            .thenBy { TRANSLATION_PROVIDERS.indexOf(it.provider) })
+    }
+
+    private fun translationChoiceLabel(choice: TranslationProfileChoice): String =
+        "${translationProviderName(choice.provider)} · ${choice.name}" +
+            choice.model.takeIf { it.isNotBlank() && it != choice.name }?.let { " · $it" }.orEmpty()
+
+    private fun renderTranslationSettings() {
+        val body = translationSettingsBody ?: return
+        body.removeAllViews()
+        body.addView(label("翻译配置来自当前电脑，手机可单独选择模型。", 11, MUTED).apply {
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(dp(2), dp(2), dp(2), dp(8))
+        }, widthWrap())
+        val sourceName = connectionProfiles.firstOrNull { it.id == activeConnectionId }?.name
+            ?.takeIf { it.isNotBlank() } ?: connectionName(endpoint).ifBlank { tr("当前电脑") }
+        val sourceStatus = translationConfigurationStatus?.takeUnless { translationConfigurationError }
+        val sourceText = "${tr("配置来源")}：$sourceName" + sourceStatus?.let { " · ${tr(it)}" }.orEmpty()
+        body.addView(label(sourceText, 10, SUBTLE, translateUi = false).apply {
+            setLineSpacing(dp(2).toFloat(), 1f)
+            setPadding(dp(2), 0, dp(2), dp(4))
+        }, widthWrap())
+        if (translationConfigurationError) {
+            translationConfigurationStatus?.let { status ->
+                body.addView(label(status, 11, WARNING).apply {
+                    setLineSpacing(dp(2).toFloat(), 1f)
+                    setPadding(dp(2), dp(4), dp(2), dp(4))
+                }, widthWrap())
+            }
+        }
+        fun addTranslationRow(row: View, startsGroup: Boolean = false) {
+            row.minimumHeight = dp(52)
+            body.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply {
+                topMargin = dp(if (startsGroup) 12 else 4)
+            })
+        }
+        addTranslationRow(settingsActionRow("启用聊天翻译", if (translationEnabled()) "已开启" else "已关闭") {
+            prefs.edit().putBoolean(connectionScopedKey(KEY_TRANSLATION_ENABLED), !translationEnabled()).apply()
+            renderTranslationSettings()
+            scheduleTranslationPreview()
+            markTranslationDisplayDirty()
+        })
+        addTranslationRow(settingsActionRow("优先显示译文", if (showTranslatedMessages()) "已开启" else "已关闭") {
+            prefs.edit().putBoolean(connectionScopedKey(KEY_TRANSLATION_SHOW_TRANSLATED), !showTranslatedMessages()).apply()
+            renderTranslationSettings()
+            markTranslationDisplayDirty()
+        }.apply { isEnabled = translationEnabled(); alpha = if (translationEnabled()) 1f else .55f })
+        val styleRow = settingsActionRow("英文表达", if (translationStyle() == "formal") "正式" else "自然") {}
+        styleRow.setOnClickListener {
+            showChoicePopup(styleRow, "英文表达", listOf("natural" to tr("自然"), "formal" to tr("正式")), translationStyle()) { value ->
+                prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_STYLE), value).apply()
+                renderTranslationSettings()
+                scheduleTranslationPreview()
+                markTranslationDisplayDirty()
+            }
+        }
+        addTranslationRow(styleRow)
+        val provider = translationProvider()
+        val providerRow = settingsActionRow("翻译引擎", translationProviderName(provider)) {}
+        providerRow.setOnClickListener {
+            val choices = TRANSLATION_PROVIDERS.map { candidate ->
+                val available = configuredTranslationChoices().firstOrNull { it.provider == candidate }
+                candidate to "${translationProviderName(candidate)}${if (available == null) " · ${tr("待配置")}" else
+                    available.model.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}"
+            }
+            showChoicePopup(providerRow, "翻译引擎", choices, provider) { value ->
+                prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), value).apply()
+                renderTranslationSettings()
+                scheduleTranslationPreview()
+                markTranslationDisplayDirty()
+            }
+        }
+        addTranslationRow(providerRow, startsGroup = true)
+        val selectedProfile = selectedTranslationProfile(provider)
+        val profileLabel = selectedProfile?.optString("name")?.takeIf { it.isNotBlank() }
+            ?: if (translationConfigurationEndpoint == endpoint && translationProfileId(provider) != null) "配置已删除" else "正在读取配置…"
+        val profileRow = settingsActionRow("使用的配置", "${translationProviderName(provider)} · $profileLabel${if (selectedProfile?.optBoolean("configured") == false) " · ${tr("待配置")}" else ""}") {}
+        profileRow.setOnClickListener {
+            val choices = configuredTranslationChoices()
+            if (choices.isEmpty()) {
+                translationConfigurationStatus = "当前电脑没有可用的翻译配置。"
+                translationConfigurationError = true
+                renderTranslationSettings()
+                return@setOnClickListener
+            }
+            showChoicePopup(profileRow, "使用的配置", choices.map { it.key to translationChoiceLabel(it) },
+                "$provider\u0000${selectedProfile?.optString("id").orEmpty()}") { value ->
+                val choice = choices.firstOrNull { it.key == value } ?: return@showChoicePopup
+                prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), choice.provider)
+                    .putString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX${choice.provider}"), choice.id).apply()
+                renderTranslationSettings()
+                scheduleTranslationPreview()
+                markTranslationDisplayDirty()
+            }
+        }
+        addTranslationRow(profileRow)
+        addTranslationRow(settingsActionRow("刷新翻译配置", "从当前电脑读取网页版已保存的模型配置") {
+            refreshTranslationConfiguration()
+        })
+    }
+
+    private fun refreshTranslationConfiguration() {
+        if (endpoint.isBlank() || token.isBlank()) return
+        translationConfigurationStatus = "正在读取配置…"
+        translationConfigurationError = false
+        renderTranslationSettings()
+        val requestEndpoint = endpoint
+        val requestToken = token
+        val connection = connectionGeneration
+        val requestGeneration = ++translationRefreshGeneration
+        runApi({ RemoteApi(requestEndpoint, requestToken).get("/api/v1/codex/translation/config") }, { response ->
+            if (connection != connectionGeneration || endpoint != requestEndpoint || requestGeneration != translationRefreshGeneration) return@runApi
+            translationConfiguration = response
+            translationConfigurationEndpoint = requestEndpoint
+            if (prefs.getString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), null) == null) {
+                configuredTranslationChoices().firstOrNull()?.let { choice ->
+                    prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), choice.provider)
+                        .putString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX${choice.provider}"), choice.id).apply()
+                }
+            }
+            translationConfigurationStatus = if (configuredTranslationChoices().isEmpty())
+                "当前电脑没有可用的翻译配置。" else "配置已更新"
+            translationConfigurationError = configuredTranslationChoices().isEmpty()
+            translationRevision++
+            translationPreviewKey = ""
+            translationPreviewValue = null
+            assistantTranslationCache.clear()
+            assistantTranslationErrors.clear()
+            assistantTranslationPending.clear()
+            renderTranslationSettings()
+            scheduleTranslationPreview()
+            markTranslationDisplayDirty()
+        }, { error ->
+            if (connection == connectionGeneration && requestGeneration == translationRefreshGeneration) {
+                translationConfigurationStatus = error.message ?: "无法读取翻译配置"
+                translationConfigurationError = true
+                renderTranslationSettings()
+            }
+        })
+    }
+
+    private fun translationSpec(text: String, source: String, target: String): TranslationRequestSpec =
+        TranslationRequestSpec(endpoint, token, translationProvider(), translationProfileId(), translationStyle(), source, target, text)
+
+    private fun translationKey(spec: TranslationRequestSpec): String =
+        listOf(translationRevision.toString(), spec.endpoint, spec.provider, spec.profileId.orEmpty(), spec.style,
+            spec.source, spec.target, spec.text).joinToString("\u0000")
+
+    private fun translateText(spec: TranslationRequestSpec): String {
+        val body = JSONObject().put("provider", spec.provider).putOpt("profileId", spec.profileId)
+            .put("source", spec.source).put("target", spec.target).put("style", spec.style).put("text", spec.text)
+        return RemoteApi(spec.endpoint, spec.token).translate(body).optString("text").trim()
+            .ifBlank { throw IOException("翻译结果为空，请重试。") }
+    }
+
+    private fun containsChinese(text: String): Boolean = text.any { it in '\u3400'..'\u9fff' }
+
+    private fun containsEnglish(text: String): Boolean = text.any { it in 'A'..'Z' || it in 'a'..'z' }
+
+    private fun scheduleTranslationPreview() {
+        translationPreviewRunnable?.let(handler::removeCallbacks)
+        translationPreviewRunnable = null
+        val preview = translationPreviewView ?: return
+        if (!::composerInput.isInitialized) return
+        val previewHeading = tr("英文发送预览")
+        val source = composerInput.text.toString().trim()
+        if (!translationEnabled() || source.isBlank() || !containsChinese(source)) {
+            translationPreviewKey = ""
+            translationPreviewValue = null
+            preview.visibility = View.GONE
+            return
+        }
+        preview.visibility = View.VISIBLE
+        if (source.length > 30_000) {
+            translationPreviewKey = ""
+            translationPreviewValue = null
+            preview.text = "$previewHeading\n${tr("内容超过 30000 字符，无法翻译。")}"
+            return
+        }
+        val spec = translationSpec(source, "zh", "en")
+        val key = translationKey(spec)
+        if (translationPreviewKey == key && translationPreviewValue != null) {
+            preview.text = "$previewHeading\n$translationPreviewValue"
+            return
+        }
+        translationPreviewKey = key
+        translationPreviewValue = null
+        preview.text = "$previewHeading\n${tr("正在翻译最新内容…")}"
+        val connection = connectionGeneration
+        val task = Runnable {
+            translationIo.execute {
+                val result = runCatching { translateText(spec) }
+                handler.post {
+                    if (isFinishing || isDestroyed || connection != connectionGeneration ||
+                        translationPreviewKey != key || !::composerInput.isInitialized ||
+                        translationPreviewView !== preview ||
+                        composerInput.text.toString().trim() != source) return@post
+                    result.onSuccess {
+                        translationPreviewValue = it
+                        preview.text = "$previewHeading\n$it"
+                    }.onFailure {
+                        preview.text = "$previewHeading\n${it.message ?: tr("翻译失败。")}"
+                    }
+                }
+            }
+        }
+        translationPreviewRunnable = task
+        handler.postDelayed(task, 650L)
+    }
+
+    private fun translateDraftBeforeSubmit(original: String, onReady: (String) -> Unit): Boolean {
+        if (!translationEnabled() || !containsChinese(original)) return false
+        if (original.length > 30_000) {
+            showStatus("内容超过 30000 字符，无法翻译。")
+            return true
+        }
+        val spec = translationSpec(original, "zh", "en")
+        val selected = selectedTranslationProfile(spec.provider)
+        if (translationConfigurationEndpoint == endpoint && (selected == null || !selected.optBoolean("configured"))) {
+            showStatus(if (selected == null) "所选翻译配置已不存在，请在设置页重新选择。" else "所选翻译配置尚未配置，请在网页版设置。")
+            return true
+        }
+        val scope = draftStorageKey()
+        val files = selectedFiles.toList()
+        val connection = connectionGeneration
+        val cached = translationPreviewValue?.takeIf { translationPreviewKey == translationKey(spec) }
+        val sendGeneration = ++translationSendGeneration
+        translationSendPending = true
+        setSendBusy(true)
+        translationSendIo.execute {
+            val result = runCatching { cached ?: translateText(spec) }
+            handler.post {
+                if (isFinishing || isDestroyed || sendGeneration != translationSendGeneration) return@post
+                translationSendPending = false
+                setSendBusy(false)
+                if (connection != connectionGeneration || draftStorageKey() != scope || selectedFiles != files ||
+                    !::composerInput.isInitialized || composerInput.text.toString().trim() != original) {
+                    if (connection == connectionGeneration) showStatus("翻译时输入内容发生变化，请重新发送最新内容。")
+                    return@post
+                }
+                if (!translationEnabled() || translationKey(spec) != translationKey(translationSpec(original, "zh", "en"))) {
+                    showStatus("翻译设置已变化，请重新发送最新内容。")
+                    return@post
+                }
+                result.onSuccess(onReady).onFailure { showStatus(it.message ?: "翻译失败，消息没有发送。") }
+            }
+        }
+        return true
+    }
+
+    private fun latestUserMessageMarker(thread: JSONObject?): String {
+        val turns = thread?.optJSONArray("turns") ?: return ""
+        for (turnIndex in turns.length() - 1 downTo 0) {
+            val turn = turns.optJSONObject(turnIndex) ?: continue
+            val items = turn.optJSONArray("items") ?: continue
+            for (itemIndex in items.length() - 1 downTo 0) {
+                val item = items.optJSONObject(itemIndex) ?: continue
+                if (normalizedType(item.optString("type")) == "usermessage") {
+                    val text = messageText(item, "user")
+                    return "${turn.optString("id")}:${item.optString("id")}:${text.length}:${text.hashCode()}"
+                }
+            }
+        }
+        return "empty"
+    }
+
+    private fun requestTranslatedInputMetadata(force: Boolean = false, retryOnce: Boolean = false) {
+        val threadId = activeThreadId ?: return
+        val marker = latestUserMessageMarker(activeThread)
+        if (!force && translatedInputThreadId == threadId && translatedInputMarker == marker) return
+        if (translatedInputFetchInFlight) {
+            handler.postDelayed({ if (activeThreadId == threadId) requestTranslatedInputMetadata(force, retryOnce) }, 900L)
+            return
+        }
+        translatedInputFetchInFlight = true
+        val connection = connectionGeneration
+        val requestEndpoint = endpoint
+        val requestToken = token
+        io.execute {
+            val result = runCatching {
+                RemoteApi(requestEndpoint, requestToken)
+                    .get("/api/v1/codex/threads/${RemoteApi.encodePath(threadId)}/translated-inputs")
+                    .optJSONArray("messages") ?: JSONArray()
+            }
+            handler.post {
+                translatedInputFetchInFlight = false
+                if (connection != connectionGeneration || activeThreadId != threadId) return@post
+                result.onSuccess { entries ->
+                    val changed = translatedInputThreadId != threadId || translatedInputEntries.toString() != entries.toString()
+                    translatedInputThreadId = threadId
+                    translatedInputEntries = entries
+                    translatedInputMarker = marker
+                    if (changed) renderMessages(false)
+                }.onFailure {
+                    translatedInputThreadId = threadId
+                    translatedInputMarker = marker
+                }
+                if (retryOnce) handler.postDelayed({
+                    if (activeThreadId == threadId) requestTranslatedInputMetadata(force = true)
+                }, 900L)
+            }
+        }
+    }
+
+    private fun originalUserMessageText(item: JSONObject, sent: String, usedRequestIds: MutableSet<String>, directMessageIds: Set<String>,
+                                        byRequestId: Map<String, JSONObject>, byTurnAndText: Map<String, List<JSONObject>>): String? {
+        item.optString("originalText").takeIf { it.isNotBlank() && it != sent }?.let { return it }
+        if (translatedInputThreadId != activeThreadId) return null
+        val requestId = item.optString("id")
+        val turnId = item.optString("_turnId")
+        val visibleSent = if (sent.contains("[附件文档：")) parseUserMessageText(sent).visibleText else sent.trim()
+        val matched = byRequestId[requestId] ?: byTurnAndText["$turnId\u0000$visibleSent"]
+            ?.firstOrNull { it.optString("requestId") !in usedRequestIds && it.optString("requestId") !in directMessageIds }
+        val original = matched?.optString("originalText")?.takeIf { it.isNotBlank() && it != sent }
+        if (original != null) usedRequestIds += matched.optString("requestId")
+        return original
     }
 
     private fun checkForUpdates() {
@@ -10140,7 +10856,14 @@ class MainActivity : Activity() {
         deferredMessageScrollToEnd = false
         deferredMessageRequiresFullRender = false
         deferredMessageTurnIds.clear()
-        handler.post { renderMessages(scrollToEnd, incrementalTurnId) }
+        val connection = connectionGeneration
+        val threadId = activeThreadId
+        val scroll = messageScroll
+        handler.post {
+            if (connection == connectionGeneration && threadId == activeThreadId && scroll === messageScroll) {
+                renderMessages(scrollToEnd, incrementalTurnId)
+            }
+        }
     }
 
     private fun handleWorkspaceBack(): Boolean {
@@ -12169,6 +12892,27 @@ class MainActivity : Activity() {
         return pieces.joinToString("").ifBlank { item.optString("text") }
     }
 
+    private fun assistantMetadataField(item: JSONObject, turn: JSONObject, vararg keys: String): String? =
+        (firstJsonValue(item, *keys) ?: firstJsonValue(turn, *keys))?.toString()
+            ?.takeIf { it.isNotBlank() && it != "null" }
+
+    private fun assistantModelDisplay(value: String): String = when {
+        value == "default" -> tr("本机默认模型")
+        currentMode == "claude-code" -> claudeModelLabel(value)
+        else -> modelLabel(value)
+    }
+
+    private fun assistantEffortDisplay(value: String): String = tr(when (value) {
+        "minimal" -> "最小"
+        "low" -> "低"
+        "medium" -> "中"
+        "high" -> "高"
+        "xhigh" -> "极高"
+        "max" -> "最大"
+        "default" -> if (currentMode == "claude-code") "本机默认" else "默认"
+        else -> value
+    })
+
     private fun messageTime(item: JSONObject, turn: JSONObject, assistant: Boolean): String {
         val itemValue = firstJsonValue(
             item,
@@ -12721,6 +13465,7 @@ class MainActivity : Activity() {
         "主题" -> "palette"
         "显示" -> "display"
         "语言" -> "language"
+        "聊天翻译" -> "language"
         "系统通知" -> "notifications"
         "连接" -> "link"
         "本机配对" -> "lock"
@@ -13077,8 +13822,14 @@ class MainActivity : Activity() {
 
     companion object {
         private const val PREFS = "codex_remote_mobile"
+        private val TRANSLATION_PROVIDERS = listOf("codex", "claude", "responses", "chat", "anthropic", "deepl", "microsoft", "google")
         private const val KEY_ENDPOINT = "endpoint"
         private const val KEY_TOKEN = "token"
+        private const val KEY_TRANSLATION_ENABLED = "native_translation_enabled"
+        private const val KEY_TRANSLATION_SHOW_TRANSLATED = "native_translation_show_translated"
+        private const val KEY_TRANSLATION_PROVIDER = "native_translation_provider"
+        private const val KEY_TRANSLATION_PROFILE_PREFIX = "native_translation_profile_"
+        private const val KEY_TRANSLATION_STYLE = "native_translation_style"
         private const val KEY_UPDATE_DOWNLOAD_ID = "local_android_update_download_id"
         private const val KEY_UPDATE_DOWNLOAD_VERSION = "local_android_update_download_version"
         private const val KEY_UPDATE_DOWNLOAD_SHA256 = "local_android_update_download_sha256"

@@ -43,7 +43,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-root--theme-custom .remote-shell { background: transparent; }
 .app-root--theme-custom .pair-page { background: transparent; color: var(--custom-theme-text-color); }
 .app-root--theme-custom .pair-card { border-color: var(--custom-theme-border); background: var(--custom-theme-surface); color: var(--custom-theme-text-color); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
-.app-root--theme-custom .pair-card__mark { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .app-root--theme-custom .pair-eyebrow, .app-root--theme-custom .pair-description, .app-root--theme-custom .pair-card label, .app-root--theme-custom .pair-security, .app-root--theme-custom .pair-security svg { color: color-mix(in srgb, var(--custom-theme-text-color) 76%, transparent); }
 .app-root--theme-custom .pair-card h1 { color: var(--custom-theme-text-color); }
 .app-root--theme-custom .pair-input-wrap { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
@@ -72,7 +71,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-sidebar__mode:hover { color: inherit; }
 .remote-shell--sidebar-collapsed .remote-sidebar__mode span { display: none; }
 .remote-brand { display: flex; min-width: 0; flex: 1 1 auto; align-items: center; gap: 8px; color: #f0f1f4; letter-spacing: calc(-.02em + var(--user-letter-spacing-delta, 0em)); }
-.remote-brand__mark, .pair-card__mark { display: grid; place-items: center; border: 1px solid #41444c; background: linear-gradient(145deg, #30333a, #191b20); color: #f6f7f9; font-weight: 700; }
+.remote-brand__mark { display: grid; place-items: center; border: 1px solid #41444c; background: linear-gradient(145deg, #30333a, #191b20); color: #f6f7f9; font-weight: 700; }
 .remote-brand__mark { width: 27px; height: 27px; border-radius: 9px; box-shadow: 0 0 0 3px rgba(170, 186, 255, .05); font-size: calc(15px + var(--mobile-font-offset)); }
 .remote-brand__logo { display: block; width: 27px; height: 27px; flex: 0 0 27px; object-fit: contain; }
 .remote-brand__copy { display: grid; gap: 2px; min-width: 0; overflow: hidden; }
@@ -589,6 +588,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-filter-status { color: #8991a0; font-size: calc(10px + var(--mobile-font-offset)); }
 .cpa-usage-filter-status--error { color: #e59a9b; }
 .cpa-usage-range-tabs { display: inline-flex; flex: 0 0 auto; gap: 3px; padding: 3px; border: 1px solid rgba(146, 157, 184, .17); border-radius: 10px; background: rgba(10, 11, 14, .34); }
+.cpa-usage-source-tabs { justify-self: start; flex-wrap: wrap; max-width: 100%; }
+.cpa-usage-panel__sources { margin-bottom: 16px; }
 .cpa-usage-range-tabs button { min-height: 30px; padding: 0 11px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #929aaa; cursor: pointer; font: inherit; }
 .cpa-usage-range-tabs button:hover { color: #e8ebf3; }
 .cpa-usage-range-tabs button.cpa-usage-range-tabs__active { border-color: rgba(170, 186, 255, .18); background: rgba(115, 132, 187, .2); color: #e2e7ff; }
@@ -609,6 +610,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .cpa-usage-timeline__bar { display: block; width: min(72%, 22px); min-height: 0; border-radius: 4px 4px 1px 1px; background: linear-gradient(180deg, #9aafff, #6578c4); }
 .cpa-usage-timeline__item small { overflow: hidden; color: #7d8594; font-size: 9px; line-height: 1.25; text-align: center; text-overflow: ellipsis; }
 .cpa-usage-breakdown-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 16px; }
+.cpa-usage-breakdown-grid--single { grid-template-columns: minmax(0, 1fr); }
 .cpa-usage-table-wrap { width: 100%; overflow-x: auto; }
 .cpa-usage-table { width: 100%; border-collapse: collapse; font-size: calc(11px + var(--mobile-font-offset)); text-align: left; }
 .cpa-usage-table th, .cpa-usage-table td { padding: 11px 15px; border-bottom: 1px solid rgba(146, 157, 184, .12); }
@@ -1181,7 +1183,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 
 .pair-page { display: flex; width: 100%; height: 100vh; height: 100dvh; align-items: center; justify-content: center; overflow-y: auto; padding: max(20px, env(safe-area-inset-top), var(--native-status-bar-inset)) 20px max(20px, env(safe-area-inset-bottom)) 20px; background: radial-gradient(ellipse at 50% 25%, rgba(87, 94, 112, .16), transparent 42%), #101114; }
 .pair-card { width: min(100%, 390px); flex: 0 0 auto; margin-block: auto; padding: 30px; border: 1px solid #30323a; border-radius: 15px; background: #17191e; box-shadow: 0 25px 90px rgba(0, 0, 0, .3); }
-.pair-card__mark { width: 40px; height: 40px; margin-bottom: 22px; border-radius: 13px; font-size: calc(23px + var(--mobile-font-offset)); }
+.pair-card__logo { display: block; width: 72px; height: 72px; margin: 0 auto 22px; object-fit: contain; }
 .pair-eyebrow { margin: 0 0 7px; color: #8e96a2; font-size: calc(11px + var(--mobile-font-offset)); font-weight: 650; letter-spacing: calc(.12em + var(--user-letter-spacing-delta, 0em)); }
 .pair-card h1 { margin: 0; color: #eff0f3; font-size: calc(23px + var(--mobile-font-offset)); font-weight: 620; letter-spacing: calc(-.035em + var(--user-letter-spacing-delta, 0em)); }
 .pair-description { margin: 9px 0 23px; color: #979da7; font-size: calc(13px + var(--mobile-font-offset)); line-height: 1.65; }
@@ -2228,7 +2230,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-root--theme-retro { background: #e8edf2; color: #20252b; font-family: Arial, Helvetica, sans-serif; }
 .app-root--theme-retro .pair-page { background: #e8edf2; color: #20252b; }
 .app-root--theme-retro .pair-card { border: 1px solid #879bad; border-radius: 2px; background: #fff; color: #20252b; box-shadow: none; }
-.app-root--theme-retro .pair-card__mark { border: 1px solid #879bad; border-radius: 2px; background: #e5edf5; color: #204d75; }
 .app-root--theme-retro .pair-card h1 { color: #20252b; letter-spacing: var(--user-letter-spacing-delta, 0em); }
 .app-root--theme-retro .pair-eyebrow, .app-root--theme-retro .pair-description, .app-root--theme-retro .pair-card label, .app-root--theme-retro .pair-security { color: #526271; }
 .app-root--theme-retro .pair-input-wrap { border: 1px solid #879bad; border-radius: 2px; background: #fff; color: #20252b; box-shadow: none; }
@@ -3339,7 +3340,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   color: var(--pixel-text);
   box-shadow: none;
 }
-.app-root--theme-pixel .pair-card__mark { border: 2px solid var(--pixel-border); border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-cream); }
 .app-root--theme-pixel .pair-card h1 { color: var(--pixel-text); font-family: inherit; }
 .app-root--theme-pixel :is(.pair-eyebrow, .pair-description, .pair-card label, .pair-security) { color: var(--pixel-secondary); }
 .app-root--theme-pixel .pair-input-wrap { border: 8px solid transparent; border-image: url('/pixel-theme/frames/square-window.png') 52 54 52 54 / 8px / 0 stretch; border-radius: 0; background: var(--pixel-panel-inset); color: var(--pixel-text); box-shadow: none; }
@@ -3710,7 +3710,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 }
 .app-root--theme-chinese-retro > .pair-page { background: #d6e4e7; color: #263c3a; }
 .app-root--theme-chinese-retro .pair-card { border: 1px solid #81b8c3; border-radius: 5px; background: #eaf5f7; color: #263c3a; box-shadow: 0 14px 38px rgba(45, 56, 42, .14); }
-.app-root--theme-chinese-retro .pair-card__mark { border-color: #65a6b3; border-radius: 4px; background: linear-gradient(145deg, #15464e, #103b43); color: #e1f2f5; }
 .app-root--theme-chinese-retro .pair-card h1 { color: #243b39; letter-spacing: var(--user-letter-spacing-delta, 0em); }
 .app-root--theme-chinese-retro :is(.pair-eyebrow, .pair-description, .pair-card label, .pair-security, .pair-security svg) { color: #65766d; }
 .app-root--theme-chinese-retro .pair-input-wrap { border-color: #81b8c3; border-radius: 4px; background: #f5fdff; color: #263c3a; }

@@ -91,7 +91,7 @@ import { PastedTablePreview } from './PastedTablePreview'
 import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
-import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, selectedTranslationProfileId, type TranslationPreferences } from '../lib/translationPreferences'
+import { containsChinese, containsEnglish, readTranslationPreferences, readTranslationPreferencesIfAvailable, saveTranslationPreferences, selectedTranslationProfileId, translationPreferencesStorageKey, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 
@@ -1287,7 +1287,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   createThreadTitle,
 }, ref) {
   const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
-  const translationProfileId = selectedTranslationProfileId(translation)
+  const activeTranslation = readTranslationPreferencesIfAvailable() ?? translation
+  const translationProfileId = selectedTranslationProfileId(activeTranslation)
   const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [translationPreview, setTranslationPreview] = useState<{ key: string; text?: string; error?: string; loading: boolean } | null>(null)
@@ -1574,8 +1575,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     const source = draft.trim()
-    const key = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${source}`
-    if (!translation.enabled || !containsChinese(source)) {
+    const key = `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${source}`
+    if (!activeTranslation.enabled || !containsChinese(source)) {
       setTranslationPreview(null)
       return
     }
@@ -1586,14 +1587,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const controller = new AbortController()
     setTranslationPreview({ key, loading: true })
     const timer = window.setTimeout(() => {
-      void codexRemoteClient.translateText(token, { provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: source }, controller.signal)
+      void codexRemoteClient.translateText(token, { provider: activeTranslation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: activeTranslation.style, text: source }, controller.signal)
         .then((result) => { if (!controller.signal.aborted) setTranslationPreview({ key, text: result.text, loading: false }) })
         .catch((reason: unknown) => {
           if (!controller.signal.aborted) setTranslationPreview({ key, error: reason instanceof Error ? reason.message : '翻译失败。', loading: false })
         })
     }, 700)
     return () => { window.clearTimeout(timer); controller.abort() }
-  }, [draft, token, translation.enabled, translation.provider, translationProfileId, translation.style, translationRevision])
+  }, [draft, token, activeTranslation.enabled, activeTranslation.provider, translationProfileId, activeTranslation.style, translationRevision])
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
@@ -2072,15 +2073,17 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     let outgoingPrompt = prompt
-    if (translation.enabled && containsChinese(prompt)) {
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    if (translationForSend.enabled && containsChinese(prompt)) {
       sendingRef.current = true
       setSending(true)
       try {
-        const previewKey = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${prompt}`
+        const activeProfileId = selectedTranslationProfileId(translationForSend)
+        const previewKey = `${translationRevision}:${translationForSend.provider}:${activeProfileId ?? 'default'}:${translationForSend.style}:${prompt}`
         outgoingPrompt = (translationPreview?.key === previewKey && translationPreview.text
           ? translationPreview.text
           : (await codexRemoteClient.translateText(token, {
-            provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
+            provider: translationForSend.provider, profileId: activeProfileId, source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
           })).text).trim()
         if (!outgoingPrompt) throw new Error('翻译结果为空，消息没有发送。')
       } catch (reason) {
@@ -2264,9 +2267,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setSending(true)
     try {
       let outgoingPrompt = prompt
-      if (translation.enabled && containsChinese(prompt)) {
+      const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+      if (translationForSend.enabled && containsChinese(prompt)) {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
         })
         if (draftRef.current.trim() !== prompt) throw new Error('翻译时输入内容发生变化，请重新确认最新内容。')
         outgoingPrompt = result.text.trim()
@@ -2609,7 +2613,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                 message.images.length > 0 ? `${message.images.length} 张图片` : '',
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
               ].filter(Boolean).join(' · ')
-              const summary = [translation.enabled && translation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const summary = [activeTranslation.enabled && activeTranslation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
               const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
               const queueStatus = isSubmitting ? '正在确认送达'
                 : isEditing ? '正在输入框中编辑'
@@ -2639,11 +2643,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </div>
         </div>
       ) : null}
-      {translation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
+      {activeTranslation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
         <strong>英文发送预览</strong>
-        {translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.text
+        {translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.text
           ? <p>{translationPreview.text}</p>
-          : translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.error
+          : translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.error
             ? <p className="composer-translation-preview__error">{translationPreview.error}</p>
             : <p>正在翻译最新内容…</p>}
       </div> : null}
@@ -4161,7 +4165,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
   copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
-  const translationProfileId = selectedTranslationProfileId(translation)
   const activeThreadId = remote.activeThread?.id ?? null
   const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
   const latestUserMarker = useMemo(() => {
@@ -4256,10 +4259,11 @@ const RemoteChatPane = memo(function RemoteChatPane({
     const target = choiceReplyTarget.current
     if (!active || !target.activeThread) return false
     let prompt = reply
-    if (translation.enabled && containsChinese(reply)) {
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    if (translationForSend.enabled && containsChinese(reply)) {
       try {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: reply,
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: reply,
         })
         prompt = result.text.trim()
         if (!prompt) return false
@@ -4277,7 +4281,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
       onDeliveryStatus: (status) => { delivery = status },
     })
     return accepted ? delivery : false
-  }, [active, token, translation.enabled, translation.provider, translationProfileId, translation.style])
+  }, [active, token, translation])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -4979,7 +4983,33 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [translationPreferences, setTranslationPreferences] = useState<TranslationPreferences>(readTranslationPreferences)
   const [translationRevision, setTranslationRevision] = useState(0)
-  useEffect(() => saveTranslationPreferences(translationPreferences), [translationPreferences])
+  const updateTranslationPreferences = useCallback((next: TranslationPreferences) => {
+    saveTranslationPreferences(next)
+    setTranslationPreferences(next)
+  }, [])
+  useEffect(() => {
+    const syncTranslationPreferences = () => {
+      const stored = readTranslationPreferencesIfAvailable()
+      if (!stored) return
+      setTranslationPreferences((current) => JSON.stringify(current) === JSON.stringify(stored) ? current : stored)
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === translationPreferencesStorageKey) syncTranslationPreferences()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncTranslationPreferences()
+    }
+    window.addEventListener('storage', onStorage)
+    window.addEventListener('focus', syncTranslationPreferences)
+    window.addEventListener('pageshow', syncTranslationPreferences)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('focus', syncTranslationPreferences)
+      window.removeEventListener('pageshow', syncTranslationPreferences)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copyFeedback, setCopyFeedback] = useState<{ id: string; label: string } | null>(null)
@@ -6685,9 +6715,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={setTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
-        <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
+        <CPAUsageStatsPanel settings={cpaUsageSettings} token={token} onSourceChange={(source) => updateCPAUsageSettings({ ...cpaUsageSettings, source })} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -7200,7 +7230,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           <MCPApprovalsCard token={token} />
         </div>
         <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
-          <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+          <CPAUsageSettingsCard settings={cpaUsageSettings} token={token} onChange={onCPAUsageSettingsChange} />
         </div>
         <div id="settings-section-translation" className="theme-settings-panel__section" hidden={activeSection !== 'translation'}>
           <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />

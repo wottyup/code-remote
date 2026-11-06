@@ -28,6 +28,11 @@ internal class RemoteApi(
 
     fun post(path: String, body: JSONObject = JSONObject()): JSONObject = request("POST", path, body)
 
+    fun translate(body: JSONObject): JSONObject = execute(
+        "POST", "/api/v1/codex/translation", body.toString().toRequestBody(JSON_MEDIA_TYPE),
+        "application/json", TRANSLATION_CLIENT,
+    )
+
     fun patch(path: String, body: JSONObject): JSONObject = request("PATCH", path, body)
 
     fun delete(path: String): JSONObject = request("DELETE", path)
@@ -135,6 +140,10 @@ internal class RemoteApi(
             .callTimeout(10, TimeUnit.MINUTES)
             .readTimeout(10, TimeUnit.MINUTES)
             .writeTimeout(10, TimeUnit.MINUTES)
+            .build()
+        private val TRANSLATION_CLIENT = CLIENT.newBuilder()
+            .callTimeout(180, TimeUnit.SECONDS)
+            .readTimeout(180, TimeUnit.SECONDS)
             .build()
 
         fun normalizeEndpoint(raw: String): String {
