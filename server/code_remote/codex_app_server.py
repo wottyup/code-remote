@@ -1072,12 +1072,16 @@ class CodexAppServer:
         if prompt.strip():
             input_items.append({"type": "text", "text": prompt})
         input_items.extend({"type": "localImage", "path": str(path)} for path in images)
-        return await self.request("turn/steer", {
+        result = await self.request("turn/steer", {
             "threadId": thread_id,
             "input": input_items,
             # Always use the runtime's ID, not a potentially stale browser ID.
             "expectedTurnId": active_turn_id,
         })
+        turn = result.get("turn")
+        if not isinstance(result.get("turnId"), str) and not (isinstance(turn, dict) and isinstance(turn.get("id"), str)):
+            return {**result, "turnId": active_turn_id}
+        return result
 
     async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
         active_turn_id = await self._active_turn_id(thread_id) or turn_id

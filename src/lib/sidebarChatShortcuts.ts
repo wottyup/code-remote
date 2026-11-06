@@ -68,6 +68,7 @@ export function sameSidebarChatShortcut(left: SidebarChatShortcut, right: Sideba
 export function isReservedSidebarChatShortcut(event: KeyboardEvent) {
   const key = normalizeKey(event.key).toLowerCase()
   const controlOrMeta = event.ctrlKey || event.metaKey
+  if (event.ctrlKey && !event.altKey && !event.metaKey && !event.shiftKey && event.key === 'Enter') return true
   if (event.key === 'Tab' || event.key === 'Escape' || ['F5', 'F11', 'F12'].includes(event.key)) return true
   if (controlOrMeta && (['w', 't', 'n', 'r', 'l', 'p', 'f', 'q', 's', 'o', 'u', 'd'].includes(key) || /^[0-9]$/.test(key))) return true
   if (controlOrMeta && event.shiftKey && ['i', 'j', 'c', 'delete'].includes(key)) return true

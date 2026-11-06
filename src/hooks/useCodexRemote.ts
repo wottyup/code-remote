@@ -126,6 +126,7 @@ interface SendMessageInput {
   originalText?: string
   continuePaused?: boolean
   sendImmediately?: boolean
+  sendDirectly?: boolean
   onDeliveryStatus?: (status: 'sent' | 'queued' | 'unverified') => void
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
@@ -2895,9 +2896,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [applyTurnDelivery, confirmedTurnDelivery])
 
-  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload, previousMessageIds?: ReadonlySet<string>) => requestTurnDelivery(threadId, payload.id, async () => {
+  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload, previousMessageIds?: ReadonlySet<string>, direct = false) => requestTurnDelivery(threadId, payload.id, async () => {
     const start = () => codexRemoteClient.startTurn(token, threadId, {
       prompt: payload.requestText,
+      ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+      ...(direct ? { direct: true } : {}),
       images: payload.images,
       documents: payload.documents,
       model: payload.model,
@@ -4476,6 +4479,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError('请选择一个未来的发送时间。')
       return false
     }
+    if (input.sendDirectly && input.scheduledAt) {
+      setError('定时消息不能同时立即发送。')
+      return false
+    }
     if (input.continuePaused) {
       const threadId = activeThread?.id
       if (!threadId || isRunning || isInterrupting) return false
@@ -4503,13 +4510,108 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     const payload = queuedPayloadFromInput(input)
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
+    let createdThread = false
     if (!thread) {
-      thread = input.scheduledAt
+      thread = input.scheduledAt || input.sendDirectly
         ? await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine)
         : await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
+      createdThread = Boolean(thread)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
+    if (input.sendDirectly) {
+      const steering = !createdThread && thread.id === activeThreadId.current
+        && (isRunningRef.current || activeTurnId.current !== null || messagesRef.current.at(-1)?.streaming === true)
+      if (steering && thread.id.startsWith('claude:')) {
+        setError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
+        return false
+      }
+      const previousMessageIds = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
+        ? [message.id, message.sourceItemId] : [message.id]))
+      const previousTurnIds = new Set(messagesRef.current.flatMap((message) => message.turnId ? [message.turnId] : []))
+      const currentTurnId = steering ? activeTurnId.current : null
+      const request = steering
+        ? requestTurnDelivery(thread.id, payload.id, () => codexRemoteClient.steerTurn(token, thread.id, {
+          prompt: payload.requestText,
+          ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+          direct: true,
+          images: payload.images,
+          documents: payload.documents,
+          requestId: payload.id,
+        }), previousMessageIds)
+        : requestTurnStart(thread.id, payload, previousMessageIds, true)
+      if (currentTurnId) finalizeVisibleStreamingTurn(currentTurnId)
+      appendQueuedMessageToActiveThread(thread.id, payload, currentTurnId)
+      if (!steering && activeThreadId.current === thread.id) {
+        historyRevision.current += 1
+        setActiveTurnId(null)
+        setQueueRecoveryReadyThreadId(null)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        setIsRunning(true)
+        setIsInterrupting(false)
+        setActivity({ label: '正在发送' })
+      }
+      try {
+        const result = await request
+        if (result.turn_id) {
+          applyTurnDelivery(thread.id, payload.id, result.turn_id)
+          if (!steering && !result.completed && activeThreadId.current === thread.id) {
+            setActiveTurnId(result.turn_id)
+            startTurnTimerForTurn(result.turn_id)
+            if (interruptRequestedThreadId.current === thread.id
+              && (!interruptRequestedTurnId.current || interruptRequestedTurnId.current === result.turn_id)) {
+              void dispatchInterrupt(thread.id, result.turn_id)
+            }
+          }
+        }
+        if ((!result.turn_id || result.completed) && activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true)
+        setError(null)
+        input.onDeliveryStatus?.('sent')
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        if (isAmbiguousNetworkFailure(reason)) {
+          try {
+            const recovered = await codexRemoteClient.readThread(token, thread.id)
+            if (threadContainsNewPayload(recovered, previousMessageIds, steering ? new Set() : previousTurnIds, payload)) {
+              if (activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true, null, recovered)
+              setError(null)
+              input.onDeliveryStatus?.('sent')
+              return true
+            }
+          } catch {
+            // Keep the draft and explicitly report an unconfirmed delivery.
+          }
+          const receipt = confirmedTurnDelivery(payload.id)
+          if (receipt) {
+            if (!steering && receipt.turn_id && !receipt.completed && activeThreadId.current === thread.id) {
+              setActiveTurnId(receipt.turn_id)
+              startTurnTimerForTurn(receipt.turn_id)
+            }
+            setError(null)
+            input.onDeliveryStatus?.('sent')
+            return true
+          }
+          reconnectRef.current(true)
+        }
+        removeQueuedMessageFromActiveThread(thread.id, payload.id)
+        if (!steering && activeThreadId.current === thread.id && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+        setError(isAmbiguousNetworkFailure(reason)
+          ? '消息送达尚未确认，请先核对聊天记录再重试。'
+          : reason instanceof RemoteApiError && reason.status === 409 && steering
+            ? 'Codex 当前回复已结束，请重新发送。'
+            : reason instanceof Error ? reason.message : '立即发送失败，草稿已保留。')
+        if (isAmbiguousNetworkFailure(reason)) input.onDeliveryStatus?.('unverified')
+        return false
+      } finally {
+        pendingTurnDeliveries.current.delete(payload.id)
+      }
+    }
     if (input.scheduledAt) {
       try {
         const result = await codexRemoteClient.scheduleMessage(token, thread.id, payload)
@@ -4753,7 +4855,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finalizeVisibleStreamingTurn, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnDelivery, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false

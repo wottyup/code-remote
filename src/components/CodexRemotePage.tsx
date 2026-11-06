@@ -69,6 +69,8 @@ import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantCh
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
+import { composerKeyAction } from '../lib/composerShortcuts'
+import { ComposerDraftRecoveries, mergeComposerDocuments, prependComposerDraft, type ComposerDraftRecovery } from '../lib/composerDraftRecovery'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -726,13 +728,15 @@ function readComposerDraft(scope: string) {
 }
 
 function saveComposerDraft(scope: string, draft: string) {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined') return false
   try {
     const storageKey = composerDraftStorageKeyFor(scope)
     if (draft) window.localStorage.setItem(storageKey, draft)
     else window.localStorage.removeItem(storageKey)
+    return true
   } catch {
     // The composer still works for this session when storage is unavailable.
+    return false
   }
 }
 
@@ -780,6 +784,13 @@ function saveComposerTableDraft(scope: string, documents: CodexDocumentAttachmen
     return false
   }
 }
+
+const composerDraftRecoveries = new ComposerDraftRecoveries({
+  readDraft: readComposerDraft,
+  saveDraft: saveComposerDraft,
+  readTables: readComposerTableDraft,
+  saveTables: saveComposerTableDraft,
+})
 
 function forgetComposerTableDraft(scope: string) {
   deletedTableDraftScopes.add(scope)
@@ -1145,6 +1156,7 @@ interface ComposerSendInput {
   prompt: string
   originalText?: string
   continuePaused?: boolean
+  sendDirectly?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -1332,6 +1344,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const scheduleDateTimeInputId = useId()
   mobileSettingsExpandedRef.current = mobileSettingsExpanded
   const composer = useRef<HTMLTextAreaElement>(null)
+  const composerMounted = useRef(false)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
   draftScopeRef.current = draftScope
@@ -1528,6 +1541,38 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     draftRef.current = value
     setDraft(value)
   }, [])
+
+  useLayoutEffect(() => {
+    composerMounted.current = true
+    const restore = (detail: ComposerDraftRecovery) => {
+      const snapshot = editingDraftSnapshot.current
+      if (snapshot) {
+        snapshot.draft = prependComposerDraft(detail.draft, snapshot.draft)
+        snapshot.documents = mergeComposerDocuments(detail.documents, snapshot.documents)
+        snapshot.attachmentError ??= detail.attachmentError
+        saveComposerDraft(draftScope, snapshot.draft)
+        saveComposerTableDraft(draftScope, snapshot.documents)
+        return
+      }
+      if (detail.draft) {
+        const restored = prependComposerDraft(detail.draft, draftRef.current)
+        updateDraft(restored)
+        saveComposerDraft(draftScope, restored)
+      }
+      if (detail.documents.length) {
+        const restored = mergeComposerDocuments(detail.documents, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restored
+        setAttachedDocuments(restored)
+        saveComposerTableDraft(draftScope, restored)
+      }
+      if (detail.attachmentError) setAttachmentError((current) => current ?? detail.attachmentError)
+    }
+    const unsubscribe = composerDraftRecoveries.subscribe(draftScope, restore)
+    return () => {
+      composerMounted.current = false
+      unsubscribe()
+    }
+  }, [draftScope, updateDraft])
 
   const updateAttachedImages = useCallback((next: CodexImageAttachment[], persist = true) => {
     const images = next.slice(0, maxImagesPerTurn)
@@ -2051,7 +2096,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
   }
 
-  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string) {
+  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string, sendDirectly = false) {
     event?.preventDefault()
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
@@ -2061,7 +2106,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     if (!scheduledAt) setSchedulePanelOpen(false)
     if (editingQueuedMessageId) {
+      if (sendDirectly) {
+        setAttachmentError('请先保存或取消排队消息编辑，再使用 Ctrl+Enter。')
+        return
+      }
       void confirmQueuedEdit()
+      return
+    }
+    if (sendDirectly && isReplying && !showCodexPreferences) {
+      setAttachmentError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
       return
     }
     // A second submit can arrive before React commits the cleared draft.
@@ -2130,6 +2183,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
         claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
         claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
+        ...(sendDirectly ? { sendDirectly: true } : {}),
         scheduledAt,
       })
     } catch (reason) {
@@ -2150,7 +2204,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             : '发送失败，图片仍保留在原草稿。')
         }
       }
-      updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
+      const restoreScope = transferredImageTarget ?? (!composerMounted.current ? draftScope : null)
+      if (restoreScope) composerDraftRecoveries.recover(restoreScope, {
+        draft: previousDraft, documents: previousDocuments, attachmentError: previousAttachmentError,
+      })
+      else updateDraft((current) => prependComposerDraft(previousDraft, current))
       let persistedImages: CodexImageAttachment[] = []
       if (pendingImageDraftClear && !imagesMovedToNewThread) {
         try {
@@ -2162,11 +2220,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const restoredImages = [...previousImages, ...attachedImagesRef.current, ...persistedImages]
         .filter((image, index, images) => images.findIndex((candidate) => candidate.name === image.name && candidate.data === image.data) === index)
       updateAttachedImages(restoredImages, !imagesMovedToNewThread)
-      const currentDocuments = attachedDocumentsRef.current
-      const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
-      attachedDocumentsRef.current = restoredDocuments
-      setAttachedDocuments(restoredDocuments)
-      setAttachmentError((current) => current ?? previousAttachmentError)
+      if (!restoreScope) {
+        const restoredDocuments = mergeComposerDocuments(previousDocuments, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restoredDocuments
+        setAttachedDocuments(restoredDocuments)
+        setAttachmentError((current) => current ?? previousAttachmentError)
+      }
     } else {
       forgetComposerImageDraftTarget(draftScope)
       if (scheduledAt) {
@@ -2336,9 +2395,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
-    if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
-    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !canSend) return
+    const action = composerKeyAction(event.nativeEvent, inputIsComposing.current)
+    if (!action) return
+    if (action !== 'send') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (action === 'direct' && canSend) void send(undefined, undefined, true)
+      return
+    }
+    if (!canSend) return
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
   }
@@ -2674,6 +2739,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
           aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
+          aria-keyshortcuts={editingQueuedMessageId ? undefined : 'Control+Enter'}
+          title={editingQueuedMessageId ? 'Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter' : showCodexPreferences ? 'Ctrl+Enter 立即发送；回复时插队' : 'Ctrl+Enter 立即发送；Claude 回复中暂不支持插队'}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -2716,7 +2783,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
               aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? showCodexPreferences ? '加入发送队列；Ctrl+Enter 插队' : '加入发送队列' : '发送消息；Ctrl+Enter 立即发送'}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
@@ -7060,7 +7127,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
       }
       if (isSidebarChatShortcutModifierKey(event.key)) return
       if (isReservedSidebarChatShortcut(event)) {
-        setShortcutMessage('这个组合键由浏览器保留，请换一个。')
+        setShortcutMessage('这个组合键已被占用或由浏览器保留，请换一个。')
         return
       }
 

@@ -269,7 +269,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshots)
         self.assertTrue(all("pending" not in snapshot for snapshot in snapshots))
         self.assertEqual(self.store.queue("thread"), [])
-        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False)
+        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False, tail_turns=None)
         self.codex.resume_thread.assert_not_awaited()
         self.service.send.assert_awaited_once()
 
@@ -288,7 +288,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.codex.read_thread.return_value = {"status": {"type": "active"}}
         self.assertFalse(await self.service.submit("thread", message("wait", "wait for reply")))
         self.assertEqual(self.store.queue("thread")[0]["deliveryState"], "pending")
-        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False)
+        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False, tail_turns=None)
         self.send.assert_not_awaited()
 
     async def test_unknown_runtime_state_is_not_treated_as_idle(self) -> None:
@@ -312,8 +312,8 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.service.submit("thread", message("direct", "new message")))
         self.codex.resume_thread.assert_awaited_once_with("thread")
         self.codex.read_thread.assert_has_awaits([
-            unittest.mock.call("thread", include_turns=False),
-            unittest.mock.call("thread", include_turns=False),
+            unittest.mock.call("thread", include_turns=False, tail_turns=None),
+            unittest.mock.call("thread", include_turns=False, tail_turns=None),
         ])
 
     async def test_not_loaded_thread_that_resumes_as_busy_stays_queued(self) -> None:

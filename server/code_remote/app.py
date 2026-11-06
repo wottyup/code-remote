@@ -365,6 +365,9 @@ class TurnImage(BaseModel):
 
 class TurnRequest(BaseModel):
     prompt: str = Field(default="")
+    original_text: str | None = Field(default=None, max_length=30_000)
+    translated_text: str | None = None
+    direct: bool = False
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
@@ -378,6 +381,9 @@ class TurnRequest(BaseModel):
 
 class SteerRequest(BaseModel):
     prompt: str = Field(default="")
+    original_text: str | None = Field(default=None, max_length=30_000)
+    translated_text: str | None = None
+    direct: bool = False
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -1857,7 +1863,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.107.2-dev.6", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.107.2-dev.7", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2649,6 +2655,28 @@ def create_app(
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
+    def remember_direct_translation(thread_id: str, body: TurnRequest | SteerRequest, turn_id: str | None) -> None:
+        if not body.original_text or not body.translated_text or not isinstance(turn_id, str):
+            return
+        try:
+            shared_state.record_translated_user_message(
+                thread_id, body.request_id, turn_id, body.translated_text, body.original_text,
+            )
+        except Exception:
+            # The upstream already accepted the message: a metadata failure
+            # must not turn a successful send into a duplicate retry.
+            logger.exception("Failed to store translated message metadata")
+
+    async def run_direct_delivery(
+        thread_id: str, direct: bool, callback: Callable[[], Awaitable[dict[str, Any]]], *, ensure_idle: bool = False,
+    ) -> dict[str, Any]:
+        if not direct:
+            return await callback()
+        async with shared_queue.delivery_lock(thread_id):
+            if ensure_idle and await shared_queue._active_turn_id(thread_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="回复已经开始，请重新发送。")
+            return await callback()
+
     @app.post("/api/v1/codex/threads/{thread_id}/turns")
     async def start_turn(thread_id: str, body: TurnRequest) -> dict[str, Any]:
         prompt = body.prompt.strip()
@@ -2677,12 +2705,14 @@ def create_app(
                     if turn_directory is not None:
                         shutil.rmtree(turn_directory, ignore_errors=True)
                     raise
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
 
             try:
                 return await run_idempotent_request(
-                    "turn.start", thread_id, body.request_id, body, start_claude_turn,
+                    "turn.start", thread_id, body.request_id, body,
+                    lambda: run_direct_delivery(thread_id, body.direct, start_claude_turn, ensure_idle=True),
                 )
             except ClaudeThreadBusyError as error:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -2711,6 +2741,7 @@ def create_app(
                 )
                 turn = result.get("turn", {})
                 turn_id = turn.get("id") if isinstance(turn, dict) else None
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
             except Exception:
@@ -2725,7 +2756,7 @@ def create_app(
                 thread_id,
                 body.request_id,
                 body,
-                start,
+                lambda: run_direct_delivery(thread_id, body.direct, start, ensure_idle=True),
             )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -2787,6 +2818,7 @@ def create_app(
                 if not isinstance(turn_id, str):
                     turn = result.get("turn")
                     turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
             except Exception:
@@ -2801,7 +2833,7 @@ def create_app(
                 thread_id,
                 body.request_id,
                 body,
-                steer,
+                lambda: run_direct_delivery(thread_id, body.direct, steer),
             )
         except CodexNoActiveTurnError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

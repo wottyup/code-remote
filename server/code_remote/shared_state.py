@@ -468,6 +468,17 @@ class SharedStateStore:
             for row in reversed(rows)
         ]
 
+    def record_translated_user_message(
+        self, thread_id: str, request_id: str | None, turn_id: str | None,
+        sent_text: str | None, original_text: str | None,
+    ) -> None:
+        if not request_id or not turn_id or not sent_text or not original_text or sent_text == original_text:
+            return
+        self.connection.execute(
+            "INSERT OR IGNORE INTO translated_user_messages(request_id, thread_id, turn_id, sent_text, original_text, delivered_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (request_id, thread_id, turn_id, sent_text, original_text, _now()),
+        )
+
 
 def _turn_status(turn: dict[str, Any]) -> str:
     value = turn.get("status")
@@ -494,6 +505,9 @@ class SharedQueueService:
 
     def _lock(self, thread_id: str) -> asyncio.Lock:
         return self._locks.setdefault(thread_id, asyncio.Lock())
+
+    def delivery_lock(self, thread_id: str) -> asyncio.Lock:
+        return self._lock(thread_id)
 
     async def changed(self, thread_id: str) -> None:
         self._wake.set()

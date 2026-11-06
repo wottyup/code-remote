@@ -1172,6 +1172,9 @@ export const codexRemoteClient = {
   },
   startTurn(token: string, threadId: string, input: {
     prompt: string
+    originalText?: string
+    translatedText?: string
+    direct?: boolean
     images: CodexImageAttachment[]
     documents?: CodexDocumentAttachment[]
     model?: string
@@ -1186,6 +1189,9 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
+        original_text: input.originalText,
+        translated_text: input.translatedText,
+        direct: input.direct,
         model: input.model,
         effort: input.effort,
         approval_policy: input.approvalPolicy,
@@ -1204,6 +1210,9 @@ export const codexRemoteClient = {
   },
   steerTurn(token: string, threadId: string, input: {
     prompt: string
+    originalText?: string
+    translatedText?: string
+    direct?: boolean
     images: CodexImageAttachment[]
     documents?: CodexDocumentAttachment[]
     requestId: string
@@ -1212,6 +1221,9 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
+        original_text: input.originalText,
+        translated_text: input.translatedText,
+        direct: input.direct,
         request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,

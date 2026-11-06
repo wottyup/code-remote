@@ -1007,6 +1007,12 @@ class CodexAppServerSandboxPolicyTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def test_steer_fills_missing_result_turn_id_from_active_turn(self) -> None:
+        app_server = CodexAppServer("codex", Path.cwd())
+        app_server._active_turn_ids["thread-id"] = "current-turn-id"
+        app_server.request = AsyncMock(return_value={})
+        self.assertEqual(await app_server.steer_turn("thread-id", "continue"), {"turnId": "current-turn-id"})
+
     async def test_steer_waits_for_a_turn_that_is_still_starting(self) -> None:
         app_server = CodexAppServer("codex", Path.cwd())
         pending_start = asyncio.get_running_loop().create_future()
