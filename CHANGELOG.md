@@ -1,5 +1,7 @@
 # Changelog
 
+## Android [0.106.0-dev.1] - 回复显示模型与思考等级，并改进翻译配置、排队展示和安装图标
+
 ## [0.107.0-dev.1] - Token 用量查询新增 New API 数据源
 
 ## [0.106.0-dev.1] - Token 用量查询新增 Codex Proxy 数据源

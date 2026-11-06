@@ -819,12 +819,20 @@ class MainActivity : Activity() {
         val endpoint: String, val token: String, val provider: String, val profileId: String?,
         val style: String, val source: String, val target: String, val text: String,
     )
+    private data class TranslationProfileChoice(
+        val provider: String, val id: String, val name: String, val model: String,
+    ) {
+        val key: String get() = "$provider\u0000$id"
+    }
     private data class AssistantTranslationTarget(
         val holder: LinearLayout, val original: LinearLayout, val text: String, val width: Int,
         var expanded: Boolean = false,
     )
     private var translationConfiguration: JSONObject? = null
     private var translationConfigurationEndpoint = ""
+    private var translationConfigurationStatus: String? = null
+    private var translationConfigurationError = false
+    private var translationRefreshGeneration = 0L
     private var translationRevision = 0L
     private var translationSettingsBody: LinearLayout? = null
     private var translationDisplayDirty = false
@@ -1440,6 +1448,9 @@ class MainActivity : Activity() {
         token = profile.token
         translationConfiguration = null
         translationConfigurationEndpoint = ""
+        translationConfigurationStatus = null
+        translationConfigurationError = false
+        translationRefreshGeneration++
         translationRevision++
         translationPreviewKey = ""
         translationPreviewValue = null
@@ -4111,6 +4122,8 @@ class MainActivity : Activity() {
                     }
                     "agentmessage" -> {
                         val text = messageText(item, "assistant")
+                        val messageModel = assistantMetadataField(item, turn, "model")
+                        val messageEffort = assistantMetadataField(item, turn, "effort", "reasoningEffort", "reasoning_effort")
                         if (assistantMessageQuestions(item).isNotEmpty()) {
                             // A question is a separate interactive item. Later
                             // commentary must not overwrite its identity/data.
@@ -4118,6 +4131,8 @@ class MainActivity : Activity() {
                             messages += "assistant" to shallowCopyObject(item)
                                 .put("_turnId", turnId)
                                 .put("_displayTime", messageTime(item, turn, true))
+                                .putOpt("_model", messageModel)
+                                .putOpt("_effort", messageEffort)
                             continue
                         }
                         if (text.isNotBlank()) {
@@ -4125,12 +4140,16 @@ class MainActivity : Activity() {
                                 .put("_turnId", turnId)
                                 .put("_duration", turn.optLong("durationMs", 0))
                                 .put("_displayTime", messageTime(item, turn, true))
+                                .putOpt("_model", messageModel)
+                                .putOpt("_effort", messageEffort)
                                 .put("_activityTimeline", JSONArray())
                                 .also {
                                     assistantTextBuilders[it] = StringBuilder()
                                     assistantInTurn = it
                                     messages += "assistant" to it
                                 }
+                            if (message.optString("_model").isBlank()) message.putOpt("_model", messageModel)
+                            if (message.optString("_effort").isBlank()) message.putOpt("_effort", messageEffort)
                             val assistantBuilder = assistantTextBuilders.getOrPut(message) { StringBuilder() }
                             if (assistantBuilder.isNotEmpty()) assistantBuilder.append("\n\n")
                             assistantBuilder.append(text)
@@ -4443,6 +4462,22 @@ class MainActivity : Activity() {
                         item.optString("_turnId"), item.optString("id"),
                         currentQuestion, explicitQuestions.isNotEmpty()),
                         LinearLayout.LayoutParams(WRAP, WRAP).apply { topMargin = dp(8) })
+                }
+                val turnComplete = !running || item.optString("_turnId") != turns.optJSONObject(turns.length() - 1)?.optString("id")
+                if (turnComplete) {
+                    val model = item.optString("_model").takeIf { it.isNotBlank() && it != "null" }
+                    val effort = item.optString("_effort").takeIf { it.isNotBlank() && it != "null" }
+                    if (model != null || effort != null) {
+                        val details = listOfNotNull(
+                            model?.let { "${tr("模型")} ${assistantModelDisplay(it)}" },
+                            effort?.let { "${tr("思考")} ${assistantEffortDisplay(it)}" },
+                        ).joinToString(" · ")
+                        messageColumn.addView(label(details, 10, MUTED, translateUi = false).apply {
+                            maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
+                            setPadding(dp(3), dp(3), dp(3), 0)
+                        }, LinearLayout.LayoutParams(WRAP, WRAP))
+                    }
                 }
                 row.addView(messageColumn, LinearLayout.LayoutParams(WRAP, WRAP))
             }
@@ -7842,6 +7877,9 @@ class MainActivity : Activity() {
         if (outgoingText != text) payload.put("originalText", text)
         val outgoingFiles = selectedFiles.toList()
         val outgoingScope = draftStorageKey()
+        val expectedToQueue = threadId != null && (running || activeThread?.let(::isThreadRunning) == true ||
+            queuedMessages.length() > 0 || threadTitleKey(threadId) in pausedThreadKeys ||
+            terminalThreadId == threadId && terminalHandoffEnabled)
         val sendConnection = connectionGeneration
         val sendEndpoint = endpoint
         val sendToken = token
@@ -7852,7 +7890,7 @@ class MainActivity : Activity() {
         selectedFiles.clear()
         draftFilesByScope.remove(outgoingScope)
         renderAttachmentStrip()
-        addPendingUserMessage(outgoingScope, payload, outgoingFiles)
+        if (!expectedToQueue) addPendingUserMessage(outgoingScope, payload, outgoingFiles)
         if (threadId == null) {
             io.execute {
                 try {
@@ -7975,6 +8013,10 @@ class MainActivity : Activity() {
                     if (saved) {
                         unconfirmedSubmissions[requestId] = UnconfirmedSubmission(threadId, payload,
                             outgoingFiles, outgoingScope, sendEndpoint)
+                        if (pendingUserMessages[outgoingScope].orEmpty().none { it.optString("id") == requestId }) {
+                            addPendingUserMessage(outgoingScope, payload, outgoingFiles,
+                                displayImmediately = sendConnection == connectionGeneration && draftStorageKey() == outgoingScope)
+                        }
                         updatePendingUserMessageState(outgoingScope, requestId,
                             "发送状态未确认 · 点此重试", accepted = true)
                         if (draftStorageKey() == outgoingScope) renderMessages(false)
@@ -9236,6 +9278,12 @@ class MainActivity : Activity() {
             ?.takeIf { it in TRANSLATION_PROVIDERS }?.let { return it }
         val providers = translationConfiguration?.takeIf { translationConfigurationEndpoint == endpoint }
             ?.optJSONObject("providers")
+        TRANSLATION_PROVIDERS.firstOrNull { provider ->
+            val profiles = providers?.optJSONObject(provider)?.optJSONArray("profiles") ?: return@firstOrNull false
+            (0 until profiles.length()).any { profiles.optJSONObject(it)?.let { profile ->
+                profile.optBoolean("configured") && profile.optString("model").isNotBlank()
+            } == true }
+        }?.let { return it }
         return TRANSLATION_PROVIDERS.firstOrNull { provider ->
             val profiles = providers?.optJSONObject(provider)?.optJSONArray("profiles") ?: return@firstOrNull false
             (0 until profiles.length()).any { profiles.optJSONObject(it)?.optBoolean("configured") == true }
@@ -9244,6 +9292,11 @@ class MainActivity : Activity() {
 
     private fun translationProfileId(provider: String = translationProvider()): String? =
         prefs.getString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX$provider"), null)?.takeIf { it.isNotBlank() }
+            ?: translationProfiles(provider)?.let { profiles ->
+                (0 until profiles.length()).mapNotNull(profiles::optJSONObject)
+                    .firstOrNull { it.optBoolean("configured") && it.optString("model").isNotBlank() }
+                    ?.optString("id")?.takeIf(String::isNotBlank)
+            }
 
     private fun translationStyle(): String =
         if (prefs.getString(connectionScopedKey(KEY_TRANSLATION_STYLE), "natural") == "formal") "formal" else "natural"
@@ -9274,12 +9327,46 @@ class MainActivity : Activity() {
         return if (selectedId == null) profiles.optJSONObject(0) else null
     }
 
+    private fun configuredTranslationChoices(): List<TranslationProfileChoice> {
+        val providers = translationConfiguration?.takeIf { translationConfigurationEndpoint == endpoint }
+            ?.optJSONObject("providers") ?: return emptyList()
+        return TRANSLATION_PROVIDERS.flatMap { provider ->
+            val profiles = providers.optJSONObject(provider)?.optJSONArray("profiles") ?: return@flatMap emptyList()
+            (0 until profiles.length()).mapNotNull { index ->
+                profiles.optJSONObject(index)?.takeIf { it.optBoolean("configured") }?.let { profile ->
+                    TranslationProfileChoice(provider, profile.optString("id"),
+                        profile.optString("name").ifBlank { profile.optString("id") }, profile.optString("model"))
+                }
+            }
+        }.sortedWith(compareByDescending<TranslationProfileChoice> { it.model.isNotBlank() }
+            .thenBy { TRANSLATION_PROVIDERS.indexOf(it.provider) })
+    }
+
+    private fun translationChoiceLabel(choice: TranslationProfileChoice): String =
+        "${translationProviderName(choice.provider)} · ${choice.name}" +
+            choice.model.takeIf { it.isNotBlank() && it != choice.name }?.let { " · $it" }.orEmpty()
+
     private fun renderTranslationSettings() {
         val body = translationSettingsBody ?: return
         body.removeAllViews()
+        val configuredModels = configuredTranslationChoices().filter { it.model.isNotBlank() }
         body.addView(label("翻译模型和密钥沿用当前电脑的网页版配置；手机只保存开关与选择。", 11, MUTED).apply {
             setPadding(dp(2), 0, dp(2), dp(5))
         }, widthWrap())
+        body.addView(label("网页版当前选中的配置保存在浏览器；手机可在下方直接选电脑已保存的模型。", 11, MUTED).apply {
+            setPadding(dp(2), 0, dp(2), dp(5))
+        }, widthWrap())
+        translationConfigurationStatus?.let { status ->
+            body.addView(label(status, 11, if (translationConfigurationError) WARNING else SUBTLE).apply {
+                setPadding(dp(2), 0, dp(2), dp(5))
+            }, widthWrap())
+        }
+        if (configuredModels.isNotEmpty()) {
+            val modelsText = configuredModels.take(3).joinToString(" / ") { "${translationProviderName(it.provider)} · ${it.name}" }
+            body.addView(label("${tr("电脑端模型")}：$modelsText", 11, SUBTLE, translateUi = false).apply {
+                setPadding(dp(2), 0, dp(2), dp(5))
+            }, widthWrap())
+        }
         body.addView(settingsActionRow("启用聊天翻译", if (translationEnabled()) "已开启" else "已关闭") {
             prefs.edit().putBoolean(connectionScopedKey(KEY_TRANSLATION_ENABLED), !translationEnabled()).apply()
             renderTranslationSettings()
@@ -9305,10 +9392,9 @@ class MainActivity : Activity() {
         val providerRow = settingsActionRow("翻译引擎", translationProviderName(provider)) {}
         providerRow.setOnClickListener {
             val choices = TRANSLATION_PROVIDERS.map { candidate ->
-                val ready = translationProfiles(candidate)?.let { profiles ->
-                    (0 until profiles.length()).any { profiles.optJSONObject(it)?.optBoolean("configured") == true }
-                } == true
-                candidate to "${translationProviderName(candidate)}${if (ready) "" else " · ${tr("待配置")}"}"
+                val available = configuredTranslationChoices().firstOrNull { it.provider == candidate }
+                candidate to "${translationProviderName(candidate)}${if (available == null) " · ${tr("待配置")}" else
+                    available.model.takeIf(String::isNotBlank)?.let { " · $it" }.orEmpty()}"
             }
             showChoicePopup(providerRow, "翻译引擎", choices, provider) { value ->
                 prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), value).apply()
@@ -9321,16 +9407,20 @@ class MainActivity : Activity() {
         val selectedProfile = selectedTranslationProfile(provider)
         val profileLabel = selectedProfile?.optString("name")?.takeIf { it.isNotBlank() }
             ?: if (translationConfigurationEndpoint == endpoint && translationProfileId(provider) != null) "配置已删除" else "正在读取配置…"
-        val profileRow = settingsActionRow("使用的配置", "$profileLabel${if (selectedProfile?.optBoolean("configured") == false) " · ${tr("待配置")}" else ""}") {}
+        val profileRow = settingsActionRow("使用的配置", "${translationProviderName(provider)} · $profileLabel${if (selectedProfile?.optBoolean("configured") == false) " · ${tr("待配置")}" else ""}") {}
         profileRow.setOnClickListener {
-            val profiles = translationProfiles(provider) ?: return@setOnClickListener
-            val choices = (0 until profiles.length()).mapNotNull { index ->
-                profiles.optJSONObject(index)?.let { profile ->
-                    profile.optString("id") to "${profile.optString("name")}${if (profile.optBoolean("configured")) "" else " · ${tr("待配置")}"}"
-                }
+            val choices = configuredTranslationChoices()
+            if (choices.isEmpty()) {
+                translationConfigurationStatus = "当前电脑没有可用的翻译配置。"
+                translationConfigurationError = true
+                renderTranslationSettings()
+                return@setOnClickListener
             }
-            showChoicePopup(profileRow, "使用的配置", choices, selectedProfile?.optString("id")) { value ->
-                prefs.edit().putString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX$provider"), value).apply()
+            showChoicePopup(profileRow, "使用的配置", choices.map { it.key to translationChoiceLabel(it) },
+                "$provider\u0000${selectedProfile?.optString("id").orEmpty()}") { value ->
+                val choice = choices.firstOrNull { it.key == value } ?: return@showChoicePopup
+                prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), choice.provider)
+                    .putString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX${choice.provider}"), choice.id).apply()
                 renderTranslationSettings()
                 scheduleTranslationPreview()
                 markTranslationDisplayDirty()
@@ -9344,13 +9434,26 @@ class MainActivity : Activity() {
 
     private fun refreshTranslationConfiguration() {
         if (endpoint.isBlank() || token.isBlank()) return
+        translationConfigurationStatus = "正在读取配置…"
+        translationConfigurationError = false
+        renderTranslationSettings()
         val requestEndpoint = endpoint
         val requestToken = token
         val connection = connectionGeneration
+        val requestGeneration = ++translationRefreshGeneration
         runApi({ RemoteApi(requestEndpoint, requestToken).get("/api/v1/codex/translation/config") }, { response ->
-            if (connection != connectionGeneration || endpoint != requestEndpoint) return@runApi
+            if (connection != connectionGeneration || endpoint != requestEndpoint || requestGeneration != translationRefreshGeneration) return@runApi
             translationConfiguration = response
             translationConfigurationEndpoint = requestEndpoint
+            if (prefs.getString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), null) == null) {
+                configuredTranslationChoices().firstOrNull()?.let { choice ->
+                    prefs.edit().putString(connectionScopedKey(KEY_TRANSLATION_PROVIDER), choice.provider)
+                        .putString(connectionScopedKey("$KEY_TRANSLATION_PROFILE_PREFIX${choice.provider}"), choice.id).apply()
+                }
+            }
+            translationConfigurationStatus = if (configuredTranslationChoices().isEmpty())
+                "当前电脑没有可用的翻译配置。" else "电脑端配置已更新，点“使用的配置”可选择模型。"
+            translationConfigurationError = configuredTranslationChoices().isEmpty()
             translationRevision++
             translationPreviewKey = ""
             translationPreviewValue = null
@@ -9361,8 +9464,11 @@ class MainActivity : Activity() {
             scheduleTranslationPreview()
             markTranslationDisplayDirty()
         }, { error ->
-            if (connection == connectionGeneration && translationSettingsBody != null)
-                showStatus(error.message ?: "无法读取翻译配置")
+            if (connection == connectionGeneration && requestGeneration == translationRefreshGeneration) {
+                translationConfigurationStatus = error.message ?: "无法读取翻译配置"
+                translationConfigurationError = true
+                renderTranslationSettings()
+            }
         })
     }
 
@@ -12713,6 +12819,27 @@ class MainActivity : Activity() {
         }
         return pieces.joinToString("").ifBlank { item.optString("text") }
     }
+
+    private fun assistantMetadataField(item: JSONObject, turn: JSONObject, vararg keys: String): String? =
+        (firstJsonValue(item, *keys) ?: firstJsonValue(turn, *keys))?.toString()
+            ?.takeIf { it.isNotBlank() && it != "null" }
+
+    private fun assistantModelDisplay(value: String): String = when {
+        value == "default" -> tr("本机默认模型")
+        currentMode == "claude-code" -> claudeModelLabel(value)
+        else -> modelLabel(value)
+    }
+
+    private fun assistantEffortDisplay(value: String): String = tr(when (value) {
+        "minimal" -> "最小"
+        "low" -> "低"
+        "medium" -> "中"
+        "high" -> "高"
+        "xhigh" -> "极高"
+        "max" -> "最大"
+        "default" -> if (currentMode == "claude-code") "本机默认" else "默认"
+        else -> value
+    })
 
     private fun messageTime(item: JSONObject, turn: JSONObject, assistant: Boolean): String {
         val itemValue = firstJsonValue(
