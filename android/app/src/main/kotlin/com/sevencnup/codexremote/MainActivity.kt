@@ -2649,7 +2649,7 @@ class MainActivity : Activity() {
             tag = "sidebar_selection_toggle"
             gravity = Gravity.CENTER
             isClickable = true
-            contentDescription = "批量选择聊天"
+            contentDescription = tr("批量选择聊天")
             setOnClickListener {
                 if (sidebarSelectionBusy) return@setOnClickListener
                 sidebarSelectionMode = !sidebarSelectionMode
@@ -3005,7 +3005,10 @@ class MainActivity : Activity() {
 
     private fun renderSidebarSelectionBar() {
         if (!::sidebarSelectionBar.isInitialized) return
-        (drawer.findViewWithTag<TextView>("sidebar_selection_toggle"))?.text = if (sidebarSelectionMode) "取消" else "选择"
+        drawer.findViewWithTag<TextView>("sidebar_selection_toggle")?.apply {
+            text = tr(if (sidebarSelectionMode) "取消" else "选择")
+            contentDescription = tr(if (sidebarSelectionMode) "取消批量选择聊天" else "批量选择聊天")
+        }
         sidebarSelectionBar.removeAllViews()
         sidebarSelectionBar.visibility = if (sidebarSelectionMode) View.VISIBLE else View.GONE
         if (!sidebarSelectionMode) return
@@ -9231,7 +9234,7 @@ class MainActivity : Activity() {
                 background = if (retroTheme) lollipopRipple() else ColorDrawable(Color.TRANSPARENT)
                 isClickable = true
                 isFocusable = false
-                contentDescription = action.title
+                contentDescription = tr(action.title)
                 setOnClickListener {
                     preferencePopup?.dismiss()
                     onChoice(index)
