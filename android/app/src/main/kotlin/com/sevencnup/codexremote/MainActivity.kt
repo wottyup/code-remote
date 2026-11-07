@@ -7524,7 +7524,10 @@ class MainActivity : Activity() {
             var limitHeight = false
 
             override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-                val maxHeight = minOf(dp(400), (messageScroll.height * .55f).toInt().coerceAtLeast(dp(180)))
+                val viewportHeight = messageScroll.measuredHeight - messageScroll.paddingTop - messageScroll.paddingBottom
+                val footerHeight = if (entries.size > 1) 37 else 0
+                val cardChromeHeight = dp(61 + footerHeight + 9)
+                val maxHeight = (viewportHeight - cardChromeHeight).coerceAtLeast(0)
                 val measuredHeight = if (limitHeight) View.MeasureSpec.makeMeasureSpec(maxHeight, View.MeasureSpec.AT_MOST) else heightMeasureSpec
                 super.onMeasure(widthMeasureSpec, measuredHeight)
             }
@@ -7562,6 +7565,25 @@ class MainActivity : Activity() {
         card.addView(footer, LinearLayout.LayoutParams(MATCH, WRAP))
         var reviewing = false
         lateinit var refreshRows: () -> Unit
+        fun keepExpandedCardVisible() {
+            messageScroll.post {
+                if (!card.isAttachedToWindow || !messageScroll.isAttachedToWindow) return@post
+                val cardLocation = IntArray(2)
+                val scrollLocation = IntArray(2)
+                card.getLocationOnScreen(cardLocation)
+                messageScroll.getLocationOnScreen(scrollLocation)
+                val visibleTop = scrollLocation[1] + messageScroll.paddingTop
+                val visibleBottom = scrollLocation[1] + messageScroll.height - messageScroll.paddingBottom
+                val cardTop = cardLocation[1]
+                val cardBottom = cardTop + card.height
+                val scrollDelta = when {
+                    cardTop < visibleTop -> cardTop - visibleTop
+                    cardBottom > visibleBottom -> cardBottom - visibleBottom
+                    else -> 0
+                }
+                if (scrollDelta != 0) messageScroll.smoothScrollBy(0, scrollDelta)
+            }
+        }
         refreshRows = {
             details.removeAllViews()
             footer.removeAllViews()
@@ -7617,11 +7639,13 @@ class MainActivity : Activity() {
                     minimumHeight = dp(36)
                     setPadding(dp(12), 0, dp(12), 0)
                     setOnClickListener {
-                        if (expanded || reviewing) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
+                        val expanding = !expanded && !reviewing
+                        if (expanding) expandedFileChangeIds.add(summaryId) else expandedFileChangeIds.remove(summaryId)
                         reviewing = false
                         review.text = tr("审核")
                         refreshRows()
                         detailsScroll.scrollTo(0, 0)
+                        if (expanding) keepExpandedCardVisible()
                     }
                 }
                 more.addView(label(if (expanded || reviewing) "收起文件" else "查看另外 ${entries.size - 1} 个文件", 11, copyColor), LinearLayout.LayoutParams(WRAP, WRAP))
@@ -7637,6 +7661,7 @@ class MainActivity : Activity() {
             review.text = tr(if (reviewing) "收起审核" else "审核")
             refreshRows()
             detailsScroll.scrollTo(0, 0)
+            if (reviewing) keepExpandedCardVisible()
         }
         refreshRows()
         messageList.addView(card, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3); bottomMargin = dp(4) })
