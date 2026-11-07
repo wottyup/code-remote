@@ -5169,6 +5169,9 @@ class MainActivity : Activity() {
     private var assistantMarkdownAppearance = ""
     private var assistantMarkdownCache: Markwon? = null
     private val localInstallerLink = Regex("""\[([^\]]+)]\(<?(/[^)>\n]+\.(?:apk|exe|msi|dmg))>?\)""", RegexOption.IGNORE_CASE)
+    private val assistantSeparatorLines = Regex("(?m)^[\\t ]*(?:[-_\\u2500\\u2501\\u2550\\u2014][\\t ]*){3,}(?:\\r?\\n|$)")
+    private val assistantExcessBlankLines = Regex("\\n(?:[\\t ]*\\n){2,}")
+    private val claudeStrayAngleLines = Regex("(?m)^[\\t ]*(?:<{1,3}|>{1,3})[\\t ]*(?:\\r?\\n|$)")
 
     private data class AssistantMarkdownPart(
         val markdown: String? = null,
@@ -5177,6 +5180,7 @@ class MainActivity : Activity() {
     )
 
     private fun addAssistantMarkdown(container: LinearLayout, text: String, maximumWidth: Int) {
+        val claudeFormatting = currentMode == "claude-code"
         splitAssistantMarkdown(text).forEach { part ->
             if (part.code != null) {
                 container.addView(
@@ -5185,7 +5189,9 @@ class MainActivity : Activity() {
                 )
                 return@forEach
             }
-            val markdown = part.markdown.orEmpty()
+            var markdown = part.markdown.orEmpty().replace(assistantSeparatorLines, "")
+            if (claudeFormatting) markdown = markdown.replace(claudeStrayAngleLines, "")
+            markdown = markdown.replace(assistantExcessBlankLines, "\n\n").trim()
             if (markdown.isBlank()) return@forEach
             addSelectableMarkdown(container, markdown, maximumWidth)
         }
@@ -6272,13 +6278,13 @@ class MainActivity : Activity() {
 
     private val assistantMarkdown: Markwon
         get() {
-            val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT"
+            val appearance = "$TEXT:$PANEL_INSET:$BORDER:$ACCENT:$currentMode"
             assistantMarkdownCache?.takeIf { assistantMarkdownAppearance == appearance }?.let { return it }
             return Markwon.builder(this)
                 .usePlugin(object : AbstractMarkwonPlugin() {
                     override fun configureTheme(builder: MarkwonTheme.Builder) {
                         builder.linkColor(ACCENT)
-                            .blockMargin(dp(12))
+                            .blockMargin(dp(if (currentMode == "claude-code") 8 else 12))
                             .blockQuoteColor(MUTED)
                             .blockQuoteWidth(dp(2))
                             .codeTextColor(TEXT)
