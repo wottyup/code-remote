@@ -749,6 +749,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .chat-message__meta strong { font-weight: 650; }
 .chat-message__meta span { display: flex; align-items: center; gap: 5px; color: #8d939d; font-size: calc(11px + var(--mobile-font-offset)); }
 .chat-message__timing { color: #8d939d; font-size: calc(12.5px + var(--mobile-font-offset)); font-weight: 450; white-space: nowrap; }
+.chat-message__reply-error { display: flex; align-items: flex-start; gap: 6px; margin-top: 8px; color: #dda0a3; font-size: calc(11px + var(--mobile-font-offset)); line-height: 1.45; }
+.chat-message__reply-error > svg { flex: 0 0 auto; margin-top: 1px; }
 .chat-message__sent-at { display: block; margin: 0; color: #8993a5; font-size: calc(12.5px + var(--mobile-font-offset)); line-height: 1.2; text-align: right; white-space: nowrap; }
 .chat-message--user .chat-message__footer { display: flex; width: 100%; min-height: 23px; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 3px; }
 .chat-message--assistant .chat-message__footer--assistant { display: flex; min-height: 20px; align-items: center; margin: 1px 14px 0; }
@@ -1862,6 +1864,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-custom .approval-card__actions button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .approval-card__actions button:hover, .remote-shell--theme-custom .approval-card__actions .approval-card__accept { border-color: var(--custom-theme-border); background: var(--custom-theme-active); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .remote-error { border-color: color-mix(in srgb, var(--custom-theme-border) 72%, #d86565); background: color-mix(in srgb, var(--custom-theme-surface) 76%, rgba(190, 55, 55, .24)); color: var(--custom-theme-text-color); }
+.remote-shell--theme-custom .chat-message__reply-error { color: color-mix(in srgb, var(--custom-theme-text-color) 78%, #dc4d4d); }
 .remote-shell--theme-custom .remote-error button { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
 .remote-shell--theme-custom .remote-error button:hover:not(:disabled) { background: var(--custom-theme-active); }
 .remote-shell--theme-custom .composer-image .composer-image__remove { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: var(--custom-theme-text-color); }
@@ -2011,6 +2014,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .approval-card__actions button { border-color: #dedede; background: #f1f1f1; color: #000; }
 .remote-shell--theme-light .approval-card__actions .approval-card__accept { border-color: #dfcfad; background: #f5ecd9; color: #000; }
 .remote-shell--theme-light .remote-error { border-color: #edcaca; background: #fff1f1; color: #000; }
+.remote-shell--theme-light .chat-message__reply-error { color: #a23b3b; }
 .remote-shell--theme-light .remote-error button { border-color: #e7caca; background: #fbe5e5; color: #000; }
 .remote-shell--theme-light .remote-error button:hover:not(:disabled) { background: #f4dada; color: #000; }
 .remote-shell--theme-light .composer-image .composer-image__remove { border-color: #d0d0d0; background: #f5f5f5; color: #000; }
@@ -2437,6 +2441,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-retro .approval-card__actions button { border-color: #b4bdc4; background: #eef2f5; color: #314555; }
 .remote-shell--theme-retro .approval-card__actions .approval-card__accept { border-color: #b6a57f; background: #eee5d2; color: #3d3524; }
 .remote-shell--theme-retro .remote-error { border-color: #d2aaaa; border-radius: 2px; background: #f8eded; color: #633636; box-shadow: none; }
+.remote-shell--theme-retro .chat-message__reply-error { color: #8b3838; }
 .remote-shell--theme-retro .remote-error button { border-color: #c8a5a5; background: #f3e2e2; color: #633636; }
 .remote-shell--theme-retro .remote-error button:hover:not(:disabled) { background: #edd6d6; color: #512626; }
 .remote-shell--theme-retro .pane-limit-notice { border-color: #c6b589; border-radius: 2px; background: #f8f4e8; color: #403922; box-shadow: 2px 3px 0 rgba(61, 53, 32, .12); }

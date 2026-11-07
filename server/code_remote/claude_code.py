@@ -30,6 +30,7 @@ CLAUDE_PERMISSION_MODES = {"default", "manual", "acceptEdits", "auto", "dontAsk"
 # 剩余缓冲，排不完也强制收尾，避免轮次永久卡在 inProgress。
 CLAUDE_DRAIN_GRACE_SECONDS = 3.0
 CLAUDE_EXIT_POLL_SECONDS = 0.1
+CLAUDE_STREAM_LINE_LIMIT = 64 * 1024 * 1024
 
 
 class ClaudeCodeError(RuntimeError):
@@ -476,6 +477,9 @@ class ClaudeCodeServer:
                 item["content"] = [{"type": "text", "text": message.get("text", "")}]
             else:
                 item["text"] = message.get("text", "")
+                item["status"] = message.get("status", "completed")
+                if isinstance(message.get("error"), str) and message["error"]:
+                    item["error"] = message["error"]
                 turn["completedAt"] = message.get("completedAt")
                 turn["status"] = message.get("status", "completed")
             turn["items"].append(item)
@@ -708,7 +712,7 @@ class ClaudeCodeServer:
                 # Keep them out of logs and the remote browser.
                 "stderr": asyncio.subprocess.DEVNULL,
                 "cwd": cwd,
-                "limit": 8 * 1024 * 1024,
+                "limit": CLAUDE_STREAM_LINE_LIMIT,
             }
             if os.name != "nt":
                 kwargs["start_new_session"] = True
@@ -725,6 +729,8 @@ class ClaudeCodeServer:
 
             assert process.stdout is not None
             received_init = False
+            received_result = False
+            stream_parse_error = False
             exit_task = asyncio.create_task(_wait_for_claude_process_exit(process))
             while True:
                 line_task = asyncio.create_task(process.stdout.readline())
@@ -739,6 +745,8 @@ class ClaudeCodeServer:
                             asyncio.shield(line_task), timeout=CLAUDE_DRAIN_GRACE_SECONDS
                         )
                     except asyncio.TimeoutError:
+                        if not received_result:
+                            result_error = "Claude Code 回复流在最终结果前中断，已保留已接收的部分内容。"
                         line_task.cancel()
                         await asyncio.gather(line_task, return_exceptions=True)
                         drain_task = asyncio.create_task(_drain_claude_stdout(process.stdout))
@@ -748,13 +756,27 @@ class ClaudeCodeServer:
                 else:
                     try:
                         line = line_task.result()
-                    except Exception:
+                    except Exception as error:
+                        if not received_result:
+                            result_error = "Claude Code 回复流读取失败，已保留已接收的部分内容；请重试。"
+                        logger.warning(
+                            "Claude Code stdout reader failed for turn %s (%s)",
+                            turn_id,
+                            type(error).__name__,
+                        )
+                        drain_task = asyncio.create_task(_drain_claude_stdout(process.stdout))
+                        self._stdout_drain_tasks.add(drain_task)
+                        drain_task.add_done_callback(self._stdout_drain_tasks.discard)
+                        if process.returncode is None:
+                            await self._terminate_process(process)
                         break
                 if not line:
                     break
                 try:
                     record = json.loads(line)
                 except (UnicodeDecodeError, json.JSONDecodeError):
+                    stream_parse_error = True
+                    logger.warning("Claude Code emitted an invalid JSONL record for turn %s", turn_id)
                     continue
                 if not isinstance(record, dict):
                     continue
@@ -822,17 +844,31 @@ class ClaudeCodeServer:
                                 })
                                 tool_items.pop(tool_id, None)
                 elif record_type == "result":
+                    received_result = True
                     if record.get("is_error") is True:
-                        result_error = "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
+                        result_error = "Claude Code 请求未完成，可能与模型服务、登录状态、权限或网络连接有关。"
+                    else:
+                        result_error = None
 
             return_code = await exit_task
             if thread_id in self._interrupts:
                 result_error = None
             elif return_code != 0 and result_error is None:
+                logger.warning(
+                    "Claude Code CLI exited with status %s for turn %s (initialized=%s, partial_reply=%s)",
+                    return_code,
+                    turn_id,
+                    received_init,
+                    bool(assistant_text),
+                )
                 result_error = (
-                    "Claude Code 请求失败，请检查模型、登录状态或权限设置。"
+                    "Claude Code 请求未完成，可能与模型服务、登录状态、权限或网络连接有关。"
                     if received_init else "Claude Code CLI 启动失败，请检查本机 CLI 参数与配置。"
                 )
+            elif stream_parse_error and not received_result:
+                result_error = "Claude Code 回复流包含无法读取的数据，已保留已接收的部分内容。"
+            elif not received_result and assistant_text and result_error is None:
+                result_error = "Claude Code 回复流未返回最终结果，以上内容可能不完整。"
             elif not assistant_text and result_error is None:
                 result_error = "Claude Code 没有返回回复，请检查本机 CLI 和权限设置。"
         except asyncio.CancelledError:
@@ -864,7 +900,10 @@ class ClaudeCodeServer:
                 with suppress(Exception):
                     await self._emit_delta(thread_id, turn_id, assistant_item_id, final_text)
             with suppress(Exception):
-                await self._finish_turn(thread_id, turn_id, assistant_item_id, final_text, completed_at, status, model, effort)
+                await self._finish_turn(
+                    thread_id, turn_id, assistant_item_id, final_text, completed_at, status, model, effort,
+                    error=result_error if assistant_text and result_error else None,
+                )
             reply = self._live_replies.get(thread_id)
             if reply and reply["turnId"] == turn_id:
                 self._live_replies.pop(thread_id, None)
@@ -923,6 +962,7 @@ class ClaudeCodeServer:
         status: str,
         model: str | None,
         effort: str | None,
+        error: str | None = None,
     ) -> None:
         row = self._row(thread_id)
         try:
@@ -942,6 +982,7 @@ class ClaudeCodeServer:
                 "status": status,
                 "model": model if model and model != "default" else "default",
                 "effort": effort or "default",
+                **({"error": error} if error else {}),
             })
         preview = row["preview"]
         if text.strip():
@@ -957,6 +998,7 @@ class ClaudeCodeServer:
             "id": assistant_item_id, "type": "agentMessage", "text": text, "status": status,
             "model": model if model and model != "default" else "default",
             "effort": effort or "default",
+            **({"error": error} if error else {}),
         }
         await self.emit({
             "type": "notification", "method": "item/completed",
@@ -968,6 +1010,7 @@ class ClaudeCodeServer:
                 "id": turn_id, "threadId": thread_id, "status": status, "completedAt": completed_at,
                 "model": model if model and model != "default" else "default",
                 "effort": effort or "default",
+                **({"error": error} if error else {}),
             }},
         })
 

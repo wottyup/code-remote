@@ -8417,6 +8417,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
           ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
         {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? '查看中文原文' : '查看英文发送内容'}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
+        {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{message.replyError}</span></div> : null}
         {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>

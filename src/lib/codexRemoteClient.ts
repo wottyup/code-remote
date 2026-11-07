@@ -183,6 +183,7 @@ export interface CodexMessage {
   sentAt?: string
   replyStartedAt?: string
   replyDurationMs?: number
+  replyError?: string
   turnId?: string
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
@@ -595,6 +596,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         if (!itemComplete) assistantMessage.streaming = true
         if (!assistantMessage.model && itemModel) assistantMessage.model = itemModel
         if (!assistantMessage.effort && itemEffort) assistantMessage.effort = itemEffort
+        if (typeof item.error === 'string' && item.error) assistantMessage.replyError = item.error
         if (questions.length > 0) {
           assistantMessage.questions = questions
           assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
@@ -610,6 +612,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         text,
         ...(itemType === 'agentmessage' && itemModel ? { model: itemModel } : {}),
         ...(itemType === 'agentmessage' && itemEffort ? { effort: itemEffort } : {}),
+        ...(itemType === 'agentmessage' && typeof item.error === 'string' && item.error ? { replyError: item.error } : {}),
         createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt ?? turn.started_at),
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),

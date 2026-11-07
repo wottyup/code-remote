@@ -848,6 +848,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.sentAt === candidate.sentAt
       && message.replyStartedAt === candidate.replyStartedAt
       && message.replyDurationMs === candidate.replyDurationMs
+      && message.replyError === candidate.replyError
       && Boolean(message.streaming) === Boolean(candidate.streaming)
       && message.completedTextLength === candidate.completedTextLength
       && message.choiceItemId === candidate.choiceItemId
@@ -1912,7 +1913,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     else startTransition(update)
   }, [])
 
-  const finalizeVisibleStreamingTurn = useCallback((turnId: string | null, completedAt = Date.now(), recordDuration = true) => {
+  const finalizeVisibleStreamingTurn = useCallback((
+    turnId: string | null,
+    completedAt = Date.now(),
+    recordDuration = true,
+    replyError?: string,
+  ) => {
     const streamTurnId = streamingAssistantTurnId.current
     const targetTurnId = turnId ?? streamTurnId
     if (!targetTurnId
@@ -1935,6 +1941,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         return {
           ...message,
           streaming: false,
+          ...(replyError ? { replyError } : {}),
           ...(startedAt !== undefined ? {
             replyStartedAt: message.replyStartedAt ?? new Date(startedAt).toISOString(),
             ...(recordDuration ? { replyDurationMs: Math.max(0, completedAt - startedAt) } : {}),
@@ -3896,6 +3903,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const completedAt = eventTimestamp(turn?.completedAt) ?? Date.now()
       const staleCompletion = params.stale === true
       const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
+      const replyError = turnThreadId?.startsWith('claude:') && completedStatus === 'failed'
+        && typeof turn?.error === 'string' ? turn.error : null
       if (turnThreadId && completedTurnId) {
         liveTurnHistory.current.finish(turnThreadId, completedTurnId,
           completedStatus === 'running' ? 'completed' : completedStatus === 'stopped' ? 'interrupted' : completedStatus,
@@ -3907,7 +3916,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (completedTurnId && currentTurnId && completedTurnId !== currentTurnId) {
         // A delayed completion for the previous turn must not terminate a
         // newer turn that is already visible in this thread.
-        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
+        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
         if (interruptRequestedTurnId.current === completedTurnId) {
           interruptRequestedThreadId.current = null
           interruptRequestedTurnId.current = null
@@ -3924,6 +3933,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
+      if (replyError) setError(replyError)
       setIsRunning(false)
       const queuedThreadId = turnThreadId ?? activeThreadId.current
       const hasQueuedMessages = Boolean(queuedThreadId && queuedMessagesByThreadRef.current[queuedThreadId]?.length)
@@ -3952,7 +3962,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setQueueRecoveryReadyThreadId(canReleaseQueue && !needsHistoryCheck ? queuedThreadId : null)
       // Commit the accumulated text before finalizing the turn. This avoids a
       // trailing timer/transition from recreating a stale streaming message.
-      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
+      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
