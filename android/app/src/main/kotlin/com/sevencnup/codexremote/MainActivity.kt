@@ -4,13 +4,11 @@ import android.animation.ValueAnimator
 import android.Manifest
 import android.app.Activity
 import android.app.Dialog
-import android.app.DatePickerDialog
 import android.app.DownloadManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.TimePickerDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -7873,23 +7871,297 @@ class MainActivity : Activity() {
             return
         }
 
-        val today = Calendar.getInstance()
-        val minimumDate = (today.clone() as Calendar).apply {
+        fun dateOnly(source: Calendar): Calendar = (source.clone() as Calendar).apply {
             set(Calendar.HOUR_OF_DAY, 0)
             set(Calendar.MINUTE, 0)
             set(Calendar.SECOND, 0)
             set(Calendar.MILLISECOND, 0)
         }
-        DatePickerDialog(this, { _, year, month, day ->
-            val selectedDate = Calendar.getInstance().apply {
-                clear()
-                set(year, month, day)
+        fun sameDate(first: Calendar, second: Calendar): Boolean =
+            first.get(Calendar.YEAR) == second.get(Calendar.YEAR) &&
+                first.get(Calendar.MONTH) == second.get(Calendar.MONTH) &&
+                first.get(Calendar.DAY_OF_MONTH) == second.get(Calendar.DAY_OF_MONTH)
+        fun monthStart(source: Calendar): Calendar = dateOnly(source).apply { set(Calendar.DAY_OF_MONTH, 1) }
+
+        val openedAt = Calendar.getInstance()
+        val today = dateOnly(openedAt)
+        val initialTime = (openedAt.clone() as Calendar).apply { add(Calendar.MINUTE, 5) }
+        var selectedDate = dateOnly(initialTime)
+        var shownMonth = monthStart(selectedDate)
+        var timeEdited = false
+        var updatingTimeFields = false
+
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(14), dp(18), dp(12))
+            background = rounded(OPAQUE_PANEL, dp(16), BORDER, dp(1))
+        }
+        val title = label("定时发送", 16, TEXT, true)
+        card.addView(title, LinearLayout.LayoutParams(MATCH, dp(32)))
+
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val scroll = ScrollView(this).apply {
+            isVerticalScrollBarEnabled = false
+            overScrollMode = View.OVER_SCROLL_NEVER
+            clipToPadding = false
+            addView(content, ViewGroup.LayoutParams(MATCH, WRAP))
+        }
+        card.addView(scroll, LinearLayout.LayoutParams(MATCH, 0, 1f))
+
+        val selectedDateBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = rounded(colorWithAlpha(ACCENT, .08f), dp(11))
+        }
+        val selectedDateLabel = label("", 20, TEXT, true, translateUi = false)
+        val selectedDateDetails = label("", 11, MUTED, translateUi = false)
+        selectedDateBlock.addView(selectedDateLabel, LinearLayout.LayoutParams(MATCH, dp(29)))
+        selectedDateBlock.addView(selectedDateDetails, LinearLayout.LayoutParams(MATCH, dp(20)))
+        content.addView(selectedDateBlock, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        val calendarHeading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val previousMonth = iconButton("chevron_right", "上一月") { }.apply {
+            rotation = 180f
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            tooltipText = tr("上一月")
+        }
+        val nextMonth = iconButton("chevron_right", "下一月") { }.apply {
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            tooltipText = tr("下一月")
+        }
+        val monthLabel = label("", 14, TEXT, true, translateUi = false).apply { gravity = Gravity.CENTER }
+        calendarHeading.addView(previousMonth, LinearLayout.LayoutParams(dp(44), dp(44)))
+        calendarHeading.addView(monthLabel, LinearLayout.LayoutParams(0, dp(44), 1f))
+        calendarHeading.addView(nextMonth, LinearLayout.LayoutParams(dp(44), dp(44)))
+        content.addView(calendarHeading, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(7) })
+
+        val weekdayHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val weekdayNames = if (appLanguage == "en") listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+            else listOf("一", "二", "三", "四", "五", "六", "日")
+        weekdayNames.forEach { dayName ->
+            weekdayHeader.addView(label(dayName, 11, MUTED, true, translateUi = false).apply {
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(0, dp(28), 1f))
+        }
+        content.addView(weekdayHeader, LinearLayout.LayoutParams(MATCH, dp(28)).apply { topMargin = dp(2) })
+
+        val calendarGrid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(calendarGrid, LinearLayout.LayoutParams(MATCH, WRAP))
+
+        val timeHeading = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        timeHeading.addView(label("发送时间", 13, TEXT, true), LinearLayout.LayoutParams(0, dp(24), 1f))
+        timeHeading.addView(label("本地时间", 11, MUTED), widthWrap())
+        content.addView(timeHeading, LinearLayout.LayoutParams(MATCH, dp(24)).apply { topMargin = dp(11) })
+
+        val hourField = editField("", "%02d".format(Locale.ROOT, initialTime.get(Calendar.HOUR_OF_DAY)), android.text.InputType.TYPE_CLASS_NUMBER).apply {
+            isSingleLine = true
+            maxLines = 1
+            filters = arrayOf(android.text.InputFilter.LengthFilter(2))
+            gravity = Gravity.CENTER
+            textSize = adjustedTextSize(17)
+            setTag(R.id.base_text_size, 17f)
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            minHeight = dp(48)
+            imeOptions = EditorInfo.IME_ACTION_NEXT
+            setSelectAllOnFocus(true)
+            background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
+        }
+        val minuteField = editField("", "%02d".format(Locale.ROOT, initialTime.get(Calendar.MINUTE)), android.text.InputType.TYPE_CLASS_NUMBER).apply {
+            isSingleLine = true
+            maxLines = 1
+            filters = arrayOf(android.text.InputFilter.LengthFilter(2))
+            gravity = Gravity.CENTER
+            textSize = adjustedTextSize(17)
+            setTag(R.id.base_text_size, 17f)
+            setPadding(dp(5), dp(5), dp(5), dp(5))
+            minHeight = dp(48)
+            imeOptions = EditorInfo.IME_ACTION_DONE
+            setSelectAllOnFocus(true)
+            background = rounded(PANEL_INSET, dp(9), BORDER, dp(1))
+        }
+        val timeFields = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        timeFields.addView(hourField, LinearLayout.LayoutParams(dp(60), dp(48)))
+        timeFields.addView(label(":", 19, SUBTLE, true).apply {
+            gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(dp(28), dp(48)))
+        timeFields.addView(minuteField, LinearLayout.LayoutParams(dp(60), dp(48)))
+        content.addView(timeFields, LinearLayout.LayoutParams(MATCH, dp(48)).apply { topMargin = dp(5) })
+
+        val errorLabel = label("", 11, ERROR).apply {
+            visibility = View.GONE
+            setPadding(dp(2), dp(4), dp(2), 0)
+        }
+        card.addView(errorLabel, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(3) })
+
+        fun updateSelectedDateLabel() {
+            val day = selectedDate.get(Calendar.DAY_OF_MONTH)
+            val monthNumber = selectedDate.get(Calendar.MONTH) + 1
+            if (appLanguage == "en") {
+                val weekday = selectedDate.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.SHORT, Locale.ENGLISH).orEmpty()
+                val month = selectedDate.getDisplayName(Calendar.MONTH, Calendar.SHORT, Locale.ENGLISH).orEmpty()
+                selectedDateLabel.text = "$weekday, $month $day"
+                selectedDateDetails.text = "${selectedDate.get(Calendar.YEAR)} · ${tr("本地时间")}"
+            } else {
+                val weekIndex = selectedDate.get(Calendar.DAY_OF_WEEK) - Calendar.SUNDAY
+                val weekday = listOf("日", "一", "二", "三", "四", "五", "六")[weekIndex]
+                selectedDateLabel.text = "${monthNumber}月${day}日 周$weekday"
+                selectedDateDetails.text = "${selectedDate.get(Calendar.YEAR)}年 · ${tr("本地时间")}"
             }
+        }
+
+        fun setTimeFields(value: Calendar) {
+            updatingTimeFields = true
+            hourField.setText("%02d".format(Locale.ROOT, value.get(Calendar.HOUR_OF_DAY)))
+            minuteField.setText("%02d".format(Locale.ROOT, value.get(Calendar.MINUTE)))
+            updatingTimeFields = false
+        }
+
+        fun applySuggestedTimeForDate() {
             val now = Calendar.getInstance()
-            val sameDay = year == now.get(Calendar.YEAR) && month == now.get(Calendar.MONTH) && day == now.get(Calendar.DAY_OF_MONTH)
-            val suggestedTime = if (sameDay) (now.clone() as Calendar).apply { add(Calendar.MINUTE, 5) }
-                else (selectedDate.clone() as Calendar).apply { set(Calendar.HOUR_OF_DAY, 9) }
-            TimePickerDialog(this, { _, hour, minute ->
+            val suggestion = if (sameDate(selectedDate, dateOnly(now))) {
+                (now.clone() as Calendar).apply { add(Calendar.MINUTE, 5) }
+            } else {
+                (selectedDate.clone() as Calendar).apply {
+                    set(Calendar.HOUR_OF_DAY, 9)
+                    set(Calendar.MINUTE, 0)
+                }
+            }
+            selectedDate = dateOnly(suggestion)
+            shownMonth = monthStart(selectedDate)
+            setTimeFields(suggestion)
+        }
+
+        fun renderCalendar() {
+            val monthName = shownMonth.getDisplayName(Calendar.MONTH, Calendar.LONG, if (appLanguage == "en") Locale.ENGLISH else Locale.getDefault()).orEmpty()
+            monthLabel.text = if (appLanguage == "en") "$monthName ${shownMonth.get(Calendar.YEAR)}"
+                else "${shownMonth.get(Calendar.YEAR)}年${shownMonth.get(Calendar.MONTH) + 1}月"
+            val previous = (shownMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
+            val canGoPrevious = previous.get(Calendar.YEAR) > today.get(Calendar.YEAR) ||
+                previous.get(Calendar.YEAR) == today.get(Calendar.YEAR) && previous.get(Calendar.MONTH) >= today.get(Calendar.MONTH)
+            previousMonth.isEnabled = canGoPrevious
+            previousMonth.alpha = if (canGoPrevious) 1f else .38f
+
+            calendarGrid.removeAllViews()
+            val firstDay = monthStart(shownMonth)
+            val mondayOffset = (firstDay.get(Calendar.DAY_OF_WEEK) - Calendar.MONDAY + 7) % 7
+            val firstCell = (firstDay.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, -mondayOffset) }
+            repeat(6) { rowIndex ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                repeat(7) { columnIndex ->
+                    val date = (firstCell.clone() as Calendar).apply { add(Calendar.DAY_OF_MONTH, rowIndex * 7 + columnIndex) }
+                    val inShownMonth = date.get(Calendar.YEAR) == shownMonth.get(Calendar.YEAR) &&
+                        date.get(Calendar.MONTH) == shownMonth.get(Calendar.MONTH)
+                    val isSelected = sameDate(date, selectedDate)
+                    val isToday = sameDate(date, today)
+                    val canSelect = date.timeInMillis >= today.timeInMillis
+                    val dayCell = label(date.get(Calendar.DAY_OF_MONTH).toString(), 13, when {
+                        isSelected -> ACCENT
+                        isToday -> ACCENT
+                        inShownMonth && canSelect -> TEXT
+                        else -> MUTED
+                    }, isSelected || isToday, translateUi = false).apply {
+                        gravity = Gravity.CENTER
+                        isEnabled = canSelect
+                        isClickable = canSelect
+                        isFocusable = canSelect
+                        alpha = if (!canSelect) .34f else if (inShownMonth) 1f else .56f
+                        background = when {
+                            isSelected -> rounded(colorWithAlpha(ACCENT, .16f), dp(22), ACCENT, dp(1))
+                            isToday -> rounded(Color.TRANSPARENT, dp(22), ACCENT, dp(1))
+                            else -> ColorDrawable(Color.TRANSPARENT)
+                        }
+                        contentDescription = if (appLanguage == "en") {
+                            "${date.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.ENGLISH)}, ${date.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.ENGLISH)} ${date.get(Calendar.DAY_OF_MONTH)}, ${date.get(Calendar.YEAR)}"
+                        } else {
+                            "${date.get(Calendar.YEAR)}年${date.get(Calendar.MONTH) + 1}月${date.get(Calendar.DAY_OF_MONTH)}日"
+                        }
+                        if (canSelect) setOnClickListener {
+                            selectedDate = dateOnly(date)
+                            if (!timeEdited) applySuggestedTimeForDate()
+                            errorLabel.visibility = View.GONE
+                            updateSelectedDateLabel()
+                            renderCalendar()
+                        }
+                    }
+                    row.addView(dayCell, LinearLayout.LayoutParams(0, dp(44), 1f))
+                }
+                calendarGrid.addView(row, LinearLayout.LayoutParams(MATCH, dp(44)))
+            }
+        }
+
+        previousMonth.setOnClickListener {
+            val previous = (shownMonth.clone() as Calendar).apply { add(Calendar.MONTH, -1) }
+            val firstAllowedMonth = monthStart(today)
+            if (previous.get(Calendar.YEAR) > firstAllowedMonth.get(Calendar.YEAR) ||
+                previous.get(Calendar.YEAR) == firstAllowedMonth.get(Calendar.YEAR) && previous.get(Calendar.MONTH) >= firstAllowedMonth.get(Calendar.MONTH)) {
+                shownMonth = previous
+                renderCalendar()
+            }
+        }
+        nextMonth.setOnClickListener {
+            shownMonth = (shownMonth.clone() as Calendar).apply { add(Calendar.MONTH, 1) }
+            renderCalendar()
+        }
+        val timeWatcher = SimpleTextWatcher {
+            if (!updatingTimeFields) {
+                timeEdited = true
+                errorLabel.visibility = View.GONE
+            }
+        }
+        hourField.addTextChangedListener(timeWatcher)
+        minuteField.addTextChangedListener(timeWatcher)
+        hourField.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_NEXT) {
+                minuteField.requestFocus()
+                true
+            } else false
+        }
+        minuteField.setOnEditorActionListener { _, action, _ ->
+            if (action == EditorInfo.IME_ACTION_DONE) {
+                (getSystemService(INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager)
+                    ?.hideSoftInputFromWindow(minuteField.windowToken, 0)
+                true
+            } else false
+        }
+
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        }
+        actions.addView(dialogTextButton("取消", MUTED) { dialog.dismiss() }, LinearLayout.LayoutParams(WRAP, dp(44)))
+        val confirm = label("加入排队", 13, ACCENT, true).apply {
+            gravity = Gravity.CENTER
+            setPadding(dp(13), 0, dp(13), 0)
+            background = if (retroTheme) android1SegmentButtonBackground()
+                else rounded(colorWithAlpha(ACCENT, .13f), dp(9), ACCENT, dp(1))
+            isFocusable = true
+            isClickable = true
+            setOnClickListener {
+                val hour = hourField.text.toString().toIntOrNull()
+                val minute = minuteField.text.toString().toIntOrNull()
+                if (hour == null || hour !in 0..23 || minute == null || minute !in 0..59) {
+                    errorLabel.text = tr("时间无效，请检查小时和分钟。")
+                    errorLabel.visibility = View.VISIBLE
+                    return@setOnClickListener
+                }
                 val scheduled = (selectedDate.clone() as Calendar).apply {
                     set(Calendar.HOUR_OF_DAY, hour)
                     set(Calendar.MINUTE, minute)
@@ -7897,14 +8169,32 @@ class MainActivity : Activity() {
                     set(Calendar.MILLISECOND, 0)
                 }
                 if (scheduled.timeInMillis <= System.currentTimeMillis()) {
-                    showStatus("发送时间必须晚于现在")
-                    return@TimePickerDialog
+                    errorLabel.text = tr("发送时间必须晚于现在")
+                    errorLabel.visibility = View.VISIBLE
+                    return@setOnClickListener
                 }
+                dialog.dismiss()
                 scheduleCurrentMessage(Instant.ofEpochMilli(scheduled.timeInMillis).toString())
-            }, suggestedTime.get(Calendar.HOUR_OF_DAY), suggestedTime.get(Calendar.MINUTE), android.text.format.DateFormat.is24HourFormat(this)).show()
-        }, today.get(Calendar.YEAR), today.get(Calendar.MONTH), today.get(Calendar.DAY_OF_MONTH)).apply {
-            datePicker.minDate = minimumDate.timeInMillis
-        }.show()
+            }
+        }
+        actions.addView(confirm, LinearLayout.LayoutParams(WRAP, dp(44)).apply { leftMargin = dp(8) })
+        card.addView(actions, LinearLayout.LayoutParams(MATCH, dp(44)).apply { topMargin = dp(8) })
+
+        updateSelectedDateLabel()
+        renderCalendar()
+        dialog.setContentView(card)
+        dialog.setCanceledOnTouchOutside(true)
+        dialog.show()
+        dialog.window?.apply {
+            setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            setDimAmount(.48f)
+            setLayout(
+                min(dp(420), resources.displayMetrics.widthPixels - dp(24)),
+                min(dp(650), (resources.displayMetrics.heightPixels - dp(72)).coerceAtLeast(dp(320))),
+            )
+            setGravity(Gravity.CENTER)
+            setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        }
     }
 
     private fun scheduleCurrentMessage(scheduledAt: String, translatedText: String? = null) {
