@@ -7444,7 +7444,7 @@ class MainActivity : Activity() {
         if (retroTheme) heading.addView(ImageView(this).apply {
             setPixelAwareImageResource(iconResource("file"))
             imageTintList = null
-            contentDescription = "正在编辑的文件"
+            contentDescription = tr("正在编辑的文件")
         }, LinearLayout.LayoutParams(dp(16), dp(16)).apply { rightMargin = dp(6) })
         heading.addView(label("正在编辑 ${entries.size} 个文件", 11, SUBTLE, true), LinearLayout.LayoutParams(0, WRAP, 1f))
         if (additions > 0) heading.addView(label("+$additions", 10, if (retroTheme) ANDROID1_ADDED_COLOR else if (lightTheme) Color.rgb(22, 130, 63) else Color.rgb(91, 201, 123), true))

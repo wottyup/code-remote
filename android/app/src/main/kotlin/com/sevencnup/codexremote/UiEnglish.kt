@@ -124,6 +124,7 @@ internal object UiEnglish {
         "本机默认模型" to "Device default model", "本机默认权限" to "Device default permission",
         "添加图片或文件" to "Add image or file", "发送消息" to "Send message",
         "发送" to "Send", "发送消息…" to "Write a message…",
+        "发送中…" to "Sending…", "同步中…" to "Syncing…",
         "暂停当前回复" to "Pause reply", "继续回复：发送续写请求" to "Continue reply by sending a follow-up",
         "已停止当前回复；点继续会发送续写请求" to "Reply stopped. Continue sends a follow-up request.",
         "继续回复失败" to "Could not continue reply", "暂停失败" to "Could not pause reply",
@@ -131,6 +132,7 @@ internal object UiEnglish {
         "正在思考…" to "Thinking…", "正在等待连接…" to "Waiting for connection…",
         "用时" to "Time",
         "回到底部" to "Scroll to bottom", "最近编辑文件" to "Recently edited files",
+        "正在编辑的文件" to "Files being edited",
         "操作记录" to "Activity log", "展开或收起最近编辑文件" to "Toggle recently edited files",
         "上一批" to "Previous batch", "下一批" to "Next batch", "上一页" to "Previous page", "下一页" to "Next page",
         "修改文件" to "Changed files", "查看文件" to "View file", "查看图片" to "View image",
@@ -279,9 +281,28 @@ internal object UiEnglish {
         "脚本命令发送失败" to "Could not send script command",
     )
 
+    private val editingFileCount = Regex("^正在编辑 (\\d+) 个文件$")
+    private val editedFileSummaryCount = Regex("^本次已编辑 (\\d+) 个文件$")
+    private val operationCount = Regex("^(\\d+) 项(进行中|失败|完成)$")
+
     fun translate(value: String): String {
         strings[value]?.let { return it }
         extra[value]?.let { return it }
+        editingFileCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "Editing $count ${if (count == 1) "file" else "files"}"
+        }
+        editedFileSummaryCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "$count ${if (count == 1) "file" else "files"} edited this turn"
+        }
+        operationCount.matchEntire(value)?.let { match ->
+            val count = match.groupValues[1].toIntOrNull() ?: return@let
+            val status = when (match.groupValues[2]) {
+                "进行中" -> "in progress"
+                "失败" -> "failed"
+                else -> "completed"
+            }
+            return "$count ${if (count == 1) "item" else "items"} $status"
+        }
         activityLabels.entries.firstOrNull { (source, _) -> value == source || value.startsWith("$source ") }?.let { (source, translated) ->
             return translated + value.removePrefix(source)
         }
