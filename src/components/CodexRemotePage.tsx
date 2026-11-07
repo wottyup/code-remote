@@ -58,6 +58,7 @@ import {
   X,
 } from 'lucide-react'
 import { threadIsRunning, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
+import { useStreamingTextReveal } from '../hooks/useStreamingTextReveal'
 import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type QueuedTranslationConfig } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
@@ -8383,6 +8384,8 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   const renderCopyAction = (displayedText: string) => showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
+  const revealedText = useStreamingTextReveal(message.text, Boolean(message.role === 'assistant' && message.streaming
+    && !(translation.enabled && translation.showTranslated) && !message.questions?.length))
   const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
   const structuredQuestions = choiceVisible && message.questions?.length ? message.questions : null
   const choiceContent = useMemo(() => choiceVisible && message.role === 'assistant'
@@ -8414,7 +8417,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     ? message.text.slice(0, message.completedTextLength ?? 0)
     : message.streaming ? '' : message.text
   const displayedUserText = originalUserText && !showTranslatedUser ? originalUserText : message.text
-  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : revealedText
   const preferWebUrlLabel = message.role === 'assistant'
   const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
   const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
