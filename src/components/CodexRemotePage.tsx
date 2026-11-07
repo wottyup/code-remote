@@ -2430,6 +2430,21 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     event.currentTarget.form?.requestSubmit()
   }
 
+  function handleQueueKeyboardShortcut(event: KeyboardEvent<HTMLFormElement>) {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    if (queuedMessages.length === 0 || inputIsComposing.current || event.nativeEvent.isComposing) return
+
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target !== composer.current && target.closest('input, select, textarea, [contenteditable="true"]')) return
+    if (target === composer.current && draftRef.current.length > 0) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    setQueuedMessagesExpanded(event.key === 'ArrowUp')
+  }
+
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     if (readingDocuments) return
     const pastedText = event.clipboardData.getData('text/plain')
@@ -2597,6 +2612,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <form
         className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
         ref={isReplying ? syncReplyBreatheOnMount : undefined}
+        onKeyDownCapture={handleQueueKeyboardShortcut}
         onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }}
         onSubmit={(event) => void send(event)}
       >
@@ -2665,6 +2681,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             aria-expanded={queuedMessagesExpanded}
             aria-controls="composer-queue-list"
             aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
+            aria-keyshortcuts="Control+ArrowUp Control+ArrowDown"
+            title="Ctrl+↑ 展开 · Ctrl+↓ 收起"
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
