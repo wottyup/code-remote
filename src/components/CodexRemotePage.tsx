@@ -8195,8 +8195,47 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   const [sending, setSending] = useState(false)
   const [submitted, setSubmitted] = useState<ChoiceReplyDelivery | null>(null)
   const [notice, setNotice] = useState('选好后可直接发送，也可填入输入框修改')
+  const sendingRef = useRef(false)
+  const submittedRef = useRef(false)
+  const composingRef = useRef(false)
+  const lastCompositionEndAt = useRef(0)
   const complete = selected.every((optionIndex, index) => optionIndex >= 0 || optionIndex === -2 && Boolean(customAnswers[index].trim()))
   const reply = () => formatAssistantChoiceReply(groups, selected, customAnswers)
+
+  async function sendAnswer() {
+    if (!enabled || !complete || inserted || submittedRef.current || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    try {
+      const result = await onSend(reply())
+      if (result) {
+        submittedRef.current = true
+        setSubmitted(result)
+        setNotice(result === 'sent' ? '答案已发送，AI 会继续回复'
+          : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
+            : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
+      } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
+  function handleCustomAnswerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+      || composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (Date.now() - lastCompositionEndAt.current < 100 || event.repeat
+      || sendingRef.current || submittedRef.current || inserted || !enabled) return
+    if (!complete) {
+      setNotice('请先填写所有答案，再按 Enter 发送')
+      return
+    }
+    void sendAnswer()
+  }
 
   return (
     <div className="message-choices" aria-label={enabled ? '助手提出的选择题' : '历史选择题，已有后续消息'}>
@@ -8219,26 +8258,14 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
             ))}
             <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || submitted !== null} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
           </div>
-          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
+          {selected[groupIndex] === -2 ? <>
+            <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={`${group.question}的其他答案`} aria-keyshortcuts="Enter" enterKeyHint="send" title="Enter 发送；Shift+Enter 换行" onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} onCompositionStart={() => { composingRef.current = true }} onCompositionEnd={() => { composingRef.current = false; lastCompositionEndAt.current = Date.now() }} onBlur={() => { composingRef.current = false }} onKeyDown={handleCustomAnswerKeyDown} />
+            {enabled && !inserted && submitted === null ? <small className="message-choices__custom-hint">Enter 发送 · Shift+Enter 换行</small> : null}
+          </> : null}
         </fieldset>
       ))}
       {enabled ? <div className="message-choices__footer">
-        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={async () => {
-          setSending(true)
-          try {
-            const result = await onSend(reply())
-            if (result) {
-              setSubmitted(result)
-              setNotice(result === 'sent' ? '答案已发送，AI 会继续回复'
-                : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
-                  : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
-            } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
-          } catch (reason) {
-            setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
-          } finally {
-            setSending(false)
-          }
-        }}>{sending ? '正在发送…' : submitted === 'sent' ? '答案已发送' : submitted === 'queued' ? '已加入排队' : submitted === 'unverified' ? '送达未确认' : '发送并继续'}</button>
+        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => void sendAnswer()}>{sending ? '正在发送…' : submitted === 'sent' ? '答案已发送' : submitted === 'queued' ? '已加入排队' : submitted === 'unverified' ? '送达未确认' : '发送并继续'}</button>
         <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => {
           if (onUse(reply())) setInserted(true)
           else setNotice('请先结束当前编辑，再填入回答')
