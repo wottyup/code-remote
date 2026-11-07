@@ -162,6 +162,7 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
       : 'none',
     '--custom-theme-text-color': preferences.customTextColor,
     '--custom-theme-native-color-scheme': darkCustomTheme ? 'dark' : 'light',
+    '--custom-theme-menu-shade': darkCustomTheme ? '#000' : '#fff',
     '--custom-theme-send-circle': darkCustomTheme ? '#fff' : '#000',
     '--custom-theme-send-arrow': darkCustomTheme ? '#000' : '#fff',
     '--custom-theme-send-disabled-circle': darkCustomTheme ? '#6f737a' : '#8b8e95',
