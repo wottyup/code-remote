@@ -401,6 +401,12 @@ class QueuedDocument(BaseModel):
     sourceFileId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{24,64}$")
 
 
+class QueuedTranslationConfig(BaseModel):
+    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"]
+    profileId: str | None = Field(default=None, max_length=100)
+    style: Literal["natural", "formal"] = "natural"
+
+
 class QueuedMessageRequest(BaseModel):
     id: str = Field(min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
     text: str
@@ -417,6 +423,9 @@ class QueuedMessageRequest(BaseModel):
     claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
+    translation: QueuedTranslationConfig | None = None
+    translationStatus: Literal["pending", "failed"] | None = None
+    translationError: str | None = Field(default=None, max_length=1000)
 
     @field_validator("scheduledAt")
     @classmethod
@@ -1787,7 +1796,7 @@ def create_app(
             ))
         return result.get("turn_id")
 
-    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
+    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code, translation.translate)
     workspace_download_tickets: dict[str, tuple[Path, str, float]] = {}
 
     def paused_thread_view(thread_id: str, thread: dict[str, Any]) -> dict[str, Any]:
@@ -1863,7 +1872,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.108.0-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.109.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2482,6 +2491,21 @@ def create_app(
             await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
 
+    @app.post("/api/v1/codex/queue/{thread_id}/enqueue-translating")
+    async def enqueue_translating_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if body.translationStatus != "pending" or body.translation is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="后台翻译配置无效。")
+        if not body.text.strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            async with shared_queue.delivery_lock(thread_id):
+                inserted = shared_state.enqueue_translating(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        if inserted:
+            await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
     @app.post("/api/v1/codex/queue/{thread_id}/schedule")
     async def schedule_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
         if not body.scheduledAt:
@@ -2559,6 +2583,14 @@ def create_app(
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
         return {"sent": sent, "queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/translation/retry")
+    async def retry_queued_translation(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            queue = await shared_queue.retry_translation(thread_id, body.message_id)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"queue": queue}
 
     @app.post("/api/v1/codex/queue/{thread_id}/start-if-idle")
     async def start_queued_message_if_idle(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:

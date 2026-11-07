@@ -58,7 +58,7 @@ import {
   X,
 } from 'lucide-react'
 import { threadIsRunning, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type QueuedTranslationConfig } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { forgetOpenTerminalThread, isOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
@@ -1155,6 +1155,9 @@ type RemoteConnection = keyof typeof connectionLabel
 interface ComposerSendInput {
   prompt: string
   originalText?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   continuePaused?: boolean
   sendDirectly?: boolean
   images: CodexImageAttachment[]
@@ -1169,7 +1172,7 @@ interface ComposerSendInput {
 }
 
 type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
-type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 interface ComposerHandle {
   focusInput(): void
@@ -1226,6 +1229,7 @@ interface MessageComposerProps {
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string, mode: QueuedMessageSendMode) => Promise<boolean>
+  onRetryQueuedTranslation: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
   onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
@@ -1284,6 +1288,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onSend,
   queuedMessages,
   onSendQueuedNow,
+  onRetryQueuedTranslation,
   onBeginQueuedEdit,
   onUpdateQueuedMessage,
   onEndQueuedEdit,
@@ -2126,15 +2131,31 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     let outgoingPrompt = prompt
+    let backgroundTranslation: QueuedTranslationConfig | undefined
     const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
-    if (translationForSend.enabled && containsChinese(prompt)) {
+    const activeProfileId = selectedTranslationProfileId(translationForSend)
+    const previewKey = `${translationRevision}:${translationForSend.provider}:${activeProfileId ?? 'default'}:${translationForSend.style}:${prompt}`
+    const readyPreview = translationPreview?.key === previewKey && translationPreview.text
+      ? translationPreview.text.trim()
+      : ''
+    const wantsChineseTranslation = translationForSend.enabled && containsChinese(prompt)
+    const shouldTranslateInQueue = wantsChineseTranslation
+      && prompt.length <= 30_000
+      && !sendDirectly
+      && (isReplying || queuedMessages.length > 0 || Boolean(scheduledAt))
+      && !readyPreview
+    if (shouldTranslateInQueue) {
+      backgroundTranslation = {
+        provider: translationForSend.provider,
+        ...(activeProfileId ? { profileId: activeProfileId } : {}),
+        style: translationForSend.style,
+      }
+    } else if (wantsChineseTranslation) {
       sendingRef.current = true
       setSending(true)
       try {
-        const activeProfileId = selectedTranslationProfileId(translationForSend)
-        const previewKey = `${translationRevision}:${translationForSend.provider}:${activeProfileId ?? 'default'}:${translationForSend.style}:${prompt}`
-        outgoingPrompt = (translationPreview?.key === previewKey && translationPreview.text
-          ? translationPreview.text
+        outgoingPrompt = (readyPreview
+          ? readyPreview
           : (await codexRemoteClient.translateText(token, {
             provider: translationForSend.provider, profileId: activeProfileId, source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
           })).text).trim()
@@ -2175,6 +2196,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       sent = await onSend({
         prompt: outgoingPrompt,
         ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
+        ...(backgroundTranslation ? { translation: backgroundTranslation, translationStatus: 'pending' as const } : {}),
         images: previousImages,
         documents: previousDocuments,
         model: showCodexPreferences ? selectedModel || undefined : undefined,
@@ -2655,6 +2677,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const isEditing = editingQueuedMessageId === message.id
               const isSubmitting = message.deliveryState === 'submitting'
               const deliveryUnverified = Boolean(message.sendAttempt)
+              const translationPending = message.translationStatus === 'pending'
+              const translationFailed = message.translationStatus === 'failed'
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId) || Boolean(movingQueuedId)
               const previousMessage = queuedMessages[index - 1]
               const nextMessage = queuedMessages[index + 1]
@@ -2668,7 +2692,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
               const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
               const waitingForClaude = isRunning && !showCodexPreferences
-              const sendTitle = isSubmitting ? '消息正在提交，请稍候'
+              const sendTitle = translationPending ? '后台翻译完成后才能发送'
+                : translationFailed ? `翻译失败：${message.translationError ?? '请重试翻译。'}`
+                  : isSubmitting ? '消息正在提交，请稍候'
                 : deliveryUnverified ? '请先核对这条消息是否已发送'
                   : waitingForClaude ? 'Claude 当前不支持运行中插队，请等待回复结束，或暂停后发送'
                     : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
@@ -2685,12 +2711,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   : message.editing ? '另一设备正在编辑 · 暂停发送'
                     : sendingNow ? '正在确认送达'
                       : deliveryUnverified ? '可能已发送 · 请核对聊天记录'
+                        : translationPending ? '后台翻译中 · 完成后自动发送'
+                          : translationFailed ? `翻译失败 · ${message.translationError ?? '点击重试翻译'}`
                         : scheduledLabel ? `定于 ${scheduledLabel} 发送`
                           : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small title={translationFailed ? message.translationError : undefined}>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
                   <span className="composer-queue__order" role="group" aria-label={`调整第 ${index + 1} 条发送顺序`}>
                     <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={`上移第 ${index + 1} 条排队消息`} title="上移一位"><ArrowUp size={14} /></button>
                     <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={`下移第 ${index + 1} 条排队消息`} title="下移一位"><ArrowDown size={14} /></button>
@@ -2698,8 +2726,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || waitingForClaude} onClick={() => void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{sendMode === 'steer' ? '插队' : '发送'}</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending || (!translationFailed && waitingForClaude)} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? '翻译中' : translationFailed ? '重试翻译' : sendMode === 'steer' ? '插队' : '发送'}</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
                 </div>
@@ -6858,6 +6886,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+              onRetryQueuedTranslation={activeRemote.retryQueuedTranslation}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
               onEndQueuedEdit={activeRemote.endEditQueuedMessage}

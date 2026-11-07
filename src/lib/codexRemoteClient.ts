@@ -30,6 +30,11 @@ export interface MCPApprovalGrant {
 export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic' | 'responses'
 export type TranslationApiProtocol = Extract<TranslationProvider, 'chat' | 'anthropic' | 'responses'>
 export type TranslationStyle = 'natural' | 'formal'
+export interface QueuedTranslationConfig {
+  provider: TranslationProvider
+  profileId?: string
+  style: TranslationStyle
+}
 
 export interface TranslationProviderConfig {
   configured: boolean
@@ -211,6 +216,9 @@ export interface CodexQueuedMessage {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
@@ -1093,6 +1101,12 @@ export const codexRemoteClient = {
       body: JSON.stringify(message),
     }, { networkRetries: 3 })
   },
+  enqueueTranslatingMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue-translating`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
   scheduleMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/schedule`, {
       method: 'POST',
@@ -1126,6 +1140,12 @@ export const codexRemoteClient = {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/update`, {
       method: 'POST',
       body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  retryQueuedTranslation(token: string, threadId: string, messageId: string) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/translation/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId }),
     }, { networkRetries: 3 })
   },
   pins(token: string) {
