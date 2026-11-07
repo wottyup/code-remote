@@ -136,6 +136,8 @@ internal object UiEnglish {
         "操作记录" to "Activity log", "展开或收起最近编辑文件" to "Toggle recently edited files",
         "上一批" to "Previous batch", "下一批" to "Next batch", "上一页" to "Previous page", "下一页" to "Next page",
         "修改文件" to "Changed files", "查看文件" to "View file", "查看图片" to "View image",
+        "审核" to "Review", "收起审核" to "Hide review", "收起文件" to "Collapse files",
+        "插入对话" to "Insert into chat", "文件已更新，点击文件名查看文件" to "File updated. Tap its name to view it.",
         "关闭图片" to "Close image", "关闭文件预览" to "Close file preview",
         "关闭修改预览" to "Close diff preview", "文件" to "File", "文件夹" to "Folder",
         "空文件夹" to "Empty folder", "图片无法加载" to "Could not load image",
@@ -284,6 +286,7 @@ internal object UiEnglish {
     private val editingFileCount = Regex("^正在编辑 (\\d+) 个文件$")
     private val editedFileSummaryCount = Regex("^本次已编辑 (\\d+) 个文件$")
     private val operationCount = Regex("^(\\d+) 项(进行中|失败|完成)$")
+    private val moreEditedFilesCount = Regex("^查看另外 (\\d+) 个文件$")
 
     fun translate(value: String): String {
         strings[value]?.let { return it }
@@ -293,6 +296,9 @@ internal object UiEnglish {
         }
         editedFileSummaryCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
             return "$count ${if (count == 1) "file" else "files"} edited this turn"
+        }
+        moreEditedFilesCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "View $count more ${if (count == 1) "file" else "files"}"
         }
         operationCount.matchEntire(value)?.let { match ->
             val count = match.groupValues[1].toIntOrNull() ?: return@let
@@ -307,6 +313,10 @@ internal object UiEnglish {
             return translated + value.removePrefix(source)
         }
         return when {
+            value.startsWith("已更改 ") -> value.replaceFirst("已更改 ", "Changed ")
+            value.startsWith("查看更改 ") -> value.replaceFirst("查看更改 ", "View changes to ")
+            value.startsWith("插入 ") && value.endsWith(" 到对话") ->
+                "Insert ${value.removePrefix("插入 ").removeSuffix(" 到对话")} into chat"
             value.startsWith("排队消息 · ") -> value.replaceFirst("排队消息 · ", "Queued messages · ")
             value.startsWith("最近编辑文件 · ") -> value.replaceFirst("最近编辑文件 · ", "Recently edited files · ")
             value.startsWith("模型：") -> value.replace("模型：", "Model: ").replace("思考：", "Reasoning: ")

@@ -6611,7 +6611,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(if (compact) 3 else 10), dp(if (compact) 4 else 5), dp(if (compact) 3 else 9), dp(if (compact) 4 else 5))
             setOnClickListener { showDiffPreview(entry) }
-            contentDescription = "查看更改 ${entry.path}"
+            contentDescription = tr("查看更改 ${entry.path}")
         }
         line.addView(ImageView(this).apply {
             setImageResource(fileDisplayIconResource(entry.path))
@@ -7591,7 +7591,7 @@ class MainActivity : Activity() {
                     setPadding(dp(7), 0, dp(7), 0)
                     background = rounded(controlSurface, dp(7), controlBorder, dp(1))
                     setOnClickListener { insertWorkspacePathIntoComposer(entry.path) }
-                    contentDescription = "插入 ${entry.path} 到对话"
+                    contentDescription = tr("插入 ${entry.path} 到对话")
                 }
                 insert.addView(ImageView(this).apply {
                     setPixelAwareImageResource(if (retroTheme) iconResource("add") else R.drawable.ic_insert_conversation)
@@ -7601,7 +7601,7 @@ class MainActivity : Activity() {
                 row.addView(insert, LinearLayout.LayoutParams(WRAP, dp(28)).apply { leftMargin = dp(8) })
                 details.addView(row, LinearLayout.LayoutParams(MATCH, WRAP))
                 if (reviewing) details.addView(label("", 10, MUTED, translateUi = false, pixelize = false).apply {
-                    text = highlightedReviewDiff(entry.diff.ifBlank { "文件已更新，点击文件名查看文件" })
+                    text = highlightedReviewDiff(entry.diff.ifBlank { tr("文件已更新，点击文件名查看文件") })
                     typeface = Typeface.MONOSPACE
                     maxLines = 10
                     setPadding(dp(12), dp(7), dp(12), dp(7))
@@ -7619,7 +7619,7 @@ class MainActivity : Activity() {
                     setOnClickListener {
                         if (expanded || reviewing) expandedFileChangeIds.remove(summaryId) else expandedFileChangeIds.add(summaryId)
                         reviewing = false
-                        review.text = "审核"
+                        review.text = tr("审核")
                         refreshRows()
                         detailsScroll.scrollTo(0, 0)
                     }
@@ -7634,7 +7634,7 @@ class MainActivity : Activity() {
         }
         review.setOnClickListener {
             reviewing = !reviewing
-            review.text = if (reviewing) "收起审核" else "审核"
+            review.text = tr(if (reviewing) "收起审核" else "审核")
             refreshRows()
             detailsScroll.scrollTo(0, 0)
         }
