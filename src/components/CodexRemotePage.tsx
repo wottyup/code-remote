@@ -2785,8 +2785,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
           aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
-          aria-keyshortcuts={editingQueuedMessageId ? undefined : 'Control+Enter'}
-          title={editingQueuedMessageId ? 'Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter' : showCodexPreferences ? 'Ctrl+Enter 立即发送；回复时插队' : 'Ctrl+Enter 立即发送；Claude 回复中暂不支持插队'}
+          aria-keyshortcuts={[
+            stableQueueHeight ? 'Control+ArrowLeft Control+ArrowRight' : '',
+            editingQueuedMessageId ? '' : 'Control+Enter',
+          ].filter(Boolean).join(' ') || undefined}
+          title={`${editingQueuedMessageId ? 'Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter' : showCodexPreferences ? 'Ctrl+Enter 立即发送；回复时插队' : 'Ctrl+Enter 立即发送；Claude 回复中暂不支持插队'}${stableQueueHeight ? '；Ctrl+←/→ 切换并发窗口' : ''}`}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -5259,6 +5262,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const focusComposerAfterThreadSwitch = useRef<string | null>(null)
+  const focusComposerAfterPaneShortcut = useRef(false)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
@@ -5672,6 +5676,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  useLayoutEffect(() => {
+    if (!focusComposerAfterPaneShortcut.current) return
+    focusComposerAfterPaneShortcut.current = false
+    if (shouldAutoFocusComposer()) composerHandle.current?.focusInput()
+  }, [selectedPaneIndex])
   useLayoutEffect(() => {
     if (!activeThreadId || focusComposerAfterThreadSwitch.current !== activeThreadId) return
     focusComposerAfterThreadSwitch.current = null
@@ -6598,6 +6607,35 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     document.addEventListener('keydown', switchSidebarThread)
     return () => document.removeEventListener('keydown', switchSidebarThread)
   }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, usageStatsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
+
+  useEffect(() => {
+    const switchConcurrentPane = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+      if (direction === 0 || openPaneIndexes.length < 2) return
+      if (sidebarOpen || sidebarSelectionMode || sidebarSelectionBusy || settingsOpen || usageStatsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const editableTarget = target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')
+      if (editableTarget && !editableTarget.matches('textarea[data-chat-composer]')) return
+      if (document.querySelector('dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+
+      const currentPosition = openPaneIndexes.indexOf(selectedPaneIndex)
+      if (currentPosition < 0) return
+      const nextPaneIndex = openPaneIndexes[(currentPosition + direction + openPaneIndexes.length) % openPaneIndexes.length]
+      if (nextPaneIndex === undefined || nextPaneIndex === selectedPaneIndex) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      focusComposerAfterPaneShortcut.current = true
+      setSelectedPaneIndex(nextPaneIndex)
+    }
+
+    document.addEventListener('keydown', switchConcurrentPane, true)
+    return () => document.removeEventListener('keydown', switchConcurrentPane, true)
+  }, [openPaneIndexes, selectedPaneIndex, sidebarOpen, sidebarSelectionMode, sidebarSelectionBusy, settingsOpen, usageStatsOpen, threadContextMenu, threadRenameTarget, threadDeleteTargets])
 
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
