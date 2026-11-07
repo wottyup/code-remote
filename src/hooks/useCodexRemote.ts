@@ -224,7 +224,7 @@ const persistentThreadCacheWriteDelayMs = 600
 // Version 2 preserves original message whitespace and source item identity.
 const persistentThreadCacheVersion = 2
 const threadMetadataFreshnessMs = 30_000
-const streamingRenderIntervalMs = 48
+const streamingRenderIntervalMs = 24
 const maxPersistedQueuedImageCharacters = 12_000_000
 const maxPersistedQueuedThreads = 24
 const maxPersistedQueuedMessagesPerThread = 30
@@ -1930,6 +1930,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     retireAssistantItems(targetTurnId, (activityTimelineByTurnRef.current[targetTurnId] ?? [])
       .filter((entry) => entry.type === 'message').map((entry) => entry.itemId))
     const recordedStart = turnStartedAtById.current.get(targetTurnId)
+    const finalizedActivityTimeline = activityTimelineByTurnRef.current
+    setActivityTimelineByTurn((current) => current === finalizedActivityTimeline ? current : finalizedActivityTimeline)
     setMessages((current) => {
       const next = current.map((message) => {
         const matches = message.streaming
@@ -2130,14 +2132,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     })
   }, [cacheThreadSnapshot])
 
-  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number) => {
+  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number, renderImmediately = true) => {
     if (!threadId || !turnId || !itemId) return
     const entry: CodexActivityTimelineEntry = { type: 'message', itemId, length }
     if (threadId === activeThreadId.current) {
       const next = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, entry)
       if (next === activityTimelineByTurnRef.current) return
       activityTimelineByTurnRef.current = next
-      setActivityTimelineByTurn(next)
+      if (renderImmediately) setActivityTimelineByTurn(next)
       return
     }
     const cached = threadHistoryCache.current.get(threadId)
@@ -4051,7 +4053,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       const part = streamingAssistantParts.current.get(itemId) ?? ''
       streamingAssistantParts.current.set(itemId, part + delta)
-      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length)
+      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length, false)
       const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       activityItemId.current = itemId
