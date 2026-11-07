@@ -9618,11 +9618,11 @@ class MainActivity : Activity() {
                 maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
             }, widthWrap())
             row.addView(copy, LinearLayout.LayoutParams(0, dp(42), 1f))
-            row.addView(iconButton("edit", "重命名 ${profile.name}") { renameConnection(profile.id) }.apply {
-                setPadding(dp(8), dp(8), dp(8), dp(8))
+            row.addView(connectionProfileActionButton("edit", "重命名 ${profile.name}") {
+                renameConnection(profile.id)
             }, LinearLayout.LayoutParams(dp(38), dp(38)))
-            row.addView(iconButton("delete", "删除 ${profile.name}") { removeConnection(profile.id) }.apply {
-                setPadding(dp(8), dp(8), dp(8), dp(8))
+            row.addView(connectionProfileActionButton("delete", "删除 ${profile.name}") {
+                removeConnection(profile.id)
             }, LinearLayout.LayoutParams(dp(38), dp(38)))
             connection.addView(row, LinearLayout.LayoutParams(MATCH, WRAP).apply { topMargin = dp(6) })
         }
@@ -13648,6 +13648,15 @@ class MainActivity : Activity() {
         isClickable = true
         setOnClickListener { action() }
     }
+
+    private fun connectionProfileActionButton(icon: String, description: String, action: () -> Unit): ImageButton =
+        iconButton(icon, description, action).apply {
+            if (!retroTheme && !pixelTheme) {
+                setImageResource(if (icon == "edit") R.drawable.ic_settings_edit_line else R.drawable.ic_settings_delete_line)
+                imageTintList = ColorStateList.valueOf(MUTED)
+            }
+            setPadding(dp(9), dp(9), dp(9), dp(9))
+        }
 
     private fun sidebarIconButton(icon: String, description: String, action: () -> Unit): ImageButton =
         iconButton(icon, description, action).apply {
