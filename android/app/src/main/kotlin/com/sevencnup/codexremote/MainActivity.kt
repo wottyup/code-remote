@@ -614,6 +614,16 @@ class MainActivity : Activity() {
         else Typeface.createFromAsset(assets, "fonts/DroidSans-Bold.ttf")
     }
     private val prefs by lazy { getSharedPreferences(PREFS, MODE_PRIVATE) }
+    private val connectionChatSelections by lazy {
+        ConnectionChatSelections(
+            read = { key -> prefs.getString(key, null) },
+            write = { values ->
+                val editor = prefs.edit()
+                values.forEach { (key, value) -> editor.putString(key, value) }
+                editor.apply()
+            },
+        )
+    }
     private val themeName: String get() = (prefs.getString(KEY_THEME, if (prefs.getBoolean(KEY_LIGHT_THEME, false)) "light" else "dark") ?: "dark")
         .let { if (it == "oreo" || it == "gingerbread" || it == "android23") "lollipop" else it }
     private val lightTheme get() = when (themeName) {
@@ -1231,7 +1241,7 @@ class MainActivity : Activity() {
         endpoint = prefs.getString(KEY_ENDPOINT, "").orEmpty()
         token = prefs.getString(KEY_TOKEN, "").orEmpty()
         loadConnectionProfiles()
-        currentMode = prefs.getString(KEY_MODE, "codex") ?: "codex"
+        currentMode = restoreConnectionSelection(prefs.getString(KEY_MODE, "codex")).mode
         if (endpoint.isNotBlank() && token.isNotBlank()) {
             openChatHome()
             verifySavedConnection(homeAlreadyOpen = true)
@@ -1471,6 +1481,7 @@ class MainActivity : Activity() {
         }
         if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
+        rememberCurrentConnectionSelection()
         connectionGeneration++
         sidebarSelectionMode = false
         selectedSidebarThreadIds.clear()
@@ -1478,6 +1489,7 @@ class MainActivity : Activity() {
         activeConnectionId = profile.id
         endpoint = profile.endpoint
         token = profile.token
+        currentMode = restoreConnectionSelection(currentMode).mode
         translationConfiguration = null
         translationConfigurationEndpoint = ""
         translationConfigurationStatus = null
@@ -1513,11 +1525,19 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun connectionScopedKey(base: String): String =
-        if (activeConnectionId.isBlank() || activeConnectionId == prefs.getString(KEY_LEGACY_CONNECTION_ID, null)) base
-        else "${activeConnectionId}_$base"
+    private fun connectionScopedKey(base: String): String = ConnectionChatSelections.scopedKey(
+        activeConnectionId, prefs.getString(KEY_LEGACY_CONNECTION_ID, null), base,
+    )
 
     private fun activeThreadStorageKey(mode: String): String = connectionScopedKey("$KEY_ACTIVE_THREAD_PREFIX$mode")
+
+    private fun rememberCurrentConnectionSelection() {
+        connectionChatSelections.save(activeConnectionId, prefs.getString(KEY_LEGACY_CONNECTION_ID, null),
+            currentMode, activeThreadId)
+    }
+
+    private fun restoreConnectionSelection(fallbackMode: String?): ConnectionChatSelections.Selection =
+        connectionChatSelections.restore(activeConnectionId, prefs.getString(KEY_LEGACY_CONNECTION_ID, null), fallbackMode)
 
     private fun showConnectionPage(message: String? = null) {
         closeWebPreview()
@@ -1690,8 +1710,7 @@ class MainActivity : Activity() {
         deferredMessageTurnIds.clear()
         syncRevisions.clear()
         renderHome()
-        prefs.getString(activeThreadStorageKey(currentMode), null)
-            ?.takeIf { it.isNotBlank() }
+        restoreConnectionSelection(currentMode).threadId
             ?.let { cachedId ->
                 selectThread(
                     JSONObject().put("id", cachedId).put("engine", currentMode),
@@ -3121,6 +3140,7 @@ class MainActivity : Activity() {
                         clearLiveReply()
                         activeThreadId = null
                         activeThread = null
+                        rememberCurrentConnectionSelection()
                         queuedMessages = JSONArray()
                         running = false
                         selectedFiles.clear()
@@ -3683,7 +3703,7 @@ class MainActivity : Activity() {
                             }
                             renderHeader()
                         }
-                    } else if (showErrors && result.length() > 0) {
+                    } else if (showErrors && result.length() > 0 && !restoreConnectionSelection(currentMode).explicitlyEmpty) {
                         val first = (0 until result.length()).mapNotNull { result.optJSONObject(it) }
                             .filter { it.optString("engine", "codex") == currentMode }
                             .firstOrNull { it.optString("id") == prefs.getString(activeThreadStorageKey(currentMode), null) }
@@ -3748,7 +3768,7 @@ class MainActivity : Activity() {
         visibleHistoryTurnCount = INITIAL_VISIBLE_HISTORY_TURNS
         currentMode = thread.optString("engine", "codex")
         restoreComposerInputHeight()
-        prefs.edit().putString(KEY_MODE, currentMode).putString(activeThreadStorageKey(currentMode), id).apply()
+        rememberCurrentConnectionSelection()
         running = isThreadRunning(activeThread ?: thread)
         pendingApproval = null
         queuedMessages = JSONArray()
@@ -9113,20 +9133,27 @@ class MainActivity : Activity() {
 
     private fun createThread() {
         if (queueEditPending || queueEditItem != null) { showStatus("请先保存或取消排队消息编辑"); return }
+        val requestConnection = connectionGeneration
+        val requestSelection = historySelectionGeneration
+        val api = RemoteApi(endpoint, token)
         val requestId = UUID.randomUUID().toString()
         val body = JSONObject().put("engine", currentMode).put("request_id", requestId)
             .putOpt("model", preference(if (currentMode == "codex") "model" else "claudeModel"))
         if (currentMode == "codex") body.put("approval_policy", preference("approvalPolicy") ?: "on-request")
         io.execute {
             try {
-                val thread = RemoteApi(endpoint, token).post("/api/v1/codex/threads", body)
+                val thread = api.post("/api/v1/codex/threads", body)
                 handler.post {
+                    if (requestConnection != connectionGeneration) return@post
                     markKnownEmptyThread(thread.optString("id"))
                     refreshThreads(false)
+                    if (requestSelection != historySelectionGeneration) return@post
                     selectThread(thread)
                     setSidebarVisible(false)
                 }
-            } catch (error: Exception) { handler.post { showStatus(error.message ?: "新建对话失败") } }
+            } catch (error: Exception) { handler.post {
+                if (requestConnection == connectionGeneration) showStatus(error.message ?: "新建对话失败")
+            } }
         }
     }
 
@@ -9140,7 +9167,7 @@ class MainActivity : Activity() {
         }
         if (terminalOverlay != null) closeTerminal()
         persistCurrentDraft()
-        activeThreadId?.let { prefs.edit().putString(activeThreadStorageKey(previousMode), it).apply() }
+        rememberCurrentConnectionSelection()
         currentMode = targetMode
         restoreComposerInputHeight()
         sidebarSelectionMode = false
@@ -9165,6 +9192,7 @@ class MainActivity : Activity() {
         if (rememberedThread != null) {
             selectThread(rememberedThread, eagerDiskCache = true)
         } else {
+            rememberCurrentConnectionSelection()
             renderMessages(false)
             renderQueue()
             renderHeader()
@@ -9291,6 +9319,7 @@ class MainActivity : Activity() {
                     clearLiveReply()
                     activeThreadId = null
                     activeThread = null
+                    rememberCurrentConnectionSelection()
                     historyLoadingThreadId = null
                     historyLoadError = null
                     historySelectionGeneration += 1
@@ -13499,18 +13528,9 @@ class MainActivity : Activity() {
         if (!targetConnection.isNullOrBlank() && targetConnection != activeConnectionId) return
         if (terminalOverlay != null && terminalThreadId != threadId) closeTerminal()
         val thread = findThread(threadId)
-        if (thread != null) selectThread(thread) else {
-            activeThreadId = threadId
-            activeThread = null
-            historyLoadingThreadId = threadId
-            historyLoadError = null
-            historySelectionGeneration += 1
-            queuedMessages = JSONArray()
-            running = false
-            renderMessages(false)
-            renderQueue()
-            loadThreadHistoryCacheThenRefresh(threadId)
-        }
+        val target = thread ?: JSONObject().put("id", threadId)
+            .put("engine", if (threadId.startsWith("claude:")) "claude-code" else "codex")
+        selectThread(target, eagerDiskCache = true)
     }
 
     private fun showStatus(message: String) {
@@ -14500,8 +14520,8 @@ class MainActivity : Activity() {
         private const val KEY_CONNECTION_PROFILES = "native_connection_profiles"
         private const val KEY_ACTIVE_CONNECTION_ID = "native_active_connection_id"
         private const val KEY_LEGACY_CONNECTION_ID = "native_legacy_connection_id"
-        private const val KEY_MODE = "native_engine_mode"
-        private const val KEY_ACTIVE_THREAD_PREFIX = "native_active_thread_"
+        private const val KEY_MODE = ConnectionChatSelections.GLOBAL_MODE_KEY
+        private const val KEY_ACTIVE_THREAD_PREFIX = ConnectionChatSelections.ACTIVE_THREAD_PREFIX
         private const val KEY_FONT_SIZE = "native_chat_font_size"
         private const val KEY_GLOBAL_FONT_ADJUSTMENT = "native_global_font_adjustment"
         private const val KEY_THEME = "native_theme"
