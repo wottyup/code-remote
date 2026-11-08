@@ -60,7 +60,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .app-recovery__actions button { min-height: 31px; padding: 0 10px; border: 1px solid rgba(146, 157, 184, .28); border-radius: 7px; background: #292e3a; color: #d6dce9; cursor: pointer; font-size: calc(12px + var(--mobile-font-offset)); }
 .app-recovery__actions button:first-child { border-color: rgba(159, 177, 255, .48); background: #586aa4; color: #fff; }
 .app-recovery__actions button:hover { border-color: rgba(185, 198, 255, .72); background: #657abc; color: #fff; }
-.remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior: none; background: #101114; color: #e9ebef; }
+.remote-shell { --line: rgba(146, 157, 184, .16); --muted: #858b95; --panel: #15171c; --panel-raised: #1a1d24; --accent: #aabaff; --codex-brand-color: #7188c2; --pane-marquee-color: #f5f5f1; position: relative; isolation: isolate; display: grid; width: 100%; height: var(--app-viewport-height); min-height: var(--app-viewport-height); grid-template-columns: clamp(180px, 22vw, 284px) minmax(0, 1fr) 8px var(--workspace-explorer-width, 340px); grid-template-rows: minmax(0, 1fr); overflow: hidden; overscroll-behavior: none; background: #101114; color: #e9ebef; }
 .sidebar-backdrop { display: none; }
 .remote-shell--android { padding-top: var(--native-status-bar-inset); }
 .remote-sidebar { --sidebar-selection-border: #8296ce; --sidebar-selection-bg: rgba(107, 128, 185, .2); z-index: 2; display: flex; min-width: 0; min-height: 0; flex-direction: column; overflow: hidden; padding: 12px 12px 12px; border-right: 1px solid var(--line); background: linear-gradient(180deg, #15171b 0%, #121316 100%); }
@@ -100,7 +100,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .new-thread-button:disabled { cursor: not-allowed; opacity: .48; }
 .sidebar-engine-filters { display: flex; align-items: center; gap: 6px; min-height: 30px; }
 .sidebar-engine-filter { display: grid; width: 34px; height: 30px; flex: 0 0 34px; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #8490ad; cursor: pointer; transition: border-color .16s ease, background-color .16s ease, color .16s ease; }
-.sidebar-engine-filter--codex > .engine-brand-icon { background-color: #7188c2; }
+.sidebar-engine-filter--codex > .engine-brand-icon { background-color: var(--codex-brand-color); }
 .sidebar-engine-filter--claude-code > .engine-brand-icon { opacity: .78; }
 .sidebar-engine-filter:hover { background: rgba(129, 148, 204, .12); color: #d2dcfa; }
 .sidebar-engine-filter--claude-code:hover { color: #e7a08a; }
@@ -138,7 +138,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .thread-row--active::before { display: none !important; content: none !important; }
 .thread-row--active > .engine-brand-icon { color: #d3d6dc; }
 .thread-row__icon { display: grid; width: 22px; height: 22px; flex: 0 0 22px; place-items: center; border-radius: 6px; }
-.remote-shell:not(.remote-shell--theme-custom) .thread-row__icon .engine-brand-icon--codex { background-color: #7188c2; }
+.remote-shell:not(.remote-shell--theme-custom) .thread-row__icon .engine-brand-icon--codex { background-color: var(--codex-brand-color); }
 .thread-row__checkbox { display: grid; width: 18px; height: 18px; place-items: center; border: 1.5px solid #8e98a9; border-radius: 5px; }
 .thread-row__checkbox--checked { border-color: #7691cc; background: #5b76b2; }
 .thread-row__checkbox--checked svg { stroke: #fff; }
@@ -1684,7 +1684,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-warm .workspace-file-preview__line-content .hljs-code { color: #9a5b22; }
 .remote-shell--theme-warm .workspace-file-preview__line-content .hljs-link { color: #397b7c; }
 
-.remote-shell--theme-custom { --pane-marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background: transparent; }
+.remote-shell--theme-custom { --codex-brand-color: var(--custom-theme-text-color); --pane-marquee-color: var(--custom-theme-text-color); color: var(--custom-theme-text-color); background: transparent; }
 .remote-shell--theme-custom .remote-sidebar, .remote-shell--theme-custom .theme-settings-panel { --sidebar-selection-border: var(--custom-theme-border); --sidebar-selection-bg: var(--custom-theme-active); border-color: var(--custom-theme-border); background: var(--custom-theme-surface); backdrop-filter: blur(var(--custom-theme-panel-blur)); -webkit-backdrop-filter: blur(var(--custom-theme-panel-blur)); }
 .remote-shell--theme-custom .sidebar-search { border-color: var(--custom-theme-border); background: var(--custom-theme-control); color: color-mix(in srgb, var(--custom-theme-text-color) 65%, transparent); }
 .remote-shell--theme-custom .sidebar-search:focus-within { background: var(--custom-theme-surface); }
@@ -2174,7 +2174,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell .remote-chat--claude .chat-message--user .chat-message__content,
 .remote-shell .remote-chat--claude .chat-message--user .chat-message__text { color: #fff3ee; }
 .remote-shell:not(.remote-shell--theme-retro):not(.remote-shell--theme-pixel) .remote-chat--claude .chat-message--user .chat-message__content a { color: #b8ddff; }
-.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #c8d0ff; }
+.remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: var(--codex-brand-color); }
 .remote-shell .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #ee8c6d; }
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__body { border: 0; background: #b3b8d5; }
 .remote-shell .remote-chat:not(.remote-chat--claude) .chat-message--user .chat-message__content,
@@ -2201,7 +2201,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-light .new-thread-button > span:last-child { color: #fff; }
 .remote-shell--claude-mode .remote-sidebar .icon-button:hover,
 .remote-shell--claude-mode .remote-sidebar__footer button:hover { color: #ee8c6d; }
-.remote-shell--claude-mode .engine-switch-button .engine-brand-icon--codex { background-color: #7188c2; color: #7188c2; }
+.remote-shell--claude-mode .engine-switch-button .engine-brand-icon--codex { background-color: var(--codex-brand-color); color: var(--codex-brand-color); }
 .running-indicator__activity--claude-thinking .operation-activity__text { background-image: none; color: #ee8c6d; animation: none; -webkit-text-fill-color: #ee8c6d; }
 
 .remote-shell .message-composer__footer .send-button--arrow {
@@ -2706,6 +2706,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
   .remote-shell--theme-retro.remote-shell .remote-chat--claude .chat-message--user .chat-message__body { padding: 0; border: 0; background: transparent; box-shadow: none; }
   .remote-shell--theme-retro .chat-message__meta { display: block; min-height: 0; margin: 1em 0 .25em; color: #000; font: bold 1em/normal "Times New Roman", Times, serif; }
   .remote-shell--theme-retro .chat-message__meta :is(strong, span, time) { color: #000 !important; font: inherit; }
+  .remote-shell--theme-retro .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: var(--codex-brand-color) !important; }
   .remote-shell--theme-retro .chat-message__timing,
   .remote-shell--theme-retro .chat-message__sent-at { display: none; }
   .remote-shell--theme-retro .chat-message--user .chat-message__meta { display: none; }
@@ -3147,7 +3148,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell .thread-completion-toast--codex .thread-completion-toast__icon {
   border-color: rgba(113, 136, 194, .58);
   background: rgba(113, 136, 194, .2);
-  color: #7188c2;
+  color: var(--codex-brand-color);
 }
 .remote-shell .thread-completion-toast--codex .thread-completion-toast__open:hover,
 .remote-shell .thread-completion-toast--codex .thread-completion-toast__close:hover { background: rgba(113, 136, 194, .12); }
@@ -3485,7 +3486,6 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .remote-shell--theme-pixel.remote-shell .remote-chat--claude .chat-message--user :is(.chat-message__content, .chat-message__text) { color: #ffe0d1; font-family: inherit; }
 .remote-shell--theme-pixel .chat-message--assistant .chat-message__body { border-radius: 0; background: transparent; box-shadow: none; }
 .remote-shell--theme-pixel .chat-message--assistant :is(.chat-message__content, .chat-message__meta) { color: var(--pixel-text); font-family: inherit; }
-.remote-shell--theme-pixel .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--codex { color: #8fc1ff; }
 .remote-shell--theme-pixel .chat-message--assistant .chat-message__meta > .chat-message__assistant-name--claude { color: #ee8c6d; }
 .remote-shell--theme-pixel .chat-message__meta span,
 .remote-shell--theme-pixel .chat-message__timing,
@@ -4250,7 +4250,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 
 .native-config__body { display: grid; gap: 20px; padding: 22px 0 0; }
 .native-config .theme-settings-card__heading .engine-brand-icon { width: 22px; height: 22px; }
-.native-config .engine-brand-icon--codex, .theme-settings-panel__nav-item .engine-brand-icon--codex { background-color: #7188c2; }
+.native-config .engine-brand-icon--codex, .theme-settings-panel__nav-item .engine-brand-icon--codex { background-color: var(--codex-brand-color); }
 .native-config__profiles { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 12px; }
 .native-config__profile-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .native-config__profiles .translation-select__trigger, .native-config__profile-actions button { min-height: 44px; }
