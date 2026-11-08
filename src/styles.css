@@ -4282,6 +4282,45 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .native-config__field input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--settings-inner-border); border-radius: 9px; outline: none; background: var(--settings-inner-surface); color: inherit; font: inherit; font-size: calc(14px + var(--mobile-font-offset)); }
 .native-config__field input::placeholder { color: inherit; opacity: .45; }
 .native-config__field input:focus-visible { border-color: var(--settings-nav-accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--settings-nav-accent) 16%, transparent); }
+
+/* Keep focus and selection readable without adding an outer ring to controls. */
+:is(button, input, textarea, select, a, summary, [role="button"], [contenteditable="true"], [tabindex]):focus,
+.theme-image-upload:focus-within { outline: none !important; }
+:is(input, textarea, select):focus { box-shadow: none !important; }
+:is(button, a, summary, [role="button"]):focus-visible,
+.theme-image-upload:focus-within {
+  text-decoration: underline;
+  text-underline-offset: .18em;
+}
+:is(button, a, summary, [role="button"]):focus-visible :is(svg, img, .engine-brand-icon) {
+  filter: drop-shadow(0 0 3px currentColor);
+}
+.remote-shell--theme-chinese-retro :is(.sidebar-search, .message-composer):focus-within {
+  box-shadow: none;
+}
+.theme-option--active,
+.translation-select__trigger:is(:hover, [aria-expanded="true"]),
+.remote-shell--theme-custom .theme-settings-panel .translation-select__option:is(:hover, :focus-visible, [aria-selected="true"]),
+:is(.thread-context-menu, .terminal-context-menu) button:not(.thread-context-menu__danger):is(:hover, :focus-visible):not(:disabled) {
+  box-shadow: none !important;
+}
+.thread-row:is(.thread-row--active, .thread-row--selected) {
+  outline: none;
+  box-shadow: none;
+}
+.remote-shell--theme-pixel .thread-row--active,
+.remote-shell--theme-chinese-retro .thread-row--active {
+  border-image: none;
+}
+.workspace-explorer__entry--selected {
+  border-color: transparent !important;
+  border-image: none !important;
+}
+.remote-shell--theme-pixel .workspace-explorer__entry--selected,
+.remote-shell--theme-chinese-retro .workspace-explorer__entry--selected {
+  border-width: 1px;
+}
+.remote-shell--theme-chinese-retro .theme-option--active { border-width: 10px; }
 .native-config__field input:disabled { opacity: .65; }
 .native-config__field .translation-settings__field { display: grid; gap: 8px; }
 .native-config__field .translation-select__trigger { min-height: 44px; }
