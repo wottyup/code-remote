@@ -4399,6 +4399,7 @@ class MainActivity : Activity() {
         if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
         val turns = renderTurnsWithLiveReply(thread?.optJSONArray("turns") ?: JSONArray())
+        val runningTurnId = currentRunningTurnId()
         val incrementalTurnIndex = incrementalTurnId?.let { requestedId ->
             (0 until turns.length()).firstOrNull { turns.optJSONObject(it)?.optString("id") == requestedId }
         }
@@ -4607,7 +4608,7 @@ class MainActivity : Activity() {
         }
         fun appendTurnSummary(turnId: String) {
             if (!renderedFileChangeTurns.add(turnId)) return
-            if (running && turnId == turns.optJSONObject(turns.length() - 1)?.optString("id")) return
+            if (turnId == runningTurnId) return
             val entries = fileChangesForTurn(turnId, turnsById[turnId], thread)
             addFileChangeSummary(turnId, entries)
         }
@@ -7643,13 +7644,28 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun currentRunningTurnId(): String? {
+        if (!running) return null
+        val threadId = activeThreadId ?: return null
+        pendingLiveTurnIds[threadId]?.takeIf(String::isNotBlank)?.let { return it }
+        val liveId = liveActivityTurnId?.takeIf(String::isNotBlank)
+        val turns = activeThread?.optJSONArray("turns")
+        val lastTurn = turns?.optJSONObject(turns.length() - 1)
+        val status = lastTurn?.optString("status")?.lowercase(Locale.ROOT)
+        val historyRunningId = lastTurn?.optString("id")?.takeIf {
+            it.isNotBlank() && status in setOf("inprogress", "running", "active", "started")
+        }
+        return historyRunningId ?: liveId
+    }
+
     private fun updateComposerFileChanges() {
         if (!::composerFileChanges.isInitialized) return
         composerFileChanges.removeAllViews()
         val turns = activeThread?.optJSONArray("turns") ?: JSONArray()
         val turn = turns.optJSONObject(turns.length() - 1)
-        val turnId = turn?.optString("id").orEmpty()
-        val entries = if (running && turnId.isNotBlank()) fileChangesForTurn(turnId, turn, activeThread) else emptyList()
+        val turnId = currentRunningTurnId().orEmpty()
+        val activeTurn = turn?.takeIf { it.optString("id") == turnId }
+        val entries = if (turnId.isNotBlank()) fileChangesForTurn(turnId, activeTurn, activeThread) else emptyList()
         composerFileChanges.visibility = if (entries.isEmpty()) View.GONE else View.VISIBLE
         if (entries.isEmpty()) return
         val additions = entries.sumOf { it.additions }
