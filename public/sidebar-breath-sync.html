@@ -55,8 +55,8 @@
 <body>
   <div class="layout">
     <aside class="sidebar">
-      <div class="brand"><span class="brand-mark">C</span><span>Code Remote · 呼吸演示</span></div>
-      <h2>对话列表</h2>
+      <div class="brand"><span class="brand-mark">C</span><span data-copy="brand">Code Remote · 呼吸演示</span></div>
+      <h2 data-copy="chats">对话列表</h2>
       <div class="thread-row thread-row--active thread-row--replying" data-thread="a">
         <span class="thread-row__breath" data-reply-breath-layer aria-hidden="true"></span>
         <button class="thread-main" type="button" data-select="a"><span class="thread-icon">C</span><span class="thread-copy"><strong>当前正在回复的话题</strong><small data-status>回复中</small></span></button>
@@ -75,24 +75,40 @@
     </aside>
     <main class="content">
       <header>
-        <h1>侧边栏跟随输入框呼吸</h1>
-        <p>点击“错时启动”，观察后来开始回复的话题是否与当前话题的输入框一起变亮、变暗。点击左侧话题可切换当前输入框。</p>
+        <h1 data-copy="heading">侧边栏跟随输入框呼吸</h1>
+        <p data-copy="description">点击“错时启动”，观察后来开始回复的话题是否与当前话题的输入框一起变亮、变暗。点击左侧话题可切换当前输入框。</p>
       </header>
       <div class="controls">
-        <button type="button" id="stagger">错时启动其他话题</button>
-        <button type="button" id="stop-all">全部停止</button>
+        <button type="button" id="stagger" data-copy="stagger">错时启动其他话题</button>
+        <button type="button" id="stop-all" data-copy="stopAll">全部停止</button>
       </div>
       <div class="current-topic" id="current-topic">当前话题：当前正在回复的话题</div>
       <form class="message-composer message-composer--running" id="composer" onsubmit="return false">
         <span class="message-composer__breath" data-reply-breath-layer aria-hidden="true"></span>
         <textarea placeholder="这个演示不会发送消息"></textarea>
-        <div class="composer-footer"><span>当前话题的输入框</span><span class="status" id="composer-status">正在回复</span></div>
+        <div class="composer-footer"><span data-copy="composer">当前话题的输入框</span><span class="status" id="composer-status">正在回复</span></div>
       </form>
     </main>
   </div>
   <script>
     const running = new Map([['a', true], ['b', false], ['c', false]])
-    const titles = { a: '当前正在回复的话题', b: '稍后开始的话题', c: '第三个并发话题' }
+    const copy = {
+      'zh-CN': {
+        title: '侧边栏与输入框呼吸同步演示', brand: 'Code Remote · 呼吸演示', chats: '对话列表',
+        heading: '侧边栏跟随输入框呼吸', description: '点击“错时启动”，观察后来开始回复的话题是否与当前话题的输入框一起变亮、变暗。点击左侧话题可切换当前输入框。',
+        stagger: '错时启动其他话题', stopAll: '全部停止', composer: '当前话题的输入框', placeholder: '这个演示不会发送消息',
+        titles: { a: '当前正在回复的话题', b: '稍后开始的话题', c: '第三个并发话题' },
+        replying: '回复中', idle: '待命', stop: '停止', start: '开始', current: '当前话题：', running: '正在回复', stopped: '未回复',
+      },
+      en: {
+        title: 'Sidebar and composer breathing demo', brand: 'Code Remote · Breathing demo', chats: 'Chats',
+        heading: 'Sidebar and composer breathing in sync', description: 'Start the other chats at intervals to see their animations follow the current composer. Select a chat on the left to switch composers.',
+        stagger: 'Start other chats at intervals', stopAll: 'Stop all', composer: 'Current chat composer', placeholder: 'This demo does not send messages',
+        titles: { a: 'Chat currently replying', b: 'Chat starting later', c: 'Third concurrent chat' },
+        replying: 'Replying', idle: 'Idle', stop: 'Stop', start: 'Start', current: 'Current chat: ', running: 'Replying', stopped: 'Not replying',
+      },
+    }
+    let language = 'zh-CN'
     const composer = document.querySelector('#composer')
     let selected = 'a'
     let syncFrame = null
@@ -136,20 +152,22 @@
     }
 
     function render(resetComposer = false) {
+      const text = copy[language]
       for (const row of document.querySelectorAll('[data-thread]')) {
         const id = row.dataset.thread
         row.classList.toggle('thread-row--active', id === selected)
         row.classList.toggle('thread-row--replying', running.get(id))
-        row.querySelector('[data-status]').textContent = running.get(id) ? '回复中' : '待命'
-        row.querySelector('[data-toggle]').textContent = running.get(id) ? '停止' : '开始'
+        row.querySelector('.thread-copy strong').textContent = text.titles[id]
+        row.querySelector('[data-status]').textContent = running.get(id) ? text.replying : text.idle
+        row.querySelector('[data-toggle]').textContent = running.get(id) ? text.stop : text.start
       }
       if (resetComposer) {
         composer.classList.remove('message-composer--running')
         void composer.offsetWidth
       }
       composer.classList.toggle('message-composer--running', running.get(selected))
-      document.querySelector('#current-topic').textContent = `当前话题：${titles[selected]}`
-      document.querySelector('#composer-status').textContent = running.get(selected) ? '正在回复' : '未回复'
+      document.querySelector('#current-topic').textContent = text.current + text.titles[selected]
+      document.querySelector('#composer-status').textContent = running.get(selected) ? text.running : text.stopped
       scheduleSync()
     }
 
@@ -185,7 +203,19 @@
       for (const id of running.keys()) running.set(id, false)
       render()
     })
-    scheduleSync()
+    function updateLanguage() {
+      try { language = localStorage.getItem('code-remote-ui-language') === 'en' ? 'en' : 'zh-CN' } catch { language = 'zh-CN' }
+      const text = copy[language]
+      document.documentElement.lang = language
+      document.title = text.title
+      document.querySelectorAll('[data-copy]').forEach((element) => { element.textContent = text[element.dataset.copy] })
+      document.querySelector('textarea').placeholder = text.placeholder
+      render()
+    }
+    window.addEventListener('storage', (event) => {
+      if (event.key === 'code-remote-ui-language' || event.key === null) updateLanguage()
+    })
+    updateLanguage()
   </script>
 </body>
 </html>

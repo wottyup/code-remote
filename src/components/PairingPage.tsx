@@ -1,3 +1,4 @@
+import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
@@ -11,6 +12,7 @@ function normalizePairingCode(value: string) {
 }
 
 export function PairingPage({ onPaired }: { onPaired: (token: string) => void }) {
+  useUiLanguage()
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -59,10 +61,10 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
       <section className="pair-card">
         <img className="pair-card__logo" src="/code-remote.png" alt="Code Remote" />
         <p className="pair-eyebrow">CODE REMOTE</p>
-        <h1>连接你的 Code Remote</h1>
-        <p className="pair-description">在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。</p>
+        <h1>{ui("连接你的 Code Remote")}</h1>
+        <p className="pair-description">{ui("在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。")}</p>
         <form onSubmit={(event) => void submit(event)}>
-          <label htmlFor="pair-code">8 位配对码</label>
+          <label htmlFor="pair-code">{ui("8 位配对码")}</label>
           <div className="pair-input-wrap"><KeyRound size={17} /><input
             id="pair-code"
             value={code}
@@ -83,18 +85,18 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
             inputMode="text"
             enterKeyHint="done"
             maxLength={8}
-            placeholder="例如 A2BC7DEF"
+            placeholder={ui("例如 A2BC7DEF")}
           /></div>
           {cooldownRemaining > 0
-            ? <p className="pair-error" role="status">配对已暂停；{cooldownRemaining} 秒后可以再试。</p>
-            : error ? <p className="pair-error" role="alert">{error}</p> : null}
+            ? <p className="pair-error" role="status">{uiFormat('配对已暂停；{0} 秒后可以再试。', cooldownRemaining)}</p>
+            : error ? <p className="pair-error" role="alert">{uiMessage(error)}</p> : null}
           <button className="pair-submit" type="submit" disabled={busy || cooldownRemaining > 0 || code.trim().length !== 8}>
             {busy
               ? <LoaderCircle className="spin" size={17} />
-              : cooldownRemaining > 0 ? `请等待 ${cooldownRemaining} 秒` : <>连接本机 <ArrowRight size={16} /></>}
+              : cooldownRemaining > 0 ? uiFormat("请等待 {0} 秒", cooldownRemaining) : <>{ui("连接本机")} <ArrowRight size={16} /></>}
           </button>
         </form>
-        <div className="pair-security"><ShieldCheck size={15} /><span>配对后，此浏览器即可访问电脑上的聊天会话。</span></div>
+        <div className="pair-security"><ShieldCheck size={15} /><span>{ui("配对后，此浏览器即可访问电脑上的聊天会话。")}</span></div>
       </section>
     </main>
   )

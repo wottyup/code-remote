@@ -1,3 +1,4 @@
+import { ui, useUiLanguage } from '../lib/uiLanguage'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 
@@ -16,6 +17,7 @@ interface TranslationSelectProps {
 }
 
 export function TranslationSelect({ label, value, options, onChange, disabled = false }: TranslationSelectProps) {
+  useUiLanguage()
   const labelId = useId()
   const valueId = useId()
   const listboxId = useId()
@@ -25,7 +27,7 @@ export function TranslationSelect({ label, value, options, onChange, disabled = 
   const [open, setOpen] = useState(false)
   const selectedIndex = options.findIndex((option) => option.value === value)
   const [activeIndex, setActiveIndex] = useState(Math.max(0, selectedIndex))
-  const selectedLabel = options[selectedIndex]?.label ?? '请选择'
+  const selectedLabel = options[selectedIndex]?.label ?? ui('请选择')
   const popoverSupported = typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.showPopover === 'function'
 
   const positionMenu = useCallback(() => {

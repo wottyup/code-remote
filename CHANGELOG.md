@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.111.0-dev.1] - 网页界面支持简体中文和英文切换
+
 ## [0.110.0-dev.1] - 支持查看各 Codex Proxy Client Key 的累计用量
 
 ## [0.109.1-dev.6] - 修复旧版 New API 用量统计的连接
