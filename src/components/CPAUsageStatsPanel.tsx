@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Activity, ChartColumnIncreasing, Database, DollarSign, Filter, RefreshCw, Settings2, X } from 'lucide-react'
 import {
   fetchCodexProxyUsageAnalytics,
+  fetchCodexProxyClientKeys,
   fetchCPAUsageAnalytics,
   fetchNewAPIUsageAnalytics,
   type CPAUsageAccountStat,
@@ -12,6 +13,7 @@ import {
   type CPAUsageSettings,
   type CPAUsageSource,
   type CPAUsageTimelinePoint,
+  type CodexProxyClientKeyStat,
 } from '../lib/cpaUsageStats'
 
 const numberFormatter = new Intl.NumberFormat('zh-CN', { maximumFractionDigits: 0 })
@@ -37,6 +39,12 @@ function accountLabel(account: CPAUsageAccountStat) {
 
 function timelineTokens(point: CPAUsageTimelinePoint) {
   return point.total_tokens ?? point.tokens ?? 0
+}
+
+function clientKeyLastUsed(value: string | null) {
+  if (!value) return '—'
+  const time = Date.parse(value)
+  return Number.isFinite(time) ? dateTimeFormatter.format(new Date(time)) : '—'
 }
 
 function UsageTimeline({ points }: { points: CPAUsageTimelinePoint[] }) {
@@ -82,11 +90,36 @@ export function CPAUsageStatsPanel({
   const [data, setData] = useState<CPAUsageAnalyticsResponse | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [clientKeys, setClientKeys] = useState<CodexProxyClientKeyStat[] | null>(null)
+  const [clientKeysLoading, setClientKeysLoading] = useState(false)
+  const [clientKeysError, setClientKeysError] = useState<string | null>(null)
 
   useEffect(() => {
     setSelectedApiKeyHash('')
     setApiKeyHashes([])
   }, [settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken, settings.newAPIUserId])
+
+  useEffect(() => {
+    if (settings.source !== 'codex-proxy' || !settings.codexProxyBaseUrl.trim() || !settings.codexProxyApiKey.trim()) {
+      setClientKeys(null)
+      setClientKeysLoading(false)
+      setClientKeysError(null)
+      return
+    }
+    const controller = new AbortController()
+    setClientKeys(null)
+    setClientKeysLoading(true)
+    setClientKeysError(null)
+    fetchCodexProxyClientKeys(settings, token, controller.signal)
+      .then(setClientKeys)
+      .catch((reason) => {
+        if (!controller.signal.aborted) setClientKeysError(reason instanceof Error ? reason.message : '读取 Client Key 用量失败。')
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setClientKeysLoading(false)
+      })
+    return () => controller.abort()
+  }, [settings.source, settings.codexProxyBaseUrl, settings.codexProxyApiKey, token, refreshKey])
 
   useEffect(() => {
     if (settings.source !== 'cpamp' || !settings.baseUrl.trim() || !settings.managementKey.trim()) {
@@ -158,6 +191,11 @@ export function CPAUsageStatsPanel({
     () => [...(data?.account_stats ?? [])].sort((a, b) => b.total_tokens - a.total_tokens),
     [data?.account_stats],
   )
+  const sortedClientKeys = useMemo(() => [...(clientKeys ?? [])].sort((a, b) => b.used_tokens - a.used_tokens), [clientKeys])
+  const clientKeyTotals = useMemo(() => (clientKeys ?? []).reduce(
+    (total, key) => ({ requests: total.requests + key.request_count, tokens: total.tokens + key.used_tokens, cost: total.cost + key.used_cost_usd }),
+    { requests: 0, tokens: 0, cost: 0 },
+  ), [clientKeys])
   const summary = data?.summary
   const isCodexProxy = settings.source === 'codex-proxy'
   const isNewAPI = settings.source === 'new-api'
@@ -183,7 +221,7 @@ export function CPAUsageStatsPanel({
           <p>数据来自你在设置中选择的 {sourceName}。</p>
         </div>
         <div className="cpa-usage-panel__header-actions">
-          <button className="icon-button theme-settings-panel__close" type="button" aria-label="刷新统计" title="刷新统计" disabled={!configured || loading} onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw size={16} className={loading ? 'spin' : undefined} /></button>
+          <button className="icon-button theme-settings-panel__close" type="button" aria-label="刷新统计" title="刷新统计" disabled={!configured || loading || clientKeysLoading} onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw size={16} className={loading || clientKeysLoading ? 'spin' : undefined} /></button>
           <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={onClose}><X size={18} /></button>
         </div>
       </header>
@@ -197,7 +235,7 @@ export function CPAUsageStatsPanel({
           <section className="theme-settings-card cpa-usage-connect-prompt">
             <Database size={25} />
             <h2>先连接你的 {isCPAMP ? 'Manager Server' : sourceName}</h2>
-            <p>在设置中填写服务地址和{isCodexProxy ? '主 Proxy API Key' : isNewAPI ? '面板访问令牌（旧版还需用户 ID）' : 'Manager 密钥'}后，这里会显示记录到的 Token 用量。</p>
+            <p>在设置中填写服务地址和{isCodexProxy ? '控制面板登录密码' : isNewAPI ? '面板访问令牌（旧版还需用户 ID）' : 'Manager 密钥'}后，这里会显示记录到的 Token 用量。</p>
             <button className="theme-notification-toggle theme-notification-toggle--enabled" type="button" onClick={onOpenSettings}><Settings2 size={14} />前往设置</button>
           </section>
         ) : (
@@ -272,8 +310,19 @@ export function CPAUsageStatsPanel({
                 </div> : null}
               </>
             ) : null}
+            {isCodexProxy ? <section className="theme-settings-card cpa-usage-section" aria-label="各 Client Key 累计用量">
+              <div className="theme-settings-card__heading"><div><h2>各 Client Key 用量</h2><p>当前 Key 自创建或上次重置以来的累计，不随上方时间范围变化；不包含主 Key 和已删除的 Key。</p></div></div>
+              <div className="cpa-usage-section__body">
+                {clientKeysLoading ? <div className="cpa-usage-loading"><RefreshCw size={16} className="spin" />正在读取各 Key 用量…</div> : null}
+                {clientKeysError ? <div className="cpa-usage-error" role="alert"><strong>读取 Key 用量失败</strong><span>{clientKeysError}</span><button type="button" onClick={() => setRefreshKey((value) => value + 1)}>重试</button></div> : null}
+                {clientKeys && !clientKeysError ? <>
+                  <p>当前 {count(clientKeys.length)} 个 Key 合计：{count(clientKeyTotals.tokens)} Token · {count(clientKeyTotals.requests)} 次请求 · 估算 {moneyFormatter.format(clientKeyTotals.cost)}</p>
+                  {clientKeys.length ? <div className="cpa-usage-table-wrap"><table className="cpa-usage-table"><thead><tr><th>Key 名称</th><th>累计请求</th><th>累计 Token</th><th>估算金额</th><th>最近使用</th></tr></thead><tbody>{sortedClientKeys.map((key) => <tr key={key.id}><td><strong>{key.name || '未命名'}</strong><small>{key.id}</small></td><td>{count(key.request_count)}</td><td>{count(key.used_tokens)}</td><td>{moneyFormatter.format(key.used_cost_usd)}</td><td>{clientKeyLastUsed(key.last_used_at)}</td></tr>)}</tbody></table></div> : <div className="cpa-usage-empty">当前没有 Client Key。</div>}
+                </> : null}
+              </div>
+            </section> : null}
             <p className="theme-settings-hint cpa-usage-disclaimer">{isCodexProxy
-              ? 'Token 和估算金额来自 Codex Proxy 的历史快照；时间范围按小时近似，启用统计前的请求无法补回。该接口未提供按模型、按账号及推理 Token 的时间段明细。'
+              ? '时间段汇总来自 Codex Proxy 的历史快照；各 Client Key 显示上游累计值。上游未提供按 Key 的时间段明细，已删除或重置前的 Key 用量无法在列表中恢复。'
               : isNewAPI
                 ? '总 Token、请求数和模型明细来自 New API 的小时汇总；缓存明细在接口提供时显示，金额按额度单位换算成美元。当前小时可能延后写入；该接口不提供输入、输出及失败请求明细。'
               : 'Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。'}</p>

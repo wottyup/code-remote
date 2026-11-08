@@ -1,5 +1,7 @@
 # Changelog
 
+## [0.110.0-dev.1] - 支持查看各 Codex Proxy Client Key 的累计用量
+
 ## [0.109.1-dev.6] - 修复旧版 New API 用量统计的连接
 
 ## Android [0.108.12-dev.1] - 修复新消息开始时上一轮已编辑文件短暂闪现

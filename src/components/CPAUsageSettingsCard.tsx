@@ -56,7 +56,7 @@ export function CPAUsageSettingsCard({
     let nextSettings: CPAUsageSettings
     try {
       nextSettings = settings.source === 'codex-proxy'
-        ? { ...settings, codexProxyBaseUrl: normalizeCodexProxyBaseUrl(codexProxyBaseUrl), codexProxyApiKey: codexProxyApiKey.trim() }
+        ? { ...settings, codexProxyBaseUrl: normalizeCodexProxyBaseUrl(codexProxyBaseUrl), codexProxyApiKey }
         : settings.source === 'new-api'
           ? { ...settings, newAPIBaseUrl: normalizeNewAPIBaseUrl(newAPIBaseUrl), newAPIAccessToken: newAPIAccessToken.trim(), newAPIUserId: normalizeNewAPIUserId(newAPIUserId) }
           : { ...settings, baseUrl: normalizeCPAUsageBaseUrl(baseUrl), managementKey: managementKey.trim() }
@@ -70,17 +70,20 @@ export function CPAUsageSettingsCard({
       : settings.source === 'new-api'
         ? !nextSettings.newAPIBaseUrl || !nextSettings.newAPIAccessToken
         : !nextSettings.baseUrl || !nextSettings.managementKey) {
-      setMessage({ text: settings.source === 'codex-proxy' ? '请填写 Codex Proxy 地址和主 Proxy API Key。' : settings.source === 'new-api' ? '请填写 New API 地址和面板个人访问令牌。' : '请填写 Manager Server 地址和管理密钥。', error: true })
+      setMessage({ text: settings.source === 'codex-proxy' ? '请填写 Codex Proxy 地址和控制面板登录密码。' : settings.source === 'new-api' ? '请填写 New API 地址和面板个人访问令牌。' : '请填写 Manager Server 地址和管理密钥。', error: true })
       return
     }
 
     setBusy(true)
     try {
-      if (settings.source === 'codex-proxy') await probeCodexProxyUsageConnection(nextSettings, token)
+      let clientKeysError: string | undefined
+      if (settings.source === 'codex-proxy') clientKeysError = (await probeCodexProxyUsageConnection(nextSettings, token)).clientKeysError
       else if (settings.source === 'new-api') await probeNewAPIUsageConnection(nextSettings, token)
       else await probeCPAUsageConnection(nextSettings)
       save(nextSettings)
-      setMessage({ text: '连接成功，已验证统计接口可读取。', error: false })
+      setMessage(clientKeysError
+        ? { text: `连接成功，但各 Key 用量暂不可用：${clientKeysError}`, error: true }
+        : { text: '连接成功，已验证统计接口可读取。', error: false })
     } catch (reason) {
       setMessage({ text: reason instanceof Error ? reason.message : '连接失败，请检查设置。', error: true })
     } finally {
@@ -105,8 +108,8 @@ export function CPAUsageSettingsCard({
             <input className="cpa-usage-settings-input" type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="http://你的服务器:8080" value={codexProxyBaseUrl} onChange={(event) => { setCodexProxyBaseUrl(event.target.value); setMessage(null) }} aria-label="Codex Proxy 地址" />
           </label>
           <label className="theme-control-row theme-control-row--stacked">
-            <span><strong>主 Proxy API Key</strong><small>使用 Codex Proxy 控制面板显示的主 API Key，普通 Client Key 无法读取管理统计。</small></span>
-            <input className="cpa-usage-settings-input" type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="输入主 Proxy API Key" value={codexProxyApiKey} onChange={(event) => { setCodexProxyApiKey(event.target.value); setMessage(null) }} aria-label="Codex Proxy 主 API Key" />
+            <span><strong>控制面板登录密码（主 API Key）</strong><small>Codex Proxy 的后台登录密码和主 API Key 是同一个值；成员使用的 Client Key 无法读取全部统计。</small></span>
+            <input className="cpa-usage-settings-input" type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="输入 Codex Proxy 后台登录密码" value={codexProxyApiKey} onChange={(event) => { setCodexProxyApiKey(event.target.value); setMessage(null) }} aria-label="Codex Proxy 控制面板登录密码" />
           </label>
         </> : settings.source === 'new-api' ? <>
           <label className="theme-control-row theme-control-row--stacked">
@@ -164,7 +167,7 @@ export function CPAUsageSettingsCard({
         {message ? <p className={`cpa-usage-settings-message${message.error ? ' cpa-usage-settings-message--error' : ''}`} role={message.error ? 'alert' : 'status'}>{message.text}</p> : null}
       </div>
       <p className="theme-settings-hint">{settings.source === 'codex-proxy'
-        ? '地址和主 API Key 保存在当前浏览器，并经已配对的 Code Remote 后端读取 Codex Proxy 管理接口。密钥不会放入 URL。历史用量依赖 Codex Proxy 已记录的快照。'
+        ? '地址和登录密码保存在当前浏览器，并经已配对的 Code Remote 后端读取 Codex Proxy 管理接口。密码不会放入 URL。历史用量依赖 Codex Proxy 已记录的快照。'
         : settings.source === 'new-api'
           ? '地址、访问令牌和用户 ID 保存在当前浏览器，并经已配对的 Code Remote 后端读取 New API 统计接口。令牌不会放入 URL；New API 需要开启数据导出。'
         : '地址和管理密钥保存在当前浏览器；密钥只通过 Authorization Bearer 请求头发送，不会放进 URL。Full Mode 才提供持久化历史统计；跨域时 Manager Server 需要允许当前网页来源。'}</p>

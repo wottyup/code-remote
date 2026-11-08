@@ -1873,7 +1873,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.109.1-dev.6", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.110.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2107,7 +2107,7 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     @app.post("/api/v1/codex/usage/codex-proxy/{kind}")
-    async def codex_proxy_usage(kind: Literal["summary", "history"], body: CodexProxyUsageRequest) -> dict[str, Any]:
+    async def codex_proxy_usage(kind: Literal["summary", "history", "client-keys"], body: CodexProxyUsageRequest) -> dict[str, Any]:
         try:
             return await asyncio.to_thread(fetch_codex_proxy_usage, body.baseUrl, body.apiKey, kind, body.hours)
         except CodexProxyUsageError as error:

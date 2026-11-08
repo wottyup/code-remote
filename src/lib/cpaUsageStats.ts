@@ -1,4 +1,4 @@
-import { codexRemoteClient } from './codexRemoteClient'
+import { codexRemoteClient, RemoteApiError } from './codexRemoteClient'
 
 export type CPAUsageSource = 'cpamp' | 'codex-proxy' | 'new-api'
 
@@ -304,6 +304,15 @@ interface CodexProxyHistoryPoint {
 
 interface CodexProxyHistory { data_points: CodexProxyHistoryPoint[] }
 
+export interface CodexProxyClientKeyStat {
+  id: string
+  name: string
+  used_tokens: number
+  used_cost_usd: number
+  request_count: number
+  last_used_at: string | null
+}
+
 function finiteUsageNumber(value: unknown, label: string, optional = false): number {
   if (optional && value === undefined) return 0
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -314,15 +323,43 @@ function finiteUsageNumber(value: unknown, label: string, optional = false): num
 
 function codexProxyCredentials(settings: CPAUsageSettings) {
   const baseUrl = normalizeCodexProxyBaseUrl(settings.codexProxyBaseUrl)
-  const apiKey = settings.codexProxyApiKey.trim()
+  const apiKey = settings.codexProxyApiKey
   if (!baseUrl) throw new Error('请先在设置中填写 Codex Proxy 地址。')
-  if (!apiKey) throw new Error('请先在设置中填写主 Proxy API Key。')
+  if (!apiKey.trim()) throw new Error('请先在设置中填写 Codex Proxy 控制面板登录密码。')
   return { baseUrl, apiKey }
 }
 
-export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<void> {
+export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<{ clientKeysError?: string }> {
   const summary = await codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', codexProxyCredentials(settings))
   finiteUsageNumber(summary?.total_request_count, '累计请求')
+  try {
+    await fetchCodexProxyClientKeys(settings, token)
+    return {}
+  } catch (reason) {
+    return { clientKeysError: reason instanceof Error ? reason.message : '读取 Client Key 用量失败。' }
+  }
+}
+
+export async function fetchCodexProxyClientKeys(settings: CPAUsageSettings, token: string, signal?: AbortSignal): Promise<CodexProxyClientKeyStat[]> {
+  let response: { keys: CodexProxyClientKeyStat[] }
+  try {
+    response = await codexRemoteClient.codexProxyUsage(token, 'client-keys', codexProxyCredentials(settings), signal)
+  } catch (reason) {
+    if (reason instanceof RemoteApiError && reason.status === 422) throw new Error('Code Remote 后端可能尚未更新，请重启服务，并检查连接配置。')
+    throw reason
+  }
+  if (!Array.isArray(response?.keys)) throw new Error('Codex Proxy 未返回有效的 Client Key 列表。')
+  return response.keys.map((key) => {
+    if (!key || typeof key.id !== 'string' || !key.id) throw new Error('Codex Proxy 返回了无效的 Client Key 数据。')
+    return {
+      id: key.id,
+      name: typeof key.name === 'string' ? key.name : '',
+      used_tokens: finiteUsageNumber(key.used_tokens, 'Client Key Token'),
+      used_cost_usd: finiteUsageNumber(key.used_cost_usd, 'Client Key 金额'),
+      request_count: finiteUsageNumber(key.request_count, 'Client Key 请求数'),
+      last_used_at: typeof key.last_used_at === 'string' ? key.last_used_at : null,
+    }
+  })
 }
 
 export async function fetchCodexProxyUsageAnalytics(
