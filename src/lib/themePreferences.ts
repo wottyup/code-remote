@@ -5,6 +5,8 @@ export type AppTheme = 'light' | 'dark' | 'warm' | 'custom' | 'retro' | 'pixel' 
 export interface ThemePreferences {
   theme: AppTheme
   customBackgroundColor: string
+  customModuleColor?: string
+  customModuleTransparency: number
   customTextColor: string
   customBackgroundTransparency: number
   customBackgroundPositionX: number
@@ -23,6 +25,7 @@ const defaultLetterSpacingPercent = 2
 const defaultThemePreferences: ThemePreferences = {
   theme: 'dark',
   customBackgroundColor: '#4b5563',
+  customModuleTransparency: 62,
   customTextColor: '#f1f5f9',
   customBackgroundTransparency: 0,
   customBackgroundPositionX: 50,
@@ -39,6 +42,10 @@ export function normalizeHexColor(value: unknown, fallback: string) {
 
 export function normalizeTransparency(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, Math.round(value))) : 0
+}
+
+export function normalizeModuleTransparency(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? normalizeTransparency(value) : 62
 }
 
 export function normalizeBackgroundPosition(value: unknown) {
@@ -91,9 +98,12 @@ export function readThemePreferences(): ThemePreferences {
       ? parsed.theme
       : defaultThemePreferences.theme
     const customBackgroundImage = normalizeThemeBackgroundImage(parsed.customBackgroundImage)
+    const customModuleColor = normalizeHexColor(parsed.customModuleColor, '')
     return {
       theme,
       customBackgroundColor: normalizeHexColor(parsed.customBackgroundColor, defaultThemePreferences.customBackgroundColor),
+      ...(customModuleColor ? { customModuleColor } : {}),
+      customModuleTransparency: normalizeModuleTransparency(parsed.customModuleTransparency),
       customTextColor: normalizeHexColor(parsed.customTextColor, defaultThemePreferences.customTextColor),
       customBackgroundTransparency: normalizeTransparency(parsed.customBackgroundTransparency),
       customBackgroundPositionX: normalizeBackgroundPosition(parsed.customBackgroundPositionX),
@@ -135,9 +145,15 @@ export function saveThemePreferences(preferences: ThemePreferences) {
 
 export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
   const customBackgroundOpacity = (100 - preferences.customBackgroundTransparency) / 100
+  const moduleColor = normalizeHexColor(preferences.customModuleColor, preferences.customBackgroundColor)
+  const moduleOpacity = (100 - normalizeModuleTransparency(preferences.customModuleTransparency)) / 100
+  // Keep the previous surface/control/active proportions for existing themes.
+  const controlOpacity = Math.min(1, Math.round(moduleOpacity * (58 / 38) * 100) / 100)
+  const activeOpacity = Math.round(moduleOpacity * (24 / 38) * 100) / 100
   const darkCustomTheme = isLightColor(preferences.customTextColor)
   return {
     '--custom-theme-background': preferences.customBackgroundColor,
+    '--custom-theme-module-color': moduleColor,
     '--custom-theme-background-opacity': customBackgroundOpacity,
     '--custom-theme-background-position': `${normalizeBackgroundPosition(preferences.customBackgroundPositionX)}% ${normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%`,
     '--custom-theme-background-zoom': normalizeBackgroundZoom(preferences.customBackgroundZoom) / 100,
@@ -146,12 +162,13 @@ export function themeRootStyle(preferences: ThemePreferences): CSSProperties {
       : 'none',
     '--custom-theme-text-color': preferences.customTextColor,
     '--custom-theme-native-color-scheme': darkCustomTheme ? 'dark' : 'light',
+    '--custom-theme-menu-shade': darkCustomTheme ? '#000' : '#fff',
     '--custom-theme-send-circle': darkCustomTheme ? '#fff' : '#000',
     '--custom-theme-send-arrow': darkCustomTheme ? '#000' : '#fff',
     '--custom-theme-send-disabled-circle': darkCustomTheme ? '#6f737a' : '#8b8e95',
-    '--custom-theme-surface': rgbaFromHex(preferences.customBackgroundColor, 0.38),
-    '--custom-theme-control': rgbaFromHex(preferences.customBackgroundColor, 0.58),
-    '--custom-theme-active': rgbaFromHex(preferences.customBackgroundColor, 0.24),
+    '--custom-theme-surface': rgbaFromHex(moduleColor, moduleOpacity),
+    '--custom-theme-control': rgbaFromHex(moduleColor, controlOpacity),
+    '--custom-theme-active': rgbaFromHex(moduleColor, activeOpacity),
     '--custom-theme-border': rgbaFromHex(preferences.customTextColor, 0.32),
     '--custom-theme-panel-blur': '8px',
     '--user-font-offset': `${normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)}px`,

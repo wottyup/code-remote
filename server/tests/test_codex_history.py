@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from codex_remote.app import (
+from code_remote.app import (
     TurnImage,
     MESSAGE_IMAGE_RETENTION_SECONDS,
     cleanup_expired_message_images,
@@ -25,7 +25,7 @@ from codex_remote.app import (
     save_turn_images,
     workspace_image_preview,
 )
-from codex_remote.codex_history import CodexHistoryStore, is_internal_codex_thread
+from code_remote.codex_history import CodexHistoryStore, is_internal_codex_thread
 
 
 class CodexHistoryStoreTests(unittest.TestCase):
@@ -396,7 +396,7 @@ class CodexHistoryStoreTests(unittest.TestCase):
                 {"type": "localImage", "path": str(unrelated_image)},
             ]}]}]}
 
-            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+            with patch("code_remote.app.tempfile.gettempdir", return_value=directory):
                 enrich_thread_images(thread, root / "remote-images")
 
             content = thread["turns"][0]["items"][0]["content"]
@@ -414,7 +414,7 @@ class CodexHistoryStoreTests(unittest.TestCase):
                 "content": [{"type": "local_image", "path": str(clipboard_image)}],
             }
 
-            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+            with patch("code_remote.app.tempfile.gettempdir", return_value=directory):
                 enriched = enrich_user_message_item(item, root / "remote-images")
 
             self.assertEqual("bGl2ZS1pbWFnZQ==", enriched["content"][0]["data"])
@@ -427,7 +427,7 @@ class CodexHistoryStoreTests(unittest.TestCase):
             clipboard_image = root / "codex-clipboard-preview.png"
             clipboard_image.write_bytes(b"\x89PNG\r\n\x1a\npreview")
 
-            with patch("codex_remote.app.tempfile.gettempdir", return_value=directory):
+            with patch("code_remote.app.tempfile.gettempdir", return_value=directory):
                 preview = workspace_image_preview(workspace, str(clipboard_image), root / "remote-images")
 
             self.assertEqual("image/png", preview["mediaType"])

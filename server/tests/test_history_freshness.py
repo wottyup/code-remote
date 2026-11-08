@@ -7,8 +7,8 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
-from codex_remote.codex_history import CodexHistoryStore
-from codex_remote.browser_history_sync import BrowserHistorySync
+from code_remote.codex_history import CodexHistoryStore
+from code_remote.browser_history_sync import BrowserHistorySync
 
 
 class HistoryFreshnessTests(unittest.TestCase):

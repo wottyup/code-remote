@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from codex_remote.claude_code import ClaudeCodeServer
+from code_remote.claude_code import ClaudeCodeServer
 
 
 class ControlledOutput:
@@ -37,10 +37,15 @@ class FakeProcess:
         self.stdout = ControlledOutput()
         self.stdin = None
         self.returncode = None
+        self.exited = asyncio.Event()
 
     async def wait(self) -> int:
+        await self.exited.wait()
+        return self.returncode
+
+    def finish(self) -> None:
         self.returncode = 0
-        return 0
+        self.exited.set()
 
 
 class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
@@ -55,7 +60,7 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
 
         self.server = ClaudeCodeServer(sys.executable, workspace, workspace / "claude.sqlite3", emit)
         self.process = FakeProcess()
-        self.spawn = patch("codex_remote.claude_code.asyncio.create_subprocess_exec", AsyncMock(return_value=self.process))
+        self.spawn = patch("code_remote.claude_code.asyncio.create_subprocess_exec", AsyncMock(return_value=self.process))
         self.spawn.start()
         self.addCleanup(self.spawn.stop)
         self.thread = await self.server.create_thread()
@@ -64,6 +69,7 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
         self.events.clear()
 
     async def asyncTearDown(self) -> None:
+        self.process.finish()
         await self.process.stdout.lines.put(b"")
         await asyncio.wait_for(asyncio.gather(*tuple(self.server._tasks.values())), 2)
         await self.server.close()
@@ -110,8 +116,8 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
     async def test_windows_terminate_targets_only_claude_process_tree(self) -> None:
         process = Mock(pid=12345, returncode=None, wait=AsyncMock(return_value=0))
         killer = Mock(wait=AsyncMock(return_value=0))
-        with patch("codex_remote.claude_code.os.name", "nt"), patch(
-            "codex_remote.claude_code.asyncio.create_subprocess_exec",
+        with patch("code_remote.claude_code.os.name", "nt"), patch(
+            "code_remote.claude_code.asyncio.create_subprocess_exec",
             AsyncMock(return_value=killer),
         ) as spawn:
             await self.server._terminate_process(process)
@@ -162,6 +168,7 @@ class ClaudeStreamingTests(unittest.IsolatedAsyncioTestCase):
         await self.event({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}})
         await self.process.stdout.send({"type": "result", "result": "Hello world", "is_error": False})
         self.assertEqual(self.visible_text(), "Hello world")
+        self.process.finish()
         await self.process.stdout.lines.put(b"")
         await asyncio.wait_for(asyncio.gather(*tuple(self.server._tasks.values())), 2)
         history = await self.server.read_thread(self.thread["id"])
@@ -207,7 +214,7 @@ class ClaudeNativeRefreshTests(unittest.IsolatedAsyncioTestCase):
             "created_at": "2026-10-22T00:00:00Z", "updated_at": "2026-10-22T00:00:01Z",
             "messages_json": "[]", "native_source": "/native/session.jsonl", "native_mtime_ns": 123,
         }
-        with patch("codex_remote.claude_code.scan_native_sessions", return_value=[session]):
+        with patch("code_remote.claude_code.scan_native_sessions", return_value=[session]):
             await self.server.refresh_native_threads()
         changes = [call.args[0] for call in self.emit.await_args_list if call.args[0]["type"] == "thread.history.changed"]
         self.assertEqual(len(changes), 1)
@@ -217,7 +224,7 @@ class ClaudeNativeRefreshTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_change_during_throttle_is_deferred_instead_of_dropped(self) -> None:
         self.server._next_native_scan_at = time.monotonic() + 0.02
-        with patch("codex_remote.claude_code.scan_native_sessions", return_value=[]) as scan:
+        with patch("code_remote.claude_code.scan_native_sessions", return_value=[]) as scan:
             self.server.schedule_native_refresh()
             await asyncio.wait_for(self.server._native_refresh_task, 1)
         scan.assert_called_once()

@@ -58,7 +58,8 @@ import {
   X,
 } from 'lucide-react'
 import { threadIsRunning, useCodexRemote, type CodexActivity, type CodexActivityTimelineEntry, type CodexFileChange, type CodexOperation, type CodexRemoteController, type CodexThreadCompletion, type QueuedMessageSendMode, type QueuedTurnMessage, type SelectThreadOptions } from '../hooks/useCodexRemote'
-import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant } from '../lib/codexRemoteClient'
+import { useStreamingTextReveal } from '../hooks/useStreamingTextReveal'
+import { codexRemoteClient, maxWorkspaceUploadFileSize, messagesFromThread, RemoteApiError, type ClaudeCodePermissionMode, type CodexApprovalPolicy, type CodexDocumentAttachment, type CodexImageAttachment, type CodexMessage, type CodexModel, type CodexThread, type CodexWorkspaceEntry, type CodexWorkspaceFile, type CodexWorkspaceImage, type CodexWorkspaceTree, type MCPApprovalGrant, type QueuedTranslationConfig } from '../lib/codexRemoteClient'
 import { copyTextAndImagesToClipboard, copyTextToClipboard, recoverCopiedMessageTextFromImagePaste, richMessageContentFromClipboardHtml } from '../lib/clipboard'
 import { isRunnableScriptPath } from '../lib/terminalPathCommand'
 import { forgetOpenTerminalThread, isOpenTerminalThread, rememberOpenTerminalThread } from '../lib/terminalScreenMemory'
@@ -69,6 +70,8 @@ import { assistantChoiceStartIndex, formatAssistantChoiceReply, parseAssistantCh
 import { groupSidebarThreads } from '../lib/sidebarThreadGroups.mjs'
 import { filterSidebarThreads } from '../lib/sidebarThreadFilter.mjs'
 import { defaultSidebarChatShortcuts, formatSidebarChatShortcut, isReservedSidebarChatShortcut, isSidebarChatShortcutModifierKey, matchesSidebarChatShortcut, readSidebarChatShortcuts, sameSidebarChatShortcut, saveSidebarChatShortcuts, sidebarChatShortcutFromEvent, type SidebarChatShortcutAction, type SidebarChatShortcuts } from '../lib/sidebarChatShortcuts'
+import { composerKeyAction } from '../lib/composerShortcuts'
+import { ComposerDraftRecoveries, mergeComposerDocuments, prependComposerDraft, type ComposerDraftRecovery } from '../lib/composerDraftRecovery'
 import { composerMenuPosition } from '../lib/composerMenuPosition'
 import { forgetComposerImageDraftTarget, moveComposerImageDraft, pendingComposerImageDraftTarget, readComposerImageDraft, rememberComposerImageDraftTarget, saveComposerImageDraft, subscribeToComposerImageDraft } from '../lib/composerImageDrafts'
 import { attachmentAcceptForLayout, documentExtensionOf, isSupportedDocumentFile, isSvgDocumentFile, maxDocumentFileSize, maxDocumentsPerTurn } from '../lib/documentAttachmentRules'
@@ -76,7 +79,7 @@ import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { beginMobileGlobalBackGesture, beginMobilePanelGesture, mobileSidebarBackdropOpacity, mobileSidebarDragOffset, mobileWorkspaceDragOffset, resolveMobilePanelGesture, shouldOpenMobileSidebarAfterDrag, shouldOpenMobileWorkspaceAfterDrag, type MobilePanelGestureStart } from '../lib/mobilePanelGestures'
 import { earlierTurnMessageWindow, recentTurnMessageWindow, visibleTurnMessageStart } from '../lib/messageWindow'
 import { maxConcurrentPaneCount, readPersistedPaneLayout, savePersistedPaneLayout } from '../lib/paneLayout'
-import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
+import { isCompactThemeBackgroundImage, letterSpacingStyle, normalizeBackgroundPosition, normalizeBackgroundZoom, normalizeFontSizeAdjustment, normalizeHexColor, normalizeLetterSpacingPercent, normalizeModuleTransparency, normalizeTransparency, themeRootStyle, type AppTheme, type ThemePreferences } from '../lib/themePreferences'
 import { readActiveSettingsSection, saveActiveSettingsSection, type SettingsSectionId } from '../lib/settingsSectionState'
 import { canRequestSystemNotifications, requestSystemNotificationPermission, sendSystemNotification, type AndroidNotificationBridge } from '../lib/systemNotifications'
 import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadTranscript'
@@ -91,7 +94,7 @@ import { PastedTablePreview } from './PastedTablePreview'
 import { ServerRequestCard } from './ServerRequestCard'
 import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
-import { containsChinese, containsEnglish, readTranslationPreferences, saveTranslationPreferences, selectedTranslationProfileId, type TranslationPreferences } from '../lib/translationPreferences'
+import { containsChinese, containsEnglish, readTranslationPreferences, readTranslationPreferencesIfAvailable, saveTranslationPreferences, selectedTranslationProfileId, translationPreferencesStorageKey, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 
@@ -726,13 +729,15 @@ function readComposerDraft(scope: string) {
 }
 
 function saveComposerDraft(scope: string, draft: string) {
-  if (typeof window === 'undefined') return
+  if (typeof window === 'undefined') return false
   try {
     const storageKey = composerDraftStorageKeyFor(scope)
     if (draft) window.localStorage.setItem(storageKey, draft)
     else window.localStorage.removeItem(storageKey)
+    return true
   } catch {
     // The composer still works for this session when storage is unavailable.
+    return false
   }
 }
 
@@ -780,6 +785,13 @@ function saveComposerTableDraft(scope: string, documents: CodexDocumentAttachmen
     return false
   }
 }
+
+const composerDraftRecoveries = new ComposerDraftRecoveries({
+  readDraft: readComposerDraft,
+  saveDraft: saveComposerDraft,
+  readTables: readComposerTableDraft,
+  saveTables: saveComposerTableDraft,
+})
 
 function forgetComposerTableDraft(scope: string) {
   deletedTableDraftScopes.add(scope)
@@ -1144,7 +1156,11 @@ type RemoteConnection = keyof typeof connectionLabel
 interface ComposerSendInput {
   prompt: string
   originalText?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   continuePaused?: boolean
+  sendDirectly?: boolean
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
   model?: string
@@ -1157,7 +1173,7 @@ interface ComposerSendInput {
 }
 
 type QueuedMessageEditPreferences = Pick<ComposerSendInput, 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
-type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
+type QueuedMessageEditInput = Pick<ComposerSendInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>
 
 interface ComposerHandle {
   focusInput(): void
@@ -1214,6 +1230,7 @@ interface MessageComposerProps {
   onSend: (input: ComposerSendInput) => Promise<boolean>
   queuedMessages: QueuedTurnMessage[]
   onSendQueuedNow: (messageId: string, mode: QueuedMessageSendMode) => Promise<boolean>
+  onRetryQueuedTranslation: (messageId: string) => Promise<boolean>
   onBeginQueuedEdit: (messageId: string) => boolean | Promise<boolean>
   onUpdateQueuedMessage: (messageId: string, input: QueuedMessageEditInput) => boolean | Promise<boolean>
   onEndQueuedEdit: (messageId: string) => void | boolean | Promise<boolean>
@@ -1272,6 +1289,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   onSend,
   queuedMessages,
   onSendQueuedNow,
+  onRetryQueuedTranslation,
   onBeginQueuedEdit,
   onUpdateQueuedMessage,
   onEndQueuedEdit,
@@ -1287,7 +1305,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   createThreadTitle,
 }, ref) {
   const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
-  const translationProfileId = selectedTranslationProfileId(translation)
+  const activeTranslation = readTranslationPreferencesIfAvailable() ?? translation
+  const translationProfileId = selectedTranslationProfileId(activeTranslation)
   const savedComposerHeight = composerHeightMemory.current?.[composerEngine]
   const [draft, setDraft] = useState(() => readComposerDraft(draftScope))
   const [translationPreview, setTranslationPreview] = useState<{ key: string; text?: string; error?: string; loading: boolean } | null>(null)
@@ -1331,6 +1350,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const scheduleDateTimeInputId = useId()
   mobileSettingsExpandedRef.current = mobileSettingsExpanded
   const composer = useRef<HTMLTextAreaElement>(null)
+  const composerMounted = useRef(false)
   const draftRef = useRef(draft)
   const draftScopeRef = useRef(draftScope)
   draftScopeRef.current = draftScope
@@ -1528,6 +1548,38 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setDraft(value)
   }, [])
 
+  useLayoutEffect(() => {
+    composerMounted.current = true
+    const restore = (detail: ComposerDraftRecovery) => {
+      const snapshot = editingDraftSnapshot.current
+      if (snapshot) {
+        snapshot.draft = prependComposerDraft(detail.draft, snapshot.draft)
+        snapshot.documents = mergeComposerDocuments(detail.documents, snapshot.documents)
+        snapshot.attachmentError ??= detail.attachmentError
+        saveComposerDraft(draftScope, snapshot.draft)
+        saveComposerTableDraft(draftScope, snapshot.documents)
+        return
+      }
+      if (detail.draft) {
+        const restored = prependComposerDraft(detail.draft, draftRef.current)
+        updateDraft(restored)
+        saveComposerDraft(draftScope, restored)
+      }
+      if (detail.documents.length) {
+        const restored = mergeComposerDocuments(detail.documents, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restored
+        setAttachedDocuments(restored)
+        saveComposerTableDraft(draftScope, restored)
+      }
+      if (detail.attachmentError) setAttachmentError((current) => current ?? detail.attachmentError)
+    }
+    const unsubscribe = composerDraftRecoveries.subscribe(draftScope, restore)
+    return () => {
+      composerMounted.current = false
+      unsubscribe()
+    }
+  }, [draftScope, updateDraft])
+
   const updateAttachedImages = useCallback((next: CodexImageAttachment[], persist = true) => {
     const images = next.slice(0, maxImagesPerTurn)
     attachedImagesRef.current = images
@@ -1574,8 +1626,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   useEffect(() => {
     const source = draft.trim()
-    const key = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${source}`
-    if (!translation.enabled || !containsChinese(source)) {
+    const key = `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${source}`
+    if (!activeTranslation.enabled || !containsChinese(source)) {
       setTranslationPreview(null)
       return
     }
@@ -1586,14 +1638,14 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     const controller = new AbortController()
     setTranslationPreview({ key, loading: true })
     const timer = window.setTimeout(() => {
-      void codexRemoteClient.translateText(token, { provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: source }, controller.signal)
+      void codexRemoteClient.translateText(token, { provider: activeTranslation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: activeTranslation.style, text: source }, controller.signal)
         .then((result) => { if (!controller.signal.aborted) setTranslationPreview({ key, text: result.text, loading: false }) })
         .catch((reason: unknown) => {
           if (!controller.signal.aborted) setTranslationPreview({ key, error: reason instanceof Error ? reason.message : '翻译失败。', loading: false })
         })
     }, 700)
     return () => { window.clearTimeout(timer); controller.abort() }
-  }, [draft, token, translation.enabled, translation.provider, translationProfileId, translation.style, translationRevision])
+  }, [draft, token, activeTranslation.enabled, activeTranslation.provider, translationProfileId, activeTranslation.style, translationRevision])
 
   useLayoutEffect(() => onDraftChange(draft), [draft, onDraftChange])
 
@@ -2050,7 +2102,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setAttachmentError(notices.length > 0 ? notices.join(' ') : null)
   }
 
-  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string) {
+  async function send(event?: FormEvent<HTMLFormElement>, scheduledAt?: string, sendDirectly = false) {
     event?.preventDefault()
     if (sendingRef.current) return
     if (readingDocuments || readingImages || !imagesReady) return
@@ -2060,7 +2112,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     }
     if (!scheduledAt) setSchedulePanelOpen(false)
     if (editingQueuedMessageId) {
+      if (sendDirectly) {
+        setAttachmentError('请先保存或取消排队消息编辑，再使用 Ctrl+Enter。')
+        return
+      }
       void confirmQueuedEdit()
+      return
+    }
+    if (sendDirectly && isReplying && !showCodexPreferences) {
+      setAttachmentError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
       return
     }
     // A second submit can arrive before React commits the cleared draft.
@@ -2072,15 +2132,33 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       return
     }
     let outgoingPrompt = prompt
-    if (translation.enabled && containsChinese(prompt)) {
+    let backgroundTranslation: QueuedTranslationConfig | undefined
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    const activeProfileId = selectedTranslationProfileId(translationForSend)
+    const previewKey = `${translationRevision}:${translationForSend.provider}:${activeProfileId ?? 'default'}:${translationForSend.style}:${prompt}`
+    const readyPreview = translationPreview?.key === previewKey && translationPreview.text
+      ? translationPreview.text.trim()
+      : ''
+    const wantsChineseTranslation = translationForSend.enabled && containsChinese(prompt)
+    const shouldTranslateInQueue = wantsChineseTranslation
+      && prompt.length <= 30_000
+      && !sendDirectly
+      && (isReplying || queuedMessages.length > 0 || Boolean(scheduledAt))
+      && !readyPreview
+    if (shouldTranslateInQueue) {
+      backgroundTranslation = {
+        provider: translationForSend.provider,
+        ...(activeProfileId ? { profileId: activeProfileId } : {}),
+        style: translationForSend.style,
+      }
+    } else if (wantsChineseTranslation) {
       sendingRef.current = true
       setSending(true)
       try {
-        const previewKey = `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${prompt}`
-        outgoingPrompt = (translationPreview?.key === previewKey && translationPreview.text
-          ? translationPreview.text
+        outgoingPrompt = (readyPreview
+          ? readyPreview
           : (await codexRemoteClient.translateText(token, {
-            provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
+            provider: translationForSend.provider, profileId: activeProfileId, source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
           })).text).trim()
         if (!outgoingPrompt) throw new Error('翻译结果为空，消息没有发送。')
       } catch (reason) {
@@ -2119,6 +2197,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       sent = await onSend({
         prompt: outgoingPrompt,
         ...(outgoingPrompt !== prompt ? { originalText: prompt } : {}),
+        ...(backgroundTranslation ? { translation: backgroundTranslation, translationStatus: 'pending' as const } : {}),
         images: previousImages,
         documents: previousDocuments,
         model: showCodexPreferences ? selectedModel || undefined : undefined,
@@ -2127,6 +2206,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         claudeModel: !showCodexPreferences && selectedModel !== 'default' ? selectedModel : undefined,
         claudeEffort: !showCodexPreferences && selectedEffort !== 'default' ? selectedEffort : undefined,
         claudePermissionMode: showCodexPreferences ? undefined : selectedClaudePermissionMode,
+        ...(sendDirectly ? { sendDirectly: true } : {}),
         scheduledAt,
       })
     } catch (reason) {
@@ -2147,7 +2227,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             : '发送失败，图片仍保留在原草稿。')
         }
       }
-      updateDraft((current) => !current ? previousDraft : !previousDraft ? current : `${previousDraft}${previousDraft.endsWith('\n') ? '' : '\n'}${current}`)
+      const restoreScope = transferredImageTarget ?? (!composerMounted.current ? draftScope : null)
+      if (restoreScope) composerDraftRecoveries.recover(restoreScope, {
+        draft: previousDraft, documents: previousDocuments, attachmentError: previousAttachmentError,
+      })
+      else updateDraft((current) => prependComposerDraft(previousDraft, current))
       let persistedImages: CodexImageAttachment[] = []
       if (pendingImageDraftClear && !imagesMovedToNewThread) {
         try {
@@ -2159,11 +2243,12 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       const restoredImages = [...previousImages, ...attachedImagesRef.current, ...persistedImages]
         .filter((image, index, images) => images.findIndex((candidate) => candidate.name === image.name && candidate.data === image.data) === index)
       updateAttachedImages(restoredImages, !imagesMovedToNewThread)
-      const currentDocuments = attachedDocumentsRef.current
-      const restoredDocuments = currentDocuments.length > 0 ? [...previousDocuments, ...currentDocuments] : previousDocuments
-      attachedDocumentsRef.current = restoredDocuments
-      setAttachedDocuments(restoredDocuments)
-      setAttachmentError((current) => current ?? previousAttachmentError)
+      if (!restoreScope) {
+        const restoredDocuments = mergeComposerDocuments(previousDocuments, attachedDocumentsRef.current)
+        attachedDocumentsRef.current = restoredDocuments
+        setAttachedDocuments(restoredDocuments)
+        setAttachmentError((current) => current ?? previousAttachmentError)
+      }
     } else {
       forgetComposerImageDraftTarget(draftScope)
       if (scheduledAt) {
@@ -2264,9 +2349,10 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
     setSending(true)
     try {
       let outgoingPrompt = prompt
-      if (translation.enabled && containsChinese(prompt)) {
+      const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+      if (translationForSend.enabled && containsChinese(prompt)) {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: prompt,
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: prompt,
         })
         if (draftRef.current.trim() !== prompt) throw new Error('翻译时输入内容发生变化，请重新确认最新内容。')
         outgoingPrompt = result.text.trim()
@@ -2332,11 +2418,32 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   function handleInputKey(event: KeyboardEvent<HTMLTextAreaElement>) {
-    // Enter is commonly used to confirm Chinese/Japanese/Korean IME candidates.
-    if (inputIsComposing.current || event.nativeEvent.isComposing || event.keyCode === 229) return
-    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || !canSend) return
+    const action = composerKeyAction(event.nativeEvent, inputIsComposing.current)
+    if (!action) return
+    if (action !== 'send') {
+      event.preventDefault()
+      event.stopPropagation()
+      if (action === 'direct' && canSend) void send(undefined, undefined, true)
+      return
+    }
+    if (!canSend) return
     event.preventDefault()
     event.currentTarget.form?.requestSubmit()
+  }
+
+  function handleQueueKeyboardShortcut(event: KeyboardEvent<HTMLFormElement>) {
+    if (!event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return
+    if (queuedMessages.length === 0 || inputIsComposing.current || event.nativeEvent.isComposing) return
+
+    const target = event.target
+    if (!(target instanceof HTMLElement)) return
+    if (target !== composer.current && target.closest('input, select, textarea, [contenteditable="true"]')) return
+    if (target === composer.current && draftRef.current.length > 0) return
+
+    event.preventDefault()
+    event.stopPropagation()
+    setQueuedMessagesExpanded(event.key === 'ArrowUp')
   }
 
   function handlePaste(event: ClipboardEvent<HTMLTextAreaElement>) {
@@ -2506,6 +2613,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <form
         className={`message-composer${isReplying ? ' message-composer--running' : ''}`}
         ref={isReplying ? syncReplyBreatheOnMount : undefined}
+        onKeyDownCapture={handleQueueKeyboardShortcut}
         onAnimationStart={(event) => { if (event.animationName === 'composer-fill-breathe') scheduleReplyBreatheSync() }}
         onSubmit={(event) => void send(event)}
       >
@@ -2574,6 +2682,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
             aria-expanded={queuedMessagesExpanded}
             aria-controls="composer-queue-list"
             aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
+            aria-keyshortcuts="Control+ArrowUp Control+ArrowDown"
+            title="Ctrl+↑ 展开 · Ctrl+↓ 收起"
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
             <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
@@ -2586,6 +2696,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const isEditing = editingQueuedMessageId === message.id
               const isSubmitting = message.deliveryState === 'submitting'
               const deliveryUnverified = Boolean(message.sendAttempt)
+              const translationPending = message.translationStatus === 'pending'
+              const translationFailed = message.translationStatus === 'failed'
               const queueLocked = Boolean(editingQueuedMessageId) || Boolean(sendingQueuedId) || Boolean(movingQueuedId)
               const previousMessage = queuedMessages[index - 1]
               const nextMessage = queuedMessages[index + 1]
@@ -2599,7 +2711,9 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
               const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
               const waitingForClaude = isRunning && !showCodexPreferences
-              const sendTitle = isSubmitting ? '消息正在提交，请稍候'
+              const sendTitle = translationPending ? '后台翻译完成后才能发送'
+                : translationFailed ? `翻译失败：${message.translationError ?? '请重试翻译。'}`
+                  : isSubmitting ? '消息正在提交，请稍候'
                 : deliveryUnverified ? '请先核对这条消息是否已发送'
                   : waitingForClaude ? 'Claude 当前不支持运行中插队，请等待回复结束，或暂停后发送'
                     : sendMode === 'steer' ? '立即插入当前 Codex 回复，沿用当前轮次的模型和思考等级'
@@ -2609,19 +2723,21 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                 message.images.length > 0 ? `${message.images.length} 张图片` : '',
                 message.documents?.length ? `${message.documents.length} 个文档` : '',
               ].filter(Boolean).join(' · ')
-              const summary = [translation.enabled && translation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
+              const summary = [activeTranslation.enabled && activeTranslation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
               const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
               const queueStatus = isSubmitting ? '正在确认送达'
                 : isEditing ? '正在输入框中编辑'
                   : message.editing ? '另一设备正在编辑 · 暂停发送'
                     : sendingNow ? '正在确认送达'
                       : deliveryUnverified ? '可能已发送 · 请核对聊天记录'
+                        : translationPending ? '后台翻译中 · 完成后自动发送'
+                          : translationFailed ? `翻译失败 · ${message.translationError ?? '点击重试翻译'}`
                         : scheduledLabel ? `定于 ${scheduledLabel} 发送`
                           : message.blockedReason ?? (isRunning ? (index === 0 ? '下一条待发送' : '等待前面的消息完成') : index > 0 ? '等待前序消息 · 可点“发送”优先发送此条' : '等待自动发送')
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small title={translationFailed ? message.translationError : undefined}>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
                   <span className="composer-queue__order" role="group" aria-label={`调整第 ${index + 1} 条发送顺序`}>
                     <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={`上移第 ${index + 1} 条排队消息`} title="上移一位"><ArrowUp size={14} /></button>
                     <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={`下移第 ${index + 1} 条排队消息`} title="下移一位"><ArrowDown size={14} /></button>
@@ -2629,8 +2745,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                   <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
                     <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || waitingForClaude} onClick={() => void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{sendMode === 'steer' ? '插队' : '发送'}</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending || (!translationFailed && waitingForClaude)} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? '翻译中' : translationFailed ? '重试翻译' : sendMode === 'steer' ? '插队' : '发送'}</span>
                   </button>
                   <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
                 </div>
@@ -2639,11 +2755,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           </div>
         </div>
       ) : null}
-      {translation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
+      {activeTranslation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
         <strong>英文发送预览</strong>
-        {translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.text
+        {translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.text
           ? <p>{translationPreview.text}</p>
-          : translationPreview?.key === `${translationRevision}:${translation.provider}:${translationProfileId ?? 'default'}:${translation.style}:${draft.trim()}` && translationPreview.error
+          : translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.error
             ? <p className="composer-translation-preview__error">{translationPreview.error}</p>
             : <p>正在翻译最新内容…</p>}
       </div> : null}
@@ -2670,6 +2786,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           }}
           placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
           aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
+          aria-keyshortcuts={[
+            stableQueueHeight ? 'Control+ArrowLeft Control+ArrowRight' : '',
+            editingQueuedMessageId ? '' : 'Control+Enter',
+          ].filter(Boolean).join(' ') || undefined}
+          title={`${editingQueuedMessageId ? 'Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter' : showCodexPreferences ? 'Ctrl+Enter 立即发送；回复时插队' : 'Ctrl+Enter 立即发送；Claude 回复中暂不支持插队'}${stableQueueHeight ? '；Ctrl+←/→ 切换并发窗口' : ''}`}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -2712,7 +2833,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
               aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '加入发送队列' : '发送消息'}
+              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? showCodexPreferences ? '加入发送队列；Ctrl+Enter 插队' : '加入发送队列' : '发送消息；Ctrl+Enter 立即发送'}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
@@ -4161,7 +4282,6 @@ const RemoteChatPane = memo(function RemoteChatPane({
   copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
-  const translationProfileId = selectedTranslationProfileId(translation)
   const activeThreadId = remote.activeThread?.id ?? null
   const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
   const latestUserMarker = useMemo(() => {
@@ -4256,10 +4376,11 @@ const RemoteChatPane = memo(function RemoteChatPane({
     const target = choiceReplyTarget.current
     if (!active || !target.activeThread) return false
     let prompt = reply
-    if (translation.enabled && containsChinese(reply)) {
+    const translationForSend = readTranslationPreferencesIfAvailable() ?? translation
+    if (translationForSend.enabled && containsChinese(reply)) {
       try {
         const result = await codexRemoteClient.translateText(token, {
-          provider: translation.provider, profileId: translationProfileId, source: 'zh', target: 'en', style: translation.style, text: reply,
+          provider: translationForSend.provider, profileId: selectedTranslationProfileId(translationForSend), source: 'zh', target: 'en', style: translationForSend.style, text: reply,
         })
         prompt = result.text.trim()
         if (!prompt) return false
@@ -4277,7 +4398,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
       onDeliveryStatus: (status) => { delivery = status },
     })
     return accepted ? delivery : false
-  }, [active, token, translation.enabled, translation.provider, translationProfileId, translation.style])
+  }, [active, token, translation])
 
   useEffect(() => {
     if (!active || !directoryRequest || directoryRequest.id <= handledDirectoryRequestId.current) return
@@ -4979,7 +5100,33 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   const [cpaUsageSettings, setCpaUsageSettings] = useState<CPAUsageSettings>(readCPAUsageSettings)
   const [translationPreferences, setTranslationPreferences] = useState<TranslationPreferences>(readTranslationPreferences)
   const [translationRevision, setTranslationRevision] = useState(0)
-  useEffect(() => saveTranslationPreferences(translationPreferences), [translationPreferences])
+  const updateTranslationPreferences = useCallback((next: TranslationPreferences) => {
+    saveTranslationPreferences(next)
+    setTranslationPreferences(next)
+  }, [])
+  useEffect(() => {
+    const syncTranslationPreferences = () => {
+      const stored = readTranslationPreferencesIfAvailable()
+      if (!stored) return
+      setTranslationPreferences((current) => JSON.stringify(current) === JSON.stringify(stored) ? current : stored)
+    }
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === translationPreferencesStorageKey) syncTranslationPreferences()
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') syncTranslationPreferences()
+    }
+    window.addEventListener('storage', onStorage)
+    window.addEventListener('focus', syncTranslationPreferences)
+    window.addEventListener('pageshow', syncTranslationPreferences)
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.removeEventListener('storage', onStorage)
+      window.removeEventListener('focus', syncTranslationPreferences)
+      window.removeEventListener('pageshow', syncTranslationPreferences)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [])
   const [defaultComposerPreferences, setDefaultComposerPreferences] = useState<ComposerPreferences>(readComposerPreferences)
   const [threadComposerPreferences, setThreadComposerPreferences] = useState<ThreadComposerPreferences>(readThreadComposerPreferences)
   const [copyFeedback, setCopyFeedback] = useState<{ id: string; label: string } | null>(null)
@@ -5116,6 +5263,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }, [])
   const composerHandle = useRef<ComposerHandle>(null)
   const focusComposerAfterThreadSwitch = useRef<string | null>(null)
+  const focusComposerAfterPaneShortcut = useRef(false)
   const sidebarTouchStart = useRef<MobilePanelGestureStart | null>(null)
   const sidebarDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
   const workspaceDrag = useRef<{ panelWidth: number; offset: number; active: boolean } | null>(null)
@@ -5529,6 +5677,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const activeThreadId = activeRemote.activeThread?.id
   const composerDraftScope = composerDraftScopeForThread(activeThreadId)
+  useLayoutEffect(() => {
+    if (!focusComposerAfterPaneShortcut.current) return
+    focusComposerAfterPaneShortcut.current = false
+    if (shouldAutoFocusComposer()) composerHandle.current?.focusInput()
+  }, [selectedPaneIndex])
   useLayoutEffect(() => {
     if (!activeThreadId || focusComposerAfterThreadSwitch.current !== activeThreadId) return
     focusComposerAfterThreadSwitch.current = null
@@ -6461,6 +6614,35 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => document.removeEventListener('keydown', switchSidebarThread)
   }, [activeRemote.activeThread?.id, activeRemote.handedOff, groupedSidebarThreads, selectThread, settingsOpen, usageStatsOpen, sidebarChatShortcuts, sidebarSelectionBusy, sidebarSelectionMode, threadContextMenu, threadDeleteTargets, threadRenameTarget])
 
+  useEffect(() => {
+    const switchConcurrentPane = (event: globalThis.KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+        || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return
+      const direction = event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0
+      if (direction === 0 || openPaneIndexes.length < 2) return
+      if (sidebarOpen || sidebarSelectionMode || sidebarSelectionBusy || settingsOpen || usageStatsOpen
+        || threadContextMenu || threadRenameTarget || threadDeleteTargets || workspacePreviewModeRef.current !== null) return
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const editableTarget = target?.closest('input, textarea, select, [contenteditable], [role="textbox"]')
+      if (editableTarget && !editableTarget.matches('textarea[data-chat-composer]')) return
+      if (document.querySelector('dialog, [role="dialog"], [role="alertdialog"], [role="menu"], [role="listbox"]')) return
+
+      const currentPosition = openPaneIndexes.indexOf(selectedPaneIndex)
+      if (currentPosition < 0) return
+      const nextPaneIndex = openPaneIndexes[(currentPosition + direction + openPaneIndexes.length) % openPaneIndexes.length]
+      if (nextPaneIndex === undefined || nextPaneIndex === selectedPaneIndex) return
+
+      event.preventDefault()
+      event.stopPropagation()
+      focusComposerAfterPaneShortcut.current = true
+      setSelectedPaneIndex(nextPaneIndex)
+    }
+
+    document.addEventListener('keydown', switchConcurrentPane, true)
+    return () => document.removeEventListener('keydown', switchConcurrentPane, true)
+  }, [openPaneIndexes, selectedPaneIndex, sidebarOpen, sidebarSelectionMode, sidebarSelectionBusy, settingsOpen, usageStatsOpen, threadContextMenu, threadRenameTarget, threadDeleteTargets])
+
   const selectedSidebarThreads = sidebarThreads.filter((thread) => selectedSidebarThreadIds.has(thread.id))
   const completedThread = findCompletedThread()
 
@@ -6690,9 +6872,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       ) : null}
 
       {settingsOpen ? (
-        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={setTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
+        <ThemeSettingsPanel token={token} preferences={themePreferences} onChange={setThemePreferences} onClose={closeSettingsPanel} onUnpair={onUnpair} chatShortcuts={sidebarChatShortcuts} onChatShortcutsChange={setSidebarChatShortcuts} cpaUsageSettings={cpaUsageSettings} onCPAUsageSettingsChange={updateCPAUsageSettings} translation={translationPreferences} onTranslationChange={updateTranslationPreferences} onTranslationConfigSaved={() => setTranslationRevision((value) => value + 1)} />
       ) : usageStatsOpen ? (
-        <CPAUsageStatsPanel settings={cpaUsageSettings} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
+        <CPAUsageStatsPanel settings={cpaUsageSettings} token={token} onSourceChange={(source) => updateCPAUsageSettings({ ...cpaUsageSettings, source })} onOpenSettings={openSettingsPanel} onClose={closeUsageStatsPanel} />
       ) : (
         <>
           <section className="remote-workspace">
@@ -6766,6 +6948,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onSend={sendComposerMessage}
               queuedMessages={activeRemote.queuedMessages}
               onSendQueuedNow={activeRemote.sendQueuedMessageNow}
+              onRetryQueuedTranslation={activeRemote.retryQueuedTranslation}
               onBeginQueuedEdit={activeRemote.beginEditQueuedMessage}
               onUpdateQueuedMessage={activeRemote.updateQueuedMessage}
               onEndQueuedEdit={activeRemote.endEditQueuedMessage}
@@ -7035,7 +7218,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
       }
       if (isSidebarChatShortcutModifierKey(event.key)) return
       if (isReservedSidebarChatShortcut(event)) {
-        setShortcutMessage('这个组合键由浏览器保留，请换一个。')
+        setShortcutMessage('这个组合键已被占用或由浏览器保留，请换一个。')
         return
       }
 
@@ -7205,7 +7388,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           <MCPApprovalsCard token={token} />
         </div>
         <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
-          <CPAUsageSettingsCard settings={cpaUsageSettings} onChange={onCPAUsageSettingsChange} />
+          <CPAUsageSettingsCard settings={cpaUsageSettings} token={token} onChange={onCPAUsageSettingsChange} />
         </div>
         <div id="settings-section-translation" className="theme-settings-panel__section" hidden={activeSection !== 'translation'}>
           <TranslationSettingsCard token={token} preferences={translation} onChange={onTranslationChange} onConfigSaved={onTranslationConfigSaved} />
@@ -7256,6 +7439,18 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
               <label className="theme-control-row">
                 <span><strong>背景颜色</strong><small>作为半透明面板背后的底色。</small></span>
                 <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label="自定义背景颜色" /><code>{preferences.customBackgroundColor}</code></span>
+              </label>
+              <div className="theme-control-row">
+                <span><strong>模块颜色</strong><small>应用于侧栏、输入框、卡片和菜单。</small></span>
+                <span className="theme-color-input">
+                  <input type="color" value={preferences.customModuleColor ?? preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customModuleColor: normalizeHexColor(event.target.value, preferences.customModuleColor ?? preferences.customBackgroundColor) })} aria-label="自定义模块颜色" />
+                  <code>{preferences.customModuleColor ?? preferences.customBackgroundColor}</code>
+                  {preferences.customModuleColor ? <button className="theme-image-clear" type="button" onClick={() => onChange({ ...preferences, customModuleColor: undefined })}>跟随背景</button> : <small>跟随背景</small>}
+                </span>
+              </div>
+              <label className="theme-control-row theme-control-row--stacked">
+                <span><strong>模块透明度</strong><small>调整界面模块的透明程度，0% 为实色。</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customModuleTransparency} onChange={(event) => onChange({ ...preferences, customModuleTransparency: normalizeModuleTransparency(Number(event.target.value)) })} aria-label="自定义模块透明度" /><output>{preferences.customModuleTransparency}%</output></span>
               </label>
               <label className="theme-control-row">
                 <span><strong>字体颜色</strong><small>应用于工作区界面文字和控件。</small></span>
@@ -8006,8 +8201,47 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   const [sending, setSending] = useState(false)
   const [submitted, setSubmitted] = useState<ChoiceReplyDelivery | null>(null)
   const [notice, setNotice] = useState('选好后可直接发送，也可填入输入框修改')
+  const sendingRef = useRef(false)
+  const submittedRef = useRef(false)
+  const composingRef = useRef(false)
+  const lastCompositionEndAt = useRef(0)
   const complete = selected.every((optionIndex, index) => optionIndex >= 0 || optionIndex === -2 && Boolean(customAnswers[index].trim()))
   const reply = () => formatAssistantChoiceReply(groups, selected, customAnswers)
+
+  async function sendAnswer() {
+    if (!enabled || !complete || inserted || submittedRef.current || sendingRef.current) return
+    sendingRef.current = true
+    setSending(true)
+    try {
+      const result = await onSend(reply())
+      if (result) {
+        submittedRef.current = true
+        setSubmitted(result)
+        setNotice(result === 'sent' ? '答案已发送，AI 会继续回复'
+          : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
+            : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
+      } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } catch (reason) {
+      setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
+  }
+
+  function handleCustomAnswerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey
+      || composingRef.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (Date.now() - lastCompositionEndAt.current < 100 || event.repeat
+      || sendingRef.current || submittedRef.current || inserted || !enabled) return
+    if (!complete) {
+      setNotice('请先填写所有答案，再按 Enter 发送')
+      return
+    }
+    void sendAnswer()
+  }
 
   return (
     <div className="message-choices" aria-label={enabled ? '助手提出的选择题' : '历史选择题，已有后续消息'}>
@@ -8030,26 +8264,14 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
             ))}
             <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || submitted !== null} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
           </div>
-          {selected[groupIndex] === -2 ? <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={`${group.question}的其他答案`} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} /> : null}
+          {selected[groupIndex] === -2 ? <>
+            <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={`${group.question}的其他答案`} aria-keyshortcuts="Enter" enterKeyHint="send" title="Enter 发送；Shift+Enter 换行" onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} onCompositionStart={() => { composingRef.current = true }} onCompositionEnd={() => { composingRef.current = false; lastCompositionEndAt.current = Date.now() }} onBlur={() => { composingRef.current = false }} onKeyDown={handleCustomAnswerKeyDown} />
+            {enabled && !inserted && submitted === null ? <small className="message-choices__custom-hint">Enter 发送 · Shift+Enter 换行</small> : null}
+          </> : null}
         </fieldset>
       ))}
       {enabled ? <div className="message-choices__footer">
-        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={async () => {
-          setSending(true)
-          try {
-            const result = await onSend(reply())
-            if (result) {
-              setSubmitted(result)
-              setNotice(result === 'sent' ? '答案已发送，AI 会继续回复'
-                : result === 'queued' ? '暂未立即送达，答案已加入排队；可在排队消息中点击“插队”'
-                  : '送达状态未确认，请核对聊天记录和排队消息，避免重复发送')
-            } else setNotice('发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
-          } catch (reason) {
-            setNotice(reason instanceof Error ? reason.message : '发送未确认，请先核对聊天记录和排队消息，再决定是否重试')
-          } finally {
-            setSending(false)
-          }
-        }}>{sending ? '正在发送…' : submitted === 'sent' ? '答案已发送' : submitted === 'queued' ? '已加入排队' : submitted === 'unverified' ? '送达未确认' : '发送并继续'}</button>
+        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => void sendAnswer()}>{sending ? '正在发送…' : submitted === 'sent' ? '答案已发送' : submitted === 'queued' ? '已加入排队' : submitted === 'unverified' ? '送达未确认' : '发送并继续'}</button>
         <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => {
           if (onUse(reply())) setInserted(true)
           else setNotice('请先结束当前编辑，再填入回答')
@@ -8167,6 +8389,8 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   const renderCopyAction = (displayedText: string) => showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
+  const revealedText = useStreamingTextReveal(message.text, Boolean(message.role === 'assistant' && message.streaming
+    && !(translation.enabled && translation.showTranslated) && !message.questions?.length))
   const choiceText = message.streaming ? message.text.slice(0, message.completedTextLength ?? 0) : message.text
   const structuredQuestions = choiceVisible && message.questions?.length ? message.questions : null
   const choiceContent = useMemo(() => choiceVisible && message.role === 'assistant'
@@ -8198,7 +8422,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     ? message.text.slice(0, message.completedTextLength ?? 0)
     : message.streaming ? '' : message.text
   const displayedUserText = originalUserText && !showTranslatedUser ? originalUserText : message.text
-  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : message.text
+  const renderedText = message.role === 'user' ? displayedUserText : choiceContent?.onlyChoices && choiceText === message.text ? '' : revealedText
   const preferWebUrlLabel = message.role === 'assistant'
   const beforeChoiceText = splitStructuredChoice ? message.text.slice(0, promptStart).trim() : ''
   const afterChoiceText = splitStructuredChoice ? message.text.slice(promptStart + (message.choicePromptText?.length ?? 0)).trim() : ''
@@ -8228,6 +8452,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
           ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
         {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? '查看中文原文' : '查看英文发送内容'}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
+        {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{message.replyError}</span></div> : null}
         {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>

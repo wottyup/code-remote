@@ -277,7 +277,7 @@ class CodexAppServer:
         self.command = command
         self.workspace = workspace.expanduser().resolve()
         self._history_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser().resolve()
-        configured_runtime_home = os.environ.get("CODEX_REMOTE_APP_SERVER_HOME")
+        configured_runtime_home = os.environ.get("CODE_REMOTE_APP_SERVER_HOME")
         self._runtime_home = (
             Path(configured_runtime_home).expanduser().resolve()
             if configured_runtime_home
@@ -358,7 +358,7 @@ class CodexAppServer:
         python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
         return {"mcp_servers": {"code_remote_terminal": {
             "command": sys.executable,
-            "args": ["-m", "codex_remote.terminal_handoff"],
+            "args": ["-m", "code_remote.terminal_handoff"],
             "env": {
                 "PYTHONPATH": python_path,
                 "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),
@@ -797,7 +797,7 @@ class CodexAppServer:
     ) -> dict[str, Any]:
         params: dict[str, Any] = {
             "cwd": str(cwd or self.workspace),
-            "serviceName": "codex_remote_web",
+            "serviceName": "code_remote_web",
         }
         terminal_context = secrets.token_hex(16) if self._terminal_handoff and os.name != "nt" else None
         if terminal_context:
@@ -1072,12 +1072,16 @@ class CodexAppServer:
         if prompt.strip():
             input_items.append({"type": "text", "text": prompt})
         input_items.extend({"type": "localImage", "path": str(path)} for path in images)
-        return await self.request("turn/steer", {
+        result = await self.request("turn/steer", {
             "threadId": thread_id,
             "input": input_items,
             # Always use the runtime's ID, not a potentially stale browser ID.
             "expectedTurnId": active_turn_id,
         })
+        turn = result.get("turn")
+        if not isinstance(result.get("turnId"), str) and not (isinstance(turn, dict) and isinstance(turn.get("id"), str)):
+            return {**result, "turnId": active_turn_id}
+        return result
 
     async def interrupt(self, thread_id: str, turn_id: str | None = None) -> dict[str, Any]:
         active_turn_id = await self._active_turn_id(thread_id) or turn_id
@@ -1247,7 +1251,7 @@ class CodexAppServer:
             if not executable:
                 raise CodexRuntimeError(
                     f"找不到可用的 Codex CLI：{self.command}。"
-                    "请将 CODEX_REMOTE_COMMAND 指向完整安装的 Codex CLI；"
+                    "请将 CODE_REMOTE_COMMAND 指向完整安装的 Codex CLI；"
                     "不要使用 .codex/.sandbox-bin 中缺少沙箱辅助程序的内部缓存。"
                 )
             if not self.workspace.is_dir():
@@ -1307,7 +1311,7 @@ class CodexAppServer:
                 self._reader_task = asyncio.create_task(self._read_stdout(process))
             await self._request("initialize", {
                 "clientInfo": {
-                    "name": "codex_remote_web",
+                    "name": "code_remote_web",
                     "title": "Code Remote Web",
                     "version": "0.2.0-dev.7",
                 },
@@ -1562,7 +1566,7 @@ class CodexAppServer:
         except (OSError, json.JSONDecodeError):
             return False
         payload = envelope.get("payload") if isinstance(envelope, dict) else None
-        return isinstance(payload, dict) and payload.get("originator") == "codex_remote_web"
+        return isinstance(payload, dict) and payload.get("originator") == "code_remote_web"
 
     def _sync_runtime_thread_to_history(self, thread_id: str) -> bool:
         source = self._find_thread_rollout(self._runtime_home, thread_id)
@@ -1617,7 +1621,7 @@ class CodexAppServer:
                         return False
                     row = runtime_connection.execute(
                         "SELECT * FROM threads WHERE id = ? AND originator = ?",
-                        (thread_id, "codex_remote_web"),
+                        (thread_id, "code_remote_web"),
                     ).fetchone()
                     if row is None:
                         return False
@@ -1680,7 +1684,7 @@ class CodexAppServer:
                 return False
 
         target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        temporary = target.parent / f".{target.name}.codex-remote-{uuid.uuid4().hex}.tmp"
+        temporary = target.parent / f".{target.name}.code-remote-{uuid.uuid4().hex}.tmp"
         try:
             with source.open("rb") as source_file, temporary.open("xb") as temporary_file:
                 shutil.copyfileobj(source_file, temporary_file)
@@ -1707,7 +1711,7 @@ class CodexAppServer:
     def _app_server_environment(self) -> dict[str, str]:
         """Use the main Codex home unless isolation is explicitly configured.
 
-        An explicit CODEX_REMOTE_APP_SERVER_HOME keeps mutable state separate while
+        An explicit CODE_REMOTE_APP_SERVER_HOME keeps mutable state separate while
         the main home remains the source for configuration and imported history.
         """
         if self._runtime_home == self._history_home:
@@ -1790,7 +1794,7 @@ class CodexAppServer:
             raise CodexRuntimeError("网页端已交还给本机 Codex，请先在网页端选择“重新接管”。")
 
     async def _request(self, method: str, params: dict[str, Any], timeout: float) -> dict[str, Any]:
-        request_id = f"codex-remote-{self._request_id}"
+        request_id = f"code-remote-{self._request_id}"
         self._request_id += 1
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future

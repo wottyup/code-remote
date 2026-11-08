@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, patch
 from fastapi.middleware.gzip import GZipMiddleware
 from starlette.websockets import WebSocketDisconnect
 
-from codex_remote.app import create_app, enrich_thread_images
-from codex_remote.browser_payload import browser_event, browser_item, browser_thread, browser_thread_summary
+from code_remote.app import create_app, enrich_thread_images
+from code_remote.browser_payload import browser_event, browser_item, browser_thread, browser_thread_summary
 
 
 class BrowserPayloadTests(unittest.TestCase):
@@ -111,7 +111,7 @@ class BrowserPayloadTests(unittest.TestCase):
 class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_selected_thread_history_notification_is_lightweight_and_deduplicated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(Path(directory) / 'auth.json')}):
+            with patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(Path(directory) / 'auth.json')}):
                 app = create_app(Path(directory))
             server = app.state.codex
             server.connect = AsyncMock(return_value={"connected": True})
@@ -160,7 +160,7 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
     async def test_read_and_list_endpoints_project_payload_and_capture_revision_before_read(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(workspace / "auth.json")}):
+            with patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(workspace / "auth.json")}):
                 app = create_app(workspace)
             try:
                 server = app.state.codex
@@ -208,7 +208,7 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory:
             state_root = Path(directory).resolve()
             auth_path = state_root / "trusted-devices.json"
-            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(auth_path)}):
+            with patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(auth_path)}):
                 first_app = create_app(state_root)
 
             image_path = first_app.state.message_image_directory / "persistent.png"
@@ -217,7 +217,7 @@ class BrowserEndpointTests(unittest.IsolatedAsyncioTestCase):
             first_app.state.shared_state.close()
             await first_app.state.claude_code.close()
 
-            with patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(auth_path)}):
+            with patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(auth_path)}):
                 second_app = create_app(state_root)
             try:
                 self.assertEqual(first_image_directory, second_app.state.message_image_directory)

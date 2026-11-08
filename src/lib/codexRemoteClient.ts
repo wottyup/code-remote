@@ -30,6 +30,11 @@ export interface MCPApprovalGrant {
 export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic' | 'responses'
 export type TranslationApiProtocol = Extract<TranslationProvider, 'chat' | 'anthropic' | 'responses'>
 export type TranslationStyle = 'natural' | 'formal'
+export interface QueuedTranslationConfig {
+  provider: TranslationProvider
+  profileId?: string
+  style: TranslationStyle
+}
 
 export interface TranslationProviderConfig {
   configured: boolean
@@ -178,6 +183,7 @@ export interface CodexMessage {
   sentAt?: string
   replyStartedAt?: string
   replyDurationMs?: number
+  replyError?: string
   turnId?: string
   images?: CodexMessageImage[]
   documents?: CodexMessageDocument[]
@@ -211,6 +217,9 @@ export interface CodexQueuedMessage {
   claudeModel?: string
   claudeEffort?: string
   claudePermissionMode?: ClaudeCodePermissionMode
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   editing?: boolean
   deliveryState?: 'submitting' | 'pending' | 'sending' | 'unverified'
   blockedReason?: string
@@ -305,7 +314,7 @@ const networkRetryDelaysMs = [300, 900, 1_800]
 const webSocketConnectionTimeoutMs = 60_000
 const webSocketOpenTimeoutMs = 15_000
 const heartbeatIntervalMs = 25_000
-const heartbeatTimeoutMs = 12_000
+const heartbeatTimeoutMs = 20_000
 
 export function isAmbiguousNetworkFailure(reason: unknown) {
   if (reason instanceof RemoteApiError) return reason.status === 502 || reason.status === 504
@@ -587,6 +596,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         if (!itemComplete) assistantMessage.streaming = true
         if (!assistantMessage.model && itemModel) assistantMessage.model = itemModel
         if (!assistantMessage.effort && itemEffort) assistantMessage.effort = itemEffort
+        if (typeof item.error === 'string' && item.error) assistantMessage.replyError = item.error
         if (questions.length > 0) {
           assistantMessage.questions = questions
           assistantMessage.choiceItemId = typeof item.id === 'string' ? item.id : undefined
@@ -602,6 +612,7 @@ export function messagesFromThread(thread: CodexThreadDetails): CodexMessage[] {
         text,
         ...(itemType === 'agentmessage' && itemModel ? { model: itemModel } : {}),
         ...(itemType === 'agentmessage' && itemEffort ? { effort: itemEffort } : {}),
+        ...(itemType === 'agentmessage' && typeof item.error === 'string' && item.error ? { replyError: item.error } : {}),
         createdAt: itemCreatedAt ?? replyStartedAt ?? turnStartedAt ?? timestamp(turn.startedAt ?? turn.started_at),
         ...(itemType === 'usermessage' ? { sentAt: itemCreatedAt ?? turnStartedAt ?? undefined } : {}),
         ...(replyStartedAt ? { replyStartedAt } : {}),
@@ -900,6 +911,16 @@ export const codexRemoteClient = {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 180_000 })
   },
+  codexProxyUsage<T>(token: string, kind: 'summary' | 'history', input: { baseUrl: string; apiKey: string; hours?: number }, signal?: AbortSignal) {
+    return request<T>(token, `/api/v1/codex/usage/codex-proxy/${kind}`, {
+      method: 'POST', body: JSON.stringify(input), signal,
+    }, { timeoutMs: 30_000 })
+  },
+  newAPIUsage<T>(token: string, input: { baseUrl: string; accessToken: string; startTimestamp: number; endTimestamp: number }, signal?: AbortSignal) {
+    return request<T>(token, '/api/v1/codex/usage/new-api', {
+      method: 'POST', body: JSON.stringify(input), signal,
+    }, { timeoutMs: 60_000 })
+  },
   translatedInputs(token: string, threadId: string) {
     return request<{ messages: Array<{ requestId: string; turnId: string; sentText: string; originalText: string }> }>(
       token, `/api/v1/codex/threads/${encodeURIComponent(threadId)}/translated-inputs`, undefined,
@@ -1083,6 +1104,12 @@ export const codexRemoteClient = {
       body: JSON.stringify(message),
     }, { networkRetries: 3 })
   },
+  enqueueTranslatingMessage(token: string, threadId: string, message: CodexQueuedMessage) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/enqueue-translating`, {
+      method: 'POST',
+      body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
   scheduleMessage(token: string, threadId: string, message: CodexQueuedMessage) {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/schedule`, {
       method: 'POST',
@@ -1116,6 +1143,12 @@ export const codexRemoteClient = {
     return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/edit/update`, {
       method: 'POST',
       body: JSON.stringify(message),
+    }, { networkRetries: 3 })
+  },
+  retryQueuedTranslation(token: string, threadId: string, messageId: string) {
+    return request<{ queue: CodexQueuedMessage[] }>(token, `/api/v1/codex/queue/${encodeURIComponent(threadId)}/translation/retry`, {
+      method: 'POST',
+      body: JSON.stringify({ message_id: messageId }),
     }, { networkRetries: 3 })
   },
   pins(token: string) {
@@ -1162,6 +1195,9 @@ export const codexRemoteClient = {
   },
   startTurn(token: string, threadId: string, input: {
     prompt: string
+    originalText?: string
+    translatedText?: string
+    direct?: boolean
     images: CodexImageAttachment[]
     documents?: CodexDocumentAttachment[]
     model?: string
@@ -1176,6 +1212,9 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
+        original_text: input.originalText,
+        translated_text: input.translatedText,
+        direct: input.direct,
         model: input.model,
         effort: input.effort,
         approval_policy: input.approvalPolicy,
@@ -1194,6 +1233,9 @@ export const codexRemoteClient = {
   },
   steerTurn(token: string, threadId: string, input: {
     prompt: string
+    originalText?: string
+    translatedText?: string
+    direct?: boolean
     images: CodexImageAttachment[]
     documents?: CodexDocumentAttachment[]
     requestId: string
@@ -1202,6 +1244,9 @@ export const codexRemoteClient = {
       method: 'POST',
       body: JSON.stringify({
         prompt: input.prompt,
+        original_text: input.originalText,
+        translated_text: input.translatedText,
+        direct: input.direct,
         request_id: input.requestId,
         images: input.images.map((image) => ({
           name: image.name,

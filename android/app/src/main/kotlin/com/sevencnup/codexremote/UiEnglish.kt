@@ -16,7 +16,9 @@ internal object UiEnglish {
         "显示" to "Display", "字体大小会同时影响聊天、输入框、侧栏、文件区和设置页面。" to "Font size affects chat, composer, sidebars, files and settings.",
         "全局字体" to "Global font", "全局字体大小" to "Global font size", "标准" to "Standard",
         "语言" to "Language", "选择 APP 界面使用的语言；聊天和文件内容保持原文。" to "Choose the app language. Chats and files keep their original text.",
-        "简体中文" to "Simplified Chinese", "已选择" to "Selected", "关于与更新" to "About and updates",
+        "简体中文" to "Simplified Chinese", "已选择" to "Selected", "选择" to "Select",
+        "批量选择聊天" to "Select chats", "取消批量选择聊天" to "Cancel chat selection",
+        "关于与更新" to "About and updates",
         "关于" to "About", "收起" to "Collapse", "展开" to "Expand",
         "Code Remote 标志" to "Code Remote logo",
         "在手机上连接本机的代码助手，查看对话、文件和终端。" to "Connect to your local coding assistant from your phone to view chats, files and terminals.",
@@ -41,6 +43,35 @@ internal object UiEnglish {
         "无法打开安装授权设置" to "Could not open install permission settings",
         "无法打开系统安装界面" to "Could not open the system installer",
         "配对已失效，请重新连接电脑" to "Pairing expired. Reconnect to the computer",
+        "聊天翻译" to "Chat translation",
+        "英文发送预览" to "English send preview",
+        "翻译配置来自当前电脑，手机可单独选择模型。" to "Translation settings come from this computer. Choose a model for this phone.",
+        "配置来源" to "Configuration source", "当前电脑" to "Current computer", "配置已更新" to "Settings updated",
+        "输入中文时预览英文并发送英文；AI 回复可查看中文译文。" to "Preview and send English from Chinese drafts; view Chinese translations of AI replies.",
+        "翻译模型和密钥沿用当前电脑的网页版配置；手机只保存开关与选择。" to "Models and keys come from this computer's web settings. This phone saves only your choices.",
+        "网页版当前选中的配置保存在浏览器；手机可在下方直接选电脑已保存的模型。" to "The web app's current selection stays in that browser. Choose a saved model below for this phone.",
+        "当前电脑没有可用的翻译配置。" to "This computer has no available translation configuration.",
+        "电脑端配置已更新，点“使用的配置”可选择模型。" to "Computer settings updated. Tap Configuration to choose a model.",
+        "电脑端模型" to "Computer models",
+        "启用聊天翻译" to "Enable chat translation", "优先显示译文" to "Show translations first",
+        "英文表达" to "English style", "自然" to "Natural", "正式" to "Formal",
+        "翻译引擎" to "Translation engine", "使用的配置" to "Configuration",
+        "刷新翻译配置" to "Refresh translation settings",
+        "从当前电脑读取网页版已保存的模型配置" to "Read saved model settings from this computer",
+        "待配置" to "Not configured", "配置已删除" to "Configuration deleted",
+        "正在读取配置…" to "Loading settings…", "无法读取翻译配置" to "Could not load translation settings",
+        "所选翻译配置已不存在，请在设置页重新选择。" to "The selected translation configuration was deleted. Choose another in Settings.",
+        "所选翻译配置尚未配置，请在网页版设置。" to "Set up this translation configuration in the web app first.",
+        "内容超过 30000 字符，无法翻译。" to "Text is over 30,000 characters and cannot be translated.",
+        "正在翻译最新内容…" to "Translating the latest draft…", "翻译失败。" to "Translation failed.",
+        "翻译结果为空，请重试。" to "The translation was empty. Try again.",
+        "翻译失败，消息没有发送。" to "Translation failed. The message was not sent.",
+        "翻译时输入内容发生变化，请重新发送最新内容。" to "The draft changed during translation. Send the latest draft again.",
+        "翻译设置已变化，请重新发送最新内容。" to "Translation settings changed. Send the latest draft again.",
+        "中文译文" to "Chinese translation", "查看英文原文" to "View English original",
+        "收起英文原文" to "Hide English original", "重试翻译" to "Retry translation",
+        "回复已生成，正在翻译…" to "Reply complete. Translating…",
+        "查看中文原文" to "View Chinese original", "查看英文发送内容" to "View sent English text",
         "系统通知" to "System notifications", "应用在后台时提醒回复完成；通知不包含聊天正文。" to "Get a completion alert in the background. Notifications omit chat content.",
         "回复完成提醒" to "Reply completion alerts", "发送测试通知" to "Send test notification",
         "检查手机是否允许 APP 显示通知" to "Check whether this phone allows app notifications",
@@ -93,6 +124,7 @@ internal object UiEnglish {
         "本机默认模型" to "Device default model", "本机默认权限" to "Device default permission",
         "添加图片或文件" to "Add image or file", "发送消息" to "Send message",
         "发送" to "Send", "发送消息…" to "Write a message…",
+        "发送中…" to "Sending…", "同步中…" to "Syncing…",
         "暂停当前回复" to "Pause reply", "继续回复：发送续写请求" to "Continue reply by sending a follow-up",
         "已停止当前回复；点继续会发送续写请求" to "Reply stopped. Continue sends a follow-up request.",
         "继续回复失败" to "Could not continue reply", "暂停失败" to "Could not pause reply",
@@ -100,15 +132,19 @@ internal object UiEnglish {
         "正在思考…" to "Thinking…", "正在等待连接…" to "Waiting for connection…",
         "用时" to "Time",
         "回到底部" to "Scroll to bottom", "最近编辑文件" to "Recently edited files",
+        "正在编辑的文件" to "Files being edited",
         "操作记录" to "Activity log", "展开或收起最近编辑文件" to "Toggle recently edited files",
         "上一批" to "Previous batch", "下一批" to "Next batch", "上一页" to "Previous page", "下一页" to "Next page",
         "修改文件" to "Changed files", "查看文件" to "View file", "查看图片" to "View image",
+        "审核" to "Review", "收起审核" to "Hide review", "收起文件" to "Collapse files",
+        "插入对话" to "Insert into chat", "文件已更新，点击文件名查看文件" to "File updated. Tap its name to view it.",
         "关闭图片" to "Close image", "关闭文件预览" to "Close file preview",
         "关闭修改预览" to "Close diff preview", "文件" to "File", "文件夹" to "Folder",
         "空文件夹" to "Empty folder", "图片无法加载" to "Could not load image",
         "图片过大，已跳过内嵌预览" to "Image too large for inline preview",
         "这条编辑记录没有保存可审核的差异片段。" to "No reviewable diff was saved for this edit.",
         "工作区" to "Workspace", "本机项目" to "Local project", "刷新文件树" to "Refresh files",
+        "上传文件" to "Upload file",
         "关闭文件树" to "Close files", "打开文件树" to "Open files",
         "↑ 上级" to "↑ Parent", "↻ 跟随聊天" to "↻ Follow chat",
         "点按文件夹展开 · 长按查看更多操作" to "Tap folders to expand · long press for more actions",
@@ -121,6 +157,11 @@ internal object UiEnglish {
         "剪切" to "Cut", "粘贴" to "Paste", "粘贴到此处" to "Paste here", "聊天消息" to "Chat message",
         "重命名" to "Rename", "删除" to "Delete", "打开" to "Open", "新建" to "New",
         "创建" to "Create", "保存" to "Save", "取消" to "Cancel", "确定" to "OK",
+        "定时发送" to "Schedule message", "选择发送日期" to "Choose a send date",
+        "发送时间" to "Send time", "本地时间" to "Local time", "加入排队" to "Schedule",
+        "上一月" to "Previous month", "下一月" to "Next month",
+        "时间无效，请检查小时和分钟。" to "Enter valid hours and minutes.",
+        "发送时间必须晚于现在" to "Send time must be in the future",
         "关闭" to "Close", "返回聊天" to "Back to chat", "应用" to "Apply",
         "名称" to "Name", "聊天名称" to "Chat name", "删除聊天" to "Delete chat",
         "取消置顶" to "Unpin", "置顶" to "Pin", "已置顶" to "Pinned",
@@ -242,13 +283,40 @@ internal object UiEnglish {
         "脚本命令发送失败" to "Could not send script command",
     )
 
+    private val editingFileCount = Regex("^正在编辑 (\\d+) 个文件$")
+    private val editedFileSummaryCount = Regex("^本次已编辑 (\\d+) 个文件$")
+    private val operationCount = Regex("^(\\d+) 项(进行中|失败|完成)$")
+    private val moreEditedFilesCount = Regex("^查看另外 (\\d+) 个文件$")
+
     fun translate(value: String): String {
         strings[value]?.let { return it }
         extra[value]?.let { return it }
+        editingFileCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "Editing $count ${if (count == 1) "file" else "files"}"
+        }
+        editedFileSummaryCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "$count ${if (count == 1) "file" else "files"} edited this turn"
+        }
+        moreEditedFilesCount.matchEntire(value)?.groupValues?.get(1)?.toIntOrNull()?.let { count ->
+            return "View $count more ${if (count == 1) "file" else "files"}"
+        }
+        operationCount.matchEntire(value)?.let { match ->
+            val count = match.groupValues[1].toIntOrNull() ?: return@let
+            val status = when (match.groupValues[2]) {
+                "进行中" -> "in progress"
+                "失败" -> "failed"
+                else -> "completed"
+            }
+            return "$count ${if (count == 1) "item" else "items"} $status"
+        }
         activityLabels.entries.firstOrNull { (source, _) -> value == source || value.startsWith("$source ") }?.let { (source, translated) ->
             return translated + value.removePrefix(source)
         }
         return when {
+            value.startsWith("已更改 ") -> value.replaceFirst("已更改 ", "Changed ")
+            value.startsWith("查看更改 ") -> value.replaceFirst("查看更改 ", "View changes to ")
+            value.startsWith("插入 ") && value.endsWith(" 到对话") ->
+                "Insert ${value.removePrefix("插入 ").removeSuffix(" 到对话")} into chat"
             value.startsWith("排队消息 · ") -> value.replaceFirst("排队消息 · ", "Queued messages · ")
             value.startsWith("最近编辑文件 · ") -> value.replaceFirst("最近编辑文件 · ", "Recently edited files · ")
             value.startsWith("模型：") -> value.replace("模型：", "Model: ").replace("思考：", "Reasoning: ")

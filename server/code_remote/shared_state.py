@@ -39,6 +39,15 @@ def _scheduled_datetime(payload: dict[str, Any]) -> datetime | None:
     return scheduled.astimezone(timezone.utc)
 
 
+def _queued_request_text(text: str, documents: list[dict[str, Any]]) -> str:
+    document_text = "".join(
+        f"\n\n[附件文档：{document.get('name', '')}]\n{document.get('content', '')}\n[/附件文档]"
+        for document in documents
+        if isinstance(document, dict) and not document.get("sourceFileId")
+    )
+    return f"{text}{document_text}".strip()
+
+
 class QueueConflictError(RuntimeError):
     pass
 
@@ -206,6 +215,30 @@ class SharedStateStore:
         )
         return True
 
+    def enqueue_translating(self, thread_id: str, payload: dict[str, Any]) -> bool:
+        existing = self.connection.execute(
+            "SELECT thread_id, payload FROM queued_messages WHERE id = ?", (payload["id"],),
+        ).fetchone()
+        if existing:
+            current = json.loads(existing["payload"])
+            same_source = current.get("text") == payload.get("text") or current.get("originalText") == payload.get("text")
+            if (existing["thread_id"] == thread_id and same_source
+                    and current.get("translation") == payload.get("translation")):
+                return False
+            raise QueueConflictError("这条排队消息的编号已用于其它内容。")
+        receipt = self.connection.execute(
+            "SELECT thread_id FROM queue_receipts WHERE id = ?", (payload["id"],),
+        ).fetchone()
+        if receipt:
+            translated = self.connection.execute(
+                "SELECT original_text FROM translated_user_messages WHERE request_id = ? AND thread_id = ?",
+                (payload["id"], thread_id),
+            ).fetchone()
+            if receipt["thread_id"] == thread_id and translated and translated["original_text"] == payload.get("text"):
+                return False
+            raise QueueConflictError("这条排队消息的编号已用于其它内容。")
+        return self.enqueue(thread_id, payload)
+
     def finish_submission(self, thread_id: str, message_id: str) -> None:
         self.connection.execute(
             "UPDATE queued_messages SET state = 'pending' WHERE thread_id = ? AND id = ? AND state = 'submitting'",
@@ -226,6 +259,64 @@ class SharedStateStore:
         self.connection.execute(
             "UPDATE queued_messages SET payload = ? WHERE id = ?",
             (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), message_id),
+        )
+
+    def resolve_translation(
+        self,
+        thread_id: str,
+        message_id: str,
+        source_text: str,
+        translation: dict[str, Any],
+        *,
+        translated_text: str | None = None,
+        error: str | None = None,
+    ) -> bool:
+        row = self.connection.execute(
+            "SELECT payload FROM queued_messages WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            (thread_id, message_id),
+        ).fetchone()
+        if not row:
+            return False
+        payload = json.loads(row["payload"])
+        if (payload.get("translationStatus") != "pending"
+                or payload.get("text") != source_text
+                or payload.get("translation") != translation):
+            return False
+        if translated_text is None:
+            payload["translationStatus"] = "failed"
+            payload["translationError"] = (error or "翻译失败，请重试。")[:1000]
+        else:
+            translated = translated_text.strip()
+            if not translated or translated == source_text.strip():
+                payload["translationStatus"] = "failed"
+                payload["translationError"] = "翻译服务没有返回译文，请重试。"
+            else:
+                payload["originalText"] = source_text
+                payload["text"] = translated
+                payload["requestText"] = _queued_request_text(translated, payload.get("documents", []))
+                payload.pop("translationStatus", None)
+                payload.pop("translationError", None)
+        changed = self.connection.execute(
+            "UPDATE queued_messages SET payload = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), thread_id, message_id),
+        ).rowcount
+        return changed > 0
+
+    def retry_translation(self, thread_id: str, message_id: str) -> None:
+        row = self.connection.execute(
+            "SELECT payload FROM queued_messages WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            (thread_id, message_id),
+        ).fetchone()
+        if not row:
+            raise QueueConflictError("这条排队消息已发送或正在编辑。")
+        payload = json.loads(row["payload"])
+        if payload.get("translationStatus") != "failed" or not isinstance(payload.get("translation"), dict):
+            raise QueueConflictError("这条消息当前不需要重试翻译。")
+        payload["translationStatus"] = "pending"
+        payload.pop("translationError", None)
+        self.connection.execute(
+            "UPDATE queued_messages SET payload = ? WHERE thread_id = ? AND id = ? AND state = 'pending' AND editing = 0",
+            (json.dumps(payload, ensure_ascii=False, separators=(",", ":")), thread_id, message_id),
         )
 
     def edit(self, thread_id: str, message_id: str, editing: bool, owner: str = "legacy") -> None:
@@ -321,6 +412,15 @@ class SharedStateStore:
             )
 
     def claim(self, thread_id: str, message_id: str) -> dict[str, Any] | None:
+        row = self.connection.execute(
+            "SELECT payload, state, editing FROM queued_messages WHERE thread_id = ? AND id = ?",
+            (thread_id, message_id),
+        ).fetchone()
+        if not row or row["state"] not in {"pending", "submitting"} or row["editing"]:
+            return None
+        payload = json.loads(row["payload"])
+        if payload.get("translationStatus") in {"pending", "failed"}:
+            return None
         attempt_at = _now()
         changed = self.connection.execute(
             "UPDATE queued_messages SET state = 'sending', attempt_at = ? WHERE thread_id = ? AND id = ? AND state IN ('pending', 'submitting') AND editing = 0",
@@ -468,6 +568,17 @@ class SharedStateStore:
             for row in reversed(rows)
         ]
 
+    def record_translated_user_message(
+        self, thread_id: str, request_id: str | None, turn_id: str | None,
+        sent_text: str | None, original_text: str | None,
+    ) -> None:
+        if not request_id or not turn_id or not sent_text or not original_text or sent_text == original_text:
+            return
+        self.connection.execute(
+            "INSERT OR IGNORE INTO translated_user_messages(request_id, thread_id, turn_id, sent_text, original_text, delivered_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (request_id, thread_id, turn_id, sent_text, original_text, _now()),
+        )
+
 
 def _turn_status(turn: dict[str, Any]) -> str:
     value = turn.get("status")
@@ -481,19 +592,25 @@ class SharedQueueService:
         codex: CodexAppServer,
         send: Callable[[str, dict[str, Any], bool], Awaitable[str | None]],
         claude: ClaudeCodeServer | None = None,
+        translate: Callable[[str, str, str, str, str, str | None], Awaitable[str]] | None = None,
     ) -> None:
         self.store = store
         self.codex = codex
         self.send = send
         self.claude = claude
+        self.translate = translate
         self._wake = asyncio.Event()
         self._locks: dict[str, asyncio.Lock] = {}
+        self._translation_tasks: dict[tuple[str, str], asyncio.Task[None]] = {}
         self._runner: asyncio.Task[None] | None = None
         self._listener: asyncio.Task[None] | None = None
         self._closed = False
 
     def _lock(self, thread_id: str) -> asyncio.Lock:
         return self._locks.setdefault(thread_id, asyncio.Lock())
+
+    def delivery_lock(self, thread_id: str) -> asyncio.Lock:
+        return self._lock(thread_id)
 
     async def changed(self, thread_id: str) -> None:
         self._wake.set()
@@ -678,11 +795,12 @@ class SharedQueueService:
     async def close(self) -> None:
         self._closed = True
         self._wake.set()
-        tasks = tuple(task for task in (self._runner, self._listener) if task is not None)
+        tasks = tuple(task for task in (self._runner, self._listener, *self._translation_tasks.values()) if task is not None)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        self._translation_tasks.clear()
 
     async def _listen(self) -> None:
         events = await self.codex.subscribe()
@@ -703,6 +821,7 @@ class SharedQueueService:
                 await self.changed(thread_id)
             for thread_id in self.store.thread_ids():
                 try:
+                    self._schedule_pending_translations(thread_id)
                     await self.advance(thread_id)
                 except asyncio.CancelledError:
                     raise
@@ -726,6 +845,8 @@ class SharedQueueService:
             queue = self.store.queue(thread_id)
             is_claude = is_claude_thread_id(thread_id) and self.claude is not None
             if not queue or self.store.is_paused(thread_id) or queue[0].get("editing") or queue[0].get("sendAttempt") or (self.codex.handed_off and not is_claude):
+                return
+            if queue[0].get("translationStatus") in {"pending", "failed"}:
                 return
             scheduled = _scheduled_datetime(queue[0])
             if scheduled is not None and scheduled > datetime.now(timezone.utc):
@@ -841,6 +962,10 @@ class SharedQueueService:
             if require_head:
                 return False
             raise QueueConflictError("这条排队消息正在编辑、发送或等待核对。")
+        if candidate.get("translationStatus") in {"pending", "failed"}:
+            if require_head:
+                return False
+            raise QueueConflictError("这条消息尚未完成翻译，暂时不能发送。")
 
         # Do not load a whole long conversation just to ask whether it is busy.
         # read_thread also reconciles a cached active ID against this snapshot.
@@ -894,3 +1019,58 @@ class SharedQueueService:
             self.store.clear_barrier(thread_id)
         self.store.set_block(thread_id, None)
         return await self._send_claimed(thread_id, payload, new_turn=not bool(active_turn))
+
+    def _schedule_pending_translations(self, thread_id: str) -> None:
+        if self.translate is None:
+            return
+        for payload in self.store.queue(thread_id):
+            translation = payload.get("translation")
+            if (payload.get("translationStatus") != "pending" or payload.get("editing")
+                    or payload.get("sendAttempt") or not isinstance(translation, dict)):
+                continue
+            key = (thread_id, payload["id"])
+            task = self._translation_tasks.get(key)
+            if task is not None and not task.done():
+                continue
+            task = asyncio.create_task(self._translate_queued_message(thread_id, payload, translation))
+            self._translation_tasks[key] = task
+
+    async def _translate_queued_message(
+        self, thread_id: str, payload: dict[str, Any], translation: dict[str, Any],
+    ) -> None:
+        key = (thread_id, payload["id"])
+        source_text = payload.get("text")
+        translated_text: str | None = None
+        error: str | None = None
+        try:
+            if not isinstance(source_text, str) or not source_text.strip():
+                raise ValueError("排队消息没有可翻译的中文内容。")
+            translated_text = await self.translate(
+                translation["provider"], "zh", "en", translation["style"], source_text,
+                translation.get("profileId"),
+            ) if self.translate is not None else None
+            if not translated_text or not translated_text.strip():
+                raise ValueError("翻译服务没有返回译文。")
+        except asyncio.CancelledError:
+            raise
+        except Exception as reason:
+            error = str(reason) or "翻译失败，请重试。"
+            logger.warning("Background translation failed for queued message %s (%s)", payload["id"], type(reason).__name__)
+        try:
+            async with self._lock(thread_id):
+                changed = self.store.resolve_translation(
+                    thread_id, payload["id"], source_text if isinstance(source_text, str) else "", translation,
+                    translated_text=translated_text if error is None else None,
+                    error=error,
+                )
+                if changed:
+                    await self.changed(thread_id)
+        finally:
+            if self._translation_tasks.get(key) is asyncio.current_task():
+                self._translation_tasks.pop(key, None)
+
+    async def retry_translation(self, thread_id: str, message_id: str) -> list[dict[str, Any]]:
+        async with self._lock(thread_id):
+            self.store.retry_translation(thread_id, message_id)
+            await self.changed(thread_id)
+            return self.store.queue(thread_id)

@@ -63,6 +63,8 @@ from .retired_features import remove_retired_ssh_state
 from .terminal import TMUX_CLEANUP_INTERVAL_SECONDS, TerminalSession, cleanup_tmux_sessions
 from .terminal_handoff import TerminalHandoffBroker, TerminalHandoffError
 from .translation import TranslationError, TranslationService
+from .codex_proxy_usage import CodexProxyUsageError, fetch_usage as fetch_codex_proxy_usage
+from .new_api_usage import NewAPIUsageError, fetch_usage as fetch_new_api_usage
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +163,19 @@ class TranslationRequest(BaseModel):
     target: Literal["zh", "en"]
     style: Literal["natural", "formal"] = "natural"
     text: str = Field(max_length=30_000)
+
+
+class CodexProxyUsageRequest(BaseModel):
+    baseUrl: str = Field(max_length=2048)
+    apiKey: str = Field(max_length=2048)
+    hours: int = Field(default=24, ge=1, le=744)
+
+
+class NewAPIUsageRequest(BaseModel):
+    baseUrl: str = Field(max_length=2048)
+    accessToken: str = Field(max_length=2048)
+    startTimestamp: int = Field(gt=0)
+    endTimestamp: int = Field(gt=0)
 
 
 class NativeEngineConfigSaveRequest(BaseModel):
@@ -350,6 +365,9 @@ class TurnImage(BaseModel):
 
 class TurnRequest(BaseModel):
     prompt: str = Field(default="")
+    original_text: str | None = Field(default=None, max_length=30_000)
+    translated_text: str | None = None
+    direct: bool = False
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     model: str | None = Field(default=None, max_length=200)
@@ -363,6 +381,9 @@ class TurnRequest(BaseModel):
 
 class SteerRequest(BaseModel):
     prompt: str = Field(default="")
+    original_text: str | None = Field(default=None, max_length=30_000)
+    translated_text: str | None = None
+    direct: bool = False
     images: list[TurnImage] = Field(default_factory=list, max_length=MAX_IMAGES_PER_TURN)
     pdf_attachments: list[str] = Field(default_factory=list, max_length=MAX_PDF_ATTACHMENTS_PER_TURN)
     request_id: str | None = Field(default=None, min_length=8, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
@@ -378,6 +399,12 @@ class QueuedDocument(BaseModel):
     name: str = Field(min_length=1, max_length=512)
     content: str
     sourceFileId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_-]{24,64}$")
+
+
+class QueuedTranslationConfig(BaseModel):
+    provider: Literal["google", "microsoft", "deepl", "codex", "claude", "chat", "anthropic", "responses"]
+    profileId: str | None = Field(default=None, max_length=100)
+    style: Literal["natural", "formal"] = "natural"
 
 
 class QueuedMessageRequest(BaseModel):
@@ -396,6 +423,9 @@ class QueuedMessageRequest(BaseModel):
     claudeEffort: Literal["low", "medium", "high", "xhigh", "max"] | None = None
     claudePermissionMode: Literal["default", "manual", "acceptEdits", "auto", "dontAsk", "plan"] | None = None
     sendAttempt: dict[str, Any] | None = None
+    translation: QueuedTranslationConfig | None = None
+    translationStatus: Literal["pending", "failed"] | None = None
+    translationError: str | None = Field(default=None, max_length=1000)
 
     @field_validator("scheduledAt")
     @classmethod
@@ -1168,7 +1198,7 @@ def workspace_file_save(base: Path, relative_path: str, content: str, expected_r
         original_mode = stat.S_IMODE(candidate.stat().st_mode)
         with tempfile.NamedTemporaryFile(
             mode="wb",
-            prefix=".codex-remote-",
+            prefix=".code-remote-",
             suffix=".tmp",
             dir=candidate.parent,
             delete=False,
@@ -1504,7 +1534,7 @@ def tail_thread_history(response: dict[str, Any], limit: int | None) -> dict[str
 class PairingAuth:
     def __init__(self, state_path: Path | None = None) -> None:
         self.code = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8))
-        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
+        configured_path = os.environ.get("CODE_REMOTE_AUTH_FILE")
         self.state_path = state_path or self._default_state_path()
         state_exists = self.state_path.is_file()
         self.token_hashes = self._load_token_hashes(self.state_path)
@@ -1517,11 +1547,11 @@ class PairingAuth:
 
     @staticmethod
     def _default_state_path() -> Path:
-        configured_path = os.environ.get("CODEX_REMOTE_AUTH_FILE")
+        configured_path = os.environ.get("CODE_REMOTE_AUTH_FILE")
         if configured_path:
             return Path(configured_path).expanduser()
         if os.name == "nt":
-            configured_home = os.environ.get("CODEX_REMOTE_HOME")
+            configured_home = os.environ.get("CODE_REMOTE_HOME")
             if configured_home:
                 remote_home = Path(configured_home).expanduser()
             else:
@@ -1659,17 +1689,17 @@ def create_app(
     project_root = Path(__file__).resolve().parents[2]
     configured_workspace = resolve_default_workspace(
         project_root,
-        configured=workspace or (Path(os.environ["CODEX_REMOTE_WORKSPACE"]) if os.environ.get("CODEX_REMOTE_WORKSPACE") else None),
+        configured=workspace or (Path(os.environ["CODE_REMOTE_WORKSPACE"]) if os.environ.get("CODE_REMOTE_WORKSPACE") else None),
     )
-    codex_executable = codex_command or os.environ.get("CODEX_REMOTE_COMMAND", "codex")
-    claude_executable = os.environ.get("CODEX_REMOTE_CLAUDE_COMMAND", "claude")
+    codex_executable = codex_command or os.environ.get("CODE_REMOTE_COMMAND", "codex")
+    claude_executable = os.environ.get("CODE_REMOTE_CLAUDE_COMMAND", "claude")
     app_server = CodexAppServer(codex_executable, configured_workspace)
     auth = PairingAuth()
     try:
         auth.state_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     except OSError as error:
         raise RuntimeError(f"无法准备 Code Remote 用户数据目录：{auth.state_path.parent}：{error}") from error
-    state_path = Path(os.environ.get("CODEX_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
+    state_path = Path(os.environ.get("CODE_REMOTE_STATE_FILE", str(auth.state_path.parent / "shared-state.sqlite3"))).expanduser()
     translation = TranslationService(auth.state_path.parent / "translation.json", codex_executable, claude_executable)
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
     remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
@@ -1692,7 +1722,7 @@ def create_app(
     idempotent_requests = IdempotentRequestRegistry()
     image_directory = prepare_message_image_directory(auth.state_path.parent)
     image_storage_lock = threading.Lock()
-    runtime_directory = Path(tempfile.mkdtemp(prefix="codex-remote-runtime-", dir=auth.state_path.parent))
+    runtime_directory = Path(tempfile.mkdtemp(prefix="code-remote-runtime-", dir=auth.state_path.parent))
     pdf_attachments = PdfAttachmentStore(runtime_directory / "pdf-attachments")
     terminal_sessions: set[TerminalSession] = set()
     terminal_handoff = TerminalHandoffBroker(runtime_directory / "terminal.sock")
@@ -1766,7 +1796,7 @@ def create_app(
             ))
         return result.get("turn_id")
 
-    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code)
+    shared_queue = SharedQueueService(shared_state, app_server, send_queued_turn, claude_code, translation.translate)
     workspace_download_tickets: dict[str, tuple[Path, str, float]] = {}
 
     def paused_thread_view(thread_id: str, thread: dict[str, Any]) -> dict[str, Any]:
@@ -1842,7 +1872,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.104.5-dev.1", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.109.1-dev.5", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1870,7 +1900,7 @@ def create_app(
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, error: RequestValidationError):
-        if request.url.path.startswith("/api/v1/native-config/"):
+        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/")):
             # Pydantic's default error body can echo the submitted API key.
             return JSONResponse({"detail": "配置字段无效或缺失，请检查填写内容后重试。"}, status_code=422)
         return await request_validation_exception_handler(request, error)
@@ -1884,7 +1914,7 @@ def create_app(
             if not auth.accepts(token):
                 return JSONResponse({"detail": "需要配对码"}, status_code=status.HTTP_401_UNAUTHORIZED)
         response = await call_next(request)
-        if request.url.path.startswith("/api/v1/native-config/"):
+        if request.url.path.startswith(("/api/v1/native-config/", "/api/v1/codex/usage/")):
             response.headers["Cache-Control"] = "private, no-store"
             response.headers["Pragma"] = "no-cache"
         return response
@@ -2074,6 +2104,20 @@ def create_app(
             return {"text": await translation.translate(body.provider, body.source, body.target, body.style, body.text, body.profileId)}
         except TranslationError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/usage/codex-proxy/{kind}")
+    async def codex_proxy_usage(kind: Literal["summary", "history"], body: CodexProxyUsageRequest) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(fetch_codex_proxy_usage, body.baseUrl, body.apiKey, kind, body.hours)
+        except CodexProxyUsageError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
+
+    @app.post("/api/v1/codex/usage/new-api")
+    async def new_api_usage(body: NewAPIUsageRequest) -> dict[str, Any]:
+        try:
+            return await asyncio.to_thread(fetch_new_api_usage, body.baseUrl, body.accessToken, body.startTimestamp, body.endTimestamp)
+        except NewAPIUsageError as error:
+            raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 
     @app.post("/api/v1/pair")
     async def pair(request: PairRequest) -> dict[str, str]:
@@ -2447,6 +2491,21 @@ def create_app(
             await shared_queue.changed(thread_id)
         return {"queue": shared_state.queue(thread_id)}
 
+    @app.post("/api/v1/codex/queue/{thread_id}/enqueue-translating")
+    async def enqueue_translating_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
+        if body.translationStatus != "pending" or body.translation is None:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="后台翻译配置无效。")
+        if not body.text.strip():
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail="排队消息不能为空。")
+        try:
+            async with shared_queue.delivery_lock(thread_id):
+                inserted = shared_state.enqueue_translating(thread_id, body.model_dump(exclude_none=True))
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        if inserted:
+            await shared_queue.changed(thread_id)
+        return {"queue": shared_state.queue(thread_id)}
+
     @app.post("/api/v1/codex/queue/{thread_id}/schedule")
     async def schedule_message(thread_id: str, body: QueuedMessageRequest) -> dict[str, Any]:
         if not body.scheduledAt:
@@ -2524,6 +2583,14 @@ def create_app(
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
         return {"sent": sent, "queue": shared_state.queue(thread_id)}
+
+    @app.post("/api/v1/codex/queue/{thread_id}/translation/retry")
+    async def retry_queued_translation(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
+        try:
+            queue = await shared_queue.retry_translation(thread_id, body.message_id)
+        except QueueConflictError as error:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
+        return {"queue": queue}
 
     @app.post("/api/v1/codex/queue/{thread_id}/start-if-idle")
     async def start_queued_message_if_idle(thread_id: str, body: QueueMessageIdRequest) -> dict[str, Any]:
@@ -2620,6 +2687,28 @@ def create_app(
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
 
+    def remember_direct_translation(thread_id: str, body: TurnRequest | SteerRequest, turn_id: str | None) -> None:
+        if not body.original_text or not body.translated_text or not isinstance(turn_id, str):
+            return
+        try:
+            shared_state.record_translated_user_message(
+                thread_id, body.request_id, turn_id, body.translated_text, body.original_text,
+            )
+        except Exception:
+            # The upstream already accepted the message: a metadata failure
+            # must not turn a successful send into a duplicate retry.
+            logger.exception("Failed to store translated message metadata")
+
+    async def run_direct_delivery(
+        thread_id: str, direct: bool, callback: Callable[[], Awaitable[dict[str, Any]]], *, ensure_idle: bool = False,
+    ) -> dict[str, Any]:
+        if not direct:
+            return await callback()
+        async with shared_queue.delivery_lock(thread_id):
+            if ensure_idle and await shared_queue._active_turn_id(thread_id):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="回复已经开始，请重新发送。")
+            return await callback()
+
     @app.post("/api/v1/codex/threads/{thread_id}/turns")
     async def start_turn(thread_id: str, body: TurnRequest) -> dict[str, Any]:
         prompt = body.prompt.strip()
@@ -2648,12 +2737,14 @@ def create_app(
                     if turn_directory is not None:
                         shutil.rmtree(turn_directory, ignore_errors=True)
                     raise
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
 
             try:
                 return await run_idempotent_request(
-                    "turn.start", thread_id, body.request_id, body, start_claude_turn,
+                    "turn.start", thread_id, body.request_id, body,
+                    lambda: run_direct_delivery(thread_id, body.direct, start_claude_turn, ensure_idle=True),
                 )
             except ClaudeThreadBusyError as error:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
@@ -2682,6 +2773,7 @@ def create_app(
                 )
                 turn = result.get("turn", {})
                 turn_id = turn.get("id") if isinstance(turn, dict) else None
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
             except Exception:
@@ -2696,7 +2788,7 @@ def create_app(
                 thread_id,
                 body.request_id,
                 body,
-                start,
+                lambda: run_direct_delivery(thread_id, body.direct, start, ensure_idle=True),
             )
         except CodexRuntimeError as error:
             raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from error
@@ -2758,6 +2850,7 @@ def create_app(
                 if not isinstance(turn_id, str):
                     turn = result.get("turn")
                     turn_id = turn.get("id") if isinstance(turn, dict) and isinstance(turn.get("id"), str) else None
+                remember_direct_translation(thread_id, body, turn_id)
                 await app_server.notify_turn_delivery(thread_id, body.request_id, turn_id)
                 return {"turn_id": turn_id}
             except Exception:
@@ -2772,7 +2865,7 @@ def create_app(
                 thread_id,
                 body.request_id,
                 body,
-                steer,
+                lambda: run_direct_delivery(thread_id, body.direct, steer),
             )
         except CodexNoActiveTurnError as error:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error

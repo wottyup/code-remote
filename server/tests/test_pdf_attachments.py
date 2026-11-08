@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from codex_remote.app import (
+from code_remote.app import (
     MAX_PDF_BYTES,
     PDF_ATTACHMENT_TTL_SECONDS,
     PdfAttachmentStore,
@@ -32,8 +32,8 @@ class PdfAttachmentTests(unittest.IsolatedAsyncioTestCase):
         image_directory.mkdir()
         self.workspace = workspace
         with (
-            patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
-            patch("codex_remote.app.tempfile.mkdtemp", return_value=str(image_directory)),
+            patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
+            patch("code_remote.app.tempfile.mkdtemp", return_value=str(image_directory)),
         ):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)

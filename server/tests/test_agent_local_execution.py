@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from codex_remote.app import create_app
-from codex_remote.mcp_approvals import MCPApprovalStore
-from codex_remote.retired_features import remove_retired_ssh_state
+from code_remote.app import create_app
+from code_remote.mcp_approvals import MCPApprovalStore
+from code_remote.retired_features import remove_retired_ssh_state
 
 
 class RetiredSSHStateTests(unittest.TestCase):
@@ -64,10 +64,10 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         self.root = Path(temporary.name).resolve()
         self.enterContext(patch.dict(os.environ, {
             "CODEX_HOME": str(self.root / "codex-home"),
-            "CODEX_REMOTE_APP_SERVER_HOME": "",
+            "CODE_REMOTE_APP_SERVER_HOME": "",
             "CLAUDE_CONFIG_DIR": str(self.root / "claude-home"),
-            "CODEX_REMOTE_AUTH_FILE": str(self.root / "state" / "auth.json"),
-            "CODEX_REMOTE_STATE_FILE": str(self.root / "state" / "shared-state.sqlite3"),
+            "CODE_REMOTE_AUTH_FILE": str(self.root / "state" / "auth.json"),
+            "CODE_REMOTE_STATE_FILE": str(self.root / "state" / "shared-state.sqlite3"),
         }))
         # App creation must work without bubblewrap and with state inside the workspace.
         with patch("shutil.which", return_value=None):
@@ -96,7 +96,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         await server.resume_thread("existing-thread", cwd=self.root)
 
         self.assertEqual(server.request.await_args_list[0].args, (
-            "thread/start", {"cwd": str(self.root), "serviceName": "codex_remote_web"},
+            "thread/start", {"cwd": str(self.root), "serviceName": "code_remote_web"},
         ))
         self.assertEqual(server.request.await_args_list[1].args, (
             "thread/resume", {"threadId": "existing-thread", "cwd": str(self.root)},
@@ -108,7 +108,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
         server._request = AsyncMock(return_value={})
         server._write = AsyncMock()
         child = Mock(returncode=0, stdout=asyncio.StreamReader(), stderr=asyncio.StreamReader())
-        with patch("codex_remote.codex_app_server.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn:
+        with patch("code_remote.codex_app_server.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn:
             await server._start_runtime("codex")
 
         self.assertEqual(("codex", "app-server", "--listen", "stdio://"), spawn.await_args.args)
@@ -125,7 +125,7 @@ class AgentLocalExecutionTests(unittest.IsolatedAsyncioTestCase):
             child = Mock(returncode=0, stdin=None, stdout=output, wait=AsyncMock(return_value=0))
             with (
                 patch.object(server, "_executable", return_value="claude"),
-                patch("codex_remote.claude_code.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn,
+                patch("code_remote.claude_code.asyncio.create_subprocess_exec", new_callable=AsyncMock, return_value=child) as spawn,
             ):
                 await server.start_turn(thread["id"], "hello")
                 await asyncio.gather(*tuple(server._tasks.values()))

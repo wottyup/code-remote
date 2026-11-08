@@ -17,7 +17,10 @@ import {
   type MCPApprovalScope,
   type CodexThread,
   type CodexThreadDetails,
+  type QueuedTranslationConfig,
   type RemoteEvent,
+  type TranslationProvider,
+  type TranslationStyle,
 } from '../lib/codexRemoteClient'
 import { maxImagesPerTurn } from '../lib/imageAttachmentRules'
 import { collapseAssistantMessagesForTurn, completedAssistantText, reconcileAssistantStreamSnapshot, streamingAssistantText, type AssistantStreamSnapshotItem } from '../lib/assistantTextStream'
@@ -100,6 +103,9 @@ export interface QueuedTurnMessage {
   effort?: string
   claudeModel?: string
   claudeEffort?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   scheduledAt?: string
   createdAt: string
   editing?: boolean
@@ -124,8 +130,12 @@ interface QueuedTurnPayload extends QueuedTurnMessage {
 interface SendMessageInput {
   prompt: string
   originalText?: string
+  translation?: QueuedTranslationConfig
+  translationStatus?: 'pending' | 'failed'
+  translationError?: string
   continuePaused?: boolean
   sendImmediately?: boolean
+  sendDirectly?: boolean
   onDeliveryStatus?: (status: 'sent' | 'queued' | 'unverified') => void
   images: CodexImageAttachment[]
   documents?: CodexDocumentAttachment[]
@@ -214,7 +224,7 @@ const persistentThreadCacheWriteDelayMs = 600
 // Version 2 preserves original message whitespace and source item identity.
 const persistentThreadCacheVersion = 2
 const threadMetadataFreshnessMs = 30_000
-const streamingRenderIntervalMs = 48
+const streamingRenderIntervalMs = 24
 const maxPersistedQueuedImageCharacters = 12_000_000
 const maxPersistedQueuedThreads = 24
 const maxPersistedQueuedMessagesPerThread = 30
@@ -520,6 +530,9 @@ function queuedPayloadFromInput(input: SendMessageInput): QueuedTurnPayload {
     id: queuedMessageId(),
     text,
     ...(input.originalText && input.originalText !== text ? { originalText: input.originalText } : {}),
+    ...(input.translation ? { translation: input.translation } : {}),
+    ...(input.translationStatus ? { translationStatus: input.translationStatus } : {}),
+    ...(input.translationError ? { translationError: input.translationError } : {}),
     requestText: queuedRequestText(text, documents),
     images: input.images,
     ...(documents.length > 0 ? { documents } : {}),
@@ -599,6 +612,26 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
   const scheduledAt = typeof payload.scheduledAt === 'string' && Number.isFinite(Date.parse(payload.scheduledAt))
     ? payload.scheduledAt
     : undefined
+  const translationRecord = payload.translation && typeof payload.translation === 'object'
+    ? payload.translation as Record<string, unknown>
+    : null
+  const translationProviders: TranslationProvider[] = ['google', 'microsoft', 'deepl', 'codex', 'claude', 'chat', 'anthropic', 'responses']
+  const translation = translationRecord && translationProviders.includes(translationRecord.provider as TranslationProvider)
+    && (translationRecord.style === 'natural' || translationRecord.style === 'formal')
+    ? {
+      provider: translationRecord.provider as TranslationProvider,
+      ...(typeof translationRecord.profileId === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(translationRecord.profileId)
+        ? { profileId: translationRecord.profileId }
+        : {}),
+      style: translationRecord.style as TranslationStyle,
+    }
+    : undefined
+  const translationStatus = translation && (payload.translationStatus === 'pending' || payload.translationStatus === 'failed')
+    ? payload.translationStatus
+    : undefined
+  const translationError = translationStatus === 'failed' && typeof payload.translationError === 'string'
+    ? payload.translationError.slice(0, 1000)
+    : undefined
   const attempt = payload.sendAttempt && typeof payload.sendAttempt === 'object'
     ? payload.sendAttempt as Record<string, unknown>
     : null
@@ -622,6 +655,9 @@ function persistedQueuedPayload(value: unknown): QueuedTurnPayload | null {
     ...(approvalPolicy ? { approvalPolicy } : {}),
     ...(claudeModel ? { claudeModel } : {}),
     ...(claudeEffort ? { claudeEffort } : {}),
+    ...(translation ? { translation } : {}),
+    ...(translationStatus ? { translationStatus } : {}),
+    ...(translationError ? { translationError } : {}),
     ...(claudePermissionMode ? { claudePermissionMode } : {}),
     ...(scheduledAt ? { scheduledAt } : {}),
     ...(sendAttempt ? { sendAttempt } : {}),
@@ -812,6 +848,7 @@ function sameMessages(left: CodexMessage[], right: CodexMessage[]) {
       && message.sentAt === candidate.sentAt
       && message.replyStartedAt === candidate.replyStartedAt
       && message.replyDurationMs === candidate.replyDurationMs
+      && message.replyError === candidate.replyError
       && Boolean(message.streaming) === Boolean(candidate.streaming)
       && message.completedTextLength === candidate.completedTextLength
       && message.choiceItemId === candidate.choiceItemId
@@ -1876,7 +1913,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     else startTransition(update)
   }, [])
 
-  const finalizeVisibleStreamingTurn = useCallback((turnId: string | null, completedAt = Date.now(), recordDuration = true) => {
+  const finalizeVisibleStreamingTurn = useCallback((
+    turnId: string | null,
+    completedAt = Date.now(),
+    recordDuration = true,
+    replyError?: string,
+  ) => {
     const streamTurnId = streamingAssistantTurnId.current
     const targetTurnId = turnId ?? streamTurnId
     if (!targetTurnId
@@ -1888,6 +1930,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     retireAssistantItems(targetTurnId, (activityTimelineByTurnRef.current[targetTurnId] ?? [])
       .filter((entry) => entry.type === 'message').map((entry) => entry.itemId))
     const recordedStart = turnStartedAtById.current.get(targetTurnId)
+    const finalizedActivityTimeline = activityTimelineByTurnRef.current
+    setActivityTimelineByTurn((current) => current === finalizedActivityTimeline ? current : finalizedActivityTimeline)
     setMessages((current) => {
       const next = current.map((message) => {
         const matches = message.streaming
@@ -1899,6 +1943,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         return {
           ...message,
           streaming: false,
+          ...(replyError ? { replyError } : {}),
           ...(startedAt !== undefined ? {
             replyStartedAt: message.replyStartedAt ?? new Date(startedAt).toISOString(),
             ...(recordDuration ? { replyDurationMs: Math.max(0, completedAt - startedAt) } : {}),
@@ -2087,14 +2132,14 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     })
   }, [cacheThreadSnapshot])
 
-  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number) => {
+  const commitTurnActivityMessage = useCallback((threadId: string | null, turnId: string | null, itemId: string, length: number, renderImmediately = true) => {
     if (!threadId || !turnId || !itemId) return
     const entry: CodexActivityTimelineEntry = { type: 'message', itemId, length }
     if (threadId === activeThreadId.current) {
       const next = withTurnActivityEntry(activityTimelineByTurnRef.current, turnId, entry)
       if (next === activityTimelineByTurnRef.current) return
       activityTimelineByTurnRef.current = next
-      setActivityTimelineByTurn(next)
+      if (renderImmediately) setActivityTimelineByTurn(next)
       return
     }
     const cached = threadHistoryCache.current.get(threadId)
@@ -2895,9 +2940,11 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     }
   }, [applyTurnDelivery, confirmedTurnDelivery])
 
-  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload, previousMessageIds?: ReadonlySet<string>) => requestTurnDelivery(threadId, payload.id, async () => {
+  const requestTurnStart = useCallback((threadId: string, payload: QueuedTurnPayload, previousMessageIds?: ReadonlySet<string>, direct = false) => requestTurnDelivery(threadId, payload.id, async () => {
     const start = () => codexRemoteClient.startTurn(token, threadId, {
       prompt: payload.requestText,
+      ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+      ...(direct ? { direct: true } : {}),
       images: payload.images,
       documents: payload.documents,
       model: payload.model,
@@ -2992,7 +3039,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return true
   }, [queueRecoveryReadyThreadId])
 
-  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const updateQueuedMessage = useCallback((messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     if (!threadId || editingQueuedMessageByThread.current[threadId] !== messageId) return false
     const text = input.prompt.trim()
@@ -3007,6 +3054,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
           ...message,
           text,
           originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
+          translation: input.translation,
+          translationStatus: input.translationStatus,
+          translationError: input.translationError,
           requestText: queuedRequestText(text, documents),
           images,
           ...(documents.length > 0 ? { documents } : { documents: undefined }),
@@ -3038,6 +3088,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if ([...queuedTurnSteersInFlight.current].some((requestKey) => requestKey.startsWith(`${threadId}:`))) return false
     const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
     if (!payload || payload.sendAttempt) return false
+    if (payload.translationStatus === 'pending' || payload.translationStatus === 'failed') return false
     if (activeThreadId.current === threadId
       && mightBeLegacyDuplicateQueuedMessage([payload], messagesRef.current, queueRecoveryBarriers.current?.[threadId]?.turnId ?? null)) {
       void loadThread(threadId, ++historyRevision.current, true)
@@ -3171,6 +3222,12 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     if (!threadId || editingQueuedMessageByThread.current[threadId] || queuedTurnStartsInFlight.current.has(threadId)) return false
     const payload = queuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
     if (!payload) return false
+    if (payload.translationStatus === 'pending' || payload.translationStatus === 'failed') {
+      setError(payload.translationStatus === 'failed'
+        ? '这条消息翻译失败，请先重试翻译或编辑后再发送。'
+        : '这条消息正在后台翻译，完成后才能发送。')
+      return false
+    }
     if (payload.sendAttempt) {
       setError('这条排队消息的送达状态尚未确认，请先核对聊天记录；需要重发时可移除后重新输入。')
       return false
@@ -3277,7 +3334,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     return began
   }, [sharedQueueAction])
 
-  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
+  const sharedUpdateQueuedMessage = useCallback(async (messageId: string, input: Pick<SendMessageInput, 'prompt' | 'originalText' | 'translation' | 'translationStatus' | 'translationError' | 'images' | 'documents' | 'model' | 'effort' | 'claudeModel' | 'claudeEffort'>) => {
     const threadId = editingQueuedMessageThreadById.current.get(messageId)
     const previous = threadId ? serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId) : undefined
     if (!threadId || !previous) return false
@@ -3288,6 +3345,9 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         ...previous,
         text,
         originalText: input.originalText && input.originalText !== text ? input.originalText : undefined,
+        translation: input.translation,
+        translationStatus: input.translationStatus,
+        translationError: input.translationError,
         requestText: queuedRequestText(text, documents),
         images: input.images,
         documents,
@@ -3304,6 +3364,22 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
       setError(reason instanceof Error ? reason.message : '更新排队消息失败')
+      void refreshServerQueue(threadId)
+      return false
+    }
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, token])
+
+  const retryQueuedTranslation = useCallback(async (messageId: string) => {
+    const threadId = activeThreadId.current
+    if (!threadId) return false
+    try {
+      const result = await codexRemoteClient.retryQueuedTranslation(token, threadId, messageId)
+      applyServerQueueResponse(threadId, result.queue)
+      setError(null)
+      return true
+    } catch (reason) {
+      if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+      setError(reason instanceof Error ? reason.message : '重试翻译失败')
       void refreshServerQueue(threadId)
       return false
     }
@@ -3367,6 +3443,13 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
   const sharedSendQueuedMessageNow = useCallback(async (messageId: string, mode: QueuedMessageSendMode = 'start') => {
     const threadId = activeThreadId.current
     if (!threadId) return false
+    const queued = serverQueuedMessagesByThreadRef.current[threadId]?.find((message) => message.id === messageId)
+    if (queued?.translationStatus === 'pending' || queued?.translationStatus === 'failed') {
+      setError(queued.translationStatus === 'failed'
+        ? '这条消息翻译失败，请先重试翻译或编辑后再发送。'
+        : '这条消息正在后台翻译，完成后才能发送。')
+      return false
+    }
     // The clicked action determines whether to steer. Saved preferences apply
     // to new turns; steering explicitly uses the current turn's settings.
     if (mode === 'steer' && !threadId.startsWith('claude:')) return sharedQueueAction(threadId, 'send-now', messageId)
@@ -3382,7 +3465,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       void refreshServerQueue(threadId)
       return false
     }
-  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, sharedQueueAction, token])
+  }, [applyServerQueueResponse, onUnauthorized, refreshServerQueue, serverQueuedMessagesByThreadRef, sharedQueueAction, token])
 
   useEffect(() => {
     const threadId = activeThread?.id
@@ -3822,6 +3905,8 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       const completedAt = eventTimestamp(turn?.completedAt) ?? Date.now()
       const staleCompletion = params.stale === true
       const completedStatus = normalizedOperationStatus(turn?.status, 'completed')
+      const replyError = turnThreadId?.startsWith('claude:') && completedStatus === 'failed'
+        && typeof turn?.error === 'string' ? turn.error : null
       if (turnThreadId && completedTurnId) {
         liveTurnHistory.current.finish(turnThreadId, completedTurnId,
           completedStatus === 'running' ? 'completed' : completedStatus === 'stopped' ? 'interrupted' : completedStatus,
@@ -3833,7 +3918,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (completedTurnId && currentTurnId && completedTurnId !== currentTurnId) {
         // A delayed completion for the previous turn must not terminate a
         // newer turn that is already visible in this thread.
-        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
+        finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
         if (interruptRequestedTurnId.current === completedTurnId) {
           interruptRequestedThreadId.current = null
           interruptRequestedTurnId.current = null
@@ -3850,6 +3935,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       writerConflictRef.current = false
       setWriterConflict(false)
       setError((current) => current === activeWriterError ? null : current)
+      if (replyError) setError(replyError)
       setIsRunning(false)
       const queuedThreadId = turnThreadId ?? activeThreadId.current
       const hasQueuedMessages = Boolean(queuedThreadId && queuedMessagesByThreadRef.current[queuedThreadId]?.length)
@@ -3878,7 +3964,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setQueueRecoveryReadyThreadId(canReleaseQueue && !needsHistoryCheck ? queuedThreadId : null)
       // Commit the accumulated text before finalizing the turn. This avoids a
       // trailing timer/transition from recreating a stale streaming message.
-      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion)
+      finalizeVisibleStreamingTurn(completedTurnId, completedAt, !staleCompletion, replyError ?? undefined)
       finishTurnTimer()
       setActivity(null)
       activityItemId.current = null
@@ -3967,7 +4053,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       if (!streamingAssistantTurnId.current) streamingAssistantTurnId.current = turnId
       const part = streamingAssistantParts.current.get(itemId) ?? ''
       streamingAssistantParts.current.set(itemId, part + delta)
-      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length)
+      if (turnId) commitTurnActivityMessage(activeThreadId.current, turnId, itemId, part.length + delta.length, false)
       const messageId = streamingAssistantMessageId.current ?? streamingMessageId(turnId ?? activeTurnId.current)
       streamingAssistantMessageId.current = messageId
       activityItemId.current = itemId
@@ -4476,6 +4562,10 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
       setError('请选择一个未来的发送时间。')
       return false
     }
+    if (input.sendDirectly && input.scheduledAt) {
+      setError('定时消息不能同时立即发送。')
+      return false
+    }
     if (input.continuePaused) {
       const threadId = activeThread?.id
       if (!threadId || isRunning || isInterrupting) return false
@@ -4500,16 +4590,158 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
         return false
       }
     }
-    const payload = queuedPayloadFromInput(input)
+    let payload = queuedPayloadFromInput(input)
     if (!payload.text && payload.images.length === 0 && !payload.documents?.length) return false
     let thread = activeThread
+    let createdThread = false
     if (!thread) {
-      thread = input.scheduledAt
+      thread = input.scheduledAt || input.sendDirectly
         ? await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine)
         : await createThread(input.model, input.approvalPolicy, payload.id, undefined, activeEngine, payload)
+      createdThread = Boolean(thread)
       if (thread) input.onThreadCreated?.(thread)
     }
     if (!thread) return false
+    if (payload.translationStatus === 'pending' && payload.translation && !input.sendDirectly) {
+      try {
+        const result = await codexRemoteClient.enqueueTranslatingMessage(token, thread.id, payload)
+        applyServerQueueResponse(thread.id, result.queue)
+        if (!result.queue.some((message) => message.id === payload.id) && activeThreadId.current === thread.id) {
+          void loadThread(thread.id, ++historyRevision.current, true)
+        }
+        setError(null)
+        input.onDeliveryStatus?.('queued')
+        return true
+      } catch (reason) {
+        if (!(reason instanceof RemoteApiError && reason.status === 404)) {
+          if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+          setError(isAmbiguousNetworkFailure(reason)
+            ? '连接中断，暂时无法确认消息是否进入后台翻译队列。请先检查排队消息，避免重复发送。'
+            : reason instanceof Error ? reason.message : '消息加入后台翻译队列失败')
+          void refreshServerQueue(thread.id)
+          return false
+        }
+        // Older paired servers do not understand translation-pending queue
+        // items. Translate synchronously before falling back to their send API.
+        try {
+          const sourceText = payload.text
+          const translatedText = (await codexRemoteClient.translateText(token, {
+            provider: payload.translation.provider,
+            profileId: payload.translation.profileId,
+            source: 'zh',
+            target: 'en',
+            style: payload.translation.style,
+            text: sourceText,
+          })).text.trim()
+          if (!translatedText) throw new Error('翻译结果为空，消息没有发送。')
+          payload = {
+            ...payload,
+            text: translatedText,
+            originalText: sourceText,
+            requestText: queuedRequestText(translatedText, payload.documents),
+            translation: undefined,
+            translationStatus: undefined,
+            translationError: undefined,
+          }
+        } catch (translationError) {
+          setError(translationError instanceof Error ? translationError.message : '翻译失败，消息没有发送。')
+          return false
+        }
+      }
+    }
+    if (input.sendDirectly) {
+      const steering = !createdThread && thread.id === activeThreadId.current
+        && (isRunningRef.current || activeTurnId.current !== null || messagesRef.current.at(-1)?.streaming === true)
+      if (steering && thread.id.startsWith('claude:')) {
+        setError('Claude 回复中暂不支持插队，消息仍保留在输入框。')
+        return false
+      }
+      const previousMessageIds = new Set(messagesRef.current.flatMap((message) => message.sourceItemId
+        ? [message.id, message.sourceItemId] : [message.id]))
+      const previousTurnIds = new Set(messagesRef.current.flatMap((message) => message.turnId ? [message.turnId] : []))
+      const currentTurnId = steering ? activeTurnId.current : null
+      const request = steering
+        ? requestTurnDelivery(thread.id, payload.id, () => codexRemoteClient.steerTurn(token, thread.id, {
+          prompt: payload.requestText,
+          ...(payload.originalText ? { originalText: payload.originalText, translatedText: payload.text } : {}),
+          direct: true,
+          images: payload.images,
+          documents: payload.documents,
+          requestId: payload.id,
+        }), previousMessageIds)
+        : requestTurnStart(thread.id, payload, previousMessageIds, true)
+      if (currentTurnId) finalizeVisibleStreamingTurn(currentTurnId)
+      appendQueuedMessageToActiveThread(thread.id, payload, currentTurnId)
+      if (!steering && activeThreadId.current === thread.id) {
+        historyRevision.current += 1
+        setActiveTurnId(null)
+        setQueueRecoveryReadyThreadId(null)
+        interruptRequestedThreadId.current = null
+        interruptRequestedTurnId.current = null
+        interruptInFlightThreadId.current = null
+        setIsRunning(true)
+        setIsInterrupting(false)
+        setActivity({ label: '正在发送' })
+      }
+      try {
+        const result = await request
+        if (result.turn_id) {
+          applyTurnDelivery(thread.id, payload.id, result.turn_id)
+          if (!steering && !result.completed && activeThreadId.current === thread.id) {
+            setActiveTurnId(result.turn_id)
+            startTurnTimerForTurn(result.turn_id)
+            if (interruptRequestedThreadId.current === thread.id
+              && (!interruptRequestedTurnId.current || interruptRequestedTurnId.current === result.turn_id)) {
+              void dispatchInterrupt(thread.id, result.turn_id)
+            }
+          }
+        }
+        if ((!result.turn_id || result.completed) && activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true)
+        setError(null)
+        input.onDeliveryStatus?.('sent')
+        return true
+      } catch (reason) {
+        if (reason instanceof RemoteApiError && reason.status === 401) onUnauthorized()
+        if (isAmbiguousNetworkFailure(reason)) {
+          try {
+            const recovered = await codexRemoteClient.readThread(token, thread.id)
+            if (threadContainsNewPayload(recovered, previousMessageIds, steering ? new Set() : previousTurnIds, payload)) {
+              if (activeThreadId.current === thread.id) void loadThread(thread.id, ++historyRevision.current, true, null, recovered)
+              setError(null)
+              input.onDeliveryStatus?.('sent')
+              return true
+            }
+          } catch {
+            // Keep the draft and explicitly report an unconfirmed delivery.
+          }
+          const receipt = confirmedTurnDelivery(payload.id)
+          if (receipt) {
+            if (!steering && receipt.turn_id && !receipt.completed && activeThreadId.current === thread.id) {
+              setActiveTurnId(receipt.turn_id)
+              startTurnTimerForTurn(receipt.turn_id)
+            }
+            setError(null)
+            input.onDeliveryStatus?.('sent')
+            return true
+          }
+          reconnectRef.current(true)
+        }
+        removeQueuedMessageFromActiveThread(thread.id, payload.id)
+        if (!steering && activeThreadId.current === thread.id && !activeTurnId.current) {
+          setIsRunning(false)
+          setActivity(null)
+        }
+        setError(isAmbiguousNetworkFailure(reason)
+          ? '消息送达尚未确认，请先核对聊天记录再重试。'
+          : reason instanceof RemoteApiError && reason.status === 409 && steering
+            ? 'Codex 当前回复已结束，请重新发送。'
+            : reason instanceof Error ? reason.message : '立即发送失败，草稿已保留。')
+        if (isAmbiguousNetworkFailure(reason)) input.onDeliveryStatus?.('unverified')
+        return false
+      } finally {
+        pendingTurnDeliveries.current.delete(payload.id)
+      }
+    }
     if (input.scheduledAt) {
       try {
         const result = await codexRemoteClient.scheduleMessage(token, thread.id, payload)
@@ -4753,7 +4985,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     } finally {
       pendingTurnDeliveries.current.delete(payload.id)
     }
-  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
+  }, [activeEngine, activeThread, appendQueuedMessageToActiveThread, applyServerQueueResponse, applyTurnDelivery, clearTurnTimer, confirmedTurnDelivery, createThread, dispatchInterrupt, finalizeVisibleStreamingTurn, finishTurnTimer, isInterrupting, isRunning, loadThread, messages, onUnauthorized, refreshServerQueue, refreshThreads, removeQueuedMessageFromActiveThread, requestTurnDelivery, requestTurnStart, resetStreamingAssistant, runningTurnId, sendQueuedMessageNow, setActiveTurnId, setQueueRecoveryBarrier, startNextQueuedMessage, startTurnTimerForTurn, token, updateQueuedMessages])
 
   const interrupt = useCallback(async () => {
     if (handedOffRef.current) return false
@@ -4918,6 +5150,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     stopInterruptedThread,
     uploadPdfAttachment,
     sendQueuedMessageNow: sharedQueueAuthoritative ? sharedSendQueuedMessageNow : sendQueuedMessageNow,
+    retryQueuedTranslation,
     beginEditQueuedMessage: sharedQueueAuthoritative ? sharedBeginQueuedEdit : beginEditQueuedMessage,
     updateQueuedMessage: sharedQueueAuthoritative ? sharedUpdateQueuedMessage : updateQueuedMessage,
     endEditQueuedMessage: sharedQueueAuthoritative ? sharedEndQueuedEdit : endEditQueuedMessage,
@@ -4940,6 +5173,7 @@ export function useCodexRemote(token: string, onUnauthorized: () => void, option
     renameThread, bindThreadWorkspace, refreshModels, selectThread, createThread,
     sendMessage, stopInterruptedThread, uploadPdfAttachment,
     sharedSendQueuedMessageNow, sendQueuedMessageNow, sharedBeginQueuedEdit,
+    retryQueuedTranslation,
     beginEditQueuedMessage, sharedUpdateQueuedMessage, updateQueuedMessage,
     sharedEndQueuedEdit, endEditQueuedMessage, sharedRemoveQueuedMessage,
     removeQueuedMessage, sharedMoveQueuedMessage, interrupt, handoffToLocalCodex, reclaimForRemote,

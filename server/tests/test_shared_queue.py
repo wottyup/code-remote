@@ -8,9 +8,9 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 from fastapi import HTTPException
 
-from codex_remote.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
-from codex_remote.codex_app_server import CodexAppServer, CodexExternalTurnError, CodexRuntimeError
-from codex_remote.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
+from code_remote.app import PinRequest, PinsInitializeRequest, QueueMessageIdRequest, QueuedMessageRequest, create_app
+from code_remote.codex_app_server import CodexAppServer, CodexExternalTurnError, CodexRuntimeError
+from code_remote.shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 
 
 def message(message_id: str, text: str) -> dict[str, object]:
@@ -50,7 +50,7 @@ class SharedStateStoreTests(unittest.TestCase):
 
     def test_sqlite_permissions_follow_the_host_platform(self) -> None:
         self.store.close()
-        with patch("codex_remote.shared_state.os.chmod") as chmod:
+        with patch("code_remote.shared_state.os.chmod") as chmod:
             self.store = SharedStateStore(self.path)
         self.addCleanup(self.store.close)
         if os.name == "nt":
@@ -204,7 +204,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.store.enqueue("thread", message("queued-first", "first"))
         self.codex.read_thread.return_value = {"turns": []}
         self.send.side_effect = RuntimeError("connection lost after send")
-        with self.assertLogs("codex_remote.shared_state", level="ERROR"):
+        with self.assertLogs("code_remote.shared_state", level="ERROR"):
             await self.service.advance("thread")
         await self.service.advance("thread")
         self.assertEqual(self.send.await_count, 1)
@@ -269,7 +269,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(snapshots)
         self.assertTrue(all("pending" not in snapshot for snapshot in snapshots))
         self.assertEqual(self.store.queue("thread"), [])
-        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False)
+        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False, tail_turns=None)
         self.codex.resume_thread.assert_not_awaited()
         self.service.send.assert_awaited_once()
 
@@ -288,7 +288,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.codex.read_thread.return_value = {"status": {"type": "active"}}
         self.assertFalse(await self.service.submit("thread", message("wait", "wait for reply")))
         self.assertEqual(self.store.queue("thread")[0]["deliveryState"], "pending")
-        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False)
+        self.codex.read_thread.assert_awaited_once_with("thread", include_turns=False, tail_turns=None)
         self.send.assert_not_awaited()
 
     async def test_unknown_runtime_state_is_not_treated_as_idle(self) -> None:
@@ -312,8 +312,8 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.service.submit("thread", message("direct", "new message")))
         self.codex.resume_thread.assert_awaited_once_with("thread")
         self.codex.read_thread.assert_has_awaits([
-            unittest.mock.call("thread", include_turns=False),
-            unittest.mock.call("thread", include_turns=False),
+            unittest.mock.call("thread", include_turns=False, tail_turns=None),
+            unittest.mock.call("thread", include_turns=False, tail_turns=None),
         ])
 
     async def test_not_loaded_thread_that_resumes_as_busy_stays_queued(self) -> None:
@@ -342,7 +342,7 @@ class SharedQueueServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_unknown_delivery_is_visible_and_blocks_later_submission(self) -> None:
         self.codex.read_thread.return_value = {"status": {"type": "idle"}}
         self.send.side_effect = RuntimeError("lost acknowledgement")
-        with self.assertLogs("codex_remote.shared_state", level="ERROR"):
+        with self.assertLogs("code_remote.shared_state", level="ERROR"):
             self.assertFalse(await self.service.submit("thread", message("first", "may have arrived")))
         self.assertFalse(await self.service.submit("thread", message("second", "must not overtake")))
         queue = self.store.queue("thread")
@@ -392,8 +392,8 @@ class SharedQueueEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(self.directory.cleanup)
         root = Path(self.directory.name)
         with patch.dict(os.environ, {
-            "CODEX_REMOTE_AUTH_FILE": str(root / "auth.json"),
-            "CODEX_REMOTE_STATE_FILE": str(root / "state.sqlite3"),
+            "CODE_REMOTE_AUTH_FILE": str(root / "auth.json"),
+            "CODE_REMOTE_STATE_FILE": str(root / "state.sqlite3"),
         }):
             self.app = create_app(root)
         self.addCleanup(self.app.state.shared_state.close)

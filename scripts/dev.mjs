@@ -10,8 +10,8 @@ const production = !process.argv.includes('--development')
 const serverRoot = join(projectRoot, 'server')
 const viteEntrypoint = join(projectRoot, 'node_modules', 'vite', 'bin', 'vite.js')
 const isWindows = process.platform === 'win32'
-const configuredPython = process.env.CODEX_REMOTE_PYTHON
-const configuredCodex = process.env.CODEX_REMOTE_COMMAND
+const configuredPython = process.env.CODE_REMOTE_PYTHON
+const configuredCodex = process.env.CODE_REMOTE_COMMAND
 const managedDaemonCodex = isWindows
   ? join(process.env.USERPROFILE || '', '.codex', 'packages', 'app-server-daemon', 'current', 'bin', 'codex.exe')
   : ''
@@ -52,6 +52,9 @@ let shuttingDown = false
 let viteRestartTimer = null
 let viteStableTimer = null
 let viteRestartAttempts = 0
+let engineRestartTimer = null
+let engineStableTimer = null
+let engineRestartAttempts = 0
 
 function sleep(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds))
@@ -59,7 +62,7 @@ function sleep(milliseconds) {
 
 function cleanCodexEnvironment() {
   for (const key of Object.keys(process.env)) {
-    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODEX_REMOTE_APP_SERVER_HOME', 'CODEX_REMOTE_COMMAND', 'CODEX_REMOTE_PYTHON', 'CODEX_REMOTE_WORKSPACE', 'CODEX_REMOTE_AUTH_FILE', 'CODEX_REMOTE_STATE_FILE'].includes(key)) {
+    if (key.startsWith('CODEX_') && !['CODEX_HOME', 'CODE_REMOTE_APP_SERVER_HOME', 'CODE_REMOTE_COMMAND', 'CODE_REMOTE_PYTHON', 'CODE_REMOTE_WORKSPACE', 'CODE_REMOTE_AUTH_FILE', 'CODE_REMOTE_STATE_FILE'].includes(key)) {
       delete process.env[key]
     }
   }
@@ -117,6 +120,10 @@ async function shutdown(exitCode = 0) {
   if (viteStableTimer) clearTimeout(viteStableTimer)
   viteRestartTimer = null
   viteStableTimer = null
+  if (engineRestartTimer) clearTimeout(engineRestartTimer)
+  if (engineStableTimer) clearTimeout(engineStableTimer)
+  engineRestartTimer = null
+  engineStableTimer = null
   await stopProcess(vite)
   if (ownsEngine) await stopProcess(engine)
   process.exitCode = exitCode
@@ -166,9 +173,54 @@ function startVite() {
   })
 }
 
+function scheduleEngineRestart(reason) {
+  if (shuttingDown || engineRestartTimer) return
+  const delay = Math.min(10_000, 1_000 * (2 ** Math.min(engineRestartAttempts, 4)))
+  engineRestartAttempts += 1
+  console.error(`${reason} 将在 ${Math.ceil(delay / 1000)} 秒后重启；网页服务继续运行。`)
+  engineRestartTimer = setTimeout(() => {
+    engineRestartTimer = null
+    startEngine()
+  }, delay)
+}
+
+function startEngine() {
+  if (shuttingDown) return
+  ownsEngine = true
+  const child = spawn(python, ['-m', 'code_remote.main'], {
+    cwd: serverRoot,
+    env: process.env,
+    stdio: 'inherit',
+    windowsHide: false,
+  })
+  engine = child
+
+  child.once('spawn', () => {
+    if (shuttingDown || engine !== child) return
+    if (engineStableTimer) clearTimeout(engineStableTimer)
+    engineStableTimer = setTimeout(() => {
+      if (engine === child) engineRestartAttempts = 0
+      engineStableTimer = null
+    }, 30_000)
+  })
+  child.once('error', (error) => {
+    if (engine === child) engine = null
+    console.error(`无法启动 Python 后端：${error.message}`)
+    void shutdown(1)
+  })
+  child.once('exit', (code, signal) => {
+    if (engine === child) engine = null
+    if (engineStableTimer) clearTimeout(engineStableTimer)
+    engineStableTimer = null
+    if (!shuttingDown) {
+      scheduleEngineRestart(`Python 后端已退出（${signal ?? code ?? '未知原因'}）`)
+    }
+  })
+}
+
 async function main() {
   if (!python) {
-    throw new Error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODEX_REMOTE_PYTHON 指向 Python。`)
+    throw new Error(`找不到 Python，请先创建 ${isWindows ? '.venv\\Scripts\\python.exe 或将 python.exe 加入 PATH' : '.venv/bin/python'}。也可以设置 CODE_REMOTE_PYTHON 指向 Python。`)
   }
   if (!existsSync(viteEntrypoint)) {
     throw new Error(`找不到 Vite 启动文件：${viteEntrypoint}。请先在 workspace 根目录完成依赖安装。`)
@@ -178,30 +230,14 @@ async function main() {
   }
 
   if (!configuredCodex && windowsCodexCandidates.some((candidate) => existsSync(candidate))) {
-    process.env.CODEX_REMOTE_COMMAND = windowsCodexCandidates.find((candidate) => existsSync(candidate))
+    process.env.CODE_REMOTE_COMMAND = windowsCodexCandidates.find((candidate) => existsSync(candidate))
   }
   cleanCodexEnvironment()
 
   if (await engineReady()) {
     console.log('复用已运行的本机 Codex 引擎。')
   } else {
-    ownsEngine = true
-    engine = spawn(python, ['-m', 'codex_remote.main'], {
-      cwd: serverRoot,
-      env: process.env,
-      stdio: 'inherit',
-      windowsHide: false,
-    })
-    engine.once('error', (error) => {
-      console.error(`无法启动 Python 后端：${error.message}`)
-      void shutdown(1)
-    })
-    engine.once('exit', (code, signal) => {
-      if (!shuttingDown) {
-        console.error(`Python 后端已退出（${signal ?? code ?? '未知原因'}）。`)
-        void shutdown(code && code > 0 ? code : 1)
-      }
-    })
+    startEngine()
     await waitForEngine()
   }
 

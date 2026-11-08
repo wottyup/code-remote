@@ -57,7 +57,7 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
   return (
     <main className="pair-page">
       <section className="pair-card">
-        <div className="pair-card__mark">C</div>
+        <img className="pair-card__logo" src="/code-remote.png" alt="Code Remote" />
         <p className="pair-eyebrow">CODE REMOTE</p>
         <h1>连接你的 Code Remote</h1>
         <p className="pair-description">在运行 Code Remote 的电脑终端里找到配对码，然后在这里输入。</p>

@@ -20,7 +20,7 @@ if not defined PNPM_CMD (
   exit /b 1
 )
 
-if exist "%APPDATA%\npm\codex.cmd" set "CODEX_REMOTE_COMMAND=%APPDATA%\npm\codex.cmd"
+if exist "%APPDATA%\npm\codex.cmd" set "CODE_REMOTE_COMMAND=%APPDATA%\npm\codex.cmd"
 echo Starting Code Remote. Keep this window open.
 echo Web: http://localhost:4173
 call "%PNPM_CMD%" start

@@ -4,13 +4,14 @@ import asyncio
 import os
 import tempfile
 import unittest
+import uuid
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from fastapi import HTTPException
 
-from codex_remote.app import ResumeRequest, SteerRequest, TurnRequest, create_app
-from codex_remote.codex_app_server import CodexRuntimeError
+from code_remote.app import ResumeRequest, SteerRequest, TurnRequest, create_app
+from code_remote.codex_app_server import CodexRuntimeError
 
 
 class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
@@ -21,8 +22,8 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
         images = workspace / "images"
         images.mkdir()
         with (
-            patch.dict(os.environ, {"CODEX_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
-            patch("codex_remote.app.tempfile.mkdtemp", return_value=str(images)),
+            patch.dict(os.environ, {"CODE_REMOTE_AUTH_FILE": str(workspace / "auth.json")}),
+            patch("code_remote.app.tempfile.mkdtemp", return_value=str(images)),
         ):
             self.app = create_app(workspace)
         self.addCleanup(self.app.state.shared_state.close)
@@ -136,6 +137,85 @@ class SendReliabilityTests(unittest.IsolatedAsyncioTestCase):
             "request_id": body.request_id,
             "params": {"threadId": "thread-one", "turnId": "turn-one"},
         })
+
+    def existing_queue_message(self) -> list[dict]:
+        store = self.app.state.shared_state
+        store.enqueue("thread-one", {
+            "id": "already-queued-001", "text": "queued", "requestText": "queued",
+            "images": [], "createdAt": "2026-11-06T00:00:00Z",
+        })
+        return store.queue("thread-one")
+
+    async def test_direct_steer_preserves_queue_and_translated_original(self) -> None:
+        original_queue = self.existing_queue_message()
+        self.server.steer_turn = AsyncMock(return_value={"turnId": "turn-one"})
+        steer = self.endpoint("/api/v1/codex/threads/{thread_id}/steer")
+        body = SteerRequest(
+            prompt="Check logs", translated_text="Check logs", original_text="检查日志",
+            request_id="direct-steer-001", direct=True,
+        )
+        self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
+        self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
+        self.server.steer_turn.assert_awaited_once()
+        self.assertEqual(self.app.state.shared_state.queue("thread-one"), original_queue)
+        self.assertEqual(self.app.state.shared_state.translated_user_messages("thread-one"), [{
+            "requestId": body.request_id, "turnId": "turn-one", "sentText": "Check logs", "originalText": "检查日志",
+        }])
+
+    async def test_direct_start_bypasses_queue_and_keeps_original_text(self) -> None:
+        original_queue = self.existing_queue_message()
+        self.server._active_turn_id = AsyncMock(return_value=None)
+        self.server.start_turn = AsyncMock(return_value={"turn": {"id": "turn-new"}})
+        start = self.endpoint("/api/v1/codex/threads/{thread_id}/turns")
+        body = TurnRequest(
+            prompt="Check logs", translated_text="Check logs", original_text="检查日志",
+            request_id="direct-start-001", direct=True,
+        )
+        self.assertEqual(await start("thread-one", body), {"turn_id": "turn-new"})
+        self.assertEqual(self.app.state.shared_state.queue("thread-one"), original_queue)
+        self.assertEqual(self.app.state.shared_state.translated_user_messages("thread-one")[0]["originalText"], "检查日志")
+
+    async def test_direct_start_waits_for_queue_lock_and_rejects_a_busy_turn(self) -> None:
+        original_queue = self.existing_queue_message()
+        self.server._active_turn_id = AsyncMock(return_value="turn-busy")
+        self.server.start_turn = AsyncMock()
+        start = self.endpoint("/api/v1/codex/threads/{thread_id}/turns")
+        lock = self.app.state.shared_queue.delivery_lock("thread-one")
+        await lock.acquire()
+        try:
+            pending = asyncio.create_task(start("thread-one", TurnRequest(prompt="urgent", request_id="direct-race-001", direct=True)))
+            await asyncio.sleep(0.02)
+            self.server._active_turn_id.assert_not_awaited()
+        finally:
+            lock.release()
+        with self.assertRaises(HTTPException) as error:
+            await pending
+        self.assertEqual(error.exception.status_code, 409)
+        self.server.start_turn.assert_not_awaited()
+        self.assertEqual(self.app.state.shared_state.queue("thread-one"), original_queue)
+
+    async def test_busy_claude_direct_start_does_not_queue_or_interrupt(self) -> None:
+        thread_id = f"claude:{uuid.uuid4()}"
+        claude = self.app.state.claude_code
+        start = self.endpoint("/api/v1/codex/threads/{thread_id}/turns")
+        with patch.object(claude, "active_turn_id", AsyncMock(return_value="active")), patch.object(claude, "start_turn", AsyncMock()) as start_claude:
+            with self.assertRaises(HTTPException) as error:
+                await start(thread_id, TurnRequest(prompt="urgent", request_id="direct-claude-001", direct=True))
+        self.assertEqual(error.exception.status_code, 409)
+        start_claude.assert_not_awaited()
+        self.assertEqual(self.app.state.shared_state.queue(thread_id), [])
+
+    async def test_translation_metadata_failure_does_not_retry_an_accepted_steer(self) -> None:
+        self.server.steer_turn = AsyncMock(return_value={"turnId": "turn-one"})
+        steer = self.endpoint("/api/v1/codex/threads/{thread_id}/steer")
+        body = SteerRequest(
+            prompt="Check logs", translated_text="Check logs", original_text="检查日志",
+            request_id="direct-metadata-001", direct=True,
+        )
+        with patch.object(self.app.state.shared_state, "record_translated_user_message", side_effect=OSError("storage")), self.assertLogs("code_remote.app", level="ERROR"):
+            self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
+            self.assertEqual(await steer("thread-one", body), {"turn_id": "turn-one"})
+        self.server.steer_turn.assert_awaited_once()
 
 
 if __name__ == "__main__":
