@@ -1087,6 +1087,7 @@ class MainActivity : Activity() {
     private var liveReplyActiveItemId: String? = null
     private var liveReplyViewItemId: String? = null
     private var liveReplyView: TextView? = null
+    private var liveReplyDisplayFormatter: LiveReplyDisplayFormatter? = null
     private var liveReplyFrameScheduled = false
     private val liveReplyFrame = object : Runnable {
         override fun run() {
@@ -4079,6 +4080,7 @@ class MainActivity : Activity() {
         liveReplyActiveItemId = null
         liveReplyViewItemId = null
         liveReplyView = null
+        liveReplyDisplayFormatter = null
     }
 
     private fun scheduleLiveReplyFrame() {
@@ -4092,7 +4094,9 @@ class MainActivity : Activity() {
     private fun appendLiveReplyToView(itemId: String, chunk: String) {
         if (chunk.isEmpty()) return
         val view = liveReplyView?.takeIf { liveReplyViewItemId == itemId && it.isAttachedToWindow } ?: return
-        view.append(chunk)
+        val displayChunk = liveReplyDisplayFormatter?.append(chunk) ?: return
+        if (displayChunk.isEmpty()) return
+        view.append(displayChunk)
         if (followMessageBottom && !messageTouchActive && ::messageScroll.isInitialized) {
             val scroll = messageScroll
             val threadId = liveReplyThreadId
@@ -4390,6 +4394,7 @@ class MainActivity : Activity() {
         val renderStartedAt = SystemClock.uptimeMillis()
         liveReplyView = null
         liveReplyViewItemId = null
+        liveReplyDisplayFormatter = null
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
         val restoreChoiceKey = assistantChoiceFocusedKey
@@ -6785,10 +6790,12 @@ class MainActivity : Activity() {
                     if (index == lastMessageIndex && visible.isNotEmpty() && text.endsWith(visible)) {
                         val previous = text.dropLast(visible.length)
                         if (previous.isNotBlank()) addAssistantMarkdown(container, previous, maximumWidth)
-                        val view = selectableMarkdownText(maximumWidth).apply { setText(visible) }
+                        val formatter = LiveReplyDisplayFormatter()
+                        val view = selectableMarkdownText(maximumWidth).apply { setText(formatter.append(visible)) }
                         container.addView(view, LinearLayout.LayoutParams(WRAP, WRAP))
                         liveReplyView = view
                         liveReplyViewItemId = liveItemId
+                        liveReplyDisplayFormatter = formatter
                     } else addAssistantMarkdown(container, text, maximumWidth)
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
