@@ -4,6 +4,7 @@ import {
   normalizeCPAUsageBaseUrl,
   normalizeCodexProxyBaseUrl,
   normalizeNewAPIBaseUrl,
+  normalizeNewAPIUserId,
   probeCPAUsageConnection,
   probeCodexProxyUsageConnection,
   probeNewAPIUsageConnection,
@@ -25,6 +26,7 @@ export function CPAUsageSettingsCard({
   const [codexProxyApiKey, setCodexProxyApiKey] = useState(settings.codexProxyApiKey)
   const [newAPIBaseUrl, setNewAPIBaseUrl] = useState(settings.newAPIBaseUrl)
   const [newAPIAccessToken, setNewAPIAccessToken] = useState(settings.newAPIAccessToken)
+  const [newAPIUserId, setNewAPIUserId] = useState(settings.newAPIUserId)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null)
 
@@ -35,7 +37,8 @@ export function CPAUsageSettingsCard({
     setCodexProxyApiKey(settings.codexProxyApiKey)
     setNewAPIBaseUrl(settings.newAPIBaseUrl)
     setNewAPIAccessToken(settings.newAPIAccessToken)
-  }, [settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken])
+    setNewAPIUserId(settings.newAPIUserId)
+  }, [settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken, settings.newAPIUserId])
 
   function save(nextSettings: CPAUsageSettings) {
     onChange(nextSettings)
@@ -45,6 +48,7 @@ export function CPAUsageSettingsCard({
     setCodexProxyApiKey(nextSettings.codexProxyApiKey)
     setNewAPIBaseUrl(nextSettings.newAPIBaseUrl)
     setNewAPIAccessToken(nextSettings.newAPIAccessToken)
+    setNewAPIUserId(nextSettings.newAPIUserId)
   }
 
   async function testConnection() {
@@ -54,7 +58,7 @@ export function CPAUsageSettingsCard({
       nextSettings = settings.source === 'codex-proxy'
         ? { ...settings, codexProxyBaseUrl: normalizeCodexProxyBaseUrl(codexProxyBaseUrl), codexProxyApiKey: codexProxyApiKey.trim() }
         : settings.source === 'new-api'
-          ? { ...settings, newAPIBaseUrl: normalizeNewAPIBaseUrl(newAPIBaseUrl), newAPIAccessToken: newAPIAccessToken.trim() }
+          ? { ...settings, newAPIBaseUrl: normalizeNewAPIBaseUrl(newAPIBaseUrl), newAPIAccessToken: newAPIAccessToken.trim(), newAPIUserId: normalizeNewAPIUserId(newAPIUserId) }
           : { ...settings, baseUrl: normalizeCPAUsageBaseUrl(baseUrl), managementKey: managementKey.trim() }
     } catch (reason) {
       setMessage({ text: reason instanceof Error ? reason.message : '服务器地址无效。', error: true })
@@ -110,8 +114,12 @@ export function CPAUsageSettingsCard({
             <input className="cpa-usage-settings-input" type="url" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="https://你的 New API 地址" value={newAPIBaseUrl} onChange={(event) => { setNewAPIBaseUrl(event.target.value); setMessage(null) }} aria-label="New API 地址" />
           </label>
           <label className="theme-control-row theme-control-row--stacked">
-            <span><strong>面板个人访问令牌</strong><small>在 New API 面板创建 nap_ 开头的个人访问令牌，授予 usage:read 权限；普通模型 API Key 不能读取完整统计。</small></span>
-            <input className="cpa-usage-settings-input" type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="输入 nap_ 开头的个人访问令牌" value={newAPIAccessToken} onChange={(event) => { setNewAPIAccessToken(event.target.value); setMessage(null) }} aria-label="New API 面板个人访问令牌" />
+            <span><strong>面板访问令牌</strong><small>rc.21 在“个人资料 → 安全 → 访问令牌”获取，打开时会重新生成令牌；新版使用有 usage:read 权限的个人访问令牌。</small></span>
+            <input className="cpa-usage-settings-input" type="password" autoComplete="new-password" autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder="输入面板访问令牌，不是登录密码" value={newAPIAccessToken} onChange={(event) => { setNewAPIAccessToken(event.target.value); setMessage(null) }} aria-label="New API 面板访问令牌" />
+          </label>
+          <label className="theme-control-row theme-control-row--stacked">
+            <span><strong>用户 ID（旧版需要）</strong><small>在 New API 的“个人资料”页顶部查看用户 ID；新版如不要求用户 ID 可以留空。</small></span>
+            <input className="cpa-usage-settings-input" type="text" inputMode="numeric" maxLength={18} autoComplete="off" placeholder="例如 1" value={newAPIUserId} onChange={(event) => { setNewAPIUserId(event.target.value); setMessage(null) }} aria-label="New API 用户 ID" />
           </label>
         </> : <>
         <label className="theme-control-row theme-control-row--stacked">
@@ -149,7 +157,7 @@ export function CPAUsageSettingsCard({
             {busy ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
             {busy ? '正在测试连接…' : '测试连通性并保存'}
           </button>
-          <button className="theme-notification-toggle" type="button" disabled={busy || (settings.source === 'codex-proxy' ? !settings.codexProxyBaseUrl && !settings.codexProxyApiKey : settings.source === 'new-api' ? !settings.newAPIBaseUrl && !settings.newAPIAccessToken : !settings.baseUrl && !settings.managementKey)} onClick={() => { save(settings.source === 'codex-proxy' ? { ...settings, codexProxyBaseUrl: '', codexProxyApiKey: '' } : settings.source === 'new-api' ? { ...settings, newAPIBaseUrl: '', newAPIAccessToken: '' } : { ...settings, baseUrl: '', managementKey: '' }); setMessage({ text: '已清除当前数据源连接。', error: false }) }}>
+          <button className="theme-notification-toggle" type="button" disabled={busy || (settings.source === 'codex-proxy' ? !settings.codexProxyBaseUrl && !settings.codexProxyApiKey : settings.source === 'new-api' ? !settings.newAPIBaseUrl && !settings.newAPIAccessToken && !settings.newAPIUserId : !settings.baseUrl && !settings.managementKey)} onClick={() => { save(settings.source === 'codex-proxy' ? { ...settings, codexProxyBaseUrl: '', codexProxyApiKey: '' } : settings.source === 'new-api' ? { ...settings, newAPIBaseUrl: '', newAPIAccessToken: '', newAPIUserId: '' } : { ...settings, baseUrl: '', managementKey: '' }); setMessage({ text: '已清除当前数据源连接。', error: false }) }}>
             <Trash2 size={14} />清除
           </button>
         </div>
@@ -158,7 +166,7 @@ export function CPAUsageSettingsCard({
       <p className="theme-settings-hint">{settings.source === 'codex-proxy'
         ? '地址和主 API Key 保存在当前浏览器，并经已配对的 Code Remote 后端读取 Codex Proxy 管理接口。密钥不会放入 URL。历史用量依赖 Codex Proxy 已记录的快照。'
         : settings.source === 'new-api'
-          ? '地址和个人访问令牌保存在当前浏览器，并经已配对的 Code Remote 后端读取 New API 统计接口。令牌不会放入 URL；New API 需要开启数据导出。'
+          ? '地址、访问令牌和用户 ID 保存在当前浏览器，并经已配对的 Code Remote 后端读取 New API 统计接口。令牌不会放入 URL；New API 需要开启数据导出。'
         : '地址和管理密钥保存在当前浏览器；密钥只通过 Authorization Bearer 请求头发送，不会放进 URL。Full Mode 才提供持久化历史统计；跨域时 Manager Server 需要允许当前网页来源。'}</p>
     </section>
   )

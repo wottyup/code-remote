@@ -10,6 +10,7 @@ export interface CPAUsageSettings {
   codexProxyApiKey: string
   newAPIBaseUrl: string
   newAPIAccessToken: string
+  newAPIUserId: string
 }
 
 export type CPAUsageRange = 'today' | 'yesterday' | '7d' | '30d'
@@ -99,6 +100,7 @@ export const emptyCPAUsageSettings: CPAUsageSettings = {
   codexProxyApiKey: '',
   newAPIBaseUrl: '',
   newAPIAccessToken: '',
+  newAPIUserId: '',
 }
 
 export function normalizeCPAUsageBaseUrl(value: string) {
@@ -142,6 +144,12 @@ export function normalizeNewAPIBaseUrl(value: string) {
   }
 }
 
+export function normalizeNewAPIUserId(value: string) {
+  const userId = value.trim()
+  if (userId && !/^[1-9]\d{0,17}$/.test(userId)) throw new Error('New API 用户 ID 应为正整数。')
+  return userId
+}
+
 export function readCPAUsageSettings(): CPAUsageSettings {
   if (typeof window === 'undefined') return emptyCPAUsageSettings
   try {
@@ -156,6 +164,7 @@ export function readCPAUsageSettings(): CPAUsageSettings {
       codexProxyApiKey: typeof value.codexProxyApiKey === 'string' ? value.codexProxyApiKey : '',
       newAPIBaseUrl: typeof value.newAPIBaseUrl === 'string' ? value.newAPIBaseUrl : '',
       newAPIAccessToken: typeof value.newAPIAccessToken === 'string' ? value.newAPIAccessToken : '',
+      newAPIUserId: typeof value.newAPIUserId === 'string' ? value.newAPIUserId : '',
     }
   } catch {
     return emptyCPAUsageSettings
@@ -414,8 +423,8 @@ function newAPICredentials(settings: CPAUsageSettings) {
   const baseUrl = normalizeNewAPIBaseUrl(settings.newAPIBaseUrl)
   const accessToken = settings.newAPIAccessToken.trim()
   if (!baseUrl) throw new Error('请先在设置中填写 New API 地址。')
-  if (!accessToken) throw new Error('请先在设置中填写 New API 面板个人访问令牌。')
-  return { baseUrl, accessToken }
+  if (!accessToken) throw new Error('请先在设置中填写 New API 面板访问令牌。')
+  return { baseUrl, accessToken, userId: normalizeNewAPIUserId(settings.newAPIUserId) }
 }
 
 function newAPIUsageNumber(value: unknown, label: string, optional = false): number {
@@ -449,12 +458,16 @@ export async function fetchNewAPIUsageAnalytics(
   const summary = {
     total_calls: 0, success_calls: 0, failure_calls: 0,
     input_tokens: 0, output_tokens: 0, reasoning_tokens: 0,
-    cache_read_tokens: 0, cache_creation_tokens: 0,
     total_tokens: 0, total_cost: 0, success_rate: 0,
   }
+  let cacheReadTotal = 0
+  let cacheCreationTotal = 0
+  let cacheBreakdownComplete = true
+  let includedRows = 0
   for (const row of response.rows) {
     const timestamp = newAPIUsageNumber(row?.created_at, '统计时间') * 1000
     if (timestamp < fromMs || timestamp > toMs) continue
+    includedRows += 1
     const calls = newAPIUsageNumber(row.count, '请求数')
     const tokens = newAPIUsageNumber(row.token_used, 'Token')
     const quota = newAPIUsageNumber(row.quota, '额度')
@@ -465,8 +478,9 @@ export async function fetchNewAPIUsageAnalytics(
     summary.total_calls += calls
     summary.total_tokens += tokens
     summary.total_cost += cost
-    summary.cache_read_tokens += cacheRead
-    summary.cache_creation_tokens += cacheCreation
+    cacheReadTotal += cacheRead
+    cacheCreationTotal += cacheCreation
+    if (row.cache_read_tokens === undefined || row.cache_creation_tokens === undefined) cacheBreakdownComplete = false
 
     const date = new Date(timestamp)
     if (daily) date.setHours(0, 0, 0, 0)
@@ -493,7 +507,10 @@ export async function fetchNewAPIUsageAnalytics(
   return {
     generated_at_ms: now.getTime(),
     granularity: daily ? 'day' : 'hour',
-    summary,
+    summary: {
+      ...summary,
+      ...(includedRows > 0 && cacheBreakdownComplete ? { cache_read_tokens: cacheReadTotal, cache_creation_tokens: cacheCreationTotal } : {}),
+    },
     timeline: [...buckets.values()].sort((a, b) => a.bucket_ms - b.bucket_ms),
     model_stats: [...models.values()],
   }

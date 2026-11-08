@@ -86,7 +86,7 @@ export function CPAUsageStatsPanel({
   useEffect(() => {
     setSelectedApiKeyHash('')
     setApiKeyHashes([])
-  }, [settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken])
+  }, [settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken, settings.newAPIUserId])
 
   useEffect(() => {
     if (settings.source !== 'cpamp' || !settings.baseUrl.trim() || !settings.managementKey.trim()) {
@@ -148,7 +148,7 @@ export function CPAUsageStatsPanel({
         if (!controller.signal.aborted) setLoading(false)
       })
     return () => controller.abort()
-  }, [range, refreshKey, selectedApiKeyHash, settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken, token])
+  }, [range, refreshKey, selectedApiKeyHash, settings.source, settings.baseUrl, settings.managementKey, settings.codexProxyBaseUrl, settings.codexProxyApiKey, settings.newAPIBaseUrl, settings.newAPIAccessToken, settings.newAPIUserId, token])
 
   const models = useMemo(
     () => [...(data?.model_stats ?? [])].sort((a, b) => b.total_tokens - a.total_tokens),
@@ -161,6 +161,7 @@ export function CPAUsageStatsPanel({
   const summary = data?.summary
   const isCodexProxy = settings.source === 'codex-proxy'
   const isNewAPI = settings.source === 'new-api'
+  const hasNewAPICacheBreakdown = typeof summary?.cache_read_tokens === 'number' && typeof summary?.cache_creation_tokens === 'number'
   const isCPAMP = settings.source === 'cpamp'
   const sourceName = isCodexProxy ? 'Codex Proxy' : isNewAPI ? 'New API' : 'CPA-Manager-Plus'
   const configured = isCodexProxy
@@ -196,7 +197,7 @@ export function CPAUsageStatsPanel({
           <section className="theme-settings-card cpa-usage-connect-prompt">
             <Database size={25} />
             <h2>先连接你的 {isCPAMP ? 'Manager Server' : sourceName}</h2>
-            <p>在设置中填写服务地址和{isCodexProxy ? '主 Proxy API Key' : isNewAPI ? '面板个人访问令牌' : 'Manager 密钥'}后，这里会显示记录到的 Token 用量。</p>
+            <p>在设置中填写服务地址和{isCodexProxy ? '主 Proxy API Key' : isNewAPI ? '面板访问令牌（旧版还需用户 ID）' : 'Manager 密钥'}后，这里会显示记录到的 Token 用量。</p>
             <button className="theme-notification-toggle theme-notification-toggle--enabled" type="button" onClick={onOpenSettings}><Settings2 size={14} />前往设置</button>
           </section>
         ) : (
@@ -240,11 +241,11 @@ export function CPAUsageStatsPanel({
                   </>}
                   <article className="theme-settings-card cpa-usage-summary-card">
                     <span>缓存</span>
-                    <strong>{count(cachedTokenTotal(summary))}</strong>
+                    <strong>{isNewAPI && !hasNewAPICacheBreakdown ? '—' : count(cachedTokenTotal(summary))}</strong>
                     <small>
                       {typeof summary.cache_hit_rate === 'number' && Number.isFinite(summary.cache_hit_rate)
                         ? `命中率 ${percentFormatter.format(Math.max(0, Math.min(1, summary.cache_hit_rate)))}`
-                        : isNewAPI ? '读取 + 创建 Token，已包含在总量' : '缓存 Token'}
+                        : isNewAPI ? hasNewAPICacheBreakdown ? '读取 + 创建 Token，已包含在总量' : '上游未提供完整缓存明细' : '缓存 Token'}
                     </small>
                   </article>
                   {isCodexProxy ? <>
@@ -274,7 +275,7 @@ export function CPAUsageStatsPanel({
             <p className="theme-settings-hint cpa-usage-disclaimer">{isCodexProxy
               ? 'Token 和估算金额来自 Codex Proxy 的历史快照；时间范围按小时近似，启用统计前的请求无法补回。该接口未提供按模型、按账号及推理 Token 的时间段明细。'
               : isNewAPI
-                ? '总 Token、请求数、缓存量和模型明细来自 New API 的小时汇总；金额按 New API 的额度单位换算成美元。当前小时可能延后写入；该接口不提供输入、输出及失败请求明细。'
+                ? '总 Token、请求数和模型明细来自 New API 的小时汇总；缓存明细在接口提供时显示，金额按额度单位换算成美元。当前小时可能延后写入；该接口不提供输入、输出及失败请求明细。'
               : 'Token 数量直接显示 CPAMP 收到的用量统计，不在 Code Remote 中推算；金额按 Manager 中已配置的模型单价统计。若上游没有回报 Token 字段，或统计服务启用前的请求，不会出现在结果里。'}</p>
           </>
         )}

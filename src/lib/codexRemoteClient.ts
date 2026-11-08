@@ -916,7 +916,7 @@ export const codexRemoteClient = {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 30_000 })
   },
-  newAPIUsage<T>(token: string, input: { baseUrl: string; accessToken: string; startTimestamp: number; endTimestamp: number }, signal?: AbortSignal) {
+  newAPIUsage<T>(token: string, input: { baseUrl: string; accessToken: string; userId?: string; startTimestamp: number; endTimestamp: number }, signal?: AbortSignal) {
     return request<T>(token, '/api/v1/codex/usage/new-api', {
       method: 'POST', body: JSON.stringify(input), signal,
     }, { timeoutMs: 60_000 })
