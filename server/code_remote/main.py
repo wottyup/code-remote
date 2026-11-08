@@ -27,7 +27,7 @@ def parse_arguments() -> argparse.Namespace:
 def main() -> None:
     arguments = parse_arguments()
     loopback = "[::1]" if ":" in arguments.host else "127.0.0.1"
-    app = create_app(arguments.workspace, arguments.codex_command,
+    app = create_app(arguments.workspace, arguments.code_command,
                      native_gateway_url=f"http://{loopback}:{arguments.port}")
     uvicorn.run(app, host=arguments.host, port=arguments.port, log_level="info")
 
