@@ -97,6 +97,7 @@ import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 import { containsChinese, containsEnglish, readTranslationPreferences, readTranslationPreferencesIfAvailable, saveTranslationPreferences, selectedTranslationProfileId, translationPreferencesStorageKey, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
+import { TranslationSelect } from './TranslationSelect'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 
 interface Props {
@@ -184,6 +185,11 @@ function syncReplyBreatheOnMount(element: HTMLElement | null) {
 }
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
+
+function openSettingsSelectMenu() {
+  if (typeof HTMLElement === 'undefined' || typeof HTMLElement.prototype.showPopover !== 'function') return null
+  return document.querySelector<HTMLElement>('.theme-settings-panel .translation-select__menu:popover-open')
+}
 
 type ChatEngine = 'codex' | 'claude-code'
 type ChoiceReplyDelivery = 'sent' | 'queued' | 'unverified'
@@ -5828,6 +5834,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       if (isMobileLayout()) return
+      if (openSettingsSelectMenu()) return
       event.preventDefault()
       event.stopPropagation()
       closeSettingsPanel()
@@ -5879,6 +5886,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useLayoutEffect(() => {
     const handleBack = () => {
+      const selectMenu = openSettingsSelectMenu()
+      if (selectMenu) {
+        selectMenu.hidePopover()
+        if (selectMenu.previousElementSibling instanceof HTMLElement) selectMenu.previousElementSibling.focus({ preventScroll: true })
+        return true
+      }
       if (settingsOpen || usageStatsOpen) {
         closeSettingsPanel()
         return true
@@ -7558,13 +7571,17 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
             <span className="theme-settings-card__badge">{ui("即时预览")}</span>
           </div>
           <div className="theme-display-controls theme-display-controls--typography">
-            <label className="theme-control-row">
+            <div className="theme-control-row">
               <span><strong>{ui('语言')}</strong><small>{ui('选择网页界面使用的语言；聊天和文件内容保持原文。')}</small></span>
-              <select className="theme-notification-toggle theme-language-select" value={uiLanguage} onChange={(event) => setUiLanguage(event.target.value as UiLanguage)} aria-label={ui('语言')}>
-                <option value="zh-CN">简体中文</option>
-                <option value="en">English</option>
-              </select>
-            </label>
+              <TranslationSelect
+                className="theme-language-select"
+                label={ui('语言')}
+                hideLabel
+                value={uiLanguage}
+                onChange={(value) => setUiLanguage(value as UiLanguage)}
+                options={[{ value: 'zh-CN', label: '简体中文' }, { value: 'en', label: 'English' }]}
+              />
+            </div>
             <label className="theme-control-row theme-control-row--stacked">
               <span><strong>{ui("字体大小")}</strong><small>{ui("同时调整聊天、输入框、侧栏、文件区和设置页。")}</small></span>
               <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label={ui("全局字体大小")} /><output>{fontSizeAdjustment === 0 ? ui('标准') : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
