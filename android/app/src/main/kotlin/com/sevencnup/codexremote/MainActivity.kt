@@ -1081,6 +1081,26 @@ class MainActivity : Activity() {
     private var cachedThemeBackgroundBitmap: Bitmap? = null
     private var activeThreadRefreshScheduled = false
     private var lastActiveThreadRefreshAt = 0L
+    private var liveReplyThreadId: String? = null
+    private var liveReplyTurnId: String? = null
+    private val liveReplyTexts = linkedMapOf<String, LiveReplyText>()
+    private var liveReplyActiveItemId: String? = null
+    private var liveReplyViewItemId: String? = null
+    private var liveReplyView: TextView? = null
+    private var liveReplyFrameScheduled = false
+    private val liveReplyFrame = object : Runnable {
+        override fun run() {
+            liveReplyFrameScheduled = false
+            val itemId = liveReplyActiveItemId ?: return
+            val reply = liveReplyTexts[itemId] ?: return
+            if (activeThreadId != liveReplyThreadId || !foreground) {
+                reply.flush()
+                return
+            }
+            appendLiveReplyToView(itemId, reply.revealNext())
+            scheduleLiveReplyFrame()
+        }
+    }
     private val historyMemoryCache = object : LinkedHashMap<String, JSONObject>(12, .75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, JSONObject>?): Boolean = size > 12
     }
@@ -1260,6 +1280,9 @@ class MainActivity : Activity() {
         super.onResume()
         webPreviewView?.onResume()
         foreground = true
+        if (liveReplyThreadId == activeThreadId && liveReplyTexts.isNotEmpty() && ::messageList.isInitialized) {
+            renderMessages(false, liveReplyTurnId)
+        }
         if (pendingUpdateInstallId > 0L) {
             val installId = pendingUpdateInstallId
             pendingUpdateInstallId = -1L
@@ -1309,6 +1332,9 @@ class MainActivity : Activity() {
         persistCurrentDraft()
         if (!imeInsetVisible) parkActivityInputFocus()
         foreground = false
+        handler.removeCallbacks(liveReplyFrame)
+        liveReplyFrameScheduled = false
+        liveReplyTexts.values.forEach { it.flush() }
         backgroundedAt = System.currentTimeMillis()
         handler.removeCallbacks(terminalHandoffPoll)
         handler.removeCallbacks(refreshRunnable)
@@ -1333,6 +1359,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        clearLiveReply()
         closeWebPreview()
         activityShimmerAnimator?.cancel()
         activityShimmerAnimator = null
@@ -1468,6 +1495,7 @@ class MainActivity : Activity() {
         translatedInputThreadId = null
         translatedInputEntries = JSONArray()
         translatedInputMarker = ""
+        clearLiveReply()
         activeThreadId = null
         activeThread = null
         selectedFiles = draftFilesByScope[draftStorageKey()]?.toMutableList() ?: mutableListOf()
@@ -1600,6 +1628,7 @@ class MainActivity : Activity() {
 
     private fun openChatHome() {
         abandonQueueEditForHome()
+        clearLiveReply()
         socket?.close(1000, "reconnecting")
         socket = null
         socketConnected = false
@@ -3088,6 +3117,7 @@ class MainActivity : Activity() {
                     }
                     if (activeThreadId?.let { it in removed } == true) {
                         prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
+                        clearLiveReply()
                         activeThreadId = null
                         activeThread = null
                         queuedMessages = JSONArray()
@@ -3695,7 +3725,10 @@ class MainActivity : Activity() {
             readThreadHistoryCache(id, MAX_EAGER_HISTORY_CACHE_BYTES)
         } else null
         persistCurrentDraft()
-        if (activeThreadId != id) clearLiveActivity()
+        if (activeThreadId != id) {
+            clearLiveActivity()
+            clearLiveReply()
+        }
         activeThreadId = id
         activeThread = existingHistory ?: memoryHistory ?: diskHistory?.first ?: thread
         if (diskHistory != null) {
@@ -4001,6 +4034,7 @@ class MainActivity : Activity() {
                     val wasRunning = running
                     running = isThreadRunning(resolved)
                     if (!running) clearLiveActivity()
+                    retireLiveReplyWhenHistoryCaughtUp(resolved)
                     renderHeader()
                     if (historyChanged || wasLoadingHistory || wasRunning != running)
                         renderMessages(false, if (wasLoadingHistory || wasRunning != running) null else incrementalTurnId)
@@ -4034,6 +4068,167 @@ class MainActivity : Activity() {
         val delay = (900L - elapsed).coerceAtLeast(0L)
         activeThreadRefreshScheduled = true
         handler.postDelayed(activeThreadRefreshRunnable, delay)
+    }
+
+    private fun clearLiveReply() {
+        handler.removeCallbacks(liveReplyFrame)
+        liveReplyFrameScheduled = false
+        liveReplyThreadId = null
+        liveReplyTurnId = null
+        liveReplyTexts.clear()
+        liveReplyActiveItemId = null
+        liveReplyViewItemId = null
+        liveReplyView = null
+    }
+
+    private fun scheduleLiveReplyFrame() {
+        if (liveReplyFrameScheduled || !foreground) return
+        val reply = liveReplyTexts[liveReplyActiveItemId] ?: return
+        if (!reply.hasPendingText) return
+        liveReplyFrameScheduled = true
+        handler.postDelayed(liveReplyFrame, 24L)
+    }
+
+    private fun appendLiveReplyToView(itemId: String, chunk: String) {
+        if (chunk.isEmpty()) return
+        val view = liveReplyView?.takeIf { liveReplyViewItemId == itemId && it.isAttachedToWindow } ?: return
+        view.append(chunk)
+        if (followMessageBottom && !messageTouchActive && ::messageScroll.isInitialized) {
+            val scroll = messageScroll
+            val threadId = liveReplyThreadId
+            scroll.post {
+                if (scroll === messageScroll && activeThreadId == threadId && followMessageBottom && !messageTouchActive) {
+                    scroll.scrollTo(0, messageList.height)
+                }
+            }
+        }
+    }
+
+    private fun historyLiveReplyItem(thread: JSONObject?, turnId: String, itemId: String): JSONObject? {
+        val turns = thread?.optJSONArray("turns") ?: return null
+        for (turnIndex in turns.length() - 1 downTo 0) {
+            val turn = turns.optJSONObject(turnIndex) ?: continue
+            if (turn.optString("id") != turnId) continue
+            val items = turn.optJSONArray("items") ?: return null
+            for (itemIndex in items.length() - 1 downTo 0) {
+                val item = items.optJSONObject(itemIndex) ?: continue
+                if (item.optString("id") == itemId && normalizedType(item.optString("type")) == "agentmessage") {
+                    return item
+                }
+            }
+            break
+        }
+        return null
+    }
+
+    private fun historyLiveReplyText(thread: JSONObject?, turnId: String, itemId: String): String =
+        historyLiveReplyItem(thread, turnId, itemId)?.let { messageText(it, "assistant") }.orEmpty()
+
+    private fun receiveLiveReplyDelta(params: JSONObject) {
+        val delta = params.optString("delta")
+        if (delta.isEmpty()) return
+        val threadId = eventThreadId(params) ?: activeThreadId ?: return
+        if (threadId != activeThreadId || !foreground) return
+        val turnId = eventTurnId(params).orEmpty().ifBlank { liveActivityTurnId.orEmpty() }
+        if (turnId.isBlank()) return
+        if (liveReplyThreadId != threadId || liveReplyTurnId != turnId) clearLiveReply()
+        liveReplyThreadId = threadId
+        liveReplyTurnId = turnId
+        val itemId = params.optString("itemId").ifBlank { "agent-message-live" }
+        val existing = liveReplyTexts[itemId]
+        val firstDelta = existing == null
+        val reply = existing ?: LiveReplyText(historyLiveReplyText(activeThread, turnId, itemId)).also {
+            liveReplyTexts[itemId] = it
+        }
+        if (firstDelta && liveReplyActiveItemId != null && liveReplyActiveItemId != itemId) {
+            liveReplyTexts[liveReplyActiveItemId]?.complete()
+        }
+        liveReplyActiveItemId = itemId
+        // The first event can arrive after a history read already captured it.
+        if (!firstDelta || !reply.targetText.endsWith(delta)) reply.append(delta)
+        if (firstDelta) reply.revealNext()
+        if (firstDelta || (liveReplyViewItemId != itemId && reply.visibleText.isNotBlank() && !messageRenderDeferred)) {
+            renderMessages(false, turnId)
+        }
+        scheduleLiveReplyFrame()
+    }
+
+    private fun completeLiveReplyItem(turnId: String, item: JSONObject) {
+        if (liveReplyTurnId != turnId) return
+        val itemId = item.optString("id")
+        val reply = liveReplyTexts[itemId] ?: return
+        reply.complete(messageText(item, "assistant"))
+        if (liveReplyActiveItemId == itemId) {
+            handler.removeCallbacks(liveReplyFrame)
+            liveReplyFrameScheduled = false
+            liveReplyActiveItemId = null
+        }
+        renderMessages(false, turnId)
+    }
+
+    private fun completeLiveReplyTurn(turnId: String) {
+        if (liveReplyTurnId != turnId) return
+        handler.removeCallbacks(liveReplyFrame)
+        liveReplyFrameScheduled = false
+        liveReplyTexts.values.forEach { it.complete() }
+        liveReplyActiveItemId = null
+        renderMessages(false, turnId)
+    }
+
+    private fun renderTurnsWithLiveReply(historyTurns: JSONArray): JSONArray {
+        val turnId = liveReplyTurnId ?: return historyTurns
+        if (liveReplyThreadId != activeThreadId || liveReplyTexts.isEmpty()) return historyTurns
+        fun patchedTurn(turn: JSONObject): JSONObject {
+            val originalItems = turn.optJSONArray("items") ?: JSONArray()
+            val items = JSONArray()
+            val seen = mutableSetOf<String>()
+            for (index in 0 until originalItems.length()) {
+                val item = originalItems.optJSONObject(index) ?: continue
+                val itemId = item.optString("id")
+                val reply = liveReplyTexts[itemId]?.takeIf { normalizedType(item.optString("type")) == "agentmessage" }
+                if (reply == null) {
+                    items.put(item)
+                    continue
+                }
+                seen += itemId
+                if (reply.acceptSnapshot(messageText(item, "assistant")) && liveReplyActiveItemId == itemId) scheduleLiveReplyFrame()
+                items.put(shallowCopyObject(item).put("text", reply.visibleText).put("_liveReplyItemId", itemId))
+            }
+            liveReplyTexts.forEach { (itemId, reply) ->
+                if (itemId !in seen && reply.visibleText.isNotEmpty()) {
+                    items.put(JSONObject().put("id", itemId).put("type", "agentMessage")
+                        .put("status", if (reply.completed) "completed" else "inProgress")
+                        .put("text", reply.visibleText).put("_liveReplyItemId", itemId))
+                }
+            }
+            return shallowCopyObject(turn).put("items", items)
+        }
+        val turns = JSONArray()
+        var found = false
+        for (index in 0 until historyTurns.length()) {
+            val turn = historyTurns.optJSONObject(index) ?: continue
+            if (turn.optString("id") == turnId) {
+                turns.put(patchedTurn(turn))
+                found = true
+            } else turns.put(turn)
+        }
+        if (!found) turns.put(patchedTurn(JSONObject().put("id", turnId).put("status", "inProgress")))
+        return turns
+    }
+
+    private fun retireLiveReplyWhenHistoryCaughtUp(thread: JSONObject) {
+        if (running || liveReplyThreadId != thread.optString("id")) return
+        val turnId = liveReplyTurnId ?: return
+        val allPresent = liveReplyTexts.all { (itemId, reply) ->
+            val item = historyLiveReplyItem(thread, turnId, itemId)
+            val snapshot = item?.let { messageText(it, "assistant") }.orEmpty()
+            if (snapshot.isEmpty()) false
+            else if (item?.optString("status")?.lowercase(Locale.ROOT) in setOf("completed", "finished", "done")) {
+                reply.complete(snapshot)
+                true
+            } else snapshot.startsWith(reply.targetText)
+        }
+        if (allPresent) clearLiveReply()
     }
 
     private fun mergeHistory(threadId: String, previous: JSONObject?, delta: JSONObject, baseRevision: String): JSONObject? {
@@ -4193,6 +4388,8 @@ class MainActivity : Activity() {
             return
         }
         val renderStartedAt = SystemClock.uptimeMillis()
+        liveReplyView = null
+        liveReplyViewItemId = null
         val previousScrollY = messageScroll.scrollY
         val wasNearEnd = followMessageBottom && isMessageListNearBottom()
         val restoreChoiceKey = assistantChoiceFocusedKey
@@ -4201,7 +4398,7 @@ class MainActivity : Activity() {
         assistantChoiceFocusedField = null
         if (scrollToEnd) followMessageBottom = true
         val thread = activeThread
-        val turns = thread?.optJSONArray("turns") ?: JSONArray()
+        val turns = renderTurnsWithLiveReply(thread?.optJSONArray("turns") ?: JSONArray())
         val incrementalTurnIndex = incrementalTurnId?.let { requestedId ->
             (0 until turns.length()).firstOrNull { turns.optJSONObject(it)?.optString("id") == requestedId }
         }
@@ -4278,6 +4475,8 @@ class MainActivity : Activity() {
                                 }
                             if (message.optString("_model").isBlank()) message.putOpt("_model", messageModel)
                             if (message.optString("_effort").isBlank()) message.putOpt("_effort", messageEffort)
+                            item.optString("_liveReplyItemId").takeIf { it.isNotBlank() && liveReplyTexts[it]?.completed == false }
+                                ?.let { message.put("_liveReplyItemId", it) }
                             val assistantBuilder = assistantTextBuilders.getOrPut(message) { StringBuilder() }
                             if (assistantBuilder.isNotEmpty()) assistantBuilder.append("\n\n")
                             assistantBuilder.append(text)
@@ -4575,7 +4774,7 @@ class MainActivity : Activity() {
                     gravity = Gravity.START
                 }
                 messageColumn.addView(bubble, LinearLayout.LayoutParams(WRAP, WRAP))
-                if (!assistantTranslationEligible) messageCopyAction(text)?.let { action ->
+                if (!assistantTranslationEligible && item.optString("_liveReplyItemId").isBlank()) messageCopyAction(text)?.let { action ->
                     messageColumn.addView(action, LinearLayout.LayoutParams(WRAP, dp(30)).apply { topMargin = dp(2) })
                 }
                 if (choiceGroups.isNotEmpty()) {
@@ -6562,6 +6761,11 @@ class MainActivity : Activity() {
         val timeline = message.optJSONArray("_activityTimeline") ?: return
         val pendingOperations = mutableListOf<JSONObject>()
         val turnId = message.optString("_turnId")
+        val liveItemId = message.optString("_liveReplyItemId")
+        val liveReply = liveReplyTexts[liveItemId]?.takeIf { !it.completed && liveReplyTurnId == turnId }
+        val lastMessageIndex = (timeline.length() - 1 downTo 0).firstOrNull {
+            timeline.optJSONObject(it)?.optString("type") == "message"
+        }
 
         fun flushOperations() {
             if (pendingOperations.isEmpty()) return
@@ -6576,7 +6780,15 @@ class MainActivity : Activity() {
                     flushOperations()
                     val text = block.optString("text")
                     if (text.isBlank() || hideMessageText) continue
-                    addAssistantMarkdown(container, text, maximumWidth)
+                    val visible = liveReply?.visibleText.orEmpty()
+                    if (index == lastMessageIndex && visible.isNotEmpty() && text.endsWith(visible)) {
+                        val previous = text.dropLast(visible.length)
+                        if (previous.isNotBlank()) addAssistantMarkdown(container, previous, maximumWidth)
+                        val view = selectableMarkdownText(maximumWidth).apply { setText(visible) }
+                        container.addView(view, LinearLayout.LayoutParams(WRAP, WRAP))
+                        liveReplyView = view
+                        liveReplyViewItemId = liveItemId
+                    } else addAssistantMarkdown(container, text, maximumWidth)
                 }
                 "operation" -> block.optJSONObject("item")?.let { operation ->
                     pendingOperations.add(operation)
@@ -8917,6 +9129,7 @@ class MainActivity : Activity() {
             findThread(id)?.takeIf { it.optString("engine", "codex") == targetMode }
                 ?: if (threads.length() == 0) JSONObject().put("id", id).put("engine", targetMode) else null
         }
+        clearLiveReply()
         activeThreadId = null
         activeThread = null
         queuedMessages = JSONArray()
@@ -9052,6 +9265,7 @@ class MainActivity : Activity() {
             runApi({ RemoteApi(endpoint, token).delete("/api/v1/codex/threads/${RemoteApi.encodePath(id)}") }, {
                 if (activeThreadId == id) {
                     prefs.edit().remove(activeThreadStorageKey(currentMode)).apply()
+                    clearLiveReply()
                     activeThreadId = null
                     activeThread = null
                     historyLoadingThreadId = null
@@ -13002,6 +13216,7 @@ class MainActivity : Activity() {
             "turn/started" -> {
                 val eventThread = eventThreadId(params)
                 if (eventThread != null && turnId != null) pendingLiveTurnIds[eventThread] = turnId
+                if (eventThread == activeThreadId && turnId != null && turnId != liveReplyTurnId) clearLiveReply()
                 if (eventThread != null) run {
                     pausedThreadKeys.remove(threadTitleKey(eventThread))
                     clearKnownEmptyThread(eventThread)
@@ -13034,7 +13249,13 @@ class MainActivity : Activity() {
                     }
                     running = false
                     clearLiveActivity()
-                    if (foreground) run { clearKnownEmptyThread(eventThread.orEmpty()); renderHeader(); refreshActiveThread(false); refreshQueue(false) }
+                    if (foreground) run {
+                        turnId?.let(::completeLiveReplyTurn)
+                        clearKnownEmptyThread(eventThread.orEmpty())
+                        renderHeader()
+                        refreshActiveThread(false)
+                        refreshQueue(false)
+                    }
                     else { backgroundThreadDirty = true; backgroundQueueDirty = true }
                 } else if (eventThread != null) {
                     pendingCompletionNoticeThreadId = eventThread
@@ -13059,6 +13280,7 @@ class MainActivity : Activity() {
                             liveActivityLabel = "正在回复"
                             updateActiveActivityText()
                         }
+                        receiveLiveReplyDelta(params)
                         scheduleActiveThreadRefresh()
                     }
                     else backgroundThreadDirty = true
@@ -13114,6 +13336,7 @@ class MainActivity : Activity() {
                                         if (type != "agentmessage") liveActivityLabel = "正在思考"
                                         updateActiveActivityText()
                                     }
+                                    if (method == "item/completed" && type == "agentmessage") completeLiveReplyItem(turnId, item)
                                 }
                             }
                         } else if (method == "item/fileChange/patchUpdated") {
