@@ -31,7 +31,8 @@ export interface WebDeviceManagerState {
   profiles: WebDeviceProfile[]
   activeProfileId: string
   pendingPairingCode: string | null
-  completePendingPairing: () => void
+  completePendingPairing: (paired?: boolean) => void
+  reportPairingState: (paired: boolean) => void
   addProfile: (name: string, url: string, pairingCode?: string) => void
   renameProfile: (id: string, name: string) => void
   removeProfile: (id: string) => void
@@ -97,17 +98,6 @@ function randomId(): string {
   return `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }
 
-export function postPairingStateToManager(paired: boolean): void {
-  const config = readFrameConfig()
-  if (!config) return
-  window.parent.postMessage({
-    source: 'code-remote-app',
-    type: 'pairing-state',
-    sessionId: config.sessionId,
-    paired,
-  }, config.origin)
-}
-
 export function useWebDeviceManager(): WebDeviceManagerState {
   const [config] = useState(readFrameConfig)
   const [profiles, setProfiles] = useState<WebDeviceProfile[]>([])
@@ -119,6 +109,11 @@ export function useWebDeviceManager(): WebDeviceManagerState {
     if (!config) return
     window.parent.postMessage({ source: 'code-remote-app', sessionId: config.sessionId, ...action }, config.origin)
   }, [config])
+
+  const reportPairingState = useCallback((paired: boolean) => {
+    setProfiles((current) => current.map((profile) => profile.id === activeProfileId ? { ...profile, paired } : profile))
+    sendAction({ type: 'pairing-state', paired })
+  }, [activeProfileId, sendAction])
 
   useEffect(() => {
     const frameConfig = config
@@ -158,9 +153,9 @@ export function useWebDeviceManager(): WebDeviceManagerState {
     sendAction({ type: 'add', name: trimmedName, url, ...(pairingCode ? { pairingCode } : {}) })
   }, [profiles, sendAction])
 
-  const completePendingPairing = useCallback(() => {
+  const completePendingPairing = useCallback((paired = false) => {
     if (!pendingPairingCode) return
-    sendAction({ type: 'pairing-code-consumed', profileId: activeProfileId })
+    sendAction({ type: 'pairing-code-consumed', profileId: activeProfileId, paired })
   }, [activeProfileId, pendingPairingCode, sendAction])
 
   const renameProfile = useCallback((id: string, name: string) => {
@@ -186,7 +181,7 @@ export function useWebDeviceManager(): WebDeviceManagerState {
     return url.href
   }, [config])
 
-  return { available, profiles, activeProfileId, pendingPairingCode, completePendingPairing, addProfile, renameProfile, removeProfile, selectProfile, windowHref }
+  return { available, profiles, activeProfileId, pendingPairingCode, completePendingPairing, reportPairingState, addProfile, renameProfile, removeProfile, selectProfile, windowHref }
 }
 
 export function createWebDeviceFrameUrl(profile: WebDeviceProfile, managerOrigin: string, managerPath: string, sessionId: string): string {

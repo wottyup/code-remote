@@ -4,7 +4,7 @@ import { PairingPage } from './components/PairingPage'
 import { DeviceManagerShell } from './components/DeviceManagerShell'
 import { codexRemoteClient } from './lib/codexRemoteClient'
 import { letterSpacingStyle, readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './lib/themePreferences'
-import { postPairingStateToManager, useWebDeviceManager } from './lib/webDeviceManager'
+import { useWebDeviceManager } from './lib/webDeviceManager'
 
 const STORAGE_KEY = 'codex-remote-token'
 
@@ -33,9 +33,9 @@ function RemoteClientApp() {
   }, [themePreferences])
 
   useEffect(() => {
-    if (window.parent === window) return
-    postPairingStateToManager(Boolean(token))
-  }, [token])
+    if (!deviceManager.available) return
+    deviceManager.reportPairingState(Boolean(token))
+  }, [deviceManager.activeProfileId, deviceManager.available, deviceManager.reportPairingState, token])
 
   useLayoutEffect(() => {
     const root = document.documentElement

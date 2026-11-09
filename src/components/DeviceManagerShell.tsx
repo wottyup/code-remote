@@ -163,6 +163,10 @@ export function DeviceManagerShell() {
         return
       }
       if (data.type === 'pairing-code-consumed' && data.profileId === activeProfile.id && pendingPairing?.profileId === activeProfile.id) {
+        if (data.paired === true) {
+          if (activeProfile.isCurrent) setHomePaired(true)
+          else updateSavedProfiles(savedProfiles.map((profile) => profile.id === activeProfile.id ? { ...profile, paired: true } : profile))
+        }
         setPendingPairing(null)
         return
       }

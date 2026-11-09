@@ -42,8 +42,10 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
     setCode(normalizedCode)
     setBusy(true)
     setError(null)
+    let paired = false
     try {
       const result = await codexRemoteClient.pair(normalizedCode)
+      paired = true
       onPaired(result.token)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 429) {
@@ -54,7 +56,7 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
       }
     } finally {
       setBusy(false)
-      if (completePendingPairing) deviceManager.completePendingPairing()
+      if (completePendingPairing) deviceManager.completePendingPairing(paired)
     }
   }
 
