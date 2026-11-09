@@ -16,6 +16,28 @@ interface InitialState {
   activeProfileId: string
 }
 
+interface PendingPairing {
+  profileId: string
+  code: string
+  sessionId: string
+  requestId: string
+  requesterWindow: Window
+  requesterOrigin: string
+  requesterSessionId: string
+}
+
+function sendPairingResult(attempt: PendingPairing, paired: boolean, error?: string): void {
+  attempt.requesterWindow.postMessage({
+    source: 'code-remote-manager',
+    type: 'pairing-result',
+    sessionId: attempt.requesterSessionId,
+    requestId: attempt.requestId,
+    profileId: attempt.profileId,
+    paired,
+    ...(error ? { error } : {}),
+  }, attempt.requesterOrigin)
+}
+
 function readSavedProfiles(): WebDeviceProfile[] {
   try {
     const currentSaved = window.localStorage.getItem(profilesStorageKey)
@@ -34,6 +56,7 @@ function readSavedProfiles(): WebDeviceProfile[] {
           name: item.name.trim().slice(0, 48) || new URL(url).host,
           url,
           paired: Boolean(item.paired),
+          verified: item.verified !== false,
           isCurrent: false,
         })
       } catch {
@@ -83,11 +106,15 @@ function newRootUrl(pathname: string, profileId: string): string {
 export function DeviceManagerShell() {
   const [initial] = useState(readInitialState)
   const [savedProfiles, setSavedProfiles] = useState(initial.profiles)
+  const savedProfilesRef = useRef(initial.profiles)
   const [activeProfileId, setActiveProfileId] = useState(initial.activeProfileId)
   const [homePaired, setHomePaired] = useState(false)
-  const [pendingPairing, setPendingPairing] = useState<{ profileId: string; code: string } | null>(null)
+  const [homeVerified, setHomeVerified] = useState(false)
+  const [pendingPairing, setPendingPairing] = useState<PendingPairing | null>(null)
+  const pendingPairingRef = useRef<PendingPairing | null>(null)
   const [frameSessionId, setFrameSessionId] = useState(createWebDeviceId)
   const frame = useRef<HTMLIFrameElement>(null)
+  const pairingFrame = useRef<HTMLIFrameElement>(null)
   const managerOrigin = window.location.origin
   const managerPath = window.location.pathname || '/'
 
@@ -96,28 +123,72 @@ export function DeviceManagerShell() {
     name: window.location.host,
     url: `${managerOrigin}${managerPath}`,
     paired: homePaired,
+    verified: homeVerified,
     isCurrent: true,
-  }, ...savedProfiles], [homePaired, managerOrigin, managerPath, savedProfiles])
+  }, ...savedProfiles], [homePaired, homeVerified, managerOrigin, managerPath, savedProfiles])
   const activeProfile = profiles.find((profile) => profile.id === activeProfileId) ?? profiles[0]
   const frameUrl = useMemo(
     () => createWebDeviceFrameUrl(activeProfile, managerOrigin, managerPath, frameSessionId),
     [activeProfile, frameSessionId, managerOrigin, managerPath],
   )
+  const pendingProfile = pendingPairing ? profiles.find((profile) => profile.id === pendingPairing.profileId) : null
+  const pairingFrameUrl = pendingPairing && pendingProfile
+    ? createWebDeviceFrameUrl(pendingProfile, managerOrigin, managerPath, pendingPairing.sessionId)
+    : null
 
   const updateSavedProfiles = useCallback((next: WebDeviceProfile[]) => {
+    savedProfilesRef.current = next
     setSavedProfiles(next)
     writeSavedProfiles(next)
   }, [])
 
+  const updateProfilePairing = useCallback((profileId: string, paired: boolean) => {
+    if (profileId === currentWebDeviceId) {
+      setHomePaired(paired)
+      setHomeVerified(true)
+      return
+    }
+    const current = savedProfilesRef.current
+    if (!current.some((profile) => profile.id === profileId)) return
+    updateSavedProfiles(current.map((profile) => profile.id === profileId ? { ...profile, paired, verified: true } : profile))
+  }, [updateSavedProfiles])
+
+  const cancelPairing = useCallback((error = '自动配对已取消。') => {
+    const attempt = pendingPairingRef.current
+    if (!attempt) return
+    pendingPairingRef.current = null
+    setPendingPairing(null)
+    sendPairingResult(attempt, false, error)
+  }, [])
+
+  const startPairing = useCallback((profileId: string, code: string, requestId: string, requesterWindow: Window, requesterOrigin: string, requesterSessionId: string) => {
+    cancelPairing()
+    const attempt: PendingPairing = {
+      profileId, code, requestId, requesterWindow, requesterOrigin, requesterSessionId,
+      sessionId: createWebDeviceId(),
+    }
+    pendingPairingRef.current = attempt
+    setPendingPairing(attempt)
+  }, [cancelPairing])
+
+  const finishPairing = useCallback((sessionId: string, paired: boolean, error?: string, confirmedFailure = false) => {
+    const attempt = pendingPairingRef.current
+    if (!attempt || attempt.sessionId !== sessionId) return
+    pendingPairingRef.current = null
+    setPendingPairing(null)
+    if (paired || confirmedFailure) updateProfilePairing(attempt.profileId, paired)
+    sendPairingResult(attempt, paired, error)
+  }, [updateProfilePairing])
+
   const selectProfile = useCallback((profileId: string, addHistoryEntry = true) => {
     if (!profiles.some((profile) => profile.id === profileId) || profileId === activeProfileId) return
-    if (pendingPairing && pendingPairing.profileId !== profileId) setPendingPairing(null)
+    cancelPairing()
     setActiveProfileId(profileId)
     setFrameSessionId(createWebDeviceId())
     const nextUrl = newRootUrl(managerPath, profileId)
     if (addHistoryEntry) window.history.pushState({ codeRemoteDevice: profileId }, '', nextUrl)
     else window.history.replaceState({ codeRemoteDevice: profileId }, '', nextUrl)
-  }, [activeProfileId, managerPath, pendingPairing, profiles])
+  }, [activeProfileId, cancelPairing, managerPath, profiles])
 
   const sendState = useCallback(() => {
     const target = frame.current?.contentWindow
@@ -135,9 +206,23 @@ export function DeviceManagerShell() {
       profiles,
       activeProfileId,
       managerPath,
-      pairingCode: pendingPairing?.profileId === activeProfileId ? pendingPairing.code : null,
+      pairingCode: null,
     }, targetOrigin)
-  }, [activeProfile.url, activeProfileId, frameSessionId, managerPath, pendingPairing, profiles])
+  }, [activeProfile.url, activeProfileId, frameSessionId, managerPath, profiles])
+
+  const sendPendingState = useCallback(() => {
+    const target = pairingFrame.current?.contentWindow
+    if (!target || !pendingPairing || !pendingProfile) return
+    target.postMessage({
+      source: 'code-remote-manager',
+      type: 'state',
+      sessionId: pendingPairing.sessionId,
+      profiles,
+      activeProfileId: pendingPairing.profileId,
+      managerPath,
+      pairingCode: pendingPairing.code,
+    }, new URL(pendingProfile.url).origin)
+  }, [managerPath, pendingPairing, pendingProfile, profiles])
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -157,17 +242,7 @@ export function DeviceManagerShell() {
         return
       }
       if (data.type === 'pairing-state' && typeof data.paired === 'boolean') {
-        if (data.paired && pendingPairing?.profileId === activeProfile.id) setPendingPairing(null)
-        if (activeProfile.isCurrent) setHomePaired(data.paired)
-        else updateSavedProfiles(savedProfiles.map((profile) => profile.id === activeProfile.id ? { ...profile, paired: data.paired } : profile))
-        return
-      }
-      if (data.type === 'pairing-code-consumed' && data.profileId === activeProfile.id && pendingPairing?.profileId === activeProfile.id) {
-        if (data.paired === true) {
-          if (activeProfile.isCurrent) setHomePaired(true)
-          else updateSavedProfiles(savedProfiles.map((profile) => profile.id === activeProfile.id ? { ...profile, paired: true } : profile))
-        }
-        setPendingPairing(null)
+        updateProfilePairing(activeProfile.id, data.paired)
         return
       }
       if (data.type === 'add' && typeof data.name === 'string' && typeof data.url === 'string') {
@@ -178,15 +253,18 @@ export function DeviceManagerShell() {
           if (inputPairingCode.trim() && pairingCode.length !== 8) return
           const currentUrl = normalizeWebDeviceUrl(new URL(managerPath, managerOrigin).href)
           const allProfiles = [{ id: currentWebDeviceId, url: currentUrl }, ...savedProfiles]
-          if (allProfiles.some((profile) => profile.url === url)) return
+          const existingProfile = allProfiles.find((profile) => profile.url === url)
+          if (existingProfile && (!pairingCode || existingProfile.id === currentWebDeviceId)) return
           const name = data.name.trim().slice(0, 48) || new URL(url).host
-          const profile: WebDeviceProfile = { id: createWebDeviceId(), name, url, paired: false, isCurrent: false }
-          updateSavedProfiles([...savedProfiles, profile])
+          const profileId = existingProfile?.id ?? createWebDeviceId()
+          if (!existingProfile) {
+            const profile: WebDeviceProfile = { id: profileId, name, url, paired: false, verified: false, isCurrent: false }
+            updateSavedProfiles([...savedProfiles, profile])
+          }
           if (pairingCode) {
-            setPendingPairing({ profileId: profile.id, code: pairingCode })
-            setActiveProfileId(profile.id)
-            setFrameSessionId(createWebDeviceId())
-            window.history.pushState({ codeRemoteDevice: profile.id }, '', newRootUrl(managerPath, profile.id))
+            const requestId = typeof data.requestId === 'string' && data.requestId.length <= 96 && data.requestId
+              ? data.requestId : createWebDeviceId()
+            startPairing(profileId, pairingCode, requestId, event.source as Window, event.origin, frameSessionId)
           }
         } catch {
           // Settings performs the same validation before sending; ignore malformed messages.
@@ -201,8 +279,8 @@ export function DeviceManagerShell() {
       }
       if (data.type === 'remove' && typeof data.id === 'string') {
         if (!savedProfiles.some((profile) => profile.id === data.id)) return
+        if (pendingPairingRef.current?.profileId === data.id) cancelPairing()
         updateSavedProfiles(savedProfiles.filter((profile) => profile.id !== data.id))
-        if (pendingPairing?.profileId === data.id) setPendingPairing(null)
         if (data.id === activeProfileId) selectProfile(currentWebDeviceId)
         return
       }
@@ -211,14 +289,53 @@ export function DeviceManagerShell() {
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [activeProfile, activeProfileId, frameSessionId, managerOrigin, managerPath, pendingPairing, savedProfiles, selectProfile, sendState, updateSavedProfiles])
+  }, [activeProfile, activeProfileId, cancelPairing, frameSessionId, managerOrigin, managerPath, savedProfiles, selectProfile, sendState, startPairing, updateProfilePairing, updateSavedProfiles])
+
+  useEffect(() => {
+    if (!pendingPairing || !pendingProfile) return
+    const expectedOrigin = new URL(pendingProfile.url).origin
+    const sessionId = pendingPairing.sessionId
+    const profileId = pendingPairing.profileId
+
+    const handlePairingMessage = (event: MessageEvent) => {
+      if (event.source !== pairingFrame.current?.contentWindow || event.origin !== expectedOrigin) return
+      if (event.data?.source !== 'code-remote-app' || event.data?.sessionId !== sessionId) return
+      const data = event.data
+      if (data.type === 'ready') {
+        sendPendingState()
+        return
+      }
+      if (data.type === 'pairing-state' && data.paired === true) {
+        finishPairing(sessionId, true)
+        return
+      }
+      if (data.type === 'pairing-code-consumed' && data.profileId === profileId) {
+        const paired = data.paired === true
+        const error = paired ? undefined : typeof data.error === 'string'
+          ? data.error.slice(0, 200) : '配对失败，请确认匹配码。'
+        finishPairing(sessionId, paired, error, !paired)
+      }
+    }
+
+    window.addEventListener('message', handlePairingMessage)
+    return () => window.removeEventListener('message', handlePairingMessage)
+  }, [finishPairing, pendingPairing, pendingProfile, sendPendingState])
+
+  useEffect(() => {
+    if (!pendingPairing) return
+    const timer = window.setTimeout(() => {
+      finishPairing(pendingPairing.sessionId, false, '目标网页未回应自动配对。请检查地址，或在该设备页面手动输入匹配码。')
+    }, 20_000)
+    return () => window.clearTimeout(timer)
+  }, [finishPairing, pendingPairing])
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== profilesStorageKey) return
       const next = readSavedProfiles()
+      savedProfilesRef.current = next
       setSavedProfiles(next)
-      if (pendingPairing && !next.some((profile) => profile.id === pendingPairing.profileId)) setPendingPairing(null)
+      if (pendingPairingRef.current && !next.some((profile) => profile.id === pendingPairingRef.current?.profileId)) cancelPairing()
       if (activeProfileId !== currentWebDeviceId && !next.some((profile) => profile.id === activeProfileId)) {
         setActiveProfileId(currentWebDeviceId)
         setFrameSessionId(createWebDeviceId())
@@ -228,7 +345,7 @@ export function DeviceManagerShell() {
     const handlePopState = () => {
       const requestedId = new URLSearchParams(window.location.search).get('device') ?? currentWebDeviceId
       const targetId = profiles.some((profile) => profile.id === requestedId) ? requestedId : currentWebDeviceId
-      if (pendingPairing && pendingPairing.profileId !== targetId) setPendingPairing(null)
+      cancelPairing()
       setActiveProfileId(targetId)
       setFrameSessionId(createWebDeviceId())
     }
@@ -239,11 +356,15 @@ export function DeviceManagerShell() {
       window.removeEventListener('storage', handleStorage)
       window.removeEventListener('popstate', handlePopState)
     }
-  }, [activeProfileId, managerPath, pendingPairing, profiles])
+  }, [activeProfileId, cancelPairing, managerPath, profiles])
 
   useEffect(() => {
     sendState()
   }, [sendState])
+
+  useEffect(() => {
+    sendPendingState()
+  }, [sendPendingState])
 
   return (
     <main className="web-device-manager" aria-label="Code Remote">
@@ -257,6 +378,17 @@ export function DeviceManagerShell() {
         referrerPolicy="no-referrer"
         onLoad={sendState}
       />
+      {pendingPairing && pendingProfile && pairingFrameUrl ? <iframe
+        key={pendingPairing.sessionId}
+        ref={pairingFrame}
+        className="web-device-manager__pairing-frame"
+        src={pairingFrameUrl}
+        title={`Code Remote — ${pendingProfile.name}`}
+        aria-hidden="true"
+        tabIndex={-1}
+        referrerPolicy="no-referrer"
+        onLoad={sendPendingState}
+      /> : null}
     </main>
   )
 }

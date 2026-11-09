@@ -2,7 +2,7 @@ import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
-import { normalizePairingCode, type WebDeviceManagerState } from '../lib/webDeviceManager'
+import { normalizePairingCode, webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: string) => void; deviceManager: WebDeviceManagerState }) {
   useUiLanguage()
@@ -36,27 +36,30 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
     const normalizedCode = normalizePairingCode(value)
     if (normalizedCode.length !== 8) {
       setError('请输入有效的 8 位匹配码。')
-      if (completePendingPairing) deviceManager.completePendingPairing()
+      if (completePendingPairing) deviceManager.completePendingPairing(false, '请输入有效的 8 位匹配码。')
       return
     }
     setCode(normalizedCode)
     setBusy(true)
     setError(null)
     let paired = false
+    let pairingError: string | undefined
     try {
       const result = await codexRemoteClient.pair(normalizedCode)
-      paired = true
       onPaired(result.token)
+      paired = true
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 429) {
         startCooldown(Math.max(1, reason.retryAfterSeconds ?? 60))
         setError(null)
+        pairingError = '配对尝试次数已达上限，配对已暂停'
       } else {
-        setError(reason instanceof Error ? reason.message : '配对失败，请确认配对码。')
+        pairingError = reason instanceof Error ? reason.message : '配对失败，请确认配对码。'
+        setError(pairingError)
       }
     } finally {
       setBusy(false)
-      if (completePendingPairing) deviceManager.completePendingPairing(paired)
+      if (completePendingPairing) deviceManager.completePendingPairing(paired, pairingError)
     }
   }
 
@@ -84,7 +87,7 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
         {deviceManager.available && deviceManager.profiles.length > 1 ? <div className="pair-device-switcher">
           <span className="pair-device-switcher__current"><small>{ui('当前设备')}</small><strong>{activeProfile?.name ?? ui('设备')}</strong></span>
           <select aria-label={ui('切换设备')} value={deviceManager.activeProfileId} onChange={(event) => deviceManager.selectProfile(event.currentTarget.value)}>
-            {deviceManager.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.paired ? ui('已配对') : ui('未配对')}</option>)}
+            {deviceManager.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {ui(webDevicePairingLabel(profile))}</option>)}
           </select>
         </div> : null}
         <img className="pair-card__logo" src="/code-remote-mark.png" alt="Code Remote" />

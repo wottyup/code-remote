@@ -1,7 +1,7 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Check, ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { ui, uiMessage } from '../lib/uiLanguage'
-import { normalizePairingCode, type WebDeviceManagerState } from '../lib/webDeviceManager'
+import { normalizePairingCode, normalizeWebDeviceUrl, webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerState }) {
   const [name, setName] = useState('')
@@ -11,17 +11,46 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
   const [editingName, setEditingName] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [pendingRequestId, setPendingRequestId] = useState<string | null>(null)
+  let existingUrl: string | null = null
+  try {
+    if (url.trim()) existingUrl = normalizeWebDeviceUrl(url)
+  } catch {
+    // The form displays URL errors when submitted.
+  }
+  const retrying = Boolean(pairingCode && existingUrl && manager.profiles.some((profile) => profile.url === existingUrl))
+
+  useEffect(() => {
+    const result = manager.pairingResult
+    if (!pendingRequestId || result?.requestId !== pendingRequestId) return
+    setPendingRequestId(null)
+    if (result.paired) {
+      setName('')
+      setUrl('')
+      setPairingCode('')
+      setError(null)
+      setMessage('设备已配对，可在侧栏切换。')
+    } else {
+      setMessage(null)
+      setError(result.error || '自动配对失败，请确认匹配码。')
+    }
+  }, [manager.pairingResult, pendingRequestId])
 
   function addDevice(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setError(null)
     setMessage(null)
     try {
-      manager.addProfile(name, url, pairingCode)
-      setName('')
-      setUrl('')
-      setPairingCode('')
-      setMessage('设备已保存，可在侧栏切换。')
+      const requestId = manager.addProfile(name, url, pairingCode)
+      if (requestId) {
+        setPendingRequestId(requestId)
+        setMessage('正在验证匹配码，当前页面会保持打开。')
+      } else {
+        setName('')
+        setUrl('')
+        setPairingCode('')
+        setMessage('设备已保存，可在侧栏切换。')
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '添加设备失败。')
     }
@@ -54,24 +83,24 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
   return (
     <section className="theme-settings-card theme-settings-card--page web-device-settings" aria-label={ui('设备连接')}>
       <div className="theme-settings-card__heading">
-        <div><h2>{ui('设备连接')}</h2><p>{ui('添加其他 Code Remote 网页；可在这里填写匹配码，添加后自动配对。')}</p></div>
+        <div><h2>{ui('设备连接')}</h2><p>{ui('添加其他 Code Remote 网页；填写匹配码后会在此页验证配对结果。')}</p></div>
       </div>
 
       <form className="web-device-settings__form" onSubmit={addDevice}>
         <label className="theme-control-row web-device-settings__field">
           <span><strong>{ui('设备名称')}</strong><small>{ui('可选；留空时使用地址中的主机名。')}</small></span>
-          <input type="text" value={name} maxLength={48} autoComplete="off" placeholder={ui('例如：家里的电脑')} onChange={(event) => setName(event.currentTarget.value)} />
+          <input type="text" value={name} maxLength={48} autoComplete="off" disabled={Boolean(pendingRequestId)} placeholder={ui('例如：家里的电脑')} onChange={(event) => setName(event.currentTarget.value)} />
         </label>
         <label className="theme-control-row web-device-settings__field">
           <span><strong>{ui('Code Remote 地址')}</strong><small>{ui('支持 HTTP 或 HTTPS，也可以填写带路径的地址。')}</small></span>
-          <input type="text" value={url} required autoComplete="url" spellCheck={false} placeholder="http://192.168.1.20:4173" onChange={(event) => setUrl(event.currentTarget.value)} />
+          <input type="text" value={url} required autoComplete="url" spellCheck={false} disabled={Boolean(pendingRequestId)} placeholder="http://192.168.1.20:4173" onChange={(event) => setUrl(event.currentTarget.value)} />
         </label>
         <label className="theme-control-row web-device-settings__field">
           <span><strong>{ui('匹配码（可选）')}</strong><small>{ui('填写后，添加设备时会自动尝试配对。')}</small></span>
-          <input type="text" value={pairingCode} maxLength={24} autoComplete="one-time-code" autoCapitalize="characters" autoCorrect="off" spellCheck={false} placeholder={ui('8 位配对码')} onChange={(event) => setPairingCode(normalizePairingCode(event.currentTarget.value))} />
+          <input type="text" value={pairingCode} maxLength={24} autoComplete="one-time-code" autoCapitalize="characters" autoCorrect="off" spellCheck={false} disabled={Boolean(pendingRequestId)} placeholder={ui('8 位配对码')} onChange={(event) => setPairingCode(normalizePairingCode(event.currentTarget.value))} />
         </label>
         <div className="web-device-settings__form-actions">
-          <button className="web-device-settings__add" type="submit"><Plus size={15} />{ui('添加设备')}</button>
+          <button className="web-device-settings__add" type="submit" disabled={Boolean(pendingRequestId)}><Plus size={15} />{pendingRequestId ? ui('正在配对…') : retrying ? ui('重试配对') : pairingCode ? ui('添加并配对') : ui('添加设备')}</button>
         </div>
       </form>
 
@@ -82,8 +111,8 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
             <strong title={profile.name}>{profile.name}</strong>
             <small title={profile.url}>{profile.isCurrent ? ui('当前网页') : profile.url}</small>
           </div>
-          <span className={`web-device-settings__status${profile.paired ? ' web-device-settings__status--paired' : ''}`}>
-            <i aria-hidden="true" />{profile.paired ? ui('已配对') : ui('未配对')}
+          <span className={`web-device-settings__status${profile.verified === false ? ' web-device-settings__status--unknown' : profile.paired ? ' web-device-settings__status--paired' : ''}`}>
+            <i aria-hidden="true" />{ui(webDevicePairingLabel(profile))}
           </span>
           {!profile.isCurrent ? <div className="web-device-settings__actions">
             {editingId === profile.id ? <>

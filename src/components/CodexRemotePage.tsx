@@ -102,7 +102,7 @@ import { TranslationSettingsCard } from './TranslationSettingsCard'
 import { TranslationSelect } from './TranslationSelect'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 import { WebDeviceSettingsCard } from './WebDeviceSettingsCard'
-import type { WebDeviceManagerState } from '../lib/webDeviceManager'
+import { webDevicePairingLabel, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 interface Props {
   token: string
@@ -6894,8 +6894,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                       setDeviceContextMenu({ id: profile.id, x: event.clientX, y: event.clientY })
                     }}
                   >
-                    <i className={'sidebar-device-switcher__dot' + (profile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
-                    <span className="sidebar-device-switcher__copy"><strong>{profile.name}</strong><small>{profile.paired ? ui('已配对') : ui('未配对')}</small></span>
+                    <i className={'sidebar-device-switcher__dot' + (profile.verified === false ? ' sidebar-device-switcher__dot--unknown' : profile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
+                    <span className="sidebar-device-switcher__copy"><strong>{profile.name}</strong><small>{ui(webDevicePairingLabel(profile))}</small></span>
                     {deviceManager.activeProfileId === profile.id ? <Check size={14} aria-hidden="true" /> : null}
                   </button>
                   <button className="sidebar-device-switcher__more" type="button" title={ui('更多设备操作')} aria-label={uiMessage(`更多设备操作：${profile.name}`)} onClick={(event) => {
@@ -6912,11 +6912,11 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               aria-label={ui('切换设备')}
               aria-haspopup="true"
               aria-expanded={devicePickerOpen}
-              title={`${activeDeviceProfile.name} · ${activeDeviceProfile.paired ? ui('已配对') : ui('未配对')}`}
+              title={`${activeDeviceProfile.name} · ${ui(webDevicePairingLabel(activeDeviceProfile))}`}
               onClick={() => setDevicePickerOpen((open) => !open)}
             >
-              <i className={'sidebar-device-switcher__dot' + (activeDeviceProfile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
-              <span className="sidebar-device-selector__copy"><strong>{activeDeviceProfile.name}</strong><small>{activeDeviceProfile.paired ? ui('已配对') : ui('未配对')}</small></span>
+              <i className={'sidebar-device-switcher__dot' + (activeDeviceProfile.verified === false ? ' sidebar-device-switcher__dot--unknown' : activeDeviceProfile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
+              <span className="sidebar-device-selector__copy"><strong>{activeDeviceProfile.name}</strong><small>{ui(webDevicePairingLabel(activeDeviceProfile))}</small></span>
               <ChevronDown size={15} aria-hidden="true" />
             </button>
           </div> : null}
