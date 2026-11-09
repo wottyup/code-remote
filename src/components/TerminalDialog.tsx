@@ -1,3 +1,4 @@
+import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ClipboardPaste, Copy, CornerDownLeft, Delete, Eraser, LoaderCircle, RotateCw, Terminal as TerminalIcon, TextSelect } from 'lucide-react'
@@ -12,11 +13,11 @@ import { ChatOverlayPanel } from './ChatOverlayPanel'
 import '@xterm/xterm/css/xterm.css'
 
 const terminalControlKeys = [
-  { label: '向左', code: 'D', icon: ArrowLeft },
-  { label: '向上', code: 'A', icon: ArrowUp },
-  { label: '向下', code: 'B', icon: ArrowDown },
-  { label: '向右', code: 'C', icon: ArrowRight },
-  { label: '退格', code: 'Backspace', icon: Delete },
+  { get label() { return ui('向左') }, code: 'D', icon: ArrowLeft },
+  { get label() { return ui('向上') }, code: 'A', icon: ArrowUp },
+  { get label() { return ui('向下') }, code: 'B', icon: ArrowDown },
+  { get label() { return ui('向右') }, code: 'C', icon: ArrowRight },
+  { get label() { return ui('退格') }, code: 'Backspace', icon: Delete },
 ] as const
 type TerminalControlCode = (typeof terminalControlKeys)[number]['code']
 type TerminalModifier = 'ctrl' | 'alt'
@@ -133,6 +134,7 @@ function terminalScreenText(terminal: Terminal): string {
 }
 
 export const TerminalDialog = memo(function TerminalDialog({ token, engine, visible, threadId, cwd, directoryRequest, onDirectoryRequestConsumed, runRequest, onRunRequestConsumed, onClose, onInsertText }: TerminalDialogProps) {
+  useUiLanguage()
   const screen = useRef<HTMLDivElement>(null)
   const visibleRef = useRef(visible)
   visibleRef.current = visible
@@ -849,17 +851,17 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
     onRunRequestConsumed(runRequest.id)
   }, [onRunRequestConsumed, runRequest, shellName, status])
 
-  const statusLabel = {
+  const statusLabel = ui({
     connecting: '正在启动',
     connected: '已连接',
     disconnected: '连接断开',
     exited: '已结束',
-  }[status]
+  }[status])
 
   return (
     <ChatOverlayPanel
-      ariaLabel="本机终端"
-      backdropLabel="关闭本机终端"
+      ariaLabel={ui("本机终端")}
+      backdropLabel={ui("关闭本机终端")}
       onClose={onClose}
       hidden={!visible}
       showCloseButton={false}
@@ -868,7 +870,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
         if (!(event.target as HTMLElement).closest('.terminal-context-menu')) setContextMenu(null)
       }}
       footer={(
-        <div className="terminal-dialog__navigation" role="group" aria-label="终端快捷键">
+        <div className="terminal-dialog__navigation" role="group" aria-label={ui("终端快捷键")}>
           <div className="terminal-dialog__navigation-row terminal-dialog__navigation-row--primary">
             <button
               className="terminal-dialog__navigation-button"
@@ -914,8 +916,8 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
               className="terminal-dialog__navigation-button"
               type="button"
               disabled={status !== 'connected'}
-              aria-label="粘贴到终端"
-              title="粘贴到终端"
+              aria-label={ui("粘贴到终端")}
+              title={ui("粘贴到终端")}
               onPointerDown={(event) => {
                 event.preventDefault()
                 void pasteIntoTerminal()
@@ -928,8 +930,8 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
               className="terminal-dialog__navigation-button"
               type="button"
               disabled={status !== 'connected'}
-              aria-label="终端回车"
-              title="终端回车"
+              aria-label={ui("终端回车")}
+              title={ui("终端回车")}
               onPointerDown={(event) => {
                 event.preventDefault()
                 sendQuickInput('\r')
@@ -946,8 +948,8 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                 type="button"
                 key={label}
                 disabled={status !== 'connected'}
-                aria-label={`终端${label}`}
-                title={code === 'Backspace' ? '终端退格，长按连续删除' : `终端${label}，长按连续输入`}
+                aria-label={uiFormat("终端{0}", label)}
+                title={code === 'Backspace' ? ui('终端退格，长按连续删除') : uiFormat("终端{0}，长按连续输入", label)}
                 onPointerDown={(event) => beginControlRepeat(event, code)}
                 onPointerUp={endControlRepeat}
                 onPointerCancel={endControlRepeat}
@@ -965,7 +967,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
       header={(
         <div className="terminal-dialog__title">
           <TerminalIcon size={16} aria-hidden="true" />
-          <strong>本机终端</strong>
+          <strong>{ui("本机终端")}</strong>
           <span className={`terminal-dialog__status terminal-dialog__status--${status}`}>
             {status === 'connecting' ? <LoaderCircle className="spin" size={12} /> : <i />}
             {statusLabel}
@@ -973,7 +975,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
           {status === 'disconnected' || status === 'exited' ? (
             <button className="terminal-dialog__reconnect" type="button" onClick={reconnect}>
               <RotateCw size={13} aria-hidden="true" />
-              重连
+              {ui("重连")}
             </button>
           ) : null}
           {handoffStatusLoaded && threadId ? (
@@ -981,25 +983,25 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
               className={`terminal-dialog__handoff${handoffEnabled ? ' terminal-dialog__handoff--active' : ''}`}
               type="button"
               aria-pressed={handoffEnabled}
-              title={!handoffSupported ? handoffUnavailableReason : handoffEnabled ? '收回终端控制权，AI 将无法继续操作此终端' : '先手动登录 SSH，再交给 AI；随后在聊天中发送任务'}
+              title={!handoffSupported ? handoffUnavailableReason : handoffEnabled ? ui('收回终端控制权，AI 将无法继续操作此终端') : ui('先手动登录 SSH，再交给 AI；随后在聊天中发送任务')}
               disabled={handoffBusy || !handoffSupported || !handoffEnabled && (status !== 'connected' || !persistent)}
               onClick={() => void toggleHandoff()}
             >
               {handoffBusy ? <LoaderCircle className="spin" size={12} /> : null}
-              {!handoffSupported ? 'AI 接管不可用' : handoffEnabled ? '收回控制' : '交给 AI'}
+              {!handoffSupported ? ui('AI 接管不可用') : handoffEnabled ? ui('收回控制') : ui('交给 AI')}
             </button>
           ) : null}
           {workingDirectory ? <code title={workingDirectory}>{workingDirectory}</code> : null}
         </div>
       )}
     >
-      <div className="terminal-dialog__screen" ref={screen} aria-label="终端内容" />
-      {handoffError ? <div className="terminal-dialog__paste-hint" role="alert">{handoffError}</div> : null}
-      {handoffEnabled && !handoffError ? <div className="terminal-dialog__paste-hint" role="status">AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。</div> : null}
-      {runError ? <div className="terminal-dialog__paste-hint" role="alert">{runError}</div> : null}
+      <div className="terminal-dialog__screen" ref={screen} aria-label={ui("终端内容")} />
+      {handoffError ? <div className="terminal-dialog__paste-hint" role="alert">{uiMessage(handoffError)}</div> : null}
+      {handoffEnabled && !handoffError ? <div className="terminal-dialog__paste-hint" role="status">{ui("AI 控制中。遇到密码或确认提示，可直接在终端输入；手动输入时 AI 暂缓，按回车后继续。")}</div> : null}
+      {runError ? <div className="terminal-dialog__paste-hint" role="alert">{uiMessage(runError)}</div> : null}
       {desktopPasteHintVisible ? (
         <div className="terminal-dialog__paste-hint" role="status">
-          终端已聚焦，请按 Ctrl/⌘+V 粘贴
+          {ui("终端已聚焦，请按 Ctrl/⌘+V 粘贴")}
         </div>
       ) : null}
       {contextMenu ? (
@@ -1019,7 +1021,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             }}
           >
             <Copy size={14} />
-            复制
+            {ui("复制")}
           </button>
           <button
             type="button"
@@ -1028,7 +1030,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             onClick={() => void pasteIntoTerminal()}
           >
             <ClipboardPaste size={14} />
-            粘贴到终端
+            {ui("粘贴到终端")}
           </button>
           <button
             type="button"
@@ -1039,7 +1041,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             }}
           >
             <TextSelect size={14} />
-            全选
+            {ui("全选")}
           </button>
           <button
             type="button"
@@ -1051,7 +1053,7 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             }}
           >
             <span className={`engine-brand-icon engine-brand-icon--${engine}`} style={{ width: 14, height: 14 }} aria-hidden="true" />
-            粘贴到输入框
+            {ui("粘贴到输入框")}
           </button>
           <button
             type="button"
@@ -1062,20 +1064,20 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
             }}
           >
             <Eraser size={14} />
-            清空显示
+            {ui("清空显示")}
           </button>
         </div>
       ) : null}
       {manualPasteOpen ? (
-        <div className="terminal-manual-paste" role="dialog" aria-modal="true" aria-label="手动粘贴到终端">
+        <div className="terminal-manual-paste" role="dialog" aria-modal="true" aria-label={ui("手动粘贴到终端")}>
           <form onSubmit={submitManualPaste}>
-            <strong>手动粘贴</strong>
-            <p>浏览器无法直接读取剪贴板，请把内容粘贴到这里。</p>
+            <strong>{ui("手动粘贴")}</strong>
+            <p>{ui("浏览器无法直接读取剪贴板，请把内容粘贴到这里。")}</p>
             <textarea
               autoFocus
               value={manualPasteText}
               onChange={(event) => setManualPasteText(event.target.value)}
-              placeholder="在此粘贴终端输入"
+              placeholder={ui("在此粘贴终端输入")}
               rows={5}
             />
             <div>
@@ -1087,9 +1089,9 @@ export const TerminalDialog = memo(function TerminalDialog({ token, engine, visi
                   window.requestAnimationFrame(() => terminalActions.current.focus())
                 }}
               >
-                取消
+                {ui("取消")}
               </button>
-              <button type="submit" disabled={!manualPasteText}>粘贴到终端</button>
+              <button type="submit" disabled={!manualPasteText}>{ui("粘贴到终端")}</button>
             </div>
           </form>
         </div>

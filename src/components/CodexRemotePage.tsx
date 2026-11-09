@@ -1,3 +1,4 @@
+import { getUiLanguage, setUiLanguage, ui, uiFormat, uiMessage, useUiLanguage, type UiLanguage } from '../lib/uiLanguage'
 import { Fragment, forwardRef, lazy, memo, Suspense, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ChangeEvent, type ClipboardEvent, type CSSProperties, type FormEvent, type KeyboardEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type RefObject, type ReactNode, type TouchEvent as ReactTouchEvent, type WheelEvent as ReactWheelEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { createContext, useContext } from 'react'
@@ -96,6 +97,7 @@ import { WorkspaceFileTypeIcon } from './WorkspaceFileTypeIcon'
 import { readCPAUsageSettings, saveCPAUsageSettings, type CPAUsageSettings } from '../lib/cpaUsageStats'
 import { containsChinese, containsEnglish, readTranslationPreferences, readTranslationPreferencesIfAvailable, saveTranslationPreferences, selectedTranslationProfileId, translationPreferencesStorageKey, type TranslationPreferences } from '../lib/translationPreferences'
 import { TranslationSettingsCard } from './TranslationSettingsCard'
+import { TranslationSelect } from './TranslationSelect'
 import { NativeEngineConfigCard } from './NativeEngineConfigCard'
 
 interface Props {
@@ -116,10 +118,10 @@ declare global {
 }
 
 const connectionLabel = {
-  connecting: '正在连接',
-  connected: 'Codex 已连接',
-  disconnected: '连接已断开',
-  unavailable: 'Codex 不可用',
+  get connecting() { return ui('正在连接') },
+  get connected() { return ui('Codex 已连接') },
+  get disconnected() { return ui('连接已断开') },
+  get unavailable() { return ui('Codex 不可用') },
 }
 
 let replyBreathSyncFrame: number | null = null
@@ -184,6 +186,11 @@ function syncReplyBreatheOnMount(element: HTMLElement | null) {
 
 const TerminalDialog = lazy(() => import('./TerminalDialog').then(({ TerminalDialog: component }) => ({ default: component })))
 
+function openSettingsSelectMenu() {
+  if (typeof HTMLElement === 'undefined' || typeof HTMLElement.prototype.showPopover !== 'function') return null
+  return document.querySelector<HTMLElement>('.theme-settings-panel .translation-select__menu:popover-open')
+}
+
 type ChatEngine = 'codex' | 'claude-code'
 type ChoiceReplyDelivery = 'sent' | 'queued' | 'unverified'
 type ComposerHeightMemory = Partial<Record<ChatEngine, { height: number; manuallyResized: boolean }>>
@@ -235,18 +242,20 @@ function PixelThemeIcon({ name, theme }: { name: PixelThemeIconName; theme: AppT
 }
 
 function WelcomeTypingTitle({ text }: { text: string }) {
+  useUiLanguage()
+  const localizedText = ui(text)
   const [visibleText, setVisibleText] = useState('')
   const [cursorVisible, setCursorVisible] = useState(true)
 
   useEffect(() => {
-    const characters = Array.from(text)
+    const characters = Array.from(localizedText)
     let index = 0
     let completedBlinks = 0
     let showCursor = true
     let timer = 0
 
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-      setVisibleText(text)
+      setVisibleText(localizedText)
       setCursorVisible(false)
       return
     }
@@ -279,10 +288,10 @@ function WelcomeTypingTitle({ text }: { text: string }) {
 
     timer = window.setTimeout(typeNext, 160)
     return () => window.clearTimeout(timer)
-  }, [text])
+  }, [localizedText])
 
   return (
-    <h1 aria-label={text}>
+    <h1 aria-label={localizedText}>
       <span aria-hidden="true">{visibleText}</span>
       <span className="welcome-state__cursor" aria-hidden="true">{cursorVisible ? '_' : '\u00a0'}</span>
     </h1>
@@ -302,16 +311,13 @@ function shouldUseDarkStatusBarIcons(preferences: ThemePreferences) {
   return relativeLuminance >= 0.179
 }
 
-const threadTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit' })
-const threadDateFormatter = new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric' })
-const messageTimestampFormatter = new Intl.DateTimeFormat('zh-CN', {
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hourCycle: 'h23',
-})
+const dateFormatters = Object.fromEntries((['zh-CN', 'en'] as const).map((locale) => [locale, {
+  threadTime: new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit' }),
+  threadDate: new Intl.DateTimeFormat(locale, { month: 'numeric', day: 'numeric' }),
+  messageTimestamp: new Intl.DateTimeFormat(locale, {
+    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+  }),
+}])) as Record<UiLanguage, { threadTime: Intl.DateTimeFormat; threadDate: Intl.DateTimeFormat; messageTimestamp: Intl.DateTimeFormat }>
 const imageTypes = new Set<CodexImageAttachment['mediaType']>(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const imageMediaTypesByExtension: Record<string, CodexImageAttachment['mediaType']> = {
   png: 'image/png',
@@ -328,7 +334,7 @@ const longPasteThreshold = 4_000
 function formatMessageTimestamp(value: string | undefined) {
   if (!value) return null
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? null : messageTimestampFormatter.format(date)
+  return Number.isNaN(date.getTime()) ? null : dateFormatters[getUiLanguage()].messageTimestamp.format(date)
 }
 
 function formatTurnDuration(durationMs: number) {
@@ -336,9 +342,9 @@ function formatTurnDuration(durationMs: number) {
   const hours = Math.floor(totalSeconds / 3600)
   const minutes = Math.floor((totalSeconds % 3600) / 60)
   const seconds = totalSeconds % 60
-  if (hours > 0) return `${hours}小时${minutes}分${seconds}秒`
-  if (minutes > 0) return `${minutes}分${seconds}秒`
-  return `${seconds}秒`
+  if (hours > 0) return uiFormat('{0}小时{1}分{2}秒', hours, minutes, seconds)
+  if (minutes > 0) return uiFormat('{0}分{1}秒', minutes, seconds)
+  return uiFormat('{0}秒', seconds)
 }
 const workspaceTreeMaxEntries = 400
 const workspaceExplorerWidthStorageKey = 'codex-remote.workspace-explorer-width'
@@ -809,11 +815,12 @@ function modelIdOf(model: CodexModel) {
 }
 
 function modelLabelOf(model: CodexModel) {
-  return model.displayName || modelIdOf(model) || '未命名模型'
+  return model.displayName || modelIdOf(model) || ui('未命名模型')
 }
 
 function effortLabelOf(effort: string) {
-  return ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' } as Record<string, string>)[effort] ?? effort
+  const known = ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' } as Record<string, string>)[effort]
+  return known ? ui(known) : effort
 }
 
 function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachment['mediaType'] | null {
@@ -828,13 +835,13 @@ function isImageAttachmentFile(file: Pick<File, 'name' | 'type'>) {
 }
 
 const approvalPolicyOptions: Array<{ value: CodexApprovalPolicy; label: string }> = [
-  { value: 'on-request', label: '请求批准' },
-  { value: 'untrusted', label: '帮我批准' },
-  { value: 'never', label: '完全访问' },
+  { value: 'on-request', get label() { return ui('请求批准') } },
+  { value: 'untrusted', get label() { return ui('帮我批准') } },
+  { value: 'never', get label() { return ui('完全访问') } },
 ]
 
 const defaultClaudeModelOptions = [
-  { value: 'default', label: '本机默认模型' },
+  { value: 'default', get label() { return ui('本机默认模型') } },
   { value: 'fable', label: 'Claude Fable' },
   { value: 'opus', label: 'Claude Opus' },
   { value: 'sonnet', label: 'Claude Sonnet' },
@@ -842,21 +849,21 @@ const defaultClaudeModelOptions = [
 ]
 
 const claudeEffortOptions = [
-  { value: 'default', label: '本机默认' },
-  { value: 'low', label: '低' },
-  { value: 'medium', label: '中' },
-  { value: 'high', label: '高' },
-  { value: 'xhigh', label: '极高' },
-  { value: 'max', label: '最大' },
+  { value: 'default', get label() { return ui('本机默认') } },
+  { value: 'low', get label() { return ui('低') } },
+  { value: 'medium', get label() { return ui('中') } },
+  { value: 'high', get label() { return ui('高') } },
+  { value: 'xhigh', get label() { return ui('极高') } },
+  { value: 'max', get label() { return ui('最大') } },
 ]
 
 const claudePermissionModeOptions: Array<{ value: ClaudeCodePermissionMode; label: string }> = [
-  { value: 'default', label: '本机默认权限' },
-  { value: 'manual', label: '手动确认' },
-  { value: 'acceptEdits', label: '自动接受编辑' },
-  { value: 'auto', label: '自动模式' },
-  { value: 'dontAsk', label: '不询问（拒绝需授权操作）' },
-  { value: 'plan', label: '计划模式' },
+  { value: 'default', get label() { return ui('本机默认权限') } },
+  { value: 'manual', get label() { return ui('手动确认') } },
+  { value: 'acceptEdits', get label() { return ui('自动接受编辑') } },
+  { value: 'auto', get label() { return ui('自动模式') } },
+  { value: 'dontAsk', get label() { return ui('不询问（拒绝需授权操作）') } },
+  { value: 'plan', get label() { return ui('计划模式') } },
 ]
 
 function readImage(file: File): Promise<CodexImageAttachment> {
@@ -929,7 +936,7 @@ function optimizeThemeBackgroundImage(file: File): Promise<string> {
 }
 
 function titleOf(thread: CodexThread) {
-  const title = thread.name || thread.preview || '新对话'
+  const title = thread.name || thread.preview || ui('新对话')
   return title.length > 72 ? `${title.slice(0, 69)}…` : title
 }
 
@@ -942,8 +949,8 @@ function timeOf(thread: CodexThread) {
   if (Number.isNaN(date.getTime())) return ''
   const today = new Date()
   return date.toDateString() === today.toDateString()
-    ? threadTimeFormatter.format(date)
-    : threadDateFormatter.format(date)
+    ? dateFormatters[getUiLanguage()].threadTime.format(date)
+    : dateFormatters[getUiLanguage()].threadDate.format(date)
 }
 
 function localDateTimeInputValue(date: Date) {
@@ -955,7 +962,7 @@ function scheduledTimeLabel(value?: string) {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
+  return new Intl.DateTimeFormat(getUiLanguage(), { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(date)
 }
 
 interface ComposerMenuOption {
@@ -1058,6 +1065,7 @@ function ComposerMenu({
   portalTheme: AppTheme
   portalThemeStyle: CSSProperties
 }) {
+  useUiLanguage()
   const root = useRef<HTMLDivElement>(null)
   const popover = useRef<HTMLDivElement>(null)
   const composerFocusBeforeOpen = useRef<HTMLElement | null>(null)
@@ -1088,8 +1096,8 @@ function ComposerMenu({
         className="composer-menu__trigger"
         type="button"
         disabled={disabled}
-        aria-label={`${label}，当前值：${selected?.label ?? emptyLabel}${temporary ? '，仅本次' : ''}`}
-        title={`${selected?.label ?? emptyLabel}${temporary ? ' · 本次' : ''}`}
+        aria-label={uiFormat("{0}，当前值：{1}{2}", label, selected?.label ?? emptyLabel, temporary ? ui('，仅本次') : '')}
+        title={`${selected?.label ?? emptyLabel}${temporary ? ui(' · 本次') : ''}`}
         aria-haspopup="listbox"
         aria-expanded={open}
         onPointerDown={(event) => {
@@ -1103,7 +1111,7 @@ function ComposerMenu({
         }}
         onClick={() => onOpenChange(!open)}
       >
-        <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ' · 本次' : ''}</span>
+        <span className="composer-menu__value">{selected?.label ?? emptyLabel}{temporary ? ui(' · 本次') : ''}</span>
       </button>
       {open ? createPortal(
         <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
@@ -1304,6 +1312,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   createThreadDisabled,
   createThreadTitle,
 }, ref) {
+  useUiLanguage()
   const composerEngine: ChatEngine = showCodexPreferences ? 'codex' : 'claude-code'
   const activeTranslation = readTranslationPreferencesIfAvailable() ?? translation
   const translationProfileId = selectedTranslationProfileId(activeTranslation)
@@ -1908,7 +1917,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       aria-checked={temporaryPreferences} disabled={!canConfigure}
       onPointerDown={(event) => event.preventDefault()}
       onClick={() => onTemporaryPreferencesChange(!temporaryPreferences)}>
-      <span className="composer-menu__option-copy"><strong>仅本次</strong><small>发送后恢复原模型和思考等级</small></span>
+      <span className="composer-menu__option-copy"><strong>{ui("仅本次")}</strong><small>{ui("发送后恢复原模型和思考等级")}</small></span>
       {temporaryPreferences ? <Check size={14} aria-hidden="true" /> : null}
     </button>
   )
@@ -1955,7 +1964,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   const fileChangeSummaryTotals = fileChangeSummary ? (
     <>
       <FileText size={12} aria-hidden="true" />
-      <span>{fileChangeSummary.files.length} 个文件已更改</span>
+      <span>{fileChangeSummary.files.length} {ui("个文件已更改")}</span>
       {fileChangeSummary.additions > 0 || fileChangeSummary.deletions > 0 ? (
         <span className="composer-file-change-summary__stats"><i>+{fileChangeSummary.additions}</i><em>-{fileChangeSummary.deletions}</em></span>
       ) : null}
@@ -2562,34 +2571,34 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
   }
 
   const preferenceMenus = showCodexPreferences ? <>
-    <ComposerMenu label="模型" value={composerSelectedModel} options={modelOptions} emptyLabel="读取模型…" disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label="思考" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label={approvalPolicyUpdating ? '授权更新中' : '授权'} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel="请求批准" disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("模型")} value={composerSelectedModel} options={modelOptions} emptyLabel={ui("读取模型…")} disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel={ui("默认")} disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={approvalPolicyUpdating ? ui('授权更新中') : ui('授权')} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel={ui("请求批准")} disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </> : <>
-    <ComposerMenu label="Claude 模型" value={composerSelectedModel} options={claudeModelOptions} emptyLabel="本机默认模型" disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label="思考等级" value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="本机默认" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label="权限模式" value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel="本机默认权限" disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("Claude 模型")} value={composerSelectedModel} options={claudeModelOptions} emptyLabel={ui("本机默认模型")} disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel={ui("本机默认")} disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("权限模式")} value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel={ui("本机默认权限")} disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </>
 
   return (
     <div className="composer-dock">
       {fileChangeSummary && fileChangeSummary.files.length > 0 ? (
-        <div className={`composer-file-change-summary${fileChangeSummaryExpanded ? ' composer-file-change-summary--expanded' : ''}`} aria-live="polite" aria-label={`${fileChangeSummary.files.length} 个文件已更改，新增 ${fileChangeSummary.additions} 行，删除 ${fileChangeSummary.deletions} 行`}>
+        <div className={`composer-file-change-summary${fileChangeSummaryExpanded ? ' composer-file-change-summary--expanded' : ''}`} aria-live="polite" aria-label={uiFormat("{0} 个文件已更改，新增 {1} 行，删除 {2} 行", fileChangeSummary.files.length, fileChangeSummary.additions, fileChangeSummary.deletions)}>
           {mobileLayout ? (
             <button
               className="composer-file-change-summary__toggle"
               type="button"
               aria-expanded={fileChangeSummaryExpanded}
               aria-controls="composer-file-change-files"
-              aria-label={`${fileChangeSummary.files.length} 个文件已更改，${fileChangeSummaryExpanded ? '收起' : '展开'}文件明细`}
-              title={fileChangeSummaryExpanded ? '收起文件明细' : '查看文件明细'}
+              aria-label={uiFormat("{0} 个文件已更改，{1}文件明细", fileChangeSummary.files.length, fileChangeSummaryExpanded ? ui('收起') : ui('展开'))}
+              title={fileChangeSummaryExpanded ? ui('收起文件明细') : ui('查看文件明细')}
               onClick={() => setExpandedFileChangesKey(fileChangeSummaryExpanded ? null : fileChangeSummaryKey)}
             >
               {fileChangeSummaryTotals}
               <ChevronDown size={14} aria-hidden="true" />
             </button>
           ) : fileChangeSummaryTotals}
-          <span id="composer-file-change-files" className="composer-file-change-summary__files" aria-label="各文件增删行数">
+          <span id="composer-file-change-files" className="composer-file-change-summary__files" aria-label={ui("各文件增删行数")}>
             {fileChangeSummary.files.map((file) => {
               const fileName = file.path.split(/[\\/]/).at(-1) || file.path
               const hasStats = file.additions > 0 || file.deletions > 0
@@ -2606,7 +2615,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       {reserveFileChangeSummarySpace && !mobileLayout && (!fileChangeSummary || fileChangeSummary.files.length === 0) ? (
         <div className="composer-file-change-summary composer-file-change-summary--placeholder" aria-hidden="true">
           <FileText size={12} />
-          <span>1 个文件已更改</span>
+          <span>{ui("1 个文件已更改")}</span>
           <span className="composer-file-change-summary__stats"><i>+1</i><em>-1</em></span>
         </div>
       ) : null}
@@ -2620,35 +2629,35 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
       <span className="message-composer__breath" data-reply-breath-layer aria-hidden="true" />
       {editingQueuedMessageId ? (
         <div className="composer-edit-bar">
-          <span>正在修改排队消息</span>
-          <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label="取消修改排队消息" title="取消修改排队消息"><X size={15} /></button>
+          <span>{ui("正在修改排队消息")}</span>
+          <button className="composer-edit-cancel" type="button" onClick={cancelQueuedEdit} disabled={sending} aria-label={ui("取消修改排队消息")} title={ui("取消修改排队消息")}><X size={15} /></button>
         </div>
       ) : null}
       {attachedImages.length > 0 ? (
-        <div className="composer-images" aria-label="待发送图片">
-          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><ImagePreviewButton src={`data:${image.mediaType};base64,${image.data}`} name={image.name} /><button className="composer-image__remove" type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={`移除图片 ${image.name}`}><X size={12} /></button></span>)}
+        <div className="composer-images" aria-label={ui("待发送图片")}>
+          {attachedImages.map((image, index) => <span className="composer-image" key={`${image.name}-${index}`}><ImagePreviewButton src={`data:${image.mediaType};base64,${image.data}`} name={image.name} /><button className="composer-image__remove" type="button" onClick={() => updateAttachedImages(attachedImagesRef.current.filter((_, currentIndex) => currentIndex !== index))} aria-label={uiFormat("移除图片 {0}", image.name)}><X size={12} /></button></span>)}
         </div>
       ) : null}
-      {attachmentError ? <p className="attachment-error" role="alert">{attachmentError}</p> : null}
-      {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在读取图片…</p> : null}
-      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />正在处理文档附件…</p> : null}
+      {attachmentError ? <p className="attachment-error" role="alert">{uiMessage(attachmentError)}</p> : null}
+      {readingImages ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{ui("正在读取图片…")}</p> : null}
+      {readingDocuments ? <p className="attachment-reading" role="status"><LoaderCircle className="spin" size={13} />{ui("正在处理文档附件…")}</p> : null}
       {attachedDocuments.some((document) => document.name !== 'pasted-table.md' || document.sourceFileId) ? (
-        <div className="composer-documents" aria-label="待发送文档">
+        <div className="composer-documents" aria-label={ui("待发送文档")}>
           {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId ? null : (
             <div className="composer-document" key={`${document.name}-${index}`}>
               <FileText size={16} />
-              <span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 将读取原件' : `${document.content.length.toLocaleString()} 个字符 · 已提取文字`}</small></span>
+              <span><strong>{document.name}</strong><small>{document.sourceFileId ? ui('原始文件 · Codex 将读取原件') : uiFormat("{0} 个字符 · 已提取文字", document.content.length.toLocaleString())}</small></span>
               <button type="button" disabled={readingDocuments} onClick={() => {
                 const next = attachedDocumentsRef.current.filter((_, currentIndex) => currentIndex !== index)
                 attachedDocumentsRef.current = next
                 setAttachedDocuments(next)
-              }} aria-label={`移除文档 ${document.name}`}><X size={13} /></button>
+              }} aria-label={uiFormat("移除文档 {0}", document.name)}><X size={13} /></button>
             </div>
           ))}
         </div>
       ) : null}
       {attachedDocuments.some((document) => document.name === 'pasted-table.md' && !document.sourceFileId) ? (
-        <div className="composer-tables" aria-label="待发送表格">
+        <div className="composer-tables" aria-label={ui("待发送表格")}>
           {attachedDocuments.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
             ? <PastedTablePreview key={`${editingQueuedMessageId ?? 'draft'}-${document.name}-${index}`} content={document.content} disabled={readingDocuments || sending} onChange={(content) => {
                 const next = [...attachedDocumentsRef.current]
@@ -2668,26 +2677,26 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         {stableQueueHeight ? (
           <div className="composer-input-stack__sizer" aria-hidden="true">
             <div className="composer-queue composer-queue--collapsed">
-              <div className="composer-queue__heading"><span>已排队 1 条</span><ChevronDown size={14} /></div>
+              <div className="composer-queue__heading"><span>{ui("已排队 1 条")}</span><ChevronDown size={14} /></div>
             </div>
             <div className="composer-editor" style={{ height: `${composerHeight}px` }} />
           </div>
         ) : null}
         <div className="composer-input-stack__body">
       {queuedMessages.length > 0 ? (
-        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条消息`}>
+        <div className={`composer-queue${queuedMessagesExpanded ? ' composer-queue--expanded' : ' composer-queue--collapsed'}`} aria-live="polite" aria-label={uiFormat("{0} {1} 条消息", submittingQueuedMessageId ? ui('待处理') : ui('已排队'), queuedMessages.length)}>
           <button
             className="composer-queue__heading"
             type="button"
             aria-expanded={queuedMessagesExpanded}
             aria-controls="composer-queue-list"
-            aria-label={`${submittingQueuedMessageId ? '待处理' : '已排队'} ${queuedMessages.length} 条，${queuedMessagesExpanded ? '收起内容' : '展开内容'}`}
+            aria-label={uiFormat("{0} {1} 条，{2}", submittingQueuedMessageId ? ui('待处理') : ui('已排队'), queuedMessages.length, queuedMessagesExpanded ? ui('收起内容') : ui('展开内容'))}
             aria-keyshortcuts="Control+ArrowUp Control+ArrowDown"
-            title="Ctrl+↑ 展开 · Ctrl+↓ 收起"
+            title={ui("Ctrl+↑ 展开 · Ctrl+↓ 收起")}
             onClick={() => setQueuedMessagesExpanded((expanded) => !expanded)}
           >
-            <span>{submittingQueuedMessageId ? '待处理' : '已排队'} {queuedMessages.length} 条</span>
-            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? '编辑期间暂停 · 结束后继续队列' : sendingQueuedId ? '正在发送排队消息' : queuedMessages[0]?.sendAttempt ? '有消息送达待核对' : submittingQueuedMessageId ? '正在确认送达' : queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? '回复结束后依次发送；点“插队”沿用当前轮次设置立即发送' : 'Claude 当前不支持运行中插队，回复结束后依次发送' : '等待电脑端自动发送')}</small> : null}
+            <span>{submittingQueuedMessageId ? ui('待处理') : ui('已排队')} {queuedMessages.length} {ui("条")}</span>
+            {queuedMessagesExpanded ? <small>{editingQueuedMessageId || queuedMessages[0]?.editing ? ui('编辑期间暂停 · 结束后继续队列') : sendingQueuedId ? ui('正在发送排队消息') : queuedMessages[0]?.sendAttempt ? ui('有消息送达待核对') : submittingQueuedMessageId ? ui('正在确认送达') : uiMessage(queuedMessages[0]?.blockedReason ?? (isRunning ? showCodexPreferences ? ui('回复结束后依次发送；点“插队”沿用当前轮次设置立即发送') : ui('Claude 当前不支持运行中插队，回复结束后依次发送') : ui('等待电脑端自动发送')))}</small> : null}
             <ChevronDown size={14} aria-hidden="true" />
           </button>
           <div id="composer-queue-list" className="composer-queue__list" hidden={!queuedMessagesExpanded}>
@@ -2720,8 +2729,8 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
                       : index > 0 ? '优先按这条消息保存的模型和思考等级开始新一轮，其余消息留在队列中'
                         : '按消息保存的模型和思考等级开始新一轮'
               const attachmentSummary = [
-                message.images.length > 0 ? `${message.images.length} 张图片` : '',
-                message.documents?.length ? `${message.documents.length} 个文档` : '',
+                message.images.length > 0 ? uiFormat('{0} 张图片', message.images.length) : '',
+                message.documents?.length ? uiFormat('{0} 个文档', message.documents.length) : '',
               ].filter(Boolean).join(' · ')
               const summary = [activeTranslation.enabled && activeTranslation.showTranslated ? message.text : message.originalText ?? message.text, attachmentSummary].filter(Boolean).join(' · ')
               const scheduledLabel = scheduledTimeLabel(message.scheduledAt)
@@ -2737,18 +2746,18 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               return (
                 <div className={`composer-queue__item${isEditing ? ' composer-queue__item--editing' : ''}`} key={message.id}>
                   <span className="composer-queue__index">{index + 1}</span>
-                  <span className="composer-queue__copy"><strong>{summary}</strong><small title={translationFailed ? message.translationError : undefined}>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{queueStatus}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
-                  <span className="composer-queue__order" role="group" aria-label={`调整第 ${index + 1} 条发送顺序`}>
-                    <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={`上移第 ${index + 1} 条排队消息`} title="上移一位"><ArrowUp size={14} /></button>
-                    <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={`下移第 ${index + 1} 条排队消息`} title="下移一位"><ArrowDown size={14} /></button>
+                  <span className="composer-queue__copy"><strong>{summary}</strong><small title={translationFailed && message.translationError ? uiMessage(message.translationError) : undefined}>{queuedPreferencesLabel ? `${queuedPreferencesLabel} · ` : ''}{uiMessage(queueStatus)}</small>{message.images.length > 0 ? <span className="composer-queue__images">{message.images.map((image, imageIndex) => <ImagePreviewButton key={`${image.name}-${imageIndex}`} className="composer-queue__image" src={`data:${image.mediaType};base64,${image.data}`} name={image.name} />)}</span> : null}</span>
+                  <span className="composer-queue__order" role="group" aria-label={uiFormat("调整第 {0} 条发送顺序", index + 1)}>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveUp} onClick={() => previousMessage && void moveQueuedMessage(message.id, previousMessage.id, 'up')} aria-label={uiFormat("上移第 {0} 条排队消息", index + 1)} title={ui("上移一位")}><ArrowUp size={14} /></button>
+                    <button className="composer-queue__move" type="button" disabled={!canMoveDown} onClick={() => nextMessage && void moveQueuedMessage(message.id, nextMessage.id, 'down')} aria-label={uiFormat("下移第 {0} 条排队消息", index + 1)} title={ui("下移一位")}><ArrowDown size={14} /></button>
                   </span>
-                  <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? '消息正在提交，请稍候' : deliveryUnverified ? '请先核对这条消息是否已发送' : message.editing ? '解除其它设备的编辑暂停' : '在输入框中编辑排队消息'}>
-                    <Pencil size={14} /><span>{isEditing ? '编辑中' : message.editing ? '解除编辑' : '编辑'}</span>
+                  <button className="composer-queue__edit" type="button" disabled={queueLocked || isSubmitting || deliveryUnverified} onClick={() => message.editing ? void onEndQueuedEdit(message.id) : void beginQueuedEdit(message)} title={isSubmitting ? ui('消息正在提交，请稍候') : deliveryUnverified ? ui('请先核对这条消息是否已发送') : message.editing ? ui('解除其它设备的编辑暂停') : ui('在输入框中编辑排队消息')}>
+                    <Pencil size={14} /><span>{isEditing ? ui('编辑中') : message.editing ? ui('解除编辑') : ui('编辑')}</span>
                   </button>
-                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending || (!translationFailed && waitingForClaude)} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={sendTitle}>
-                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? '翻译中' : translationFailed ? '重试翻译' : sendMode === 'steer' ? '插队' : '发送'}</span>
+                  <button className="composer-queue__send" type="button" disabled={queueLocked || sendingNow || isSubmitting || deliveryUnverified || message.editing || translationPending || (!translationFailed && waitingForClaude)} onClick={() => translationFailed ? void onRetryQueuedTranslation(message.id) : void sendQueuedNow(message.id, sendMode)} title={uiMessage(sendTitle)}>
+                    {sendingNow ? <LoaderCircle className="spin" size={14} /> : translationFailed ? <RotateCcw size={14} /> : translationPending ? <LoaderCircle className="spin" size={14} /> : <ArrowUp size={14} />}<span>{translationPending ? ui('翻译中') : translationFailed ? ui('重试翻译') : sendMode === 'steer' ? ui('插队') : ui('发送')}</span>
                   </button>
-                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label="删除排队消息" title={isSubmitting ? '消息正在提交，请稍候' : '删除这条排队消息'}><X size={13} /><span>删除</span></button>
+                  <button className="composer-queue__remove" type="button" disabled={queueLocked || sendingNow || isSubmitting || message.editing} onClick={() => void onRemoveQueued(message.id)} aria-label={ui("删除排队消息")} title={isSubmitting ? ui('消息正在提交，请稍候') : ui('删除这条排队消息')}><X size={13} /><span>{ui("删除")}</span></button>
                 </div>
               )
             })}
@@ -2756,15 +2765,15 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
         </div>
       ) : null}
       {activeTranslation.enabled && containsChinese(draft) ? <div className="composer-translation-preview" aria-live="polite">
-        <strong>英文发送预览</strong>
+        <strong>{ui("英文发送预览")}</strong>
         {translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.text
           ? <p>{translationPreview.text}</p>
           : translationPreview?.key === `${translationRevision}:${activeTranslation.provider}:${translationProfileId ?? 'default'}:${activeTranslation.style}:${draft.trim()}` && translationPreview.error
-            ? <p className="composer-translation-preview__error">{translationPreview.error}</p>
-            : <p>正在翻译最新内容…</p>}
+            ? <p className="composer-translation-preview__error">{uiMessage(translationPreview.error)}</p>
+            : <p>{ui("正在翻译最新内容…")}</p>}
       </div> : null}
       <div className="composer-editor" style={{ height: `${composerHeight}px` }}>
-        <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label="调整输入框高度" title="上下拖动调整输入框高度"><ChevronsUpDown size={14} /></button>
+        <button className="composer-resize" type="button" onPointerDown={startComposerResize} aria-label={ui("调整输入框高度")} title={ui("上下拖动调整输入框高度")}><ChevronsUpDown size={14} /></button>
         <textarea
           ref={composer}
           data-chat-composer
@@ -2784,13 +2793,13 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               requestComposerKeyboard()
             }
           }}
-          placeholder={editingQueuedMessageId ? '编辑排队消息…' : `给${showCodexPreferences ? ' Codex' : ' Claude Code'}发送消息…`}
-          aria-label={editingQueuedMessageId ? '编辑排队消息' : `发送消息给${showCodexPreferences ? ' Codex' : ' Claude Code'}`}
+          placeholder={editingQueuedMessageId ? ui('编辑排队消息…') : uiFormat("给{0}发送消息…", showCodexPreferences ? ' Codex' : ' Claude Code')}
+          aria-label={editingQueuedMessageId ? ui('编辑排队消息') : uiFormat("发送消息给{0}", showCodexPreferences ? ' Codex' : ' Claude Code')}
           aria-keyshortcuts={[
             stableQueueHeight ? 'Control+ArrowLeft Control+ArrowRight' : '',
             editingQueuedMessageId ? '' : 'Control+Enter',
           ].filter(Boolean).join(' ') || undefined}
-          title={`${editingQueuedMessageId ? 'Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter' : showCodexPreferences ? 'Ctrl+Enter 立即发送；回复时插队' : 'Ctrl+Enter 立即发送；Claude 回复中暂不支持插队'}${stableQueueHeight ? '；Ctrl+←/→ 切换并发窗口' : ''}`}
+          title={`${editingQueuedMessageId ? ui('Enter 确认编辑；请先结束编辑再使用 Ctrl+Enter') : showCodexPreferences ? ui('Ctrl+Enter 立即发送；回复时插队') : ui('Ctrl+Enter 立即发送；Claude 回复中暂不支持插队')}${stableQueueHeight ? ui('；Ctrl+←/→ 切换并发窗口') : ''}`}
           inputMode="text"
           enterKeyHint="send"
         />
@@ -2802,55 +2811,55 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
           <button className="composer-new-thread-button" type="button" onClick={onCreateThread} disabled={createThreadDisabled} aria-label={createThreadTitle} title={createThreadTitle}><MessageSquarePlus size={17} aria-hidden="true" /></button>
           <div className={`composer-preferences${mobileLayout ? ' composer-preferences--mobile' : ''}`} ref={mobileSettingsRoot}>
             {mobileLayout ? <>
-              <button ref={mobileSettingsToggle} className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? '关闭对话设置' : '打开对话设置'} aria-expanded={mobileSettingsExpanded}>
+              <button ref={mobileSettingsToggle} className="composer-new-thread-button composer-settings-toggle" type="button" onClick={toggleMobileSettings} aria-label={mobileSettingsExpanded ? ui('关闭对话设置') : ui('打开对话设置')} aria-expanded={mobileSettingsExpanded}>
                 {mobileSettingsExpanded ? <X size={18} aria-hidden="true" /> : <Menu size={18} aria-hidden="true" />}
               </button>
               {mobileSettingsExpanded ? createPortal(
                 <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
-                  <div ref={mobileSettingsPanel} className="composer-menu__popover composer-menu__popover--floating composer-preferences__mobile-panel" role="group" aria-label="对话设置" data-mobile-settings-owner={mobileSettingsOwner} style={mobileSettingsPosition ?? { visibility: 'hidden' }}>
+                  <div ref={mobileSettingsPanel} className="composer-menu__popover composer-menu__popover--floating composer-preferences__mobile-panel" role="group" aria-label={ui("对话设置")} data-mobile-settings-owner={mobileSettingsOwner} style={mobileSettingsPosition ?? { visibility: 'hidden' }}>
                     <div className="composer-preferences__controls">{preferenceMenus}</div>
                   </div>
                 </div>,
                 document.body,
               ) : null}
             </> : <div className="composer-preferences__controls">{preferenceMenus}</div>}
-            <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? '正在恢复待发送图片…' : editingQueuedMessageId ? 'Enter 确定 · Shift+Enter 换行' : continuationPending ? '继续会另起一轮；再次 Esc 取消续接' : 'Enter 发送 · Shift+Enter 换行'}</span>
+            <span className="composer-hint">{imagesReady ? <ShieldCheck size={14} /> : <LoaderCircle className="spin" size={14} />}{!imagesReady ? ui('正在恢复待发送图片…') : editingQueuedMessageId ? ui('Enter 确定 · Shift+Enter 换行') : continuationPending ? ui('继续会另起一轮；再次 Esc 取消续接') : ui('Enter 发送 · Shift+Enter 换行')}</span>
           </div>
         </div>
         <div className="composer-actions">
-          <button ref={scheduleButton} className="composer-new-thread-button composer-schedule-toggle" type="button" onClick={toggleSchedulePanel} disabled={!canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} aria-label="定时发送" title="定时发送">
+          <button ref={scheduleButton} className="composer-new-thread-button composer-schedule-toggle" type="button" onClick={toggleSchedulePanel} disabled={!canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} aria-label={ui("定时发送")} title={ui("定时发送")}>
             <CalendarClock size={16} aria-hidden="true" />
           </button>
-          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? '正在处理附件' : mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'}>
+          <span className={`attach-button attach-button--native${canAttachFiles ? '' : ' attach-button--disabled'}`} title={readingDocuments || readingImages ? ui('正在处理附件') : mobileLayout ? ui('附加图片、文档或源码文件') : ui('附加文档或源码文件')}>
             {readingDocuments || readingImages ? <LoaderCircle className="spin" size={16} /> : <Plus size={17} />}
-            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? '附加图片、文档或源码文件' : '附加文档或源码文件'} />
+            <input className="image-input" type="file" accept={attachmentAcceptForLayout(mobileLayout)} multiple disabled={!canAttachFiles} onChange={(event) => { void attachSelectedFiles(Array.from(event.currentTarget.files ?? [])); event.currentTarget.value = '' }} aria-label={mobileLayout ? ui('附加图片、文档或源码文件') : ui('附加文档或源码文件')} />
           </span>
-          {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />刷新状态</button> : null}
+          {writerConflict && !editingQueuedMessageId ? <button className="stop-button" type="button" onClick={onRefresh}><RefreshCw size={13} />{ui("刷新状态")}</button> : null}
           {(!writerConflict || editingQueuedMessageId) ? (
             <button
               className={`send-button${isRunning && !stopWithSendButton ? ' send-button--queue' : ''}${editingQueuedMessageId ? ' send-button--confirm' : ''}${stopWithSendButton ? ' send-button--interrupt' : ''}${continueWithSendButton ? ' send-button--continue' : ''}${!editingQueuedMessageId && !stopWithSendButton && !continueWithSendButton ? ' send-button--arrow' : ''}`}
               type={stopWithSendButton || continueWithSendButton ? 'button' : 'submit'}
               onClick={stopWithSendButton ? onInterrupt : continueWithSendButton ? onContinue : undefined}
               disabled={stopWithSendButton ? isInterrupting : continueWithSendButton ? !canContinue : !canSend}
-              aria-label={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? '将消息加入发送队列' : '发送消息'}
-              title={stopWithSendButton ? (isInterrupting ? '正在中断回复' : showCodexPreferences ? '暂时中断回复，之后可继续' : '停止回复') : continueWithSendButton ? (canContinue ? '继续刚才中断的任务（新一轮）' : '当前无法继续，请稍后重试') : editingQueuedMessageId ? '确定编辑消息' : isRunning ? showCodexPreferences ? '加入发送队列；Ctrl+Enter 插队' : '加入发送队列' : '发送消息；Ctrl+Enter 立即发送'}
+              aria-label={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? ui('将消息加入发送队列') : ui('发送消息')}
+              title={stopWithSendButton ? (isInterrupting ? ui('正在中断回复') : showCodexPreferences ? ui('暂时中断回复，之后可继续') : ui('停止回复')) : continueWithSendButton ? (canContinue ? ui('继续刚才中断的任务（新一轮）') : ui('当前无法继续，请稍后重试')) : editingQueuedMessageId ? ui('确定编辑消息') : isRunning ? showCodexPreferences ? ui('加入发送队列；Ctrl+Enter 插队') : ui('加入发送队列') : ui('发送消息；Ctrl+Enter 立即发送')}
             >
               {sending || (!imagesReady && !stopWithSendButton) || (stopWithSendButton && isInterrupting)
                 ? <LoaderCircle className="spin" size={16} />
-                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>继续</span></> : <ArrowUp size={16} />}
+                : editingQueuedMessageId ? <Check size={15} /> : stopWithSendButton ? <Pause size={15} /> : continueWithSendButton ? <><RotateCcw size={16} /><span>{ui("继续")}</span></> : <ArrowUp size={16} />}
             </button>
           ) : null}
         </div>
       </div>
       {schedulePanelOpen ? createPortal(
         <div className={`composer-portal-theme remote-shell--theme-${portalTheme}`} style={{ ...portalThemeStyle, display: 'contents' }}>
-          <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label="定时发送" style={schedulePanelPosition ?? { visibility: 'hidden' }}>
-            <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>发送时间</label>
+          <div ref={schedulePanel} className="composer-menu__popover composer-menu__popover--floating composer-schedule-panel" role="dialog" aria-label={ui("定时发送")} style={schedulePanelPosition ?? { visibility: 'hidden' }}>
+            <label className="composer-schedule-panel__label" htmlFor={scheduleDateTimeInputId}>{ui("发送时间")}</label>
             <input id={scheduleDateTimeInputId} className="composer-schedule-panel__input" type="datetime-local" min={localDateTimeInputValue(new Date())} value={scheduleDateTime} onChange={(event) => setScheduleDateTime(event.currentTarget.value)} />
-            <small>本地时间；无会话时先创建，到点自动发送。</small>
+            <small>{ui("本地时间；无会话时先创建，到点自动发送。")}</small>
             <div className="composer-schedule-panel__actions">
-              <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>取消</button>
-              <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>加入排队</button>
+              <button className="composer-schedule-panel__button" type="button" onClick={() => setSchedulePanelOpen(false)}>{ui("取消")}</button>
+              <button className="composer-schedule-panel__button composer-schedule-panel__button--primary" type="button" disabled={!scheduleDateTime || !canCompose || !canSend || Boolean(editingQueuedMessageId) || readingImages || readingDocuments || !imagesReady} onClick={submitScheduledMessage}>{ui("加入排队")}</button>
             </div>
           </div>
         </div>,
@@ -3030,6 +3039,7 @@ function shouldAutoFocusComposer() {
 }
 
 const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '当前窗口', theme, themePreferences, engine, cwd, threadId, canBindThreadWorkspace, onBindDirectory, previewRequest, previewContainerRef, onPreviewStateChange, draft, onInsertPath, onAddToTerminal, onRunInTerminal, onAddDocument, mobileOpen, mobileDragging, onOpenMobile, onCloseMobile, panelRef }: WorkspaceExplorerProps) {
+  useUiLanguage()
   const [manualRoot, setManualRoot] = useState<string | null>(readWorkspaceExplorerRoot)
   const [rootInput, setRootInput] = useState(() => readWorkspaceExplorerRoot() ?? cwd ?? '')
   const [directories, setDirectories] = useState<Record<string, CodexWorkspaceTree>>({})
@@ -3124,7 +3134,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
   }, [onOpenMobile, onPreviewStateChange])
   const closePreview = useCallback(() => {
     if (previewSaving) return
-    if (previewDirty && !window.confirm('文件有未保存的修改，确定放弃并关闭吗？')) return
+    if (previewDirty && !window.confirm(ui('文件有未保存的修改，确定放弃并关闭吗？'))) return
     clearPreview()
   }, [clearPreview, previewDirty, previewSaving])
   const forceClosePreview = useCallback(() => {
@@ -3159,7 +3169,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 
   const loadPreview = useCallback(async (path: string, requestedCwd: string | undefined, diff?: string, kind: 'text' | 'image' = 'text', viewedByCodexThreadId?: string) => {
     if (previewSaving) return
-    if (previewDirty && !window.confirm('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？')) return
+    if (previewDirty && !window.confirm(ui('文件有未保存的修改，继续操作会放弃这些修改。确定继续吗？'))) return
     if (!previewReturnFocus.current && document.activeElement instanceof HTMLElement) {
       previewReturnFocus.current = document.activeElement
     }
@@ -3238,7 +3248,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
 
   function cancelPreviewEditing() {
     if (previewSaving) return
-    if (previewDirty && !window.confirm('确定放弃当前未保存的修改吗？')) return
+    if (previewDirty && !window.confirm(ui('确定放弃当前未保存的修改吗？'))) return
     setPreviewEditContent(null)
     setPreviewError(null)
   }
@@ -3661,7 +3671,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
         setMutationError('文件正在保存，请稍后再操作')
         return
       }
-      if (previewDirty && !window.confirm('当前预览有未保存修改，继续会放弃这些修改。确定继续吗？')) return
+      if (previewDirty && !window.confirm(ui('当前预览有未保存修改，继续会放弃这些修改。确定继续吗？'))) return
     }
     setMutationSaving(true)
     setMutationError(null)
@@ -3714,7 +3724,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
         setError('文件正在保存，请稍后再移动')
         return
       }
-      if (previewDirty && !window.confirm('当前预览有未保存修改，移动会放弃这些修改。确定继续吗？')) return
+      if (previewDirty && !window.confirm(ui('当前预览有未保存修改，移动会放弃这些修改。确定继续吗？'))) return
     }
     setContextMenu(null)
     setError(null)
@@ -3848,11 +3858,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
               <span className="workspace-explorer__entry-name">{entry.name}</span>
               {!isDirectory ? <small>{sizeLabel(entry.size)}</small> : null}
             </button>
-            {!alreadyAdded ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(absolutePath, !mobileOpen) }} aria-label={`加入输入框 ${entry.name}`} title="加入输入框"><Plus size={14} /></button> : null}
+            {!alreadyAdded ? <button className="workspace-explorer__add" type="button" onClick={(event) => { event.stopPropagation(); onInsertPath(absolutePath, !mobileOpen) }} aria-label={uiFormat("加入输入框 {0}", entry.name)} title={ui("加入输入框")}><Plus size={14} /></button> : null}
           </div>
           {isDirectory && isOpen ? (
             loadingPaths[directoryKey(entry.path)]
-              ? <div className="workspace-explorer__loading" style={{ paddingLeft: `${37 + depth * 14}px` }}><LoaderCircle className="spin" size={12} />读取中…</div>
+              ? <div className="workspace-explorer__loading" style={{ paddingLeft: `${37 + depth * 14}px` }}><LoaderCircle className="spin" size={12} />{ui("读取中…")}</div>
               : renderDirectory(entry.path, depth + 1)
           ) : null}
         </Fragment>
@@ -3870,7 +3880,7 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
           onClick={() => void loadDirectory(path, tree.nextOffset ?? 0)}
         >
           {loadingPaths[directoryKey(path)] ? <LoaderCircle className="spin" size={12} /> : <ChevronDown size={12} />}
-          {loadingPaths[directoryKey(path)] ? '继续读取…' : '加载更多'}
+          {loadingPaths[directoryKey(path)] ? ui('继续读取…') : ui('加载更多')}
         </button>,
       )
     }
@@ -3956,32 +3966,32 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
     : 0
   return (
     <>
-      <aside id="workspace-explorer-panel" ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label="工作区文件资源管理器" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
-        <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label="选择要上传到工作区的本机文件" />
+      <aside id="workspace-explorer-panel" ref={panelRef} className={`workspace-explorer${mobileOpen || mobileDragging ? ' workspace-explorer--mobile-open' : ''}${mobileDragging ? ' workspace-explorer--dragging' : ''}${uploadProgress ? ' workspace-explorer--uploading' : ''}`} aria-label={ui("工作区文件资源管理器")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !mobileDragging) event.currentTarget.style.removeProperty('--workspace-drag-offset') }}>
+        <input ref={uploadInput} className="workspace-explorer__upload-input" type="file" multiple onChange={handleWorkspaceUploadSelection} aria-label={ui("选择要上传到工作区的本机文件")} />
         <header className="workspace-explorer__header">
-          <div><span className="workspace-explorer__eyebrow">{eyebrow}</span><strong>文件</strong></div>
+          <div><span className="workspace-explorer__eyebrow">{ui(eyebrow)}</span><strong>{ui("文件")}</strong></div>
           <div className="workspace-explorer__header-actions">
-            <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label="新建或管理文件" title="新建或管理文件"><FilePlus2 size={15} /></button>
-            <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={!browsingRoot || Boolean(uploadProgress)} aria-label="上传本机文件到当前根目录" title="上传本机文件到当前根目录"><Upload size={15} /></button>
-            <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label="刷新文件目录" title="刷新当前目录和已展开文件夹"><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
-            <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label="关闭文件窗口" title="关闭文件窗口"><X size={16} /></button>
+            <button className="icon-button" type="button" onClick={openRootMenuFromButton} disabled={!browsingRoot} aria-label={ui("新建或管理文件")} title={ui("新建或管理文件")}><FilePlus2 size={15} /></button>
+            <button className="icon-button" type="button" onClick={() => chooseWorkspaceUpload('')} disabled={!browsingRoot || Boolean(uploadProgress)} aria-label={ui("上传本机文件到当前根目录")} title={ui("上传本机文件到当前根目录")}><Upload size={15} /></button>
+            <button className="icon-button" type="button" onClick={refreshVisibleDirectories} disabled={!browsingRoot || rootLoading} aria-label={ui("刷新文件目录")} title={ui("刷新当前目录和已展开文件夹")}><RefreshCw className={rootLoading ? 'spin' : undefined} size={14} /></button>
+            <button className="icon-button workspace-explorer__close" type="button" onClick={onCloseMobile} aria-label={ui("关闭文件窗口")} title={ui("关闭文件窗口")}><X size={16} /></button>
           </div>
         </header>
         <div className="workspace-explorer__root">
           <form className="workspace-explorer__root-form" onSubmit={(event) => { event.preventDefault(); bindRoot() }}>
             <input
-              aria-label="服务端目录路径"
-              title={browsingRoot ?? '输入后端主机上的目录路径'}
+              aria-label={ui("服务端目录路径")}
+              title={browsingRoot ?? ui('输入后端主机上的目录路径')}
               value={rootInput}
               onChange={(event) => setRootInput(event.currentTarget.value)}
-              placeholder="输入服务端目录路径"
+              placeholder={ui("输入服务端目录路径")}
               spellCheck={false}
             />
-            <button className="workspace-explorer__root-open" type="submit" title="绑定并打开目录"><FolderOpen size={13} /><span>打开</span></button>
+            <button className="workspace-explorer__root-open" type="submit" title={ui("绑定并打开目录")}><FolderOpen size={13} /><span>{ui("打开")}</span></button>
           </form>
           <div className="workspace-explorer__root-actions">
-            <button type="button" onClick={goToParentDirectory} disabled={!browsingRoot || workspaceParentPath(browsingRoot) === browsingRoot} title="浏览上级目录"><ArrowUp size={12} />上级</button>
-            <button type="button" onClick={() => followChatDirectory()} disabled={!manualRoot} title="恢复跟随当前聊天的工作目录"><RotateCcw size={12} />跟随聊天</button>
+            <button type="button" onClick={goToParentDirectory} disabled={!browsingRoot || workspaceParentPath(browsingRoot) === browsingRoot} title={ui("浏览上级目录")}><ArrowUp size={12} />{ui("上级")}</button>
+            <button type="button" onClick={() => followChatDirectory()} disabled={!manualRoot} title={ui("恢复跟随当前聊天的工作目录")}><RotateCcw size={12} />{ui("跟随聊天")}</button>
           </div>
         </div>
         <div className="workspace-explorer__body">
@@ -3998,23 +4008,23 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
               })
             }}
           >
-            {!browsingRoot ? <p className="workspace-explorer__empty">还没有聊天工作目录，可以输入服务端路径打开文件夹。</p> : null}
-            {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />读取文件目录…</div> : null}
-            {error ? <p className="workspace-explorer__error" role="alert">{error}</p> : null}
+            {!browsingRoot ? <p className="workspace-explorer__empty">{ui("还没有聊天工作目录，可以输入服务端路径打开文件夹。")}</p> : null}
+            {rootLoading && !directories['.'] ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{ui("读取文件目录…")}</div> : null}
+            {error ? <p className="workspace-explorer__error" role="alert">{uiMessage(error)}</p> : null}
             {browsingRoot && directories['.'] ? renderDirectory('', 0) : null}
-            {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">此目录条目较多，可在列表底部继续加载。</p> : null}
+            {browsingRoot && directories['.']?.truncated ? <p className="workspace-explorer__hint">{ui("此目录条目较多，可在列表底部继续加载。")}</p> : null}
           </div>
         </div>
-        <footer className={`workspace-explorer__footer${uploadProgress ? ' workspace-explorer__footer--uploading' : ''}`} aria-live={uploadProgress ? 'off' : 'polite'} title={uploadProgress?.name ?? uploadNotice ?? '右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'}>{uploadProgress ? <>
-          <div className="workspace-explorer__upload-heading"><span>上传 {uploadProgress.completed + 1}/{uploadProgress.total} · {uploadProgress.name}</span><strong>{uploadPercent}%</strong></div>
-          <div className="workspace-explorer__upload-detail">{uploadProgress.confirming ? '已发送，等待服务器确认…' : `已发送 ${sizeLabel(uploadProgress.loaded)} / ${sizeLabel(uploadProgress.size)}`}</div>
-          <div className="workspace-explorer__upload-track" role="progressbar" aria-label={`${uploadProgress.name} 上传进度`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadPercent} aria-valuetext={uploadProgress.confirming ? '已发送，等待服务器确认' : `已发送 ${sizeLabel(uploadProgress.loaded)} / ${sizeLabel(uploadProgress.size)}`}><span style={{ width: `${uploadPercent}%` }} /></div>
-        </> : <span>{uploadNotice ?? (workspaceClipboard ? `${workspaceClipboard.mode === 'copy' ? '已复制' : '已剪切'} ${workspaceClipboard.paths.length} 项 · 在文件夹右键粘贴` : '右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴')}</span>}</footer>
+        <footer className={`workspace-explorer__footer${uploadProgress ? ' workspace-explorer__footer--uploading' : ''}`} aria-live={uploadProgress ? 'off' : 'polite'} title={uploadProgress?.name ?? (uploadNotice ? uiMessage(uploadNotice) : ui('右键文件夹可上传本机文件；选中文件夹后可按 Ctrl/⌘+V 粘贴浏览器能读取的本机文件'))}>{uploadProgress ? <>
+          <div className="workspace-explorer__upload-heading"><span>{ui("上传")} {uploadProgress.completed + 1}/{uploadProgress.total} · {uploadProgress.name}</span><strong>{uploadPercent}%</strong></div>
+          <div className="workspace-explorer__upload-detail">{uploadProgress.confirming ? ui('已发送，等待服务器确认…') : uiFormat("已发送 {0} / {1}", sizeLabel(uploadProgress.loaded), sizeLabel(uploadProgress.size))}</div>
+          <div className="workspace-explorer__upload-track" role="progressbar" aria-label={uiFormat("{0} 上传进度", uploadProgress.name)} aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadPercent} aria-valuetext={uploadProgress.confirming ? ui('已发送，等待服务器确认') : uiFormat("已发送 {0} / {1}", sizeLabel(uploadProgress.loaded), sizeLabel(uploadProgress.size))}><span style={{ width: `${uploadPercent}%` }} /></div>
+        </> : <span>{uploadNotice ? uiMessage(uploadNotice) : (workspaceClipboard ? uiFormat("{0} {1} 项 · 在文件夹右键粘贴", workspaceClipboard.mode === 'copy' ? ui('已复制') : ui('已剪切'), workspaceClipboard.paths.length) : ui('右键文件夹可上传本机文件 · Ctrl/⌘+V 可粘贴'))}</span>}</footer>
       </aside>
       {previewPath && previewPortalTarget ? createPortal(
         <ChatOverlayPanel
-          ariaLabel={previewKind === 'image' ? '工作区图片预览' : '工作区文件预览'}
-          backdropLabel="关闭文件预览"
+          ariaLabel={previewKind === 'image' ? ui('工作区图片预览') : ui('工作区文件预览')}
+          backdropLabel={ui("关闭文件预览")}
           ariaModal={mobilePreviewDialog || undefined}
           className="workspace-file-preview-panel"
           closeButtonRef={previewCloseButton}
@@ -4044,13 +4054,13 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             <div className="workspace-file-preview-panel__heading">
               <WorkspaceFileTypeIcon path={previewImage?.path ?? previewFile?.path ?? previewPath} size={19} />
               <span className="workspace-file-preview-panel__heading-copy">
-                <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? '图片预览' : previewEditContent === null ? (previewDiff ? '差异预览' : '只读预览') : '编辑文件'}</span>
+                <span className="workspace-explorer__eyebrow">{previewKind === 'image' ? ui('图片预览') : previewEditContent === null ? (previewDiff ? ui('差异预览') : ui('只读预览')) : ui('编辑文件')}</span>
                 <strong title={previewImage?.path ?? previewFile?.path ?? previewPath}>{(previewImage?.path ?? previewFile?.path ?? previewPath).split(/[\\/]/).at(-1) || previewPath}</strong>
               </span>
             </div>
           )}
           footer={(
-            <span className="workspace-file-preview-panel__footer">{previewSaving ? '正在保存到本机工作区…' : previewImage ? `${sizeLabel(previewImage.size)} · ${previewImage.mediaType}` : previewEditContent !== null ? (previewDirty ? '有未保存修改 · Ctrl/⌘+S 保存' : '编辑中 · 未修改') : previewDiffStats ? `新增 ${previewDiffStats.additions} 行 · 删除 ${previewDiffStats.deletions} 行` : previewFile ? `${previewLines.length} 行 · UTF-8 文本` : previewKind === 'image' ? '图片预览' : 'UTF-8 文本'}</span>
+            <span className="workspace-file-preview-panel__footer">{previewSaving ? ui('正在保存到本机工作区…') : previewImage ? `${sizeLabel(previewImage.size)} · ${previewImage.mediaType}` : previewEditContent !== null ? (previewDirty ? ui('有未保存修改 · Ctrl/⌘+S 保存') : ui('编辑中 · 未修改')) : previewDiffStats ? uiFormat("新增 {0} 行 · 删除 {1} 行", previewDiffStats.additions, previewDiffStats.deletions) : previewFile ? uiFormat("{0} 行 · UTF-8 文本", previewLines.length) : previewKind === 'image' ? ui('图片预览') : ui('UTF-8 文本')}</span>
           )}
         >
           <section className="workspace-file-preview">
@@ -4058,26 +4068,26 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
               <code title={previewImage?.path ?? previewFile?.path ?? previewPath}>{previewImage?.path ?? previewFile?.path ?? previewPath}</code>
               <div>
                 {previewKind !== 'image' && previewEditContent === null ? (
-                  <button className="workspace-file-preview__copy" type="button" onClick={beginPreviewEditing} disabled={!previewFile || previewLoading || previewSaving} title="编辑并保存文件"><Pencil size={13} />编辑</button>
+                  <button className="workspace-file-preview__copy" type="button" onClick={beginPreviewEditing} disabled={!previewFile || previewLoading || previewSaving} title={ui("编辑并保存文件")}><Pencil size={13} />{ui("编辑")}</button>
                 ) : previewKind !== 'image' ? (
                   <>
-                    <button className="workspace-file-preview__copy" type="button" onClick={() => void savePreviewEdits()} disabled={!previewDirty || previewSaving} title="保存到本机工作区">{previewSaving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}保存</button>
-                    <button className="workspace-file-preview__copy" type="button" onClick={cancelPreviewEditing} disabled={previewSaving} title="取消编辑">取消</button>
+                    <button className="workspace-file-preview__copy" type="button" onClick={() => void savePreviewEdits()} disabled={!previewDirty || previewSaving} title={ui("保存到本机工作区")}>{previewSaving ? <LoaderCircle className="spin" size={13} /> : <Check size={13} />}{ui("保存")}</button>
+                    <button className="workspace-file-preview__copy" type="button" onClick={cancelPreviewEditing} disabled={previewSaving} title={ui("取消编辑")}>{ui("取消")}</button>
                   </>
                 ) : null}
-                {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title="复制文件内容"><Copy size={13} />{previewCopied ? '已复制' : '复制'}</button> : null}
-                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind, previewViewedByCodexThreadId ?? undefined)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? '重新读取图片' : '重新读取文件'} title={previewKind === 'image' ? '重新读取图片' : '重新读取文件'}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
+                {previewKind !== 'image' ? <button className="workspace-file-preview__copy" type="button" onClick={() => void copyPreview()} disabled={!previewFile} title={ui("复制文件内容")}><Copy size={13} />{previewCopied ? ui('已复制') : ui('复制')}</button> : null}
+                {previewEditContent === null ? <button className="icon-button" type="button" onClick={() => void loadPreview(previewPath, previewCwd, previewDiff ?? undefined, previewKind, previewViewedByCodexThreadId ?? undefined)} disabled={previewLoading || previewSaving} aria-label={previewKind === 'image' ? ui('重新读取图片') : ui('重新读取文件')} title={previewKind === 'image' ? ui('重新读取图片') : ui('重新读取文件')}><RefreshCw className={previewLoading ? 'spin' : undefined} size={14} /></button> : null}
               </div>
             </div>
-            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? '读取图片…' : '读取文件内容…'}</div> : null}
-            {previewError ? <p className="workspace-explorer__error" role="alert">{previewError}</p> : null}
+            {previewLoading ? <div className="workspace-explorer__loading"><LoaderCircle className="spin" size={13} />{previewKind === 'image' ? ui('读取图片…') : ui('读取文件内容…')}</div> : null}
+            {previewError ? <p className="workspace-explorer__error" role="alert">{uiMessage(previewError)}</p> : null}
             {previewImage ? (
               <div className="workspace-image-preview"><img src={`data:${previewImage.mediaType};base64,${previewImage.data}`} alt={previewImage.path} /></div>
             ) : previewEditContent !== null && previewFile ? (
               <textarea
                 ref={previewEditor}
                 className="workspace-file-preview__editor"
-                aria-label={`编辑文件 ${previewFile.path}`}
+                aria-label={uiFormat("编辑文件 {0}", previewFile.path)}
                 value={previewEditContent}
                 spellCheck={false}
                 autoCapitalize="off"
@@ -4118,29 +4128,29 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
       ) : null}
       {contextMenu && typeof document !== 'undefined' ? createPortal(
         <div ref={contextMenuElement} className={`thread-context-menu workspace-file-context-menu${theme === 'retro' ? ' workspace-file-context-menu--retro' : ''} remote-shell--theme-${theme}${theme === 'light' ? ' workspace-file-context-menu--light' : ''}`} style={{ ...portalThemeStyle, left: contextMenu.x, top: contextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()} onPaste={handleWorkspacePaste}>
-          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? ` · 已选 ${contextMenu.paths.length} 项` : ''}</div>
+          <div className="workspace-file-context-menu__name" title={contextMenu.entry.path}>{contextMenu.entry.name}{contextMenu.paths.length > 1 ? uiFormat(" · 已选 {0} 项", contextMenu.paths.length) : ''}</div>
           {contextMenuHasQuickActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--primary">
-            <span className="workspace-file-context-menu__group-label">快捷操作</span>
-            {contextMenuCanBind ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />绑定当前聊天到此目录</ShortcutContextMenuButton> : null}
-            {contextMenuCanOpenTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />添加到终端</ShortcutContextMenuButton> : null}
-            {contextMenuCanRunInTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />终端运行</ShortcutContextMenuButton> : null}
-            {contextMenuMissingDraftPaths.length > 0 ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />加入输入框</ShortcutContextMenuButton> : null}
+            <span className="workspace-file-context-menu__group-label">{ui("快捷操作")}</span>
+            {contextMenuCanBind ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={!canBindThreadWorkspace} onClick={() => void bindDirectoryToCurrentThread()}><FolderOpen size={14} />{ui("绑定当前聊天到此目录")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanOpenTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onAddToTerminal(path) }}><TerminalIcon size={14} />{ui("添加到终端")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanRunInTerminal ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { const path = workspaceAbsolutePath(browsingRoot, contextMenu.entry.path); setContextMenu(null); onRunInTerminal(path) }}><Play size={14} />{ui("终端运行")}</ShortcutContextMenuButton> : null}
+            {contextMenuMissingDraftPaths.length > 0 ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => { setContextMenu(null); onInsertPath(contextMenuMissingDraftPaths.join('\n'), !mobileOpen) }}><EngineBrandIcon engine={engine} size={14} />{ui("加入输入框")}</ShortcutContextMenuButton> : null}
           </div> : null}
           {contextMenuCanCreate ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--create">
-            <span className="workspace-file-context-menu__group-label">新建</span>
-            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />新建文件</ShortcutContextMenuButton>
-            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />新建文件夹</ShortcutContextMenuButton>
+            <span className="workspace-file-context-menu__group-label">{ui("新建")}</span>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('file')}><FilePlus2 size={14} />{ui("新建文件")}</ShortcutContextMenuButton>
+            <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => startWorkspaceCreate('directory')}><FolderPlus size={14} />{ui("新建文件夹")}</ShortcutContextMenuButton>
           </div> : null}
           {contextMenuHasFileActions ? <div className="workspace-file-context-menu__group workspace-file-context-menu__group--manage">
-            <span className="workspace-file-context-menu__group-label">文件操作</span>
-            {contextMenuCanRename ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={startWorkspaceRename}><Pencil size={14} />重命名</ShortcutContextMenuButton> : null}
-            {contextMenuCanCopy ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />复制{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
-            {contextMenuCanCut ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />剪切{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
-            {contextMenuCanDownload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void downloadWorkspaceFile()}><Download size={14} />文件下载</ShortcutContextMenuButton> : null}
-            {contextMenuCanPaste ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />粘贴到此处</ShortcutContextMenuButton> : null}
-            {contextMenuCanUpload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />上传文件</ShortcutContextMenuButton> : null}
+            <span className="workspace-file-context-menu__group-label">{ui("文件操作")}</span>
+            {contextMenuCanRename ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={startWorkspaceRename}><Pencil size={14} />{ui("重命名")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanCopy ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('copy')}><Copy size={14} />{ui("复制")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanCut ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => rememberWorkspaceEntries('move')}><Scissors size={14} />{ui("剪切")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
+            {contextMenuCanDownload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void downloadWorkspaceFile()}><Download size={14} />{ui("文件下载")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanPaste ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} onClick={() => void pasteWorkspaceEntries()}><ClipboardPaste size={14} />{ui("粘贴到此处")}</ShortcutContextMenuButton> : null}
+            {contextMenuCanUpload ? <ShortcutContextMenuButton shortcut={nextContextMenuShortcut()} disabled={Boolean(uploadProgress)} onClick={() => chooseWorkspaceUpload(contextMenu.entry.path)}><Upload size={14} />{ui("上传文件")}</ShortcutContextMenuButton> : null}
           </div> : null}
-          {contextMenuCanDelete ? <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger workspace-file-context-menu__delete" onClick={startWorkspaceDelete}><Trash2 size={14} />删除{contextMenu.paths.length > 1 ? ` ${contextMenu.paths.length} 项` : ''}</ShortcutContextMenuButton> : null}
+          {contextMenuCanDelete ? <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger workspace-file-context-menu__delete" onClick={startWorkspaceDelete}><Trash2 size={14} />{ui("删除")}{contextMenu.paths.length > 1 ? uiFormat(" {0} 项", contextMenu.paths.length) : ''}</ShortcutContextMenuButton> : null}
         </div>,
         document.body,
       ) : null}
@@ -4150,21 +4160,21 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
             <div className="thread-rename-dialog__heading">
               {mutationDialog.action === 'delete' ? (
                 <>
-                  <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="workspace-mutation-title">删除所选内容</h2></div>
-                  <p>将永久删除所选内容，非空文件夹也会一并删除。此操作无法恢复。</p>
+                  <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="workspace-mutation-title">{ui("删除所选内容")}</h2></div>
+                  <p>{ui("将永久删除所选内容，非空文件夹也会一并删除。此操作无法恢复。")}</p>
                 </>
               ) : (
                 <>
-                  <h2 id="workspace-mutation-title">{mutationDialog.action === 'rename' ? '重命名' : mutationDialog.kind === 'directory' ? '新建文件夹' : '新建文件'}</h2>
-                  <p>{mutationDialog.action === 'rename' ? '请输入新的文件或文件夹名称。' : `将在 ${mutationDialog.parentPath || '当前根目录'} 中创建。`}</p>
+                  <h2 id="workspace-mutation-title">{mutationDialog.action === 'rename' ? ui('重命名') : mutationDialog.kind === 'directory' ? ui('新建文件夹') : ui('新建文件')}</h2>
+                  <p>{mutationDialog.action === 'rename' ? ui('请输入新的文件或文件夹名称。') : uiFormat("将在 {0} 中创建。", mutationDialog.parentPath || '当前根目录')}</p>
                 </>
               )}
             </div>
             {mutationDialog.action === 'delete' ? (
-              <div className="thread-delete-dialog__thread" title={mutationDialog.paths.join('\n')}>{mutationDialog.paths.length === 1 ? mutationDialog.paths[0] : `${mutationDialog.paths[0]} 等 ${mutationDialog.paths.length} 项`}</div>
+              <div className="thread-delete-dialog__thread" title={mutationDialog.paths.join('\n')}>{mutationDialog.paths.length === 1 ? mutationDialog.paths[0] : uiFormat("{0} 等 {1} 项", mutationDialog.paths[0], mutationDialog.paths.length)}</div>
             ) : (
               <>
-                <label htmlFor="workspace-mutation-input">名称</label>
+                <label htmlFor="workspace-mutation-input">{ui("名称")}</label>
                 <input
                   id="workspace-mutation-input"
                   type="text"
@@ -4187,11 +4197,11 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
                 />
               </>
             )}
-            {mutationError ? <p className="thread-rename-dialog__error" id="workspace-mutation-error" role="alert">{mutationError}</p> : null}
+            {mutationError ? <p className="thread-rename-dialog__error" id="workspace-mutation-error" role="alert">{uiMessage(mutationError)}</p> : null}
             <div className={`thread-rename-dialog__actions${mutationDialog.action === 'delete' ? ' thread-delete-dialog__actions' : ''}`}>
-              <button type="button" onClick={closeWorkspaceMutation} disabled={mutationSaving}>取消</button>
+              <button type="button" onClick={closeWorkspaceMutation} disabled={mutationSaving}>{ui("取消")}</button>
               <button type="submit" disabled={mutationSaving || (mutationDialog.action !== 'delete' && !mutationDialog.value.trim())}>
-                {mutationSaving ? <><LoaderCircle className="spin" size={14} />处理中</> : mutationDialog.action === 'delete' ? <><Trash2 size={14} />确认删除</> : '确定'}
+                {mutationSaving ? <><LoaderCircle className="spin" size={14} />{ui("处理中")}</> : mutationDialog.action === 'delete' ? <><Trash2 size={14} />{ui("确认删除")}</> : ui('确定')}
               </button>
             </div>
           </form>
@@ -4206,18 +4216,18 @@ const WorkspaceExplorer = memo(function WorkspaceExplorer({ token, eyebrow = '�
           role="menu"
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} · 第 {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} 行</div>
+          <div className="workspace-file-context-menu__name" title={selectionContextMenu.path}>{selectionContextMenu.path} {ui("· 第")} {selectionContextMenu.startLine}{selectionContextMenu.endLine !== selectionContextMenu.startLine ? `–${selectionContextMenu.endLine}` : ''} {ui("行")}</div>
           <textarea
             className="workspace-selection-context-menu__note"
-            aria-label="选区备注"
-            placeholder="写下这段代码需要修改什么…（可选）"
+            aria-label={ui("选区备注")}
+            placeholder={ui("写下这段代码需要修改什么…（可选）")}
             value={selectionContextMenu.note}
             onChange={(event) => {
               const note = event.currentTarget.value
               setSelectionContextMenu((current) => current ? { ...current, note } : current)
             }}
           />
-          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />添加到对话</button>
+          <button type="button" role="menuitem" onClick={addSelectedCodeAsDocument}><FileText size={14} />{ui("添加到对话")}</button>
         </div>,
         document.body,
       ) : null}
@@ -4282,6 +4292,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
   copyFeedback,
   onCopy,
 }: RemoteChatPaneProps) {
+  useUiLanguage()
   const activeThreadId = remote.activeThread?.id ?? null
   const [translatedInputs, setTranslatedInputs] = useState<{ threadId: string; messages: TranslatedInput[] } | null>(null)
   const latestUserMarker = useMemo(() => {
@@ -4464,7 +4475,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
     ? remote.threads.find((thread) => thread.id === approvalThreadId)
       ?? (remote.activeThread?.id === approvalThreadId ? remote.activeThread : null)
     : null
-  const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? '其他对话' : null
+  const approvalSource = approvalThread ? titleOf(approvalThread) : approvalThreadId ? ui('其他对话') : null
   const [messageWindow, setMessageWindow] = useState(() => recentTurnMessageWindow(activeThreadId ?? null, remote.messages))
   const visibleStartIndex = visibleTurnMessageStart(messageWindow, activeThreadId ?? null, remote.messages)
   const visibleMessages = useMemo(() => remote.messages.slice(visibleStartIndex), [remote.messages, visibleStartIndex])
@@ -4711,9 +4722,9 @@ const RemoteChatPane = memo(function RemoteChatPane({
     if (forceMessageStreamBottomTimer.current !== undefined) window.clearTimeout(forceMessageStreamBottomTimer.current)
   }, [])
 
-  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : '新对话'
+  const activeTitle = remote.activeThread ? titleOf(remote.activeThread) : ui('新对话')
   const currentConnectionLabel = remote.handedOff
-    ? '已交还给本机'
+    ? ui('已交还给本机')
     : connectionLabel[remote.connection]
   const activeEngineLabel = remote.activeEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const assistantModelOptions = useMemo<ComposerMenuOption[]>(() => remote.activeEngine === 'claude-code'
@@ -4726,8 +4737,8 @@ const RemoteChatPane = memo(function RemoteChatPane({
   const targetEngineLabel = targetEngine === 'claude-code' ? 'Claude Code' : 'Codex'
   const claudeCodeUnavailable = targetEngine === 'claude-code' && claudeCodeAvailable === false
   const engineSwitchLabel = claudeCodeUnavailable
-    ? 'Claude Code 不可用'
-    : `切换到 ${targetEngineLabel} 聊天`
+    ? ui('Claude Code 不可用')
+    : uiFormat('切换到 {0} 聊天', targetEngineLabel)
   let streamingAssistant: CodexMessage | undefined
   for (let index = remote.messages.length - 1; index >= 0; index -= 1) {
     const message = remote.messages[index]
@@ -4778,8 +4789,8 @@ const RemoteChatPane = memo(function RemoteChatPane({
       {showActiveFrame ? <span className="conversation-pane__breath" data-pane-border-breath-layer aria-hidden="true" ref={active && isPaneReplying ? syncReplyBreatheOnMount : undefined} onAnimationStart={(event) => { if (event.animationName === 'pane-border-breathe') scheduleReplyBreatheSync() }} /> : null}
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
-          <button className="icon-button menu-button" type="button" aria-label="打开对话列表" onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{`${activeEngineLabel} · 当前工作区`}</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || '本机项目'}</span></div>
+          <button className="icon-button menu-button" type="button" aria-label={ui("打开对话列表")} onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
+          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{uiFormat("{0} · 当前工作区", activeEngineLabel)}</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || ui('本机项目')}</span></div>
         </div>
         <div className="remote-chat__controls">
           <button
@@ -4804,8 +4815,8 @@ const RemoteChatPane = memo(function RemoteChatPane({
           <button
             className={`icon-button terminal-open-button${terminalVisible ? ' terminal-open-button--active' : ''}`}
             type="button"
-            aria-label={terminalVisible ? '关闭本机终端' : '打开本机终端'}
-            title={terminalVisible ? '关闭本机终端' : '本机终端'}
+            aria-label={terminalVisible ? ui('关闭本机终端') : ui('打开本机终端')}
+            title={terminalVisible ? ui('关闭本机终端') : ui('本机终端')}
             onClick={(event) => {
               event.stopPropagation()
               if (terminalVisible) {
@@ -4826,8 +4837,8 @@ const RemoteChatPane = memo(function RemoteChatPane({
           >
             {terminalVisible ? <X size={16} /> : <TerminalIcon size={16} />}
           </button>
-          <button className="icon-button mobile-workspace-button" type="button" aria-label="打开文件树" title="打开文件树" onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
-          {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label="关闭并发窗口" title="关闭并发窗口"><X size={15} /></button> : null}
+          <button className="icon-button mobile-workspace-button" type="button" aria-label={ui("打开文件树")} title={ui("打开文件树")} onClick={(event) => { event.stopPropagation(); onOpenWorkspace() }}><Folder size={17} /></button>
+          {showPaneClose ? <button className="icon-button pane-close-button" type="button" onClick={(event) => { event.stopPropagation(); onClose() }} aria-label={ui("关闭并发窗口")} title={ui("关闭并发窗口")}><X size={15} /></button> : null}
         </div>
       </header>
 
@@ -4844,17 +4855,17 @@ const RemoteChatPane = memo(function RemoteChatPane({
         onKeyDownCapture={handleMessageKeyDown}
         onPointerDownCapture={handleMessagePointerDown}
         aria-live="polite"
-        aria-label={`${activeTitle} ${activeEngineLabel} 对话`}
+        aria-label={uiFormat("{0} {1} 对话", activeTitle, activeEngineLabel)}
       >
         <div className={`message-stream__content${remote.messages.length === 0 && !remote.loadingHistory ? ' message-stream__content--welcome' : ''}${remote.loadingHistory && remote.messages.length === 0 ? ' message-stream__content--loading' : ''}`} ref={messageContent}>
-          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>已交还给本机 Codex</strong><span>网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。</span></div> : null}
+          {remote.handedOff ? <div className="handoff-notice" role="status"><strong>{ui("已交还给本机 Codex")}</strong><span>{ui("网页端已停止持有会话，也不会自动重新连接。请在本机 Codex 中继续；需要回到网页时再点“重新接管”。")}</span></div> : null}
           {remote.messages.length === 0 && !remote.loadingHistory ? (
             <div className="welcome-state">
               <WelcomeTypingTitle text={remote.activeEngine === 'claude-code' ? '与 Claude Code 完成一个伟大项目' : '与 Codex 完成一个伟大项目'} />
             </div>
           ) : null}
-          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />正在加载对话…</div> : null}
-          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>查看更早对话（还有 {visibleStartIndex} 条消息）</button> : null}
+          {remote.loadingHistory && remote.messages.length === 0 ? <div className="loading-state"><LoaderCircle className="spin" size={18} />{ui("正在加载对话…")}</div> : null}
+          {visibleStartIndex > 0 ? <button className="message-stream__older" type="button" onClick={loadEarlierMessages}>{ui("查看更早对话（还有")} {visibleStartIndex} {ui("条消息）")}</button> : null}
           {visibleMessages.map((message, visibleIndex) => {
             const index = visibleStartIndex + visibleIndex
             const turnComplete = !message.streaming && message.turnId !== remote.runningTurnId
@@ -4919,7 +4930,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
         className="approval-modal"
         role="dialog"
         aria-modal="true"
-        aria-label="Codex 授权请求"
+        aria-label={ui("Codex 授权请求")}
         tabIndex={-1}
         onKeyDown={(event) => {
           if (event.key !== 'Escape') return
@@ -4941,26 +4952,26 @@ const RemoteChatPane = memo(function RemoteChatPane({
           onRespond={remote.respondToApproval}
         />
       </div> : null}
-      {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label="回到底部" title="回到底部"><ChevronDown size={16} /><span>回到底部</span></button> : null}
+      {showScrollToBottom ? <button className="scroll-to-bottom" type="button" onClick={scrollToBottom} aria-label={ui("回到底部")} title={ui("回到底部")}><ChevronDown size={16} /><span>{ui("回到底部")}</span></button> : null}
       {remote.error ? (
         <div className="remote-error" role="alert">
-          <AlertTriangle size={15} /><span>{remote.error}</span>
-          {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />新建远程对话</button> : null}
+          <AlertTriangle size={15} /><span>{uiMessage(remote.error)}</span>
+          {remote.writerConflict ? <button type="button" onClick={onCreateThread} disabled={remote.connection !== 'connected' || remote.loadingHistory}><Plus size={13} />{ui("新建远程对话")}</button> : null}
         </div>
       ) : null}
       {terminalMounted && terminalMountedThreadId === activeThreadId ? (
         <TerminalRecoveryBoundary key={terminalSessionIsolated ? `run-${terminalSessionId}` : activeThreadId ?? 'no-thread'} onClose={closeTerminal} hidden={!terminalVisible}>
           <Suspense fallback={(
             <ChatOverlayPanel
-              ariaLabel="本机终端"
-              backdropLabel="关闭本机终端"
+              ariaLabel={ui("本机终端")}
+              backdropLabel={ui("关闭本机终端")}
               className="terminal-dialog"
               onClose={closeTerminal}
               hidden={!terminalVisible}
               showCloseButton={false}
-              header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>本机终端</strong></div>}
+              header={<div className="terminal-dialog__title"><TerminalIcon size={16} aria-hidden="true" /><strong>{ui("本机终端")}</strong></div>}
             >
-              <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />正在加载终端…</div>
+              <div className="chat-overlay-panel__loading"><LoaderCircle className="spin" size={18} />{ui("正在加载终端…")}</div>
             </ChatOverlayPanel>
           )}>
             <TerminalDialog
@@ -4985,6 +4996,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
 })
 
 export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferences, onThemePreferencesChange: setThemePreferences }: Props) {
+  useUiLanguage()
   const [initialPaneLayout] = useState(readPersistedPaneLayout)
   const [openPaneIndexes, setOpenPaneIndexes] = useState<number[]>(initialPaneLayout?.openPaneIndexes ?? [0])
   const [selectedPaneIndex, setSelectedPaneIndex] = useState(initialPaneLayout?.selectedPaneIndex ?? 0)
@@ -5822,6 +5834,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     const closeOnDesktopEscape = (event: globalThis.KeyboardEvent) => {
       if (event.key !== 'Escape' || event.isComposing || event.keyCode === 229) return
       if (isMobileLayout()) return
+      if (openSettingsSelectMenu()) return
       event.preventDefault()
       event.stopPropagation()
       closeSettingsPanel()
@@ -5873,6 +5886,12 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   useLayoutEffect(() => {
     const handleBack = () => {
+      const selectMenu = openSettingsSelectMenu()
+      if (selectMenu) {
+        selectMenu.hidePopover()
+        if (selectMenu.previousElementSibling instanceof HTMLElement) selectMenu.previousElementSibling.focus({ preventScroll: true })
+        return true
+      }
       if (settingsOpen || usageStatsOpen) {
         closeSettingsPanel()
         return true
@@ -5994,8 +6013,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           const title = thread ? titleOf(thread) : 'Code Remote'
           notifySystemOnce(
             `completion:${completion.threadId}:${completion.completedAt}`,
-            `${title} 已完成回复`,
-            '点按通知查看对话。',
+            uiFormat('{0} 已完成回复', title),
+            ui('点按通知查看对话。'),
             completion.threadId,
           )
         }
@@ -6005,8 +6024,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         if (approval && thread) {
           notifySystemOnce(
             `approval:${thread.id}:${String(approval.requestId)}`,
-            `${titleOf(thread)} 需要批准`,
-            'Codex 正在等待你批准一项操作。',
+            uiFormat('{0} 需要批准', titleOf(thread)),
+            ui('Codex 正在等待你批准一项操作。'),
             thread.id,
           )
         }
@@ -6530,21 +6549,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return () => window.removeEventListener('resize', clampForViewport)
   }, [])
 
-  const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : '新对话'
+  const activeTitle = activeRemote.activeThread ? titleOf(activeRemote.activeThread) : ui('新对话')
   const sidebarCodexStatus = activeRemote.handedOff
-    ? { label: 'Codex 已交还给本机', state: 'handoff' }
+    ? { label: ui('Codex 已交还给本机'), state: 'handoff' }
     : activeRemote.connection === 'connected'
-      ? { label: 'Codex 已连接', state: 'connected' }
+      ? { label: ui('Codex 已连接'), state: 'connected' }
       : activeRemote.connection === 'connecting'
-        ? { label: 'Codex 正在连接', state: 'connecting' }
+        ? { label: ui('Codex 正在连接'), state: 'connecting' }
         : activeRemote.connection === 'unavailable'
-          ? { label: 'Codex 不可用', state: 'unavailable' }
-          : { label: 'Codex 连接已断开', state: 'disconnected' }
+          ? { label: ui('Codex 不可用'), state: 'unavailable' }
+          : { label: ui('Codex 连接已断开'), state: 'disconnected' }
   const sidebarClaudeStatus = claudeCodeAvailable === null
-    ? { label: '正在检查 Claude Code', state: 'connecting' }
+    ? { label: ui('正在检查 Claude Code'), state: 'connecting' }
     : claudeCodeAvailable
-      ? { label: 'Claude Code 可用', state: 'connected' }
-      : { label: 'Claude Code 不可用', state: 'unavailable' }
+      ? { label: ui('Claude Code 可用'), state: 'connected' }
+      : { label: ui('Claude Code 不可用'), state: 'unavailable' }
   const androidEndpointBridgeAvailable = typeof window !== 'undefined' && typeof window.CodexRemoteAndroid?.changeEndpoint === 'function'
   const modelSupportsImages = isClaudeCodeThread || !chosenModel || !Array.isArray(chosenModel.inputModalities) || chosenModel.inputModalities.includes('image')
   const modelOptions = useMemo<ComposerMenuOption[]>(() => availableModels.flatMap((model) => {
@@ -6712,8 +6731,8 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <button
           className="icon-button workspace-panel-toggle"
           type="button"
-          aria-label={workspaceCollapsed ? '展开文件树侧栏' : '收起文件树侧栏'}
-          title={workspaceCollapsed ? '展开文件树侧栏' : '收起文件树侧栏'}
+          aria-label={workspaceCollapsed ? ui('展开文件树侧栏') : ui('收起文件树侧栏')}
+          title={workspaceCollapsed ? ui('展开文件树侧栏') : ui('收起文件树侧栏')}
           aria-expanded={!workspaceCollapsed}
           aria-controls="workspace-explorer-panel"
           onClick={workspaceCollapsed ? openWorkspacePanel : collapseWorkspacePanel}
@@ -6725,48 +6744,48 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className={`thread-completion-toast thread-completion-toast--${completionToast.engine}`} role="status" aria-live="polite">
           <button className="thread-completion-toast__open" type="button" onClick={openCompletedThread}>
             <span className={`thread-completion-toast__icon thread-completion-toast__icon--${completionToast.engine}`}><EngineBrandIcon engine={completionToast.engine} size={16} /></span>
-            <span className="thread-completion-toast__copy"><strong>{completedThread ? `“${titleOf(completedThread)}”已完成回复` : '一条对话已完成回复'}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} · 点击查看这条对话</small></span>
+            <span className="thread-completion-toast__copy"><strong>{completedThread ? uiFormat("“{0}”已完成回复", titleOf(completedThread)) : ui('一条对话已完成回复')}</strong><small>{completionToast.engine === 'claude-code' ? 'Claude Code' : 'Codex'} {ui("· 点击查看这条对话")}</small></span>
           </button>
-          <button className="thread-completion-toast__close" type="button" aria-label="关闭完成提示" onClick={() => setCompletionToast(null)}><X size={15} /></button>
+          <button className="thread-completion-toast__close" type="button" aria-label={ui("关闭完成提示")} onClick={() => setCompletionToast(null)}><X size={15} /></button>
         </div>
       ) : null}
-      {paneNotice ? <div className="pane-limit-notice" role="status">{paneNotice}</div> : null}
-      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label="聊天记录" onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
+      {paneNotice ? <div className="pane-limit-notice" role="status">{uiMessage(paneNotice)}</div> : null}
+      <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={ui("聊天记录")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
-          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>代码助手远程工作台</small></span></div>
-          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? '展开对话栏' : '收窄对话栏'} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
+          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>{ui("代码助手远程工作台")}</small></span></div>
+          <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
-          <button className="icon-button remote-sidebar__close" type="button" aria-label="关闭对话列表" onClick={() => setSidebarOpen(false)}><X size={18} /></button>
+          <button className="icon-button remote-sidebar__close" type="button" aria-label={ui("关闭对话列表")} onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
         <div className="sidebar-search">
           <Search size={15} aria-hidden="true" />
-          <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder="搜索聊天记录" aria-label="搜索聊天记录" autoComplete="off" enterKeyHint="search" />
-          {sidebarSearch ? <button type="button" aria-label="清空搜索" title="清空搜索" onClick={() => setSidebarSearch('')}><X size={14} /></button> : null}
+          <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder={ui("搜索聊天记录")} aria-label={ui("搜索聊天记录")} autoComplete="off" enterKeyHint="search" />
+          {sidebarSearch ? <button type="button" aria-label={ui("清空搜索")} title={ui("清空搜索")} onClick={() => setSidebarSearch('')}><X size={14} /></button> : null}
         </div>
         <div className="new-thread-control">
-          <div className="sidebar-engine-filters" role="group" aria-label="按聊天模式筛选">
+          <div className="sidebar-engine-filters" role="group" aria-label={ui("按聊天模式筛选")}>
             {(['codex', 'claude-code'] as const).map((engine) => {
               const engineLabel = engine === 'claude-code' ? 'Claude' : 'Codex'
               const active = sidebarEngineFilter === engine
-              return <button className={`sidebar-engine-filter sidebar-engine-filter--${engine}`} type="button" key={engine} onClick={() => toggleSidebarEngineFilter(engine)} aria-label={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`} aria-pressed={active} title={active ? `取消${engineLabel}筛选，显示全部聊天` : `只显示${engineLabel}聊天`}><EngineBrandIcon engine={engine} size={17} /></button>
+              return <button className={`sidebar-engine-filter sidebar-engine-filter--${engine}`} type="button" key={engine} onClick={() => toggleSidebarEngineFilter(engine)} aria-label={active ? uiFormat("取消{0}筛选，显示全部聊天", engineLabel) : uiFormat("只显示{0}聊天", engineLabel)} aria-pressed={active} title={active ? uiFormat("取消{0}筛选，显示全部聊天", engineLabel) : uiFormat("只显示{0}聊天", engineLabel)}><EngineBrandIcon engine={engine} size={17} /></button>
             })}
           </div>
         </div>
         <div className="thread-list-heading">
-          <span>{normalizedSidebarSearch ? '搜索结果' : sidebarEngineFilter === 'codex' ? 'Codex 对话' : sidebarEngineFilter === 'claude-code' ? 'Claude 对话' : '聊天记录'}</span>
-          <small className="thread-list-heading__shortcut" title={`上一条：${formatSidebarChatShortcut(sidebarChatShortcuts.previous)}；下一条：${formatSidebarChatShortcut(sidebarChatShortcuts.next)}`}>{sidebarShortcutHint}</small>
+          <span>{normalizedSidebarSearch ? ui('搜索结果') : sidebarEngineFilter === 'codex' ? ui('Codex 对话') : sidebarEngineFilter === 'claude-code' ? ui('Claude 对话') : ui('聊天记录')}</span>
+          <small className="thread-list-heading__shortcut" title={uiFormat("上一条：{0}；下一条：{1}", formatSidebarChatShortcut(sidebarChatShortcuts.previous), formatSidebarChatShortcut(sidebarChatShortcuts.next))}>{sidebarShortcutHint}</small>
           <div className="thread-list-heading__actions">
-            <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? '取消' : '选择'}</button>
+            <button className="thread-list-heading__select" type="button" onClick={toggleSidebarSelectionMode} disabled={sidebarSelectionBusy || (!sidebarSelectionMode && visibleSidebarThreads.length === 0)} aria-pressed={sidebarSelectionMode}>{sidebarSelectionMode ? ui('取消') : ui('选择')}</button>
           </div>
         </div>
         {sidebarSelectionMode ? <div className="sidebar-selection-bar">
-          <div className="sidebar-selection-bar__summary"><span>已选 {selectedSidebarThreads.length} 个聊天</span><button type="button" onClick={() => setSelectedSidebarThreadIds((current) => new Set([...current, ...visibleSidebarThreads.map((thread) => thread.id)]))} disabled={sidebarSelectionBusy || visibleSidebarThreads.length === 0}>全选</button><button type="button" onClick={() => setSelectedSidebarThreadIds(new Set())} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>清空</button></div>
-          <div className="sidebar-selection-bar__actions"><button type="button" onClick={() => void pinSelectedSidebarThreads()} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{sidebarSelectionBusy ? <LoaderCircle className="spin" size={14} /> : <Pin size={14} />}置顶</button><button className="sidebar-selection-bar__delete" type="button" onClick={startBulkThreadDelete} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}><Trash2 size={14} />删除</button></div>
+          <div className="sidebar-selection-bar__summary"><span>{ui("已选")} {selectedSidebarThreads.length} {ui("个聊天")}</span><button type="button" onClick={() => setSelectedSidebarThreadIds((current) => new Set([...current, ...visibleSidebarThreads.map((thread) => thread.id)]))} disabled={sidebarSelectionBusy || visibleSidebarThreads.length === 0}>{ui("全选")}</button><button type="button" onClick={() => setSelectedSidebarThreadIds(new Set())} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{ui("清空")}</button></div>
+          <div className="sidebar-selection-bar__actions"><button type="button" onClick={() => void pinSelectedSidebarThreads()} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}>{sidebarSelectionBusy ? <LoaderCircle className="spin" size={14} /> : <Pin size={14} />}{ui("置顶")}</button><button className="sidebar-selection-bar__delete" type="button" onClick={startBulkThreadDelete} disabled={sidebarSelectionBusy || selectedSidebarThreads.length === 0}><Trash2 size={14} />{ui("删除")}</button></div>
         </div> : null}
         <nav className="thread-list">
           {groupedSidebarThreads.map((section) => <Fragment key={section.label}>
-            <div className="thread-list__section">{section.label}</div>
+            <div className="thread-list__section">{ui(section.label)}</div>
             {section.threads.map((thread) => {
               const paneIndex = paneIndexForThread(thread.id)
               const threadRemote = paneIndex === undefined ? null : remotes[paneIndex]
@@ -6790,29 +6809,29 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
                   clearThreadLongPress()
                   if (sidebarSelectionMode) toggleSidebarThreadSelection(thread.id)
                   else void selectThread(thread)
-                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? '正在回复' : undefined}>
+                }} onContextMenu={(event) => { event.preventDefault(); if (!sidebarSelectionMode) openThreadContextMenu(thread, event.clientX, event.clientY) }} onTouchStart={(event) => { if (!sidebarSelectionMode) handleThreadTouchStart(event, thread) }} onTouchMove={(event) => { if (!sidebarSelectionMode) handleThreadTouchMove(event) }} onTouchEnd={() => { if (!threadLongPress.current?.triggered) clearThreadLongPress() }} onTouchCancel={clearThreadLongPress} disabled={activeRemote.handedOff || sidebarSelectionBusy} aria-current={isActive ? 'page' : undefined} aria-pressed={sidebarSelectionMode ? isSelected : undefined} aria-description={isReplying ? ui('正在回复') : undefined}>
                   <span className="thread-row__breath" data-reply-breath-layer aria-hidden="true" />
                   <span className="thread-row__icon" title={sidebarSelectionMode ? undefined : threadEngineLabel} role={sidebarSelectionMode ? undefined : 'img'} aria-label={sidebarSelectionMode ? undefined : threadEngineLabel}>{sidebarSelectionMode ? <span className={'thread-row__checkbox' + (isSelected ? ' thread-row__checkbox--checked' : '')} aria-hidden="true">{isSelected ? <Check size={13} /> : null}</span> : <EngineBrandIcon engine={threadEngine} size={15} />}</span>
-                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label="已置顶" /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label="有定时发送" /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label="回复已完成" title="回复已完成" /> : null}<small>{timeOf(thread)}</small></span></span>
-                  {paneIndex !== undefined ? <span className="thread-row__pane-dot" title="已打开" /> : null}
+                  <span className="thread-row__copy"><strong>{titleOf(thread)}</strong><span className="thread-row__meta">{isPinned ? <Pin className="thread-row__pin" size={12} aria-label={ui("已置顶")} /> : null}{hasScheduledMessage ? <CalendarClock className="thread-row__scheduled" size={12} aria-label={ui("有定时发送")} /> : null}{remote0.completedThreadIds.includes(thread.id) ? <span className="thread-row__completion-dot" role="status" aria-label={ui("回复已完成")} title={ui("回复已完成")} /> : null}<small>{timeOf(thread)}</small></span></span>
+                  {paneIndex !== undefined ? <span className="thread-row__pane-dot" title={ui("已打开")} /> : null}
                 </button>
               )
             })}
           </Fragment>)}
-          {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? '没有找到匹配的对话' : '还没有聊天记录'}</p> : null}
-          {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />读取对话中</p> : null}
+          {visibleSidebarThreads.length === 0 && !remote0.loadingHistory ? <p className="thread-list__empty">{sidebarHasActiveFilter ? ui('没有找到匹配的对话') : ui('还没有聊天记录')}</p> : null}
+          {remote0.loadingHistory && visibleSidebarThreads.length === 0 ? <p className="thread-list__empty"><LoaderCircle className="spin" size={14} />{ui("读取对话中")}</p> : null}
         </nav>
         <div className="remote-sidebar__actions">
-          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label="切换电脑地址" title="切换电脑地址" onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>切换电脑地址</span></button> : null}
-          <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label="Token 用量统计" title="Token 用量统计" onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>Token 用量</span></button>
-          <a className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} href={panelRouteHref('settings')} aria-label="设置" title="设置" onClick={(event) => {
+          {androidEndpointBridgeAvailable ? <button className="sidebar-settings sidebar-endpoint" type="button" aria-label={ui("切换电脑地址")} title={ui("切换电脑地址")} onClick={() => window.CodexRemoteAndroid?.changeEndpoint?.()}><Link2 size={16} /><span>{ui("切换电脑地址")}</span></button> : null}
+          <button className={'sidebar-settings' + (usageStatsOpen ? ' sidebar-settings--active' : '')} type="button" aria-label={ui("Token 用量统计")} title={ui("Token 用量统计")} onClick={openUsageStatsPanel}><ChartNoAxesColumnIncreasing size={16} /><span>{ui("Token 用量")}</span></button>
+          <a className={'sidebar-settings' + (settingsOpen ? ' sidebar-settings--active' : '')} href={panelRouteHref('settings')} aria-label={ui("设置")} title={ui("设置")} onClick={(event) => {
             if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
             event.preventDefault()
             openSettingsPanel()
-          }}><Settings2 size={16} /><span>设置</span></a>
+          }}><Settings2 size={16} /><span>{ui("设置")}</span></a>
         </div>
         <footer className="remote-sidebar__footer">
-          <div className="remote-sidebar__engine-statuses" role="group" aria-label="引擎状态">
+          <div className="remote-sidebar__engine-statuses" role="group" aria-label={ui("引擎状态")}>
             {[sidebarCodexStatus, sidebarClaudeStatus].map((status) => (
               <span key={status.label} className="remote-sidebar__engine-status" role="img" aria-label={status.label} title={status.label}>
                 <i className={'status-dot status-dot--' + status.state} aria-hidden="true" />
@@ -6823,16 +6842,16 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         </footer>
       </aside>
 
-      <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label="关闭侧栏" aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
-      {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label="关闭文件树" onClick={() => setWorkspaceOpen(false)} /> : null}
+      <button className={'sidebar-backdrop' + (sidebarBackdropVisible ? ' sidebar-backdrop--visible' : '') + (sidebarDragging ? ' sidebar-backdrop--dragging' : '')} type="button" aria-label={ui("关闭侧栏")} aria-hidden={!sidebarBackdropVisible} tabIndex={sidebarBackdropVisible ? 0 : -1} onClick={() => setSidebarOpen(false)} />
+      {workspaceOpen || workspaceDragging ? <button className="workspace-backdrop" type="button" aria-label={ui("关闭文件树")} onClick={() => setWorkspaceOpen(false)} /> : null}
       {threadContextMenu ? (
         <div ref={threadContextMenuElement} className="thread-context-menu" style={{ left: threadContextMenu.x, top: threadContextMenu.y }} role="menu" tabIndex={-1} onPointerDown={(event) => event.stopPropagation()}>
-          <ShortcutContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />并发打开</ShortcutContextMenuButton>
-          <ShortcutContextMenuButton shortcut={2} onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? '取消置顶' : '置顶'}</ShortcutContextMenuButton>
-          <ShortcutContextMenuButton shortcut={3} disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? '导出中…' : '导出'}</ShortcutContextMenuButton>
-          <ShortcutContextMenuButton shortcut={4} disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? '引用中…' : '引用'}</ShortcutContextMenuButton>
-          <ShortcutContextMenuButton shortcut={5} onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />重命名</ShortcutContextMenuButton>
-          <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />删除聊天</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={1} onClick={() => { const thread = threadContextMenu.thread; setThreadContextMenu(null); void openConcurrentThread(thread) }}><MessagesSquare size={14} />{ui("并发打开")}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={2} onClick={() => void toggleThreadPin(threadContextMenu.thread)}>{pinnedThreadIds.has(threadContextMenu.thread.id) ? <PinOff size={14} /> : <Pin size={14} />}{pinnedThreadIds.has(threadContextMenu.thread.id) ? ui('取消置顶') : ui('置顶')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={3} disabled={threadContextAction !== null} onClick={() => void exportThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? <LoaderCircle className="spin" size={14} /> : <Download size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'export' ? ui('导出中…') : ui('导出')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={4} disabled={threadContextAction !== null} onClick={() => void quoteThread(threadContextMenu.thread)}>{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? <LoaderCircle className="spin" size={14} /> : <Quote size={14} />}{threadContextAction?.threadId === threadContextMenu.thread.id && threadContextAction.type === 'quote' ? ui('引用中…') : ui('引用')}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut={5} onClick={() => startThreadRename(threadContextMenu.thread)}><Pencil size={14} />{ui("重命名")}</ShortcutContextMenuButton>
+          <ShortcutContextMenuButton shortcut="Del" className="thread-context-menu__danger" disabled={threadContextAction !== null} onClick={() => startThreadDelete(threadContextMenu.thread)}><Trash2 size={14} />{ui("删除聊天")}</ShortcutContextMenuButton>
         </div>
       ) : null}
 
@@ -6840,15 +6859,15 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadRename() }}>
           <form className="thread-rename-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-rename-title" onSubmit={(event) => { void submitThreadRename(event) }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="thread-rename-dialog__heading">
-              <h2 id="thread-rename-title">重命名对话</h2>
-              <p>名称会同步到连接的设备和后续刷新。</p>
+              <h2 id="thread-rename-title">{ui("重命名对话")}</h2>
+              <p>{ui("名称会同步到连接的设备和后续刷新。")}</p>
             </div>
-            <label htmlFor="thread-rename-input">对话名称</label>
+            <label htmlFor="thread-rename-input">{ui("对话名称")}</label>
             <input id="thread-rename-input" type="text" value={threadRenameDraft} maxLength={72} autoComplete="off" autoFocus disabled={threadRenameSaving} aria-describedby={threadRenameError ? 'thread-rename-error' : undefined} onChange={(event) => { setThreadRenameDraft(event.target.value); setThreadRenameError(null) }} />
-            {threadRenameError ? <p className="thread-rename-dialog__error" id="thread-rename-error" role="alert">{threadRenameError}</p> : null}
+            {threadRenameError ? <p className="thread-rename-dialog__error" id="thread-rename-error" role="alert">{uiMessage(threadRenameError)}</p> : null}
             <div className="thread-rename-dialog__actions">
-              <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>取消</button>
-              <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />保存中</> : '确定'}</button>
+              <button type="button" onClick={closeThreadRename} disabled={threadRenameSaving}>{ui("取消")}</button>
+              <button type="submit" disabled={threadRenameSaving || !threadRenameDraft.trim()}>{threadRenameSaving ? <><LoaderCircle className="spin" size={14} />{ui("保存中")}</> : ui('确定')}</button>
             </div>
           </form>
         </div>
@@ -6858,14 +6877,14 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
         <div className="thread-rename-backdrop" role="presentation" onPointerDown={(event) => { if (event.target === event.currentTarget) closeThreadDelete() }}>
           <form className="thread-rename-dialog thread-delete-dialog" role="dialog" aria-modal="true" aria-labelledby="thread-delete-title" aria-describedby="thread-delete-description" onSubmit={(event) => { void submitThreadDelete(event) }} onPointerDown={(event) => event.stopPropagation()}>
             <div className="thread-rename-dialog__heading">
-              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">{sidebarSelectionMode ? '批量删除聊天' : '删除聊天'}</h2></div>
-              <p id="thread-delete-description">{sidebarSelectionMode ? `删除选中的 ${threadDeleteTargets.length} 个聊天？此操作无法撤销。` : '这会永久删除聊天记录，删除后无法恢复。'}</p>
+              <div className="thread-delete-dialog__title"><AlertTriangle size={18} /><h2 id="thread-delete-title">{sidebarSelectionMode ? ui('批量删除聊天') : ui('删除聊天')}</h2></div>
+              <p id="thread-delete-description">{sidebarSelectionMode ? uiFormat("删除选中的 {0} 个聊天？此操作无法撤销。", threadDeleteTargets.length) : ui('这会永久删除聊天记录，删除后无法恢复。')}</p>
             </div>
-            {sidebarSelectionMode ? <ul className="thread-delete-dialog__list">{threadDeleteTargets.slice(0, 5).map((thread) => <li key={thread.id} title={titleOf(thread)}>{titleOf(thread)}</li>)}{threadDeleteTargets.length > 5 ? <li>另有 {threadDeleteTargets.length - 5} 个聊天</li> : null}</ul> : <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTargets[0])}>{titleOf(threadDeleteTargets[0])}</div>}
-            {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{threadDeleteError}</p> : null}
+            {sidebarSelectionMode ? <ul className="thread-delete-dialog__list">{threadDeleteTargets.slice(0, 5).map((thread) => <li key={thread.id} title={titleOf(thread)}>{titleOf(thread)}</li>)}{threadDeleteTargets.length > 5 ? <li>{ui("另有")} {threadDeleteTargets.length - 5} {ui("个聊天")}</li> : null}</ul> : <div className="thread-delete-dialog__thread" title={titleOf(threadDeleteTargets[0])}>{titleOf(threadDeleteTargets[0])}</div>}
+            {threadDeleteError ? <p className="thread-rename-dialog__error" role="alert">{uiMessage(threadDeleteError)}</p> : null}
             <div className="thread-rename-dialog__actions thread-delete-dialog__actions">
-              <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>取消</button>
-              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />{sidebarSelectionMode ? `删除中 ${threadDeleteProgress}/${threadDeleteTargets.length}` : '删除中'}</> : <><Trash2 size={14} />{threadDeleteError ? '重试删除' : '确认删除'}</>}</button>
+              <button type="button" onClick={closeThreadDelete} disabled={threadDeleteSaving}>{ui("取消")}</button>
+              <button type="submit" disabled={threadDeleteSaving}>{threadDeleteSaving ? <><LoaderCircle className="spin" size={14} />{sidebarSelectionMode ? uiFormat("删除中 {0}/{1}", threadDeleteProgress, threadDeleteTargets.length) : ui('删除中')}</> : <><Trash2 size={14} />{threadDeleteError ? ui('重试删除') : ui('确认删除')}</>}</button>
             </div>
           </form>
         </div>
@@ -6961,13 +6980,13 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               onRefresh={activeRemote.refreshActiveThread}
               onCreateThread={createComposerThread}
               createThreadDisabled={activeRemote.handedOff || activeRemote.connection !== 'connected' || activeRemote.loadingHistory || (newThreadEngine === 'claude-code' && claudeCodeAvailable === false)}
-              createThreadTitle={newThreadEngine === 'claude-code' && claudeCodeAvailable === false ? 'Claude Code 不可用' : `新建${newThreadEngine === 'claude-code' ? ' Claude Code' : ' Codex'}对话`}
+              createThreadTitle={newThreadEngine === 'claude-code' && claudeCodeAvailable === false ? ui('Claude Code 不可用') : uiFormat('新建{0}对话', newThreadEngine === 'claude-code' ? ' Claude Code' : ' Codex')}
             />
           </section>
           <div
             className="workspace-resize-handle"
             role="separator"
-            aria-label={themePreferences.theme === 'retro' ? '调整左右侧边栏宽度' : '调整右侧文件区宽度'}
+            aria-label={themePreferences.theme === 'retro' ? ui('调整左右侧边栏宽度') : ui('调整右侧文件区宽度')}
             aria-orientation="vertical"
             aria-valuemin={themePreferences.theme === 'retro' ? retroSidePanelMinWidth : workspaceExplorerMinimumWidth()}
             aria-valuemax={themePreferences.theme === 'retro' ? retroSidePanelWidthLimit() : workspaceExplorerWidthLimit()}
@@ -7048,6 +7067,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 }
 
 function MCPApprovalsCard({ token }: { token: string }) {
+  useUiLanguage()
   const [approvals, setApprovals] = useState<MCPApprovalGrant[]>([])
   const [loading, setLoading] = useState(true)
   const [revokingId, setRevokingId] = useState<string | null>(null)
@@ -7082,23 +7102,23 @@ function MCPApprovalsCard({ token }: { token: string }) {
     }
   }
 
-  return <section className="theme-settings-card theme-settings-card--page mcp-approvals-card" aria-label="MCP 自动批准">
+  return <section className="theme-settings-card theme-settings-card--page mcp-approvals-card" aria-label={ui("MCP 自动批准")}>
     <div className="theme-settings-card__heading">
-      <div><h2><ShieldCheck size={17} />MCP 自动批准</h2><p>这里保存了你在聊天弹窗中选择的「始终允许」。</p></div>
+      <div><h2><ShieldCheck size={17} />{ui("MCP 自动批准")}</h2><p>{ui("这里保存了你在聊天弹窗中选择的「始终允许」。")}</p></div>
     </div>
     <div className="mcp-approvals-body">
-      {loading ? <p className="mcp-approvals-empty" role="status">正在读取授权…</p> : null}
-      {!loading && approvals.length === 0 && !error ? <p className="mcp-approvals-empty">还没有「始终允许」的 MCP 授权。</p> : null}
+      {loading ? <p className="mcp-approvals-empty" role="status">{ui("正在读取授权…")}</p> : null}
+      {!loading && approvals.length === 0 && !error ? <p className="mcp-approvals-empty">{ui("还没有「始终允许」的 MCP 授权。")}</p> : null}
       {approvals.map((grant) => <div className="mcp-approvals-grant" key={grant.id}>
         <div className="mcp-approvals-grant__info">
           <strong>{grant.serverName}{grant.scope === 'tool' ? ` · ${grant.toolName ?? ''}` : ''}</strong>
-          <small>{grant.scope === 'tool' ? '仅此工具' : '该 MCP 服务器的所有工具'}</small>
+          <small>{grant.scope === 'tool' ? ui('仅此工具') : ui('该 MCP 服务器的所有工具')}</small>
         </div>
-        <div className="mcp-approvals-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? '撤销中…' : '撤销授权'}</button></div>
+        <div className="mcp-approvals-actions"><button type="button" disabled={revokingId !== null} onClick={() => void revoke(grant)}>{revokingId === grant.id ? ui('撤销中…') : ui('撤销授权')}</button></div>
       </div>)}
-      {message ? <p className="mcp-approvals-feedback" role="status">{message}</p> : null}
-      {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{error}</p> : null}
-      <p className="mcp-approvals-note">自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。</p>
+      {message ? <p className="mcp-approvals-feedback" role="status">{uiMessage(message)}</p> : null}
+      {error ? <p className="mcp-approvals-feedback mcp-approvals-feedback--error" role="alert">{uiMessage(error)}</p> : null}
+      <p className="mcp-approvals-note">{ui("自动批准仅跳过 MCP 工具调用确认，工具自身的权限限制仍然生效。")}</p>
     </div>
   </section>
 }
@@ -7117,6 +7137,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
   onTranslationChange: (next: TranslationPreferences) => void
   onTranslationConfigSaved: () => void
 }) {
+  const uiLanguage = useUiLanguage()
   const [imageError, setImageError] = useState<string | null>(null)
   const [imageProcessing, setImageProcessing] = useState(false)
   const [notificationError, setNotificationError] = useState<string | null>(null)
@@ -7139,32 +7160,32 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
   const fontSizeAdjustment = normalizeFontSizeAdjustment(preferences.fontSizeAdjustment)
   const letterSpacingPercent = normalizeLetterSpacingPercent(preferences.letterSpacingPercent)
   const themeOptions: Array<{ value: AppTheme; label: string; description: string; previewClass: string }> = [
-    { value: 'light', label: '白色', description: '清爽明亮', previewClass: 'theme-option__preview--light' },
-    { value: 'dark', label: '黑色', description: '低光阅读', previewClass: 'theme-option__preview--dark' },
-    { value: 'warm', label: '暖色', description: '柔和纸感', previewClass: 'theme-option__preview--warm' },
-    { value: 'chinese-retro', label: '中国复古', description: '青黛山水与冷白灰青纹样', previewClass: 'theme-option__preview--chinese-retro' },
-    { value: 'retro', label: '旧网页', description: '早期 WWW 文档', previewClass: 'theme-option__preview--retro' },
-    { value: 'pixel', label: '像素风', description: '8-bit 像素界面', previewClass: 'theme-option__preview--pixel' },
-    { value: 'custom', label: '自定义主题', description: '颜色、图片与透明度', previewClass: 'theme-option__preview--custom' },
+    { value: 'light', label: ui('白色'), description: ui('清爽明亮'), previewClass: 'theme-option__preview--light' },
+    { value: 'dark', label: ui('黑色'), description: ui('低光阅读'), previewClass: 'theme-option__preview--dark' },
+    { value: 'warm', label: ui('暖色'), description: ui('柔和纸感'), previewClass: 'theme-option__preview--warm' },
+    { value: 'chinese-retro', label: ui('中国复古'), description: ui('青黛山水与冷白灰青纹样'), previewClass: 'theme-option__preview--chinese-retro' },
+    { value: 'retro', label: ui('旧网页'), description: ui('早期 WWW 文档'), previewClass: 'theme-option__preview--retro' },
+    { value: 'pixel', label: ui('像素风'), description: ui('8-bit 像素界面'), previewClass: 'theme-option__preview--pixel' },
+    { value: 'custom', label: ui('自定义主题'), description: ui('颜色、图片与透明度'), previewClass: 'theme-option__preview--custom' },
   ]
   const navigationGroups: Array<{ label: string; items: Array<{ id: SettingsSectionId; label: string; icon: ReactNode }> }> = [
-    { label: '外观', items: [
-      { id: 'theme', label: '主题', icon: <Palette size={17} /> },
-      { id: 'display', label: '显示', icon: <Monitor size={17} /> },
+    { label: ui('外观'), items: [
+      { id: 'theme', label: ui('主题'), icon: <Palette size={17} /> },
+      { id: 'display', label: ui('显示'), icon: <Monitor size={17} /> },
     ] },
-    { label: '聊天', items: [
-      { id: 'translation', label: '聊天翻译', icon: <Languages size={17} /> },
-      { id: 'chat-shortcuts', label: '切换快捷键', icon: <Keyboard size={17} /> },
+    { label: ui('聊天'), items: [
+      { id: 'translation', label: ui('聊天翻译'), icon: <Languages size={17} /> },
+      { id: 'chat-shortcuts', label: ui('切换快捷键'), icon: <Keyboard size={17} /> },
     ] },
-    { label: '连接', items: [
+    { label: ui('连接'), items: [
       { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
       { id: 'claude-config', label: 'Claude Code API', icon: <EngineBrandIcon engine="claude-code" size={17} /> },
-      { id: 'cpa-manager', label: 'token使用量查询', icon: <Link2 size={17} /> },
-      { id: 'mcp-approvals', label: 'MCP 自动批准', icon: <ShieldCheck size={17} /> },
+      { id: 'cpa-manager', label: ui('token使用量查询'), icon: <Link2 size={17} /> },
+      { id: 'mcp-approvals', label: ui('MCP 自动批准'), icon: <ShieldCheck size={17} /> },
     ] },
-    { label: '其他', items: [
-      { id: 'system-notifications', label: '系统通知', icon: <Bell size={17} /> },
-      { id: 'about', label: '关于', icon: <Info size={17} /> },
+    { label: ui('其他'), items: [
+      { id: 'system-notifications', label: ui('系统通知'), icon: <Bell size={17} /> },
+      { id: 'about', label: ui('关于'), icon: <Info size={17} /> },
     ] },
   ]
 
@@ -7183,7 +7204,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
 
   function selectSection(sectionId: SettingsSectionId) {
     if (sectionId === activeSection) return
-    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续切换吗？')) return
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续切换吗？'))) return
     if (activeSection === 'chat-shortcuts' && recordingShortcut) {
       setRecordingShortcut(null)
       setShortcutMessage('已取消录制。')
@@ -7194,12 +7215,12 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
   }
 
   function closeWithConfigCheck() {
-    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续离开吗？')) return
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续离开吗？'))) return
     onClose()
   }
 
   function unpairWithConfigCheck() {
-    if (nativeConfigDirty && !window.confirm('未保存的 API 配置会丢失，继续退出吗？')) return
+    if (nativeConfigDirty && !window.confirm(ui('未保存的 API 配置会丢失，继续退出吗？'))) return
     void onUnpair()
   }
 
@@ -7352,14 +7373,14 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
   }
 
   return (
-    <main className="theme-settings-panel theme-settings-panel--navigation" aria-label="设置">
+    <main className="theme-settings-panel theme-settings-panel--navigation" aria-label={ui("设置")}>
       <header className="theme-settings-panel__header">
-        <h1>设置</h1>
-        <button className="icon-button theme-settings-panel__close" type="button" aria-label="返回对话" onClick={closeWithConfigCheck}><X size={18} /></button>
+        <h1>{ui("设置")}</h1>
+        <button className="icon-button theme-settings-panel__close" type="button" aria-label={ui("返回对话")} onClick={closeWithConfigCheck}><X size={18} /></button>
       </header>
 
       <div className="theme-settings-panel__layout">
-        <nav className="theme-settings-panel__nav" ref={settingsNavRef} aria-label="设置分类">
+        <nav className="theme-settings-panel__nav" ref={settingsNavRef} aria-label={ui("设置分类")}>
           {navigationGroups.map((group) => <div className="theme-settings-panel__nav-group" key={group.label}>
             <h2>{group.label}</h2>
             {group.items.map((item) => <button
@@ -7372,8 +7393,8 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
             >{item.icon}<span>{item.label}</span></button>)}
           </div>)}
           <div className="theme-settings-panel__session">
-            <button className="theme-settings-panel__nav-item" type="button" onClick={unpairWithConfigCheck} title="退出当前设备的配对">
-              <LogOut size={17} /><span>退出配对</span>
+            <button className="theme-settings-panel__nav-item" type="button" onClick={unpairWithConfigCheck} title={ui("退出当前设备的配对")}>
+              <LogOut size={17} /><span>{ui("退出配对")}</span>
             </button>
           </div>
         </nav>
@@ -7395,12 +7416,12 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
         </div>
         <div id="settings-section-theme" className="theme-settings-panel__section" hidden={activeSection !== 'theme'}>
 
-        <section className="theme-settings-card theme-settings-card--page" aria-label="主题">
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("主题")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />主题</h2><p>选择工作区的基础色彩。</p></div>
-            <span className="theme-settings-card__badge">即时预览</span>
+            <div><h2><PixelThemeIcon name="theme" theme={preferences.theme} />{ui("主题")}</h2><p>{ui("选择工作区的基础色彩。")}</p></div>
+            <span className="theme-settings-card__badge">{ui("即时预览")}</span>
           </div>
-          <div className="theme-options" role="radiogroup" aria-label="界面主题">
+          <div className="theme-options" role="radiogroup" aria-label={ui("界面主题")}>
             {themeOptions.map((option) => (
               <button
                 className={`theme-option${preferences.theme === option.value ? ' theme-option--active' : ''}`}
@@ -7437,39 +7458,39 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
           {preferences.theme === 'custom' ? (
             <div className="theme-custom-controls">
               <label className="theme-control-row">
-                <span><strong>背景颜色</strong><small>作为半透明面板背后的底色。</small></span>
-                <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label="自定义背景颜色" /><code>{preferences.customBackgroundColor}</code></span>
+                <span><strong>{ui("背景颜色")}</strong><small>{ui("作为半透明面板背后的底色。")}</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customBackgroundColor: normalizeHexColor(event.target.value, preferences.customBackgroundColor) })} aria-label={ui("自定义背景颜色")} /><code>{preferences.customBackgroundColor}</code></span>
               </label>
               <div className="theme-control-row">
-                <span><strong>模块颜色</strong><small>应用于侧栏、输入框、卡片和菜单。</small></span>
+                <span><strong>{ui("模块颜色")}</strong><small>{ui("应用于侧栏、输入框、卡片和菜单。")}</small></span>
                 <span className="theme-color-input">
-                  <input type="color" value={preferences.customModuleColor ?? preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customModuleColor: normalizeHexColor(event.target.value, preferences.customModuleColor ?? preferences.customBackgroundColor) })} aria-label="自定义模块颜色" />
+                  <input type="color" value={preferences.customModuleColor ?? preferences.customBackgroundColor} onChange={(event) => onChange({ ...preferences, customModuleColor: normalizeHexColor(event.target.value, preferences.customModuleColor ?? preferences.customBackgroundColor) })} aria-label={ui("自定义模块颜色")} />
                   <code>{preferences.customModuleColor ?? preferences.customBackgroundColor}</code>
-                  {preferences.customModuleColor ? <button className="theme-image-clear" type="button" onClick={() => onChange({ ...preferences, customModuleColor: undefined })}>跟随背景</button> : <small>跟随背景</small>}
+                  {preferences.customModuleColor ? <button className="theme-image-clear" type="button" onClick={() => onChange({ ...preferences, customModuleColor: undefined })}>{ui("跟随背景")}</button> : <small>{ui("跟随背景")}</small>}
                 </span>
               </div>
               <label className="theme-control-row theme-control-row--stacked">
-                <span><strong>模块透明度</strong><small>调整界面模块的透明程度，0% 为实色。</small></span>
-                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customModuleTransparency} onChange={(event) => onChange({ ...preferences, customModuleTransparency: normalizeModuleTransparency(Number(event.target.value)) })} aria-label="自定义模块透明度" /><output>{preferences.customModuleTransparency}%</output></span>
+                <span><strong>{ui("模块透明度")}</strong><small>{ui("调整界面模块的透明程度，0% 为实色。")}</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customModuleTransparency} onChange={(event) => onChange({ ...preferences, customModuleTransparency: normalizeModuleTransparency(Number(event.target.value)) })} aria-label={ui("自定义模块透明度")} /><output>{preferences.customModuleTransparency}%</output></span>
               </label>
               <label className="theme-control-row">
-                <span><strong>字体颜色</strong><small>应用于工作区界面文字和控件。</small></span>
-                <span className="theme-color-input"><input type="color" value={preferences.customTextColor} onChange={(event) => onChange({ ...preferences, customTextColor: normalizeHexColor(event.target.value, preferences.customTextColor) })} aria-label="自定义字体颜色" /><code>{preferences.customTextColor}</code></span>
+                <span><strong>{ui("字体颜色")}</strong><small>{ui("应用于工作区界面文字和控件。")}</small></span>
+                <span className="theme-color-input"><input type="color" value={preferences.customTextColor} onChange={(event) => onChange({ ...preferences, customTextColor: normalizeHexColor(event.target.value, preferences.customTextColor) })} aria-label={ui("自定义字体颜色")} /><code>{preferences.customTextColor}</code></span>
               </label>
               <label className="theme-control-row theme-control-row--stacked">
-                <span><strong>背景透明度</strong><small>数值越高，全局背景图片和底色越透明；界面面板不变。</small></span>
-                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label="自定义背景透明度" /><output>{preferences.customBackgroundTransparency}%</output></span>
+                <span><strong>{ui("背景透明度")}</strong><small>{ui("数值越高，全局背景图片和底色越透明；界面面板不变。")}</small></span>
+                <span className="theme-range-input"><input type="range" min="0" max="100" step="1" value={preferences.customBackgroundTransparency} onChange={(event) => onChange({ ...preferences, customBackgroundTransparency: normalizeTransparency(Number(event.target.value)) })} aria-label={ui("自定义背景透明度")} /><output>{preferences.customBackgroundTransparency}%</output></span>
               </label>
               <div className="theme-control-row theme-image-row">
-                <span><strong>背景图片</strong><small>原图最大 20 MB，上传后自动压缩保存。</small></span>
+                <span><strong>{ui("背景图片")}</strong><small>{ui("原图最大 20 MB，上传后自动压缩保存。")}</small></span>
                 <span className="theme-image-input">
                   <span className={`theme-image-preview${preferences.customBackgroundImage ? '' : ' theme-image-preview--empty'}`}>
-                    {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt="当前背景图片预览" /> : <span>未设置</span>}
+                    {preferences.customBackgroundImage ? <img src={preferences.customBackgroundImage} alt={ui("当前背景图片预览")} /> : <span>{ui("未设置")}</span>}
                   </span>
                   <span className="theme-image-actions">
                     <label className="theme-image-upload">
                       {imageProcessing ? <LoaderCircle className="spin" size={14} /> : <ImagePlus size={14} />}
-                      <span>{imageProcessing ? '正在压缩…' : '选择图片'}</span>
+                      <span>{imageProcessing ? ui('正在压缩…') : ui('选择图片')}</span>
                       <input
                         type="file"
                         accept="image/png,image/jpeg,image/webp,image/gif"
@@ -7479,27 +7500,27 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
                           event.currentTarget.value = ''
                           void updateBackgroundImage(file)
                         }}
-                        aria-label="上传背景图片"
+                        aria-label={ui("上传背景图片")}
                       />
                     </label>
-                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 }) }}><X size={13} />清除</button> : null}
+                    {preferences.customBackgroundImage ? <button className="theme-image-clear" type="button" disabled={imageProcessing} onClick={() => { setImageError(null); onChange({ ...preferences, customBackgroundImage: undefined, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 }) }}><X size={13} />{ui("清除")}</button> : null}
                   </span>
                 </span>
               </div>
               {preferences.customBackgroundImage ? (
-                <section className="theme-background-framing" aria-label="背景图片取景调整">
+                <section className="theme-background-framing" aria-label={ui("背景图片取景调整")}>
                   <div className="theme-background-framing__heading">
-                    <span><strong>调整背景区域</strong><small>拖动图片调整位置，也可以用滑块微调。</small></span>
+                    <span><strong>{ui("调整背景区域")}</strong><small>{ui("拖动图片调整位置，也可以用滑块微调。")}</small></span>
                     <button
                       className="theme-background-framing__reset"
                       type="button"
                       onClick={() => onChange({ ...preferences, customBackgroundPositionX: 50, customBackgroundPositionY: 50, customBackgroundZoom: 100 })}
-                    >重置取景</button>
+                    >{ui("重置取景")}</button>
                   </div>
                   <button
                     className="theme-background-framing__preview"
                     type="button"
-                    aria-label="拖动图片调整背景位置"
+                    aria-label={ui("拖动图片调整背景位置")}
                     onPointerDown={handleBackgroundPreviewPointerDown}
                     onPointerMove={handleBackgroundPreviewPointerMove}
                     onPointerUp={endBackgroundPreviewPointer}
@@ -7524,86 +7545,97 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
                       }}
                       aria-hidden="true"
                     />
-                    <span className="theme-background-framing__hint">拖动调整取景</span>
+                    <span className="theme-background-framing__hint">{ui("拖动调整取景")}</span>
                   </button>
                   <div className="theme-background-framing__controls">
                     <label className="theme-background-framing__control">
-                      <span><strong>水平位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionX)}%</output></span>
-                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionX)} onChange={(event) => updateBackgroundPosition(Number(event.target.value), preferences.customBackgroundPositionY)} aria-label="背景图片水平位置" />
+                      <span><strong>{ui("水平位置")}</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionX)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionX)} onChange={(event) => updateBackgroundPosition(Number(event.target.value), preferences.customBackgroundPositionY)} aria-label={ui("背景图片水平位置")} />
                     </label>
                     <label className="theme-background-framing__control">
-                      <span><strong>垂直位置</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%</output></span>
-                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionY)} onChange={(event) => updateBackgroundPosition(preferences.customBackgroundPositionX, Number(event.target.value))} aria-label="背景图片垂直位置" />
+                      <span><strong>{ui("垂直位置")}</strong><output>{normalizeBackgroundPosition(preferences.customBackgroundPositionY)}%</output></span>
+                      <input type="range" min="0" max="100" step="1" value={normalizeBackgroundPosition(preferences.customBackgroundPositionY)} onChange={(event) => updateBackgroundPosition(preferences.customBackgroundPositionX, Number(event.target.value))} aria-label={ui("背景图片垂直位置")} />
                     </label>
                     <label className="theme-background-framing__control">
-                      <span><strong>缩放</strong><output>{normalizeBackgroundZoom(preferences.customBackgroundZoom)}%</output></span>
-                      <input type="range" min="100" max="250" step="1" value={normalizeBackgroundZoom(preferences.customBackgroundZoom)} onChange={(event) => onChange({ ...preferences, customBackgroundZoom: normalizeBackgroundZoom(Number(event.target.value)) })} aria-label="背景图片缩放" />
+                      <span><strong>{ui("缩放")}</strong><output>{normalizeBackgroundZoom(preferences.customBackgroundZoom)}%</output></span>
+                      <input type="range" min="100" max="250" step="1" value={normalizeBackgroundZoom(preferences.customBackgroundZoom)} onChange={(event) => onChange({ ...preferences, customBackgroundZoom: normalizeBackgroundZoom(Number(event.target.value)) })} aria-label={ui("背景图片缩放")} />
                     </label>
                   </div>
                 </section>
               ) : null}
-              {imageError ? <p className="theme-image-error" role="alert">{imageError}</p> : null}
+              {imageError ? <p className="theme-image-error" role="alert">{uiMessage(imageError)}</p> : null}
             </div>
-          ) : <p className="theme-settings-hint">切换主题后会立即应用到侧边栏、聊天区和输入框。</p>}
+          ) : <p className="theme-settings-hint">{ui("切换主题后会立即应用到侧边栏、聊天区和输入框。")}</p>}
         </section>
         </div>
 
         <div id="settings-section-display" className="theme-settings-panel__section" hidden={activeSection !== 'display'}>
-        <section className="theme-settings-card theme-settings-card--page" aria-label="显示">
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("显示")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />显示</h2><p>调整当前浏览器中的界面阅读大小。</p></div>
-            <span className="theme-settings-card__badge">即时预览</span>
+            <div><h2><PixelThemeIcon name="display" theme={preferences.theme} />{ui("显示")}</h2><p>{ui("调整当前浏览器中的界面阅读大小。")}</p></div>
+            <span className="theme-settings-card__badge">{ui("即时预览")}</span>
           </div>
           <div className="theme-display-controls theme-display-controls--typography">
+            <div className="theme-control-row">
+              <span><strong>{ui('语言')}</strong><small>{ui('选择网页界面使用的语言；聊天和文件内容保持原文。')}</small></span>
+              <TranslationSelect
+                className="theme-language-select"
+                label={ui('语言')}
+                hideLabel
+                value={uiLanguage}
+                onChange={(value) => setUiLanguage(value as UiLanguage)}
+                options={[{ value: 'zh-CN', label: '简体中文' }, { value: 'en', label: 'English' }]}
+              />
+            </div>
             <label className="theme-control-row theme-control-row--stacked">
-              <span><strong>字体大小</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页。</small></span>
-              <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label="全局字体大小" /><output>{fontSizeAdjustment === 0 ? '标准' : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
+              <span><strong>{ui("字体大小")}</strong><small>{ui("同时调整聊天、输入框、侧栏、文件区和设置页。")}</small></span>
+              <span className="theme-range-input"><input type="range" min="-3" max="6" step="1" value={fontSizeAdjustment} onChange={(event) => onChange({ ...preferences, fontSizeAdjustment: normalizeFontSizeAdjustment(Number(event.target.value)) })} aria-label={ui("全局字体大小")} /><output>{fontSizeAdjustment === 0 ? ui('标准') : `${fontSizeAdjustment > 0 ? '+' : ''}${fontSizeAdjustment} px`}</output></span>
             </label>
             <label className="theme-control-row theme-control-row--stacked">
-              <span><strong>字间距</strong><small>同时调整聊天、输入框、侧栏、文件区和设置页的普通文字。</small></span>
-              <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label="全局字间距" /><output>{letterSpacingPercent}%</output></span>
+              <span><strong>{ui("字间距")}</strong><small>{ui("同时调整聊天、输入框、侧栏、文件区和设置页的普通文字。")}</small></span>
+              <span className="theme-range-input"><input type="range" min="0" max="8" step="1" value={letterSpacingPercent} onChange={(event) => onChange({ ...preferences, letterSpacingPercent: normalizeLetterSpacingPercent(Number(event.target.value)) })} aria-label={ui("全局字间距")} /><output>{letterSpacingPercent}%</output></span>
             </label>
           </div>
         </section>
         </div>
 
         <div id="settings-section-chat-shortcuts" className="theme-settings-panel__section" hidden={activeSection !== 'chat-shortcuts'}>
-        <section className="theme-settings-card theme-settings-card--page" aria-label="聊天切换快捷键">
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("聊天切换快捷键")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />聊天切换快捷键</h2><p>录制键盘组合，自定义切换侧栏聊天的操作。</p></div>
+            <div><h2><PixelThemeIcon name="chat" theme={preferences.theme} />{ui("聊天切换快捷键")}</h2><p>{ui("录制键盘组合，自定义切换侧栏聊天的操作。")}</p></div>
           </div>
           <div className="theme-display-controls sidebar-chat-shortcut-controls">
-            <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>恢复默认</button></div>
+            <div className="sidebar-chat-shortcut-actions"><button className="theme-notification-toggle sidebar-chat-shortcut-reset" type="button" onClick={resetChatShortcuts}>{ui("恢复默认")}</button></div>
             {(['previous', 'next'] as const).map((action) => {
-              const label = action === 'previous' ? '上一条聊天' : '下一条聊天'
+              const label = action === 'previous' ? ui('上一条聊天') : ui('下一条聊天')
               const isRecording = recordingShortcut === action
               return (
                 <div className="theme-control-row sidebar-chat-shortcut-row" key={action}>
-                  <span><strong>{label}</strong><small>{action === 'previous' ? '切换到列表中的上一条聊天。' : '切换到列表中的下一条聊天。'}</small></span>
+                  <span><strong>{label}</strong><small>{action === 'previous' ? ui('切换到列表中的上一条聊天。') : ui('切换到列表中的下一条聊天。')}</small></span>
                   <kbd className="sidebar-chat-shortcut-key">{formatSidebarChatShortcut(chatShortcuts[action])}</kbd>
                   <button
                     className={`theme-notification-toggle${isRecording ? ' theme-notification-toggle--enabled' : ''}`}
                     type="button"
                     aria-pressed={isRecording}
                     onClick={() => toggleShortcutRecording(action)}
-                  >{isRecording ? '按下组合键…' : '录制'}</button>
+                  >{isRecording ? ui('按下组合键…') : ui('录制')}</button>
                 </div>
               )
             })}
           </div>
-          <p className="theme-settings-hint">设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。</p>
-          {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{shortcutMessage}</p> : null}
+          <p className="theme-settings-hint">{ui("设置保存在当前浏览器。录制需要至少一个修饰键；浏览器保留的组合键无法使用，按 Esc 取消。")}</p>
+          {shortcutMessage ? <p className="theme-settings-hint sidebar-chat-shortcut-message" role="status" aria-live="polite">{uiMessage(shortcutMessage)}</p> : null}
         </section>
         </div>
 
         <div id="settings-section-system-notifications" className="theme-settings-panel__section" hidden={activeSection !== 'system-notifications'}>
-        <section className="theme-settings-card theme-settings-card--page" aria-label="系统通知">
+        <section className="theme-settings-card theme-settings-card--page" aria-label={ui("系统通知")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />系统通知</h2><p>应用在后台且连接在线时，提醒回复完成和待批准操作。</p></div>
+            <div><h2><PixelThemeIcon name="notification" theme={preferences.theme} />{ui("系统通知")}</h2><p>{ui("应用在后台且连接在线时，提醒回复完成和待批准操作。")}</p></div>
           </div>
           <div className="theme-display-controls">
             <div className="theme-control-row">
-              <span><strong>回复与审批提醒</strong><small>通知不包含聊天正文或命令内容。</small></span>
+              <span><strong>{ui("回复与审批提醒")}</strong><small>{ui("通知不包含聊天正文或命令内容。")}</small></span>
               <button
                 className={`theme-notification-toggle${preferences.systemNotificationsEnabled ? ' theme-notification-toggle--enabled' : ''}`}
                 type="button"
@@ -7612,25 +7644,25 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
                 onClick={() => { void updateSystemNotifications(!preferences.systemNotificationsEnabled) }}
               >
                 {notificationRequestPending ? <LoaderCircle className="spin" size={14} /> : preferences.systemNotificationsEnabled ? <Bell size={14} /> : <BellOff size={14} />}
-                {notificationRequestPending ? '正在请求权限…' : preferences.systemNotificationsEnabled ? '已开启' : '开启通知'}
+                {notificationRequestPending ? ui('正在请求权限…') : preferences.systemNotificationsEnabled ? ui('已开启') : ui('开启通知')}
               </button>
             </div>
-            {notificationError ? <p className="theme-notification-error" role="alert">{notificationError}</p> : null}
+            {notificationError ? <p className="theme-notification-error" role="alert">{uiMessage(notificationError)}</p> : null}
           </div>
         </section>
         </div>
 
         <div id="settings-section-about" className="theme-settings-panel__section" hidden={activeSection !== 'about'}>
-        <section className="theme-settings-card theme-settings-card--page theme-about-card" aria-label="关于">
+        <section className="theme-settings-card theme-settings-card--page theme-about-card" aria-label={ui("关于")}>
           <div className="theme-settings-card__heading">
-            <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />关于</h2><p>项目介绍、源代码与更新。</p></div>
+            <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />{ui("关于")}</h2><p>{ui("项目介绍、源代码与更新。")}</p></div>
           </div>
           <div className="theme-about-card__body">
             <img className="theme-about-card__logo" src="/code-remote.png" alt="Code Remote Logo" />
             <strong className="theme-about-card__name">Code Remote</strong>
-            <p className="theme-about-card__description">在浏览器中连接本机的代码助手，查看对话、文件和终端。</p>
+            <p className="theme-about-card__description">{ui("在浏览器中连接本机的代码助手，查看对话、文件和终端。")}</p>
             <a className="theme-about-card__link" href="https://github.com/sevencnup/code-remote" target="_blank" rel="noopener noreferrer">
-              <strong>GitHub 项目地址</strong>
+              <strong>{ui("GitHub 项目地址")}</strong>
               <span>https://github.com/sevencnup/code-remote</span>
             </a>
           </div>
@@ -7732,6 +7764,7 @@ const MessageContent = memo(function MessageContent({ text, hideStandaloneSepara
 })
 
 const CodeBlock = memo(function CodeBlock({ value, language }: { value: string; language?: string }) {
+  useUiLanguage()
   const [copied, setCopied] = useState(false)
   const [highlighted, setHighlighted] = useState<{
     value: string
@@ -7780,9 +7813,9 @@ const CodeBlock = memo(function CodeBlock({ value, language }: { value: string; 
           ))
           : value}</code>
       </pre>
-      <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? '代码已复制' : '复制代码'}>
+      <button className="chat-message__code-copy" type="button" onClick={() => void copyCode()} aria-label={copied ? ui('代码已复制') : ui('复制代码')}>
         {copied ? <Check size={13} /> : <Copy size={13} />}
-        {copied ? '已复制' : '复制'}
+        {copied ? ui('已复制') : ui('复制')}
       </button>
     </div>
   )
@@ -7871,6 +7904,7 @@ function summarizeFileChanges(changes: CodexFileChange[]): FileChangeSummary {
 }
 
 const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onOpenFile, readOnly = false }: { changes: CodexFileChange[]; onInsertPath: (path: string) => void; onOpenFile: (path: string, diff?: string) => void; readOnly?: boolean }) {
+  useUiLanguage()
   const [expanded, setExpanded] = useState(false)
   const [reviewing, setReviewing] = useState(false)
   const { files, additions, deletions } = summarizeFileChanges(changes)
@@ -7894,21 +7928,21 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
       <header className="file-change-card__heading">
         <span className="file-change-card__icon"><FileText size={15} /></span>
         <div className="file-change-card__summary">
-          <strong>{inProgress ? `正在编辑 ${files.length} 个文件` : `本次已编辑 ${files.length} 个文件`}</strong>
+          <strong>{inProgress ? uiFormat("正在编辑 {0} 个文件", files.length) : uiFormat("本次已编辑 {0} 个文件", files.length)}</strong>
           {hasLineStats ? <span className="file-change-card__stats"><i>+{additions}</i><em>-{deletions}</em></span> : null}
         </div>
         <button className={`file-change-card__review${reviewing ? ' file-change-card__review--active' : ''}`} type="button" aria-expanded={reviewing} onClick={() => setReviewing((current) => !current)}>
-          {reviewing ? '收起审核' : '审核'}
+          {reviewing ? ui('收起审核') : ui('审核')}
         </button>
       </header>
       <div className="file-change-card__files">
         {visibleFiles.map((item) => (
           <div className="file-change-card__file" key={item.path}>
             <div className="file-change-card__file-row">
-              {readOnly ? <span className="file-change-card__path-readonly" title={item.path}>{item.path}</span> : <><button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button>
-              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={`预览 ${item.path}`} aria-label={`预览文件 ${item.path}`}>{item.path}</button></>}
+              {readOnly ? <span className="file-change-card__path-readonly" title={item.path}>{item.path}</span> : <><button className="file-change-card__path-mobile" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={uiFormat("预览 {0}", item.path)} aria-label={uiFormat("预览文件 {0}", item.path)}>{item.path}</button>
+              <button className="file-change-card__path-desktop" type="button" onClick={() => onOpenFile(item.path, item.diff)} title={uiFormat("预览 {0}", item.path)} aria-label={uiFormat("预览文件 {0}", item.path)}>{item.path}</button></>}
               {item.additions > 0 || item.deletions > 0 ? <span className="file-change-card__file-stats"><i>+{item.additions}</i><em>-{item.deletions}</em></span> : null}
-              {!readOnly ? <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={`插入 ${item.path} 到对话`} title="插入对话"><MessagesSquare size={13} /><span>插入对话</span></button> : null}
+              {!readOnly ? <button className="file-change-card__insert" type="button" onClick={() => onInsertPath(item.path)} aria-label={uiFormat("插入 {0} 到对话", item.path)} title={ui("插入对话")}><MessagesSquare size={13} /><span>{ui("插入对话")}</span></button> : null}
             </div>
             {reviewing ? (
               item.diff
@@ -7928,14 +7962,14 @@ const FileChangeCard = memo(function FileChangeCard({ changes, onInsertPath, onO
                     </span>
                   )
                 })}</pre>
-                : <small>{item.kind === 'add' ? '新增文件' : item.kind === 'delete' ? '删除文件' : '文件已更新'}</small>
+                : <small>{item.kind === 'add' ? ui('新增文件') : item.kind === 'delete' ? ui('删除文件') : ui('文件已更新')}</small>
             ) : null}
           </div>
         ))}
       </div>
       {hiddenCount > 0 ? (
         <button className="file-change-card__more" type="button" aria-expanded={showAll} onClick={toggleFiles}>
-          {showAll ? '收起文件' : `查看另外 ${hiddenCount} 个文件`}
+          {showAll ? ui('收起文件') : uiFormat("查看另外 {0} 个文件", hiddenCount)}
           <ChevronDown size={14} />
         </button>
       ) : null}
@@ -7956,6 +7990,7 @@ const OperationLog = memo(function OperationLog({
   onOpenImage: (path: string) => void
   title?: string
 }) {
+  useUiLanguage()
   const [expanded, setExpanded] = useState(false)
   const revealedTerminalOutput = useRef(false)
   useEffect(() => {
@@ -7977,7 +8012,7 @@ const OperationLog = memo(function OperationLog({
 
   return (
     <details className="operation-log" open={expanded} onToggle={(event) => setExpanded(event.currentTarget.open)}>
-      <summary><ChevronDown size={13} /><span>{title}</span><small>{statusText}</small></summary>
+      <summary><ChevronDown size={13} /><span>{ui(title)}</span><small>{uiMessage(statusText)}</small></summary>
       <ul>
         {operations.map((operation) => {
           const fileChange = fileChanges.find((change) => change.id === operation.id)
@@ -7988,26 +8023,26 @@ const OperationLog = memo(function OperationLog({
           const additionalPaths = operation.paths?.filter((path) => !linkedPaths.has(path)) ?? []
           return (
           <li className={`operation-log__item operation-log__item--${operation.status}`} key={operation.id}>
-            <span className="operation-log__status" aria-label={operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '已完成'}>
+            <span className="operation-log__status" aria-label={operation.status === 'running' ? ui('进行中') : operation.status === 'failed' ? ui('失败') : operation.status === 'stopped' ? ui('已停止') : ui('已完成')}>
               {operation.status === 'running' ? <LoaderCircle className="spin" size={12} /> : operation.status === 'completed' ? <Check size={12} /> : operation.status === 'failed' ? <AlertTriangle size={12} /> : <Square size={10} />}
             </span>
             <span className="operation-log__content">
-              <strong>{operation.label}</strong>
+              <strong>{ui(operation.label)}</strong>
               {operation.detail ? <code title={operation.detail}>{operation.detail}</code> : null}
               {operation.terminalOutput ? <pre className="operation-log__terminal-output">{operation.terminalOutput}</pre> : null}
               {operation.imagePath ? (
                 <span className="operation-log__actions">
-                  <button type="button" onClick={() => onOpenImage(operation.imagePath!)} title={operation.imagePath}><Eye size={12} />打开图片</button>
+                  <button type="button" onClick={() => onOpenImage(operation.imagePath!)} title={operation.imagePath}><Eye size={12} />{ui("打开图片")}</button>
                 </span>
               ) : null}
               {fileChange?.changes.map((change) => (
                 <span className="operation-log__actions" key={`${operation.id}:${change.path}`}>
-                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><WorkspaceFileTypeIcon path={change.path} size={13} />查看更改 · {change.path.split(/[\\/]/).at(-1) || change.path}</button>
+                  <button type="button" onClick={() => onOpenFile(change.path, change.diff)} title={change.path}><WorkspaceFileTypeIcon path={change.path} size={13} />{ui("查看更改 ·")} {change.path.split(/[\\/]/).at(-1) || change.path}</button>
                 </span>
               ))}
               {additionalPaths.map((path) => (
                 <span className="operation-log__actions" key={`${operation.id}:path:${path}`}>
-                  <button type="button" onClick={() => onOpenFile(path)} title={path}><WorkspaceFileTypeIcon path={path} size={13} />打开文件 · {path.split(/[\\/]/).at(-1) || path}</button>
+                  <button type="button" onClick={() => onOpenFile(path)} title={path}><WorkspaceFileTypeIcon path={path} size={13} />{ui("打开文件 ·")} {path.split(/[\\/]/).at(-1) || path}</button>
                 </span>
               ))}
               {operation.steps?.length ? (
@@ -8016,14 +8051,14 @@ const OperationLog = memo(function OperationLog({
                     <span className="operation-log__step" key={`${operation.id}-step-${index}`}>
                       <i aria-hidden="true">└</i>
                       {step.path
-                        ? <button className="operation-log__step-action" type="button" onClick={() => onOpenFile(step.path!)} title={step.path}><Eye size={11} />{step.label} · {step.detail ?? step.path}</button>
-                        : <><strong>{step.label}</strong>{step.detail ? <code title={step.detail}>{step.detail}</code> : null}</>}
+                        ? <button className="operation-log__step-action" type="button" onClick={() => onOpenFile(step.path!)} title={step.path}><Eye size={11} />{ui(step.label)} · {step.detail ?? step.path}</button>
+                        : <><strong>{ui(step.label)}</strong>{step.detail ? <code title={step.detail}>{step.detail}</code> : null}</>}
                     </span>
                   ))}
                 </span>
               ) : null}
             </span>
-            <small>{operation.status === 'running' ? '进行中' : operation.status === 'failed' ? '失败' : operation.status === 'stopped' ? '已停止' : '完成'}</small>
+            <small>{operation.status === 'running' ? ui('进行中') : operation.status === 'failed' ? ui('失败') : operation.status === 'stopped' ? ui('已停止') : ui('完成')}</small>
           </li>
           )
         })}
@@ -8063,6 +8098,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
   choicePromptText?: string
   choiceCard?: ReactNode
 }) {
+  useUiLanguage()
   const keepStreamingLayout = useRef(streaming)
   if (streaming) keepStreamingLayout.current = true
   const operationById = new Map(operations.map((operation) => [operation.id, operation]))
@@ -8142,7 +8178,7 @@ const ActivityTimelineContent = memo(function ActivityTimelineContent({ text, ti
           fileChanges={fileChanges}
           onOpenFile={onOpenFile}
           onOpenImage={onOpenImage}
-          title={block.operations.length === 1 ? block.operations[0].label : `${block.operations.length} 个连续操作`}
+          title={block.operations.length === 1 ? block.operations[0].label : uiFormat("{0} 个连续操作", block.operations.length)}
         />)}
     </div>
   )
@@ -8163,6 +8199,7 @@ const OperationActivityLine = memo(function OperationActivityLine({ className, o
   activity: CodexActivity | null
   iconSize: number
 }) {
+  useUiLanguage()
   const isReadingFile = operation?.kind === 'file' && operation.label === '查看文件'
   const label = isReadingFile
     ? '正在读取'
@@ -8172,7 +8209,7 @@ const OperationActivityLine = memo(function OperationActivityLine({ className, o
         ? '正在搜索文件'
         : activity?.label ?? '正在思考'
   const detail = operation ? operationActivityDetail(operation, activity) : activity?.detail
-  const text = [label, detail].filter(Boolean).join(' ')
+  const text = [ui(label), detail].filter(Boolean).join(' ')
 
   return (
     <span className={`operation-activity ${className}`} aria-live="polite">
@@ -8183,6 +8220,7 @@ const OperationActivityLine = memo(function OperationActivityLine({ className, o
 })
 
 const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number }) {
+  useUiLanguage()
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -8191,10 +8229,11 @@ const TurnElapsed = memo(function TurnElapsed({ startedAt }: { startedAt: number
     return () => window.clearInterval(timer)
   }, [startedAt])
 
-  return <time className="running-indicator__elapsed" aria-live="off">已用 {formatTurnDuration(now - startedAt)}</time>
+  return <time className="running-indicator__elapsed" aria-live="off">{ui("已用")} {formatTurnDuration(now - startedAt)}</time>
 })
 
 function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: MessageChoiceGroup[]; enabled: boolean; onUse: (reply: string) => boolean; onSend: (reply: string) => Promise<ChoiceReplyDelivery | false> }) {
+  useUiLanguage()
   const [selected, setSelected] = useState(() => groups.map(() => -1))
   const [customAnswers, setCustomAnswers] = useState(() => groups.map(() => ''))
   const [inserted, setInserted] = useState(false)
@@ -8244,8 +8283,8 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
   }
 
   return (
-    <div className="message-choices" aria-label={enabled ? '助手提出的选择题' : '历史选择题，已有后续消息'}>
-      <strong className="message-choices__heading">快速选择</strong>
+    <div className="message-choices" aria-label={enabled ? ui('助手提出的选择题') : ui('历史选择题，已有后续消息')}>
+      <strong className="message-choices__heading">{ui("快速选择")}</strong>
       {groups.map((group, groupIndex) => (
         <fieldset className="message-choices__group" key={`${groupIndex}-${group.question}`}>
           <legend>{group.question}</legend>
@@ -8262,22 +8301,22 @@ function MessageChoiceForm({ groups, enabled, onUse, onSend }: { groups: Message
                   : value))}
               >{selected[groupIndex] === optionIndex ? <Check size={14} aria-hidden="true" /> : null}<span>{option}{group.descriptions?.[optionIndex] ? <small>{group.descriptions[optionIndex]}</small> : null}</span></button>
             ))}
-            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || submitted !== null} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>其他答案（没有合适选项时填写）</button>
+            <button className={`message-choices__option${selected[groupIndex] === -2 ? ' message-choices__option--selected' : ''}`} type="button" aria-pressed={selected[groupIndex] === -2} disabled={!enabled || inserted || sending || submitted !== null} onClick={() => setSelected((current) => current.map((value, index) => index === groupIndex ? value === -2 ? -1 : -2 : value))}>{ui("其他答案（没有合适选项时填写）")}</button>
           </div>
           {selected[groupIndex] === -2 ? <>
-            <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={`${group.question}的其他答案`} aria-keyshortcuts="Enter" enterKeyHint="send" title="Enter 发送；Shift+Enter 换行" onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} onCompositionStart={() => { composingRef.current = true }} onCompositionEnd={() => { composingRef.current = false; lastCompositionEndAt.current = Date.now() }} onBlur={() => { composingRef.current = false }} onKeyDown={handleCustomAnswerKeyDown} />
-            {enabled && !inserted && submitted === null ? <small className="message-choices__custom-hint">Enter 发送 · Shift+Enter 换行</small> : null}
+            <textarea className="message-choices__custom" value={customAnswers[groupIndex]} maxLength={1000} disabled={!enabled || inserted || sending || submitted !== null} aria-label={uiFormat("{0}的其他答案", group.question)} aria-keyshortcuts="Enter" enterKeyHint="send" title={ui("Enter 发送；Shift+Enter 换行")} onChange={(event) => setCustomAnswers((current) => current.map((value, index) => index === groupIndex ? event.target.value : value))} onCompositionStart={() => { composingRef.current = true }} onCompositionEnd={() => { composingRef.current = false; lastCompositionEndAt.current = Date.now() }} onBlur={() => { composingRef.current = false }} onKeyDown={handleCustomAnswerKeyDown} />
+            {enabled && !inserted && submitted === null ? <small className="message-choices__custom-hint">{ui("Enter 发送 · Shift+Enter 换行")}</small> : null}
           </> : null}
         </fieldset>
       ))}
       {enabled ? <div className="message-choices__footer">
-        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => void sendAnswer()}>{sending ? '正在发送…' : submitted === 'sent' ? '答案已发送' : submitted === 'queued' ? '已加入排队' : submitted === 'unverified' ? '送达未确认' : '发送并继续'}</button>
+        <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => void sendAnswer()}>{sending ? ui('正在发送…') : submitted === 'sent' ? ui('答案已发送') : submitted === 'queued' ? ui('已加入排队') : submitted === 'unverified' ? ui('送达未确认') : ui('发送并继续')}</button>
         <button type="button" disabled={!complete || inserted || sending || submitted !== null} onClick={() => {
           if (onUse(reply())) setInserted(true)
           else setNotice('请先结束当前编辑，再填入回答')
-        }}>{inserted ? '已填入输入框' : '填入输入框'}</button>
-        <small>{notice}</small>
-      </div> : <small className="message-choices__history-notice">该问题已有后续消息</small>}
+        }}>{inserted ? ui('已填入输入框') : ui('填入输入框')}</button>
+        <small>{uiMessage(notice)}</small>
+      </div> : <small className="message-choices__history-notice">{ui("该问题已有后续消息")}</small>}
     </div>
   )
 }
@@ -8294,6 +8333,7 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   children: ReactNode
   renderCopyAction: (text: string) => ReactNode
 }) {
+  useUiLanguage()
   const translationProfileId = selectedTranslationProfileId(preferences)
   const container = useRef<HTMLDivElement>(null)
   const [visible, setVisible] = useState(false)
@@ -8345,17 +8385,17 @@ function AssistantTranslation({ token, text, preferences, revision, streaming, c
   const translated = eligible ? (result?.key === key && result.text ? result.text : assistantTranslationCache.get(key)) : undefined
   const error = eligible && result?.key === key ? result.error ?? (result.text === '' ? '翻译结果为空，请重试。' : undefined) : undefined
   return <div ref={container} className="assistant-translation">
-    {waitingForText ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />AI 正在回复，完成后显示译文…</small> : null}
-    {tooLong ? <small className="assistant-translation__status">回复超过 30000 字符，无法整条翻译。</small> : null}
+    {waitingForText ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{ui("AI 正在回复，完成后显示译文…")}</small> : null}
+    {tooLong ? <small className="assistant-translation__status">{ui("回复超过 30000 字符，无法整条翻译。")}</small> : null}
     {eligible && translated ? <div className="assistant-translation__result">
-      <div className="assistant-translation__heading"><strong>中文译文</strong><button type="button" onClick={() => { void copyTextToClipboard(translated).then((success) => { if (success) setCopied(true) }) }}>{copied ? '已复制' : '复制译文'}</button></div>
+      <div className="assistant-translation__heading"><strong>{ui("中文译文")}</strong><button type="button" onClick={() => { void copyTextToClipboard(translated).then((success) => { if (success) setCopied(true) }) }}>{copied ? ui('已复制') : ui('复制译文')}</button></div>
       <MessageContent text={translated} hideStandaloneSeparators preferWebUrlLabel />
     </div> : null}
-    {eligible && !translated && !error ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />回复已生成，正在翻译…</small> : null}
-    {eligible && error ? <div className="assistant-translation__error"><span>{error}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>重试</button></div> : null}
+    {eligible && !translated && !error ? <small className="assistant-translation__status"><LoaderCircle className="spin" size={14} aria-hidden="true" />{ui("回复已生成，正在翻译…")}</small> : null}
+    {eligible && error ? <div className="assistant-translation__error"><span>{uiMessage(error)}</span><button type="button" onClick={() => setRetry((value) => value + 1)}>{ui("重试")}</button></div> : null}
     {eligible || tooLong
       ? translated || error || tooLong
-        ? <details className="assistant-translation__original"><summary>查看英文原文</summary>{children}{renderCopyAction(text)}</details>
+        ? <details className="assistant-translation__original"><summary>{ui("查看英文原文")}</summary>{children}{renderCopyAction(text)}</details>
         : null
       : waitingForText ? null : children}
     {translated || error || tooLong || (!eligible && !waitingForText) ? choiceCard : null}
@@ -8384,9 +8424,10 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   onOpenFile: (path: string, diff?: string) => void
   onOpenImage: (path: string) => void
 }) {
+  useUiLanguage()
   // Whole-message copy waits for the turn; closed code blocks can be copied immediately.
   const showCopyAction = !message.streaming && Boolean(message.text || message.documents?.length || message.images?.length)
-  const renderCopyAction = (displayedText: string) => showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ?? '复制'}</button></div> : null
+  const renderCopyAction = (displayedText: string) => showCopyAction ? <div className="chat-message__actions"><button type="button" onClick={() => void onCopy(message, displayedText)}>{copyFeedback && copyFeedback !== '复制失败' ? <Check size={13} /> : <Copy size={13} />}{copyFeedback ? uiMessage(copyFeedback) : ui('复制')}</button></div> : null
   const sentAtLabel = formatMessageTimestamp(message.role === 'user' ? message.sentAt : undefined)
   const replyStartedAtLabel = formatMessageTimestamp(message.role === 'assistant' ? message.replyStartedAt : undefined)
   const revealedText = useStreamingTextReveal(message.text, Boolean(message.role === 'assistant' && message.streaming
@@ -8402,10 +8443,10 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     : null
   const assistantModelLabel = message.role === 'assistant' && message.model
     ? assistantModelOptions.find((option) => option.value === message.model)?.label
-      ?? (message.model === 'default' ? '本机默认模型' : message.model)
+    ?? (message.model === 'default' ? ui('本机默认模型') : message.model)
     : null
   const assistantEffortLabel = message.role === 'assistant' && message.effort
-    ? message.effort === 'default' ? assistantName === 'Claude Code' ? '本机默认' : '默认' : effortLabelOf(message.effort)
+    ? message.effort === 'default' ? assistantName === 'Claude Code' ? ui('本机默认') : ui('默认') : effortLabelOf(message.effort)
     : null
   const showAssistantPreferences = message.role === 'assistant' && !message.streaming && Boolean(assistantModelLabel || assistantEffortLabel)
   const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
@@ -8437,33 +8478,33 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
   return (
     <ClaudeFormattingContext.Provider value={message.role === 'assistant' && assistantName === 'Claude Code'}>
     <article className={`chat-message chat-message--${message.role}`} data-message-id={message.id}>
-      <span className="chat-message__avatar">{message.role === 'user' ? '你' : 'C'}</span>
+      <span className="chat-message__avatar">{message.role === 'user' ? ui('你') : 'C'}</span>
       <div className="chat-message__body">
         <div className="chat-message__meta">
           {message.role === 'assistant' ? <strong className={`chat-message__assistant-name chat-message__assistant-name--${assistantName === 'Claude Code' ? 'claude' : 'codex'}`}>{assistantName}</strong> : null}
-          {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString('zh-CN') : undefined}>开始 {replyStartedAtLabel}</time> : null}
-          {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">用时 {formatTurnDuration(message.replyDurationMs)}</time> : null}
+          {replyStartedAtLabel ? <time className="chat-message__timing" aria-live="off" dateTime={message.replyStartedAt} title={message.replyStartedAt ? new Date(message.replyStartedAt).toLocaleString(getUiLanguage()) : undefined}>{ui("开始")} {replyStartedAtLabel}</time> : null}
+          {!message.streaming && message.replyDurationMs !== undefined ? <time className="chat-message__timing" aria-live="off">{ui("用时")} {formatTurnDuration(message.replyDurationMs)}</time> : null}
         </div>
         {message.images?.length ? <div className="chat-message__images">{message.images.map((image, index) => <ImagePreviewButton key={`${image.name}-${index}`} src={image.previewUrl} name={image.name} />)}</div> : null}
         {message.documents?.map((document, index) => document.name === 'pasted-table.md' && !document.sourceFileId
           ? <PastedTablePreview key={`${document.name}-${index}`} content={document.content} maxRows={60} />
-          : <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? '原始文件 · Codex 读取原件' : `${document.charCount.toLocaleString()} 个字符`}</small></span></div>)}
+          : <div className="message-document" key={`${document.name}-${document.sourceFileId ?? index}`}><FileText size={15} /><span><strong>{document.name}</strong><small>{document.sourceFileId ? ui('原始文件 · Codex 读取原件') : uiFormat("{0} 个字符", document.charCount.toLocaleString())}</small></span></div>)}
         {message.role === 'assistant' && (translateAssistant || !message.streaming)
           ? <AssistantTranslation token={token} text={translateAssistant ? completedAssistantText : message.text} preferences={translation} revision={translationRevision} streaming={Boolean(message.streaming)} choiceCard={translateAssistant ? choiceCard : null} renderCopyAction={renderCopyAction}>{translateAssistant ? <MessageContent text={completedAssistantText} hideStandaloneSeparators preferWebUrlLabel /> : bodyContent}</AssistantTranslation>
           : bodyContent}
-        {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? '查看中文原文' : '查看英文发送内容'}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
-        {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{message.replyError}</span></div> : null}
+        {originalUserText ? <details className="chat-message__alternate-text"><summary>{showTranslatedUser ? ui('查看中文原文') : ui('查看英文发送内容')}</summary><MessageContent text={showTranslatedUser ? originalUserText : message.text} hideStandaloneSeparators={false} preferWebUrlLabel={false} /></details> : null}
+        {message.replyError ? <div className="chat-message__reply-error" role="status"><AlertTriangle size={13} aria-hidden="true" /><span>{uiMessage(message.replyError)}</span></div> : null}
         {showOperations && operations.length > 0 && !message.streaming && (translateAssistant || activityTimeline.length === 0) && (!message.id.startsWith('streaming-assistant-') || translateAssistant) ? <OperationLog operations={operations} fileChanges={fileChanges} onOpenFile={onOpenFile} onOpenImage={onOpenImage} /> : null}
         {!translateAssistant && !choiceInTimeline && !splitStructuredChoice ? choiceCard : null}
       </div>
       {showAssistantPreferences ? (
         <div className="chat-message__footer chat-message__footer--assistant">
-          <small className="chat-message__assistant-settings">模型 {assistantModelLabel ?? '本机默认模型'} · 思考 {assistantEffortLabel ?? (assistantName === 'Claude Code' ? '本机默认' : '默认')}</small>
+          <small className="chat-message__assistant-settings">{ui("模型")} {assistantModelLabel ?? ui('本机默认模型')} {ui("· 思考")} {assistantEffortLabel ?? (assistantName === 'Claude Code' ? ui('本机默认') : ui('默认'))}</small>
         </div>
       ) : null}
       {message.role === 'user' && (sentAtLabel || showCopyAction) ? (
         <div className="chat-message__footer">
-          {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString('zh-CN') : undefined}>发送 {sentAtLabel}</time> : null}
+          {sentAtLabel ? <time className="chat-message__sent-at" dateTime={message.sentAt} title={message.sentAt ? new Date(message.sentAt).toLocaleString(getUiLanguage()) : undefined}>{ui("发送")} {sentAtLabel}</time> : null}
           {renderCopyAction(displayedUserText)}
         </div>
       ) : null}

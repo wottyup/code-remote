@@ -1,3 +1,4 @@
+import { ui } from '../lib/uiLanguage'
 import { Component, Fragment, type ErrorInfo, type ReactNode } from 'react'
 
 interface AppRecoveryBoundaryProps {
@@ -53,11 +54,11 @@ export class AppRecoveryBoundary extends Component<AppRecoveryBoundaryProps, App
         <main className="app-recovery" role="alert">
           <section className="app-recovery__card">
             <span className="app-recovery__mark">C</span>
-            <h1>页面正在恢复</h1>
-            <p>聊天数据仍保留在本机，正在重新连接界面。</p>
+            <h1>{ui("页面正在恢复")}</h1>
+            <p>{ui("聊天数据仍保留在本机，正在重新连接界面。")}</p>
             <div className="app-recovery__actions">
-              <button type="button" onClick={this.recover}>重新恢复</button>
-              <button type="button" onClick={this.reload}>刷新页面</button>
+              <button type="button" onClick={this.recover}>{ui("重新恢复")}</button>
+              <button type="button" onClick={this.reload}>{ui("刷新页面")}</button>
             </div>
           </section>
         </main>

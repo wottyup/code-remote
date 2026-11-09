@@ -1,4 +1,4 @@
-import { codexRemoteClient } from './codexRemoteClient'
+import { codexRemoteClient, RemoteApiError } from './codexRemoteClient'
 
 export type CPAUsageSource = 'cpamp' | 'codex-proxy' | 'new-api'
 
@@ -10,6 +10,7 @@ export interface CPAUsageSettings {
   codexProxyApiKey: string
   newAPIBaseUrl: string
   newAPIAccessToken: string
+  newAPIUserId: string
 }
 
 export type CPAUsageRange = 'today' | 'yesterday' | '7d' | '30d'
@@ -99,6 +100,7 @@ export const emptyCPAUsageSettings: CPAUsageSettings = {
   codexProxyApiKey: '',
   newAPIBaseUrl: '',
   newAPIAccessToken: '',
+  newAPIUserId: '',
 }
 
 export function normalizeCPAUsageBaseUrl(value: string) {
@@ -142,6 +144,12 @@ export function normalizeNewAPIBaseUrl(value: string) {
   }
 }
 
+export function normalizeNewAPIUserId(value: string) {
+  const userId = value.trim()
+  if (userId && !/^[1-9]\d{0,17}$/.test(userId)) throw new Error('New API 用户 ID 应为正整数。')
+  return userId
+}
+
 export function readCPAUsageSettings(): CPAUsageSettings {
   if (typeof window === 'undefined') return emptyCPAUsageSettings
   try {
@@ -156,6 +164,7 @@ export function readCPAUsageSettings(): CPAUsageSettings {
       codexProxyApiKey: typeof value.codexProxyApiKey === 'string' ? value.codexProxyApiKey : '',
       newAPIBaseUrl: typeof value.newAPIBaseUrl === 'string' ? value.newAPIBaseUrl : '',
       newAPIAccessToken: typeof value.newAPIAccessToken === 'string' ? value.newAPIAccessToken : '',
+      newAPIUserId: typeof value.newAPIUserId === 'string' ? value.newAPIUserId : '',
     }
   } catch {
     return emptyCPAUsageSettings
@@ -295,6 +304,15 @@ interface CodexProxyHistoryPoint {
 
 interface CodexProxyHistory { data_points: CodexProxyHistoryPoint[] }
 
+export interface CodexProxyClientKeyStat {
+  id: string
+  name: string
+  used_tokens: number
+  used_cost_usd: number
+  request_count: number
+  last_used_at: string | null
+}
+
 function finiteUsageNumber(value: unknown, label: string, optional = false): number {
   if (optional && value === undefined) return 0
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -305,15 +323,43 @@ function finiteUsageNumber(value: unknown, label: string, optional = false): num
 
 function codexProxyCredentials(settings: CPAUsageSettings) {
   const baseUrl = normalizeCodexProxyBaseUrl(settings.codexProxyBaseUrl)
-  const apiKey = settings.codexProxyApiKey.trim()
+  const apiKey = settings.codexProxyApiKey
   if (!baseUrl) throw new Error('请先在设置中填写 Codex Proxy 地址。')
-  if (!apiKey) throw new Error('请先在设置中填写主 Proxy API Key。')
+  if (!apiKey.trim()) throw new Error('请先在设置中填写 Codex Proxy 控制面板登录密码。')
   return { baseUrl, apiKey }
 }
 
-export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<void> {
+export async function probeCodexProxyUsageConnection(settings: CPAUsageSettings, token: string): Promise<{ clientKeysError?: string }> {
   const summary = await codexRemoteClient.codexProxyUsage<CodexProxySummary>(token, 'summary', codexProxyCredentials(settings))
   finiteUsageNumber(summary?.total_request_count, '累计请求')
+  try {
+    await fetchCodexProxyClientKeys(settings, token)
+    return {}
+  } catch (reason) {
+    return { clientKeysError: reason instanceof Error ? reason.message : '读取 Client Key 用量失败。' }
+  }
+}
+
+export async function fetchCodexProxyClientKeys(settings: CPAUsageSettings, token: string, signal?: AbortSignal): Promise<CodexProxyClientKeyStat[]> {
+  let response: { keys: CodexProxyClientKeyStat[] }
+  try {
+    response = await codexRemoteClient.codexProxyUsage(token, 'client-keys', codexProxyCredentials(settings), signal)
+  } catch (reason) {
+    if (reason instanceof RemoteApiError && reason.status === 422) throw new Error('Code Remote 后端可能尚未更新，请重启服务，并检查连接配置。')
+    throw reason
+  }
+  if (!Array.isArray(response?.keys)) throw new Error('Codex Proxy 未返回有效的 Client Key 列表。')
+  return response.keys.map((key) => {
+    if (!key || typeof key.id !== 'string' || !key.id) throw new Error('Codex Proxy 返回了无效的 Client Key 数据。')
+    return {
+      id: key.id,
+      name: typeof key.name === 'string' ? key.name : '',
+      used_tokens: finiteUsageNumber(key.used_tokens, 'Client Key Token'),
+      used_cost_usd: finiteUsageNumber(key.used_cost_usd, 'Client Key 金额'),
+      request_count: finiteUsageNumber(key.request_count, 'Client Key 请求数'),
+      last_used_at: typeof key.last_used_at === 'string' ? key.last_used_at : null,
+    }
+  })
 }
 
 export async function fetchCodexProxyUsageAnalytics(
@@ -414,8 +460,8 @@ function newAPICredentials(settings: CPAUsageSettings) {
   const baseUrl = normalizeNewAPIBaseUrl(settings.newAPIBaseUrl)
   const accessToken = settings.newAPIAccessToken.trim()
   if (!baseUrl) throw new Error('请先在设置中填写 New API 地址。')
-  if (!accessToken) throw new Error('请先在设置中填写 New API 面板个人访问令牌。')
-  return { baseUrl, accessToken }
+  if (!accessToken) throw new Error('请先在设置中填写 New API 面板访问令牌。')
+  return { baseUrl, accessToken, userId: normalizeNewAPIUserId(settings.newAPIUserId) }
 }
 
 function newAPIUsageNumber(value: unknown, label: string, optional = false): number {
@@ -449,12 +495,16 @@ export async function fetchNewAPIUsageAnalytics(
   const summary = {
     total_calls: 0, success_calls: 0, failure_calls: 0,
     input_tokens: 0, output_tokens: 0, reasoning_tokens: 0,
-    cache_read_tokens: 0, cache_creation_tokens: 0,
     total_tokens: 0, total_cost: 0, success_rate: 0,
   }
+  let cacheReadTotal = 0
+  let cacheCreationTotal = 0
+  let cacheBreakdownComplete = true
+  let includedRows = 0
   for (const row of response.rows) {
     const timestamp = newAPIUsageNumber(row?.created_at, '统计时间') * 1000
     if (timestamp < fromMs || timestamp > toMs) continue
+    includedRows += 1
     const calls = newAPIUsageNumber(row.count, '请求数')
     const tokens = newAPIUsageNumber(row.token_used, 'Token')
     const quota = newAPIUsageNumber(row.quota, '额度')
@@ -465,8 +515,9 @@ export async function fetchNewAPIUsageAnalytics(
     summary.total_calls += calls
     summary.total_tokens += tokens
     summary.total_cost += cost
-    summary.cache_read_tokens += cacheRead
-    summary.cache_creation_tokens += cacheCreation
+    cacheReadTotal += cacheRead
+    cacheCreationTotal += cacheCreation
+    if (row.cache_read_tokens === undefined || row.cache_creation_tokens === undefined) cacheBreakdownComplete = false
 
     const date = new Date(timestamp)
     if (daily) date.setHours(0, 0, 0, 0)
@@ -493,7 +544,10 @@ export async function fetchNewAPIUsageAnalytics(
   return {
     generated_at_ms: now.getTime(),
     granularity: daily ? 'day' : 'hour',
-    summary,
+    summary: {
+      ...summary,
+      ...(includedRows > 0 && cacheBreakdownComplete ? { cache_read_tokens: cacheReadTotal, cache_creation_tokens: cacheCreationTotal } : {}),
+    },
     timeline: [...buckets.values()].sort((a, b) => a.bucket_ms - b.bucket_ms),
     model_stats: [...models.values()],
   }

@@ -1,3 +1,4 @@
+import { ui, uiFormat, useUiLanguage } from '../lib/uiLanguage'
 import { X } from 'lucide-react'
 import { useLayoutEffect, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode, type RefObject } from 'react'
 
@@ -83,6 +84,7 @@ export function ChatOverlayPanel({
   onKeyDown,
   onPanelPointerDown,
 }: ChatOverlayPanelProps) {
+  useUiLanguage()
   const backdrop = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLElement>(null)
   const escapeHandler = useRef(onEscape ?? onClose)
@@ -196,7 +198,7 @@ export function ChatOverlayPanel({
         <header className="chat-overlay-panel__header">
           <div className="chat-overlay-panel__heading">{header}</div>
           {showCloseButton ? (
-            <button ref={closeButtonRef} className="icon-button chat-overlay-panel__close" type="button" onClick={onClose} aria-label={`关闭${ariaLabel}`} title={`关闭${ariaLabel}`}>
+            <button ref={closeButtonRef} className="icon-button chat-overlay-panel__close" type="button" onClick={onClose} aria-label={uiFormat("关闭{0}", ariaLabel)} title={uiFormat("关闭{0}", ariaLabel)}>
               <X size={16} />
             </button>
           ) : null}
@@ -206,12 +208,12 @@ export function ChatOverlayPanel({
         <div
           className="chat-overlay-panel__resize-handle"
           role="separator"
-          aria-label="调整浮层高度"
+          aria-label={ui("调整浮层高度")}
           aria-orientation="horizontal"
           aria-valuemin={minimumHeight}
           aria-valuemax={maximumHeight}
           aria-valuenow={Math.round(currentHeight)}
-          aria-valuetext={`${Math.round(currentHeight)} 像素`}
+          aria-valuetext={uiFormat("{0} 像素", Math.round(currentHeight))}
           tabIndex={0}
           onPointerDown={beginResize}
           onPointerMove={moveResize}
@@ -220,7 +222,7 @@ export function ChatOverlayPanel({
           onLostPointerCapture={finishResize}
           onDoubleClick={resetHeight}
           onKeyDown={handleResizeKeyDown}
-          title="拖动调整高度，双击恢复铺满；方向键微调，Shift 加大步长"
+          title={ui("拖动调整高度，双击恢复铺满；方向键微调，Shift 加大步长")}
         />
       </section>
     </div>

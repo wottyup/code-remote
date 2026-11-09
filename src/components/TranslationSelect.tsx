@@ -1,3 +1,4 @@
+import { ui, useUiLanguage } from '../lib/uiLanguage'
 import { useCallback, useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
 import { Check, ChevronDown } from 'lucide-react'
 
@@ -13,9 +14,12 @@ interface TranslationSelectProps {
   options: readonly TranslationSelectOption[]
   onChange: (value: string) => void
   disabled?: boolean
+  hideLabel?: boolean
+  className?: string
 }
 
-export function TranslationSelect({ label, value, options, onChange, disabled = false }: TranslationSelectProps) {
+export function TranslationSelect({ label, value, options, onChange, disabled = false, hideLabel = false, className = '' }: TranslationSelectProps) {
+  useUiLanguage()
   const labelId = useId()
   const valueId = useId()
   const listboxId = useId()
@@ -25,7 +29,7 @@ export function TranslationSelect({ label, value, options, onChange, disabled = 
   const [open, setOpen] = useState(false)
   const selectedIndex = options.findIndex((option) => option.value === value)
   const [activeIndex, setActiveIndex] = useState(Math.max(0, selectedIndex))
-  const selectedLabel = options[selectedIndex]?.label ?? '请选择'
+  const selectedLabel = options[selectedIndex]?.label ?? ui('请选择')
   const popoverSupported = typeof HTMLElement !== 'undefined' && typeof HTMLElement.prototype.showPopover === 'function'
 
   const positionMenu = useCallback(() => {
@@ -121,16 +125,16 @@ export function TranslationSelect({ label, value, options, onChange, disabled = 
   }
 
   if (!popoverSupported) {
-    return <label className="translation-settings__field">
-      <span>{label}</span>
+    return <label className={`translation-settings__field ${className}`.trim()}>
+      <span className={hideLabel ? 'translation-select__label--visually-hidden' : undefined}>{label}</span>
       <select value={value} disabled={disabled} onChange={(event) => onChange(event.currentTarget.value)}>
         {options.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
       </select>
     </label>
   }
 
-  return <div className="translation-settings__field translation-select">
-    <span id={labelId}>{label}</span>
+  return <div className={`translation-settings__field translation-select ${className}`.trim()}>
+    <span id={labelId} className={hideLabel ? 'translation-select__label--visually-hidden' : undefined}>{label}</span>
     <button
       ref={triggerRef}
       className="translation-select__trigger"

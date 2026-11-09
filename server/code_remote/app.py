@@ -174,6 +174,7 @@ class CodexProxyUsageRequest(BaseModel):
 class NewAPIUsageRequest(BaseModel):
     baseUrl: str = Field(max_length=2048)
     accessToken: str = Field(max_length=2048)
+    userId: str = Field(default="", max_length=18)
     startTimestamp: int = Field(gt=0)
     endTimestamp: int = Field(gt=0)
 
@@ -1872,7 +1873,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.109.1-dev.5", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.111.3-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -2106,7 +2107,7 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(error)) from error
 
     @app.post("/api/v1/codex/usage/codex-proxy/{kind}")
-    async def codex_proxy_usage(kind: Literal["summary", "history"], body: CodexProxyUsageRequest) -> dict[str, Any]:
+    async def codex_proxy_usage(kind: Literal["summary", "history", "client-keys"], body: CodexProxyUsageRequest) -> dict[str, Any]:
         try:
             return await asyncio.to_thread(fetch_codex_proxy_usage, body.baseUrl, body.apiKey, kind, body.hours)
         except CodexProxyUsageError as error:
@@ -2115,7 +2116,7 @@ def create_app(
     @app.post("/api/v1/codex/usage/new-api")
     async def new_api_usage(body: NewAPIUsageRequest) -> dict[str, Any]:
         try:
-            return await asyncio.to_thread(fetch_new_api_usage, body.baseUrl, body.accessToken, body.startTimestamp, body.endTimestamp)
+            return await asyncio.to_thread(fetch_new_api_usage, body.baseUrl, body.accessToken, body.startTimestamp, body.endTimestamp, body.userId)
         except NewAPIUsageError as error:
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(error)) from error
 

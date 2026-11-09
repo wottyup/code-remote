@@ -1,3 +1,4 @@
+import { ui, uiFormat, useUiLanguage } from '../lib/uiLanguage'
 import { memo, useMemo, useState } from 'react'
 import { Pencil, Table2, X } from 'lucide-react'
 import { parseMarkdownTableBlock, type MarkdownTableBlock } from '../lib/markdownTableParser.mjs'
@@ -48,6 +49,7 @@ interface PastedTablePreviewProps {
 }
 
 export const PastedTablePreview = memo(function PastedTablePreview({ content, onChange, onRemove, disabled = false, maxRows = maxPreviewRows }: PastedTablePreviewProps) {
+  useUiLanguage()
   const [editing, setEditing] = useState(false)
   const tables = useMemo(() => readTables(content), [content])
   const rowCount = tables?.reduce((total, table) => total + table.rows.length, 0) ?? 0
@@ -72,19 +74,19 @@ export const PastedTablePreview = memo(function PastedTablePreview({ content, on
     onChange(serializeTables(nextTables))
   }
 
-  return <section className="pasted-table-preview" aria-label="粘贴表格">
+  return <section className="pasted-table-preview" aria-label={ui("粘贴表格")}>
     <div className="pasted-table-preview__heading">
       <Table2 size={16} aria-hidden="true" />
       <span className="pasted-table-preview__title">
-        <strong>粘贴表格</strong>
-        <small>{tables ? `${rowCount.toLocaleString()} 行 · ${columnCount} 列${tables.length > 1 ? ` · ${tables.length} 张表` : ''} · 左右滑动查看` : 'Markdown 原文'}</small>
+        <strong>{ui("粘贴表格")}</strong>
+        <small>{tables ? uiFormat("{0} 行 · {1} 列{2} · 左右滑动查看", rowCount.toLocaleString(), columnCount, tables.length > 1 ? uiFormat(' · {0} 张表', tables.length) : '') : ui('Markdown 原文')}</small>
       </span>
-      {onChange ? <button className="pasted-table-preview__action" type="button" disabled={disabled} onClick={() => setEditing((current) => !current)} aria-label={editing ? '完成表格编辑' : tables ? '编辑表格' : '编辑表格原文'}>{editing ? '完成' : <><Pencil size={13} aria-hidden="true" />{tables ? '编辑表格' : '编辑原文'}</>}</button> : null}
-      {onRemove ? <button className="pasted-table-preview__remove" type="button" disabled={disabled} onClick={onRemove} aria-label="移除粘贴表格" title="移除粘贴表格"><X size={15} /></button> : null}
+      {onChange ? <button className="pasted-table-preview__action" type="button" disabled={disabled} onClick={() => setEditing((current) => !current)} aria-label={editing ? ui('完成表格编辑') : tables ? ui('编辑表格') : ui('编辑表格原文')}>{editing ? ui('完成') : <><Pencil size={13} aria-hidden="true" />{tables ? ui('编辑表格') : ui('编辑原文')}</>}</button> : null}
+      {onRemove ? <button className="pasted-table-preview__remove" type="button" disabled={disabled} onClick={onRemove} aria-label={ui("移除粘贴表格")} title={ui("移除粘贴表格")}><X size={15} /></button> : null}
     </div>
     {editing && onChange
       ? tables
-        ? <div className="pasted-table-preview__scroll" role="region" aria-label="编辑粘贴表格" tabIndex={0} onKeyDownCapture={(event) => {
+        ? <div className="pasted-table-preview__scroll" role="region" aria-label={ui("编辑粘贴表格")} tabIndex={0} onKeyDownCapture={(event) => {
           if (event.key === 'Escape') {
             event.stopPropagation()
             setEditing(false)
@@ -92,10 +94,10 @@ export const PastedTablePreview = memo(function PastedTablePreview({ content, on
         }}>
           {tables.map((table, tableIndex) => <table className="pasted-table-preview__table" key={tableIndex} style={{ width: `max(100%, ${table.headers.length * 210}px)` }}>
             <thead><tr>{table.headers.map((cell, columnIndex) => <th className="pasted-table-preview__edit-cell" key={columnIndex} scope="col" style={{ textAlign: table.alignments[columnIndex] }}>
-              <input className="pasted-table-preview__cell-input pasted-table-preview__cell-input--header" type="text" value={cell} onChange={(event) => updateCell(tableIndex, -1, columnIndex, event.currentTarget.value)} aria-label={`第 ${tableIndex + 1} 张表第 ${columnIndex + 1} 列标题`} spellCheck={false} />
+              <input className="pasted-table-preview__cell-input pasted-table-preview__cell-input--header" type="text" value={cell} onChange={(event) => updateCell(tableIndex, -1, columnIndex, event.currentTarget.value)} aria-label={uiFormat("第 {0} 张表第 {1} 列标题", tableIndex + 1, columnIndex + 1)} spellCheck={false} />
             </th>)}</tr></thead>
             <tbody>{table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, columnIndex) => <td className="pasted-table-preview__edit-cell" key={columnIndex} style={{ textAlign: table.alignments[columnIndex] }}>
-              <input className="pasted-table-preview__cell-input" type="text" value={cell} onChange={(event) => updateCell(tableIndex, rowIndex, columnIndex, event.currentTarget.value)} aria-label={`第 ${tableIndex + 1} 张表第 ${rowIndex + 1} 行第 ${columnIndex + 1} 列`} spellCheck={false} />
+              <input className="pasted-table-preview__cell-input" type="text" value={cell} onChange={(event) => updateCell(tableIndex, rowIndex, columnIndex, event.currentTarget.value)} aria-label={uiFormat("第 {0} 张表第 {1} 行第 {2} 列", tableIndex + 1, rowIndex + 1, columnIndex + 1)} spellCheck={false} />
             </td>)}</tr>)}</tbody>
           </table>)}
         </div>
@@ -104,9 +106,9 @@ export const PastedTablePreview = memo(function PastedTablePreview({ content, on
             event.stopPropagation()
             setEditing(false)
           }
-        }} aria-label="编辑表格 Markdown 原文" spellCheck={false} />
+        }} aria-label={ui("编辑表格 Markdown 原文")} spellCheck={false} />
       : tables
-        ? <div className="pasted-table-preview__scroll" role="region" aria-label="可左右滑动的粘贴表格" tabIndex={0}>
+        ? <div className="pasted-table-preview__scroll" role="region" aria-label={ui("可左右滑动的粘贴表格")} tabIndex={0}>
           {tables.map((table, tableIndex) => {
             const remaining = Math.max(0, previewRowLimit - visibleRows)
             const rows = table.rows.slice(0, remaining)
@@ -119,7 +121,7 @@ export const PastedTablePreview = memo(function PastedTablePreview({ content, on
           })}
         </div>
         : <pre className="pasted-table-preview__fallback">{content}</pre>}
-    {!editing && rowCount > previewRowLimit ? <p className="pasted-table-preview__note">仅预览前 {previewRowLimit} 行，发送时包含全部内容。</p> : null}
+    {!editing && rowCount > previewRowLimit ? <p className="pasted-table-preview__note">{ui("仅预览前")} {previewRowLimit} {ui("行，发送时包含全部内容。")}</p> : null}
   </section>
 }, (previous, next) => previous.content === next.content
   && previous.disabled === next.disabled

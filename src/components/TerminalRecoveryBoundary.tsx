@@ -1,3 +1,4 @@
+import { ui } from '../lib/uiLanguage'
 import { Component, type ErrorInfo, type ReactNode } from 'react'
 import { RotateCw, Terminal } from 'lucide-react'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
@@ -32,8 +33,8 @@ export class TerminalRecoveryBoundary extends Component<TerminalRecoveryBoundary
     if (this.state.error) {
       return (
         <ChatOverlayPanel
-          ariaLabel="本机终端"
-          backdropLabel="关闭本机终端"
+          ariaLabel={ui("本机终端")}
+          backdropLabel={ui("关闭本机终端")}
           onClose={this.props.onClose}
           hidden={this.props.hidden}
           showCloseButton={false}
@@ -41,15 +42,15 @@ export class TerminalRecoveryBoundary extends Component<TerminalRecoveryBoundary
           header={(
             <div className="terminal-dialog__title">
               <Terminal size={16} aria-hidden="true" />
-              <strong>本机终端</strong>
+              <strong>{ui("本机终端")}</strong>
             </div>
           )}
         >
           <div className="terminal-dialog__error" role="alert">
-            <p>终端界面遇到问题，聊天仍可继续。</p>
+            <p>{ui("终端界面遇到问题，聊天仍可继续。")}</p>
             <div>
-              <button type="button" onClick={this.retry}><RotateCw size={14} />重试终端</button>
-              <button type="button" onClick={this.props.onClose}>关闭终端</button>
+              <button type="button" onClick={this.retry}><RotateCw size={14} />{ui("重试终端")}</button>
+              <button type="button" onClick={this.props.onClose}>{ui("关闭终端")}</button>
             </div>
           </div>
         </ChatOverlayPanel>
