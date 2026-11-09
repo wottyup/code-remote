@@ -572,7 +572,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 @media (max-width: 640px) { .mcp-approvals-body { padding: 13px 16px 17px; } .mcp-approvals-grant { align-items: flex-start; flex-direction: column; } }
 .cpa-usage-settings-controls { display: block; margin: 0; padding: 4px 22px 0; }
 .cpa-usage-settings-controls .theme-control-row { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(0, 1.2fr); align-items: center; gap: 20px; padding: 15px 0; }
-.cpa-usage-settings-input { width: 100%; min-width: 0; min-height: 38px; padding: 0 11px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 8px; outline: none; background: rgba(9, 10, 13, .44); color: #e7eaf1; font: inherit; }
+.cpa-usage-settings-input { width: 100%; min-width: 0; min-height: 38px; padding: 0 11px; border: 1px solid rgba(146, 157, 184, .24); border-radius: 8px; outline: none; background: rgba(9, 10, 13, .44); color: #e7eaf1; font: inherit; font-size: calc(.875rem + var(--mobile-font-offset)); }
 .cpa-usage-settings-input:focus { border-color: rgba(170, 186, 255, .62); box-shadow: 0 0 0 3px rgba(112, 132, 198, .14); }
 .cpa-usage-settings-actions { display: flex; flex-wrap: wrap; gap: 9px; padding: 12px 0 16px; }
 .cpa-usage-settings-message { margin: 0 0 8px; color: #91c99d; font-size: calc(12px + var(--mobile-font-offset)); }
