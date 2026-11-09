@@ -89,7 +89,7 @@ export function sendSystemNotification(title: string, body: string, threadId: st
   try {
     const notification = new Notification(title, {
       body,
-      icon: '/code-remote.png',
+      icon: '/code-remote-mark.png',
       tag: eventKey,
     })
     notification.onclick = () => {

@@ -818,11 +818,6 @@ function modelLabelOf(model: CodexModel) {
   return model.displayName || modelIdOf(model) || ui('未命名模型')
 }
 
-function effortLabelOf(effort: string) {
-  const known = ({ minimal: '最小', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' } as Record<string, string>)[effort]
-  return known ? ui(known) : effort
-}
-
 function imageMediaTypeFor(file: Pick<File, 'name' | 'type'>): CodexImageAttachment['mediaType'] | null {
   if (imageTypes.has(file.type as CodexImageAttachment['mediaType'])) return file.type as CodexImageAttachment['mediaType']
   const extension = file.name.toLowerCase().split('.').at(-1) ?? ''
@@ -849,12 +844,12 @@ const defaultClaudeModelOptions = [
 ]
 
 const claudeEffortOptions = [
-  { value: 'default', get label() { return ui('本机默认') } },
-  { value: 'low', get label() { return ui('低') } },
-  { value: 'medium', get label() { return ui('中') } },
-  { value: 'high', get label() { return ui('高') } },
-  { value: 'xhigh', get label() { return ui('极高') } },
-  { value: 'max', get label() { return ui('最大') } },
+  { value: 'default', label: 'default' },
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' },
+  { value: 'max', label: 'max' },
 ]
 
 const claudePermissionModeOptions: Array<{ value: ClaudeCodePermissionMode; label: string }> = [
@@ -2572,11 +2567,11 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
 
   const preferenceMenus = showCodexPreferences ? <>
     <ComposerMenu label={ui("模型")} value={composerSelectedModel} options={modelOptions} emptyLabel={ui("读取模型…")} disabled={!canConfigure || modelOptions.length === 0} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel={ui("默认")} disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
     <ComposerMenu label={approvalPolicyUpdating ? ui('授权更新中') : ui('授权')} value={selectedApprovalPolicy} options={authorizationOptions} emptyLabel={ui("请求批准")} disabled={!canCompose || Boolean(editingQueuedMessageId) || approvalPolicyUpdating} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(approvalPolicy) => onApprovalPolicyChange(approvalPolicy as CodexApprovalPolicy)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </> : <>
     <ComposerMenu label={ui("Claude 模型")} value={composerSelectedModel} options={claudeModelOptions} emptyLabel={ui("本机默认模型")} disabled={!canConfigure} open={openMenu === 'model'} onOpenChange={(open) => changeOpenMenu(open ? 'model' : null)} onChange={changeComposerModel} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
-    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel={ui("本机默认")} disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
+    <ComposerMenu label={ui("思考等级")} value={composerSelectedEffort} options={composerReasoningOptions} emptyLabel="default" disabled={!canConfigure || composerReasoningOptions.length === 0} open={openMenu === 'effort'} onOpenChange={(open) => changeOpenMenu(open ? 'effort' : null)} onChange={changeComposerEffort} footer={editingQueuedMessageId ? undefined : temporaryPreferencesToggle} temporary={temporaryPreferences && !editingQueuedMessageId} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
     <ComposerMenu label={ui("权限模式")} value={selectedClaudePermissionMode} options={claudePermissionModeOptions} emptyLabel={ui("本机默认权限")} disabled={!canConfigure || Boolean(editingQueuedMessageId)} open={openMenu === 'approval'} onOpenChange={(open) => changeOpenMenu(open ? 'approval' : null)} onChange={(mode) => onClaudePermissionModeChange(mode as ClaudeCodePermissionMode)} mobileSettingsOwner={mobileLayout && mobileSettingsExpanded ? mobileSettingsOwner : undefined} portalTheme={portalTheme} portalThemeStyle={portalThemeStyle} />
   </>
 
@@ -2716,7 +2711,7 @@ const MessageComposer = memo(forwardRef<ComposerHandle, MessageComposerProps>(fu
               const queuedModel = showCodexPreferences ? message.model : message.claudeModel
               const queuedEffort = showCodexPreferences ? message.effort : message.claudeEffort
               const queuedModelLabel = (showCodexPreferences ? modelOptions : claudeModelOptions).find((option) => option.value === queuedModel)?.label ?? queuedModel
-              const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? (queuedEffort ? effortLabelOf(queuedEffort) : '')
+              const queuedEffortLabel = (showCodexPreferences ? reasoningOptions : claudeEffortOptions).find((option) => option.value === queuedEffort)?.label ?? queuedEffort ?? ''
               const queuedPreferencesLabel = [queuedModelLabel, queuedEffortLabel].filter(Boolean).join(' · ')
               const sendMode: QueuedMessageSendMode = isRunning && showCodexPreferences ? 'steer' : 'start'
               const waitingForClaude = isRunning && !showCodexPreferences
@@ -6572,7 +6567,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
   }), [availableModels])
   const reasoningOptions = useMemo<ComposerMenuOption[]>(() => effortOptions.map((option) => ({
     value: option.reasoningEffort,
-    label: effortLabelOf(option.reasoningEffort),
+    label: option.reasoningEffort,
   })), [effortOptions])
   const reasoningOptionsByModel = useMemo<Record<string, ModelReasoningOptions>>(() => {
     const byModel: Record<string, ModelReasoningOptions> = {}
@@ -6582,7 +6577,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       byModel[id] = {
         options: (model.supportedReasoningEfforts ?? []).map((option) => ({
           value: option.reasoningEffort,
-          label: effortLabelOf(option.reasoningEffort),
+          label: option.reasoningEffort,
         })),
         defaultEffort: model.defaultReasoningEffort,
       }
@@ -6752,7 +6747,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       {paneNotice ? <div className="pane-limit-notice" role="status">{uiMessage(paneNotice)}</div> : null}
       <aside ref={sidebarPanel} className={'remote-sidebar' + (sidebarOpen ? ' remote-sidebar--open' : '') + (sidebarDragging ? ' remote-sidebar--dragging' : '')} aria-label={ui("聊天记录")} onTransitionEnd={(event) => { if (event.target === event.currentTarget && event.propertyName === 'transform' && !sidebarDragging) event.currentTarget.style.removeProperty('--sidebar-drag-offset') }}>
         <div className="remote-sidebar__heading">
-          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>{ui("代码助手远程工作台")}</small></span></div>
+          <div className="remote-brand"><img className="remote-brand__logo" src="/code-remote-mark.png" alt="" /><span className="remote-brand__copy"><strong>Code Remote</strong><small>{ui("代码助手远程工作台")}</small></span></div>
           <button className="icon-button remote-sidebar__collapse" type="button" aria-label={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} aria-expanded={!sidebarCollapsed} title={sidebarCollapsed ? ui('展开对话栏') : ui('收窄对话栏')} onClick={() => { if (!sidebarCollapsed) { setSidebarSearch(''); setSidebarSelectionMode(false); setSelectedSidebarThreadIds(new Set()) } setSidebarCollapsed((collapsed) => !collapsed) }}>
             {sidebarCollapsed ? <ChevronRight size={15} /> : <ChevronLeft size={15} />}
           </button>
@@ -7658,7 +7653,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
             <div><h2><PixelThemeIcon name="about" theme={preferences.theme} />{ui("关于")}</h2><p>{ui("项目介绍、源代码与更新。")}</p></div>
           </div>
           <div className="theme-about-card__body">
-            <img className="theme-about-card__logo" src="/code-remote.png" alt="Code Remote Logo" />
+            <img className="theme-about-card__logo" src="/code-remote-mark.png" alt="Code Remote Logo" />
             <strong className="theme-about-card__name">Code Remote</strong>
             <p className="theme-about-card__description">{ui("在浏览器中连接本机的代码助手，查看对话、文件和终端。")}</p>
             <a className="theme-about-card__link" href="https://github.com/sevencnup/code-remote" target="_blank" rel="noopener noreferrer">
@@ -8474,7 +8469,7 @@ const MessageBubble = memo(function MessageBubble({ token, translation, translat
     ?? (message.model === 'default' ? ui('本机默认模型') : message.model)
     : null
   const assistantEffortLabel = message.role === 'assistant' && message.effort
-    ? message.effort === 'default' ? assistantName === 'Claude Code' ? ui('本机默认') : ui('默认') : effortLabelOf(message.effort)
+    ? message.effort === 'default' ? assistantName === 'Claude Code' ? ui('本机默认') : ui('默认') : message.effort
     : null
   const showAssistantPreferences = message.role === 'assistant' && !message.streaming && Boolean(assistantModelLabel || assistantEffortLabel)
   const choiceInTimeline = Boolean(choiceCard && structuredQuestions && message.choiceItemId
