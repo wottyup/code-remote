@@ -6,13 +6,33 @@ import { letterSpacingStyle, readThemePreferences, saveThemePreferences, themeRo
 
 const STORAGE_KEY = 'codex-remote-token'
 
+declare global {
+  interface Window {
+    CodeRemoteDesktop?: {
+      getToken: () => string | null
+      saveToken: (token: string) => Promise<boolean>
+      clearToken: () => Promise<boolean>
+    }
+  }
+}
+
+function readPairedToken() {
+  if (window.CodeRemoteDesktop) return window.CodeRemoteDesktop.getToken()
+  return window.localStorage.getItem(STORAGE_KEY)
+}
+
 export default function App() {
-  const [token, setToken] = useState(() => window.localStorage.getItem(STORAGE_KEY))
+  const [token, setToken] = useState(readPairedToken)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
 
   useEffect(() => {
     saveThemePreferences(themePreferences)
   }, [themePreferences])
+
+  useEffect(() => {
+    if (window.parent === window) return
+    window.parent.postMessage({ type: 'code-remote:pairing-state', paired: Boolean(token) }, '*')
+  }, [token])
 
   useLayoutEffect(() => {
     const root = document.documentElement
@@ -29,13 +49,15 @@ export default function App() {
   }, [themePreferences.letterSpacingPercent])
 
   const paired = useCallback((nextToken: string) => {
-    window.localStorage.setItem(STORAGE_KEY, nextToken)
+    if (window.CodeRemoteDesktop) void window.CodeRemoteDesktop.saveToken(nextToken)
+    else window.localStorage.setItem(STORAGE_KEY, nextToken)
     setToken(nextToken)
   }, [])
 
   const unpair = useCallback(async () => {
-    const currentToken = window.localStorage.getItem(STORAGE_KEY)
-    window.localStorage.removeItem(STORAGE_KEY)
+    const currentToken = token
+    if (window.CodeRemoteDesktop) await window.CodeRemoteDesktop.clearToken()
+    else window.localStorage.removeItem(STORAGE_KEY)
     setToken(null)
     if (!currentToken) return
     try {
@@ -43,7 +65,7 @@ export default function App() {
     } catch {
       // The local token is already removed. A later server restart cannot restore it in this browser.
     }
-  }, [])
+  }, [token])
 
   return (
     <div className={`app-root app-root--theme-${themePreferences.theme}`} style={themeRootStyle(themePreferences)}>

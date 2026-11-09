@@ -1,0 +1,45 @@
+{
+  "name": "code-remote-desktop",
+  "version": "0.112.0-dev.1",
+  "private": true,
+  "type": "commonjs",
+  "main": "main.cjs",
+  "scripts": {
+    "dev": "electron .",
+    "package:win": "node package-win.cjs"
+  },
+  "devDependencies": {
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.wottyup.coderemote.desktop",
+    "productName": "Code Remote",
+    "directories": {
+      "output": "../artifacts/desktop"
+    },
+    "files": [
+      "main.cjs",
+      "preload-shell.cjs",
+      "preload-remote.cjs",
+      "renderer/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "Code-Remote-Desktop-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Code Remote"
+    }
+  }
+}

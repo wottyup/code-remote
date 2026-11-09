@@ -62,6 +62,22 @@ $env:CODE_REMOTE_WORKSPACE = "C:\path\to\your\project"
 pnpm --filter code-remote start
 ```
 
+## Windows 桌面客户端
+
+桌面客户端用于连接多台已经运行 Code Remote 的电脑，不会在这台 Windows 电脑上启动 Code Remote 服务或 Codex。每台远端电脑需要运行包含桌面配对桥接的 Code Remote 版本，并能从当前网络访问。
+
+可以先在浏览器打开 `http://电脑的局域网 IP:4173/desktop-client/` 体验多设备侧栏。网页模式只在当前浏览器保存设备名称和地址；添加后会打开目标网页，并在那里输入匹配码完成配对。
+
+从 workspace 根目录构建 Windows x64 安装程序：
+
+```bash
+pnpm --filter code-remote desktop:package:win
+```
+
+安装包会生成在 `code-remote/artifacts/desktop`，文件名带版本号。首次使用时选择“添加设备”，填写远端 Code Remote 网页地址和该电脑终端显示的 8 位匹配码。设备凭据使用 Windows 系统加密保存在本机。点击侧栏设备可切换连接；右键设备可重命名、移除或在新窗口打开。
+
+桌面开发模式可使用 `pnpm --filter code-remote desktop:dev`。
+
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `code-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
 
 ## 阿里云百炼语音输入（可选）

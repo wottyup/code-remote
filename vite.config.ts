@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, promises as fs } from 'node:fs'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { resolve } from 'node:path'
+import { extname, resolve } from 'node:path'
 
 const androidPackageName = /^code-remote-android-(\d+)\.(\d+)\.(\d+)(?:-(dev|beta)\.(\d+))?-debug\.apk$/
 
@@ -146,8 +146,76 @@ const engineProxy = {
   ws: true,
 }
 
+function desktopClientMiddleware(rendererDirectory: string) {
+  const contentTypes: Record<string, string> = {
+    '.css': 'text/css; charset=utf-8',
+    '.html': 'text/html; charset=utf-8',
+    '.js': 'text/javascript; charset=utf-8',
+    '.svg': 'image/svg+xml',
+  }
+  return (request: IncomingMessage, response: ServerResponse, next: () => void) => {
+    const pathname = request.url?.split('?')[0]?.split('#')[0] ?? ''
+    if (pathname !== '/desktop-client' && !pathname.startsWith('/desktop-client/')) return next()
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.writeHead(405, { Allow: 'GET, HEAD' })
+      response.end()
+      return
+    }
+    let filename = 'index.html'
+    try {
+      const relative = decodeURIComponent(pathname.slice('/desktop-client/'.length))
+      if (relative) filename = relative
+    } catch {
+      response.writeHead(400)
+      response.end()
+      return
+    }
+    if (filename.includes('/') || filename.includes('\\') || filename === '.' || filename === '..') {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    const file = resolve(rendererDirectory, filename)
+    if (!existsSync(file)) {
+      response.writeHead(404)
+      response.end()
+      return
+    }
+    void fs.readFile(file).then((content) => {
+      response.writeHead(200, {
+        'Content-Type': contentTypes[extname(file)] ?? 'application/octet-stream',
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+      })
+      response.end(request.method === 'HEAD' ? undefined : content)
+    }).catch(() => {
+      if (!response.headersSent) response.writeHead(500)
+      response.end()
+    })
+  }
+}
+
+function desktopClientPlugin() {
+  let rendererDirectory = ''
+  let outputDirectory = ''
+  return {
+    name: 'desktop-multi-device-client',
+    configResolved(config: { root: string; build: { outDir: string } }) {
+      rendererDirectory = resolve(config.root, 'desktop/renderer')
+      outputDirectory = resolve(config.root, config.build.outDir, 'desktop-client')
+    },
+    configureServer(server: { middlewares: { use: (middleware: ReturnType<typeof desktopClientMiddleware>) => void } }) {
+      server.middlewares.use(desktopClientMiddleware(rendererDirectory))
+    },
+    async closeBundle() {
+      await fs.mkdir(outputDirectory, { recursive: true })
+      await fs.cp(rendererDirectory, outputDirectory, { recursive: true, force: true })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), {
+  plugins: [react(), desktopClientPlugin(), {
     name: 'local-android-updates',
     configureServer(server) {
       server.middlewares.use(androidUpdateMiddleware(resolve(server.config.root, 'artifacts')))
