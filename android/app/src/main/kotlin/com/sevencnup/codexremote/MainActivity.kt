@@ -9952,7 +9952,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(4), 0, dp(5))
         }, widthWrap())
-        val projectUrl = "https://github.com/sevencnup/code-remote"
+        val projectUrl = "https://github.com/wottyup/code-remote"
         about.addView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
