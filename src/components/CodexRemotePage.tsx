@@ -7686,6 +7686,34 @@ function renderMessageInlineLinks(value: string, keyPrefix: string, preferWebUrl
     : part.value)
 }
 
+function renderMessageInlineMarkdown(value: string, keyPrefix: string, preferWebUrlLabel: boolean, depth = 0): ReactNode {
+  if (depth >= 8) return renderMessageInlineLinks(value, keyPrefix, preferWebUrlLabel)
+
+  const inlinePattern = /(`+)([^`\n]+?)\1|\*\*([^\n]+?)\*\*|__([^\n]+?)__/g
+  const parts: ReactNode[] = []
+  let cursor = 0
+  let index = 0
+  for (const match of value.matchAll(inlinePattern)) {
+    const matchIndex = match.index ?? cursor
+    if (matchIndex > cursor) {
+      parts.push(<Fragment key={`${keyPrefix}-plain-${index++}`}>{renderMessageInlineLinks(value.slice(cursor, matchIndex), `${keyPrefix}-links-${index}`, preferWebUrlLabel)}</Fragment>)
+    }
+
+    if (match[1]) {
+      parts.push(<code key={`${keyPrefix}-code-${index++}`}>{renderMessageInlineLinks(match[2], `${keyPrefix}-code-links-${index}`, preferWebUrlLabel)}</code>)
+    } else {
+      const strongText = match[3] ?? match[4]
+      parts.push(<strong key={`${keyPrefix}-strong-${index++}`}>{renderMessageInlineMarkdown(strongText, `${keyPrefix}-strong-inner-${index}`, preferWebUrlLabel, depth + 1)}</strong>)
+    }
+    cursor = matchIndex + match[0].length
+  }
+
+  if (cursor < value.length) {
+    parts.push(<Fragment key={`${keyPrefix}-plain-${index}`}>{renderMessageInlineLinks(value.slice(cursor), `${keyPrefix}-links-${index}`, preferWebUrlLabel)}</Fragment>)
+  }
+  return parts.length > 0 ? parts : renderMessageInlineLinks(value, keyPrefix, preferWebUrlLabel)
+}
+
 const ClaudeFormattingContext = createContext(false)
 
 function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: boolean, claudeFormatting = false): ReactNode[] {
@@ -7701,7 +7729,7 @@ function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: 
     const textKey = `${keyPrefix}-text-${plainIndex++}`
     elements.push(claudeFormatting
       ? <ClaudeReplyText key={textKey} text={plainLines.join('\n')} />
-      : <div className="chat-message__text" key={textKey}>{renderMessageInlineLinks(plainLines.join('\n'), textKey, preferWebUrlLabel)}</div>)
+      : <div className="chat-message__text" key={textKey}>{renderMessageInlineMarkdown(plainLines.join('\n'), textKey, preferWebUrlLabel)}</div>)
     plainLines = []
   }
 
@@ -7718,10 +7746,10 @@ function renderMessageText(value: string, keyPrefix: string, preferWebUrlLabel: 
       <div className="chat-message__table-scroll" key={`${keyPrefix}-table-${tableIndex++}`}>
         <table className="chat-message__table">
           <thead>
-            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-header-${index}`, preferWebUrlLabel)}</th>)}</tr>
+            <tr>{table.headers.map((cell, index) => <th key={index} scope="col" style={{ textAlign: table.alignments[index] }}>{renderMessageInlineMarkdown(cell, `${keyPrefix}-table-${tableIndex}-header-${index}`, preferWebUrlLabel)}</th>)}</tr>
           </thead>
           <tbody>
-            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{renderMessageInlineLinks(cell, `${keyPrefix}-table-${tableIndex}-row-${rowIndex}-cell-${index}`, preferWebUrlLabel)}</td>)}</tr>)}
+            {table.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, index) => <td key={index} style={{ textAlign: table.alignments[index] }}>{renderMessageInlineMarkdown(cell, `${keyPrefix}-table-${tableIndex}-row-${rowIndex}-cell-${index}`, preferWebUrlLabel)}</td>)}</tr>)}
           </tbody>
         </table>
       </div>,
