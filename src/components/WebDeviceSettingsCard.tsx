@@ -1,11 +1,12 @@
 import { useState, type FormEvent } from 'react'
 import { Check, ExternalLink, Pencil, Plus, Save, Trash2, X } from 'lucide-react'
 import { ui, uiMessage } from '../lib/uiLanguage'
-import type { WebDeviceManagerState } from '../lib/webDeviceManager'
+import { normalizePairingCode, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerState }) {
   const [name, setName] = useState('')
   const [url, setUrl] = useState('')
+  const [pairingCode, setPairingCode] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -16,9 +17,10 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
     setError(null)
     setMessage(null)
     try {
-      manager.addProfile(name, url)
+      manager.addProfile(name, url, pairingCode)
       setName('')
       setUrl('')
+      setPairingCode('')
       setMessage('设备已保存，可在侧栏切换。')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '添加设备失败。')
@@ -52,7 +54,7 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
   return (
     <section className="theme-settings-card theme-settings-card--page web-device-settings" aria-label={ui('设备连接')}>
       <div className="theme-settings-card__heading">
-        <div><h2>{ui('设备连接')}</h2><p>{ui('添加其他 Code Remote 网页；首次连接时，在设备页面输入该电脑显示的匹配码。')}</p></div>
+        <div><h2>{ui('设备连接')}</h2><p>{ui('添加其他 Code Remote 网页；可在这里填写匹配码，添加后自动配对。')}</p></div>
       </div>
 
       <form className="web-device-settings__form" onSubmit={addDevice}>
@@ -63,6 +65,10 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
         <label className="theme-control-row web-device-settings__field">
           <span><strong>{ui('Code Remote 地址')}</strong><small>{ui('支持 HTTP 或 HTTPS，也可以填写带路径的地址。')}</small></span>
           <input type="text" value={url} required autoComplete="url" spellCheck={false} placeholder="http://192.168.1.20:4173" onChange={(event) => setUrl(event.currentTarget.value)} />
+        </label>
+        <label className="theme-control-row web-device-settings__field">
+          <span><strong>{ui('匹配码（可选）')}</strong><small>{ui('填写后，添加设备时会自动尝试配对。')}</small></span>
+          <input type="text" value={pairingCode} maxLength={24} autoComplete="one-time-code" autoCapitalize="characters" autoCorrect="off" spellCheck={false} placeholder={ui('8 位配对码')} onChange={(event) => setPairingCode(normalizePairingCode(event.currentTarget.value))} />
         </label>
         <div className="web-device-settings__form-actions">
           <button className="web-device-settings__add" type="submit"><Plus size={15} />{ui('添加设备')}</button>
@@ -95,7 +101,7 @@ export function WebDeviceSettingsCard({ manager }: { manager: WebDeviceManagerSt
 
       {error ? <p className="theme-settings-hint web-device-settings__feedback web-device-settings__feedback--error" role="alert">{uiMessage(error)}</p> : null}
       {message ? <p className="theme-settings-hint web-device-settings__feedback" role="status">{uiMessage(message)}</p> : null}
-      <p className="theme-settings-hint web-device-settings__note">{ui('设备名称和地址保存在此浏览器；匹配码由各设备自己的 Code Remote 页面处理。')}</p>
+      <p className="theme-settings-hint web-device-settings__note">{ui('设备名称和地址保存在此浏览器；匹配码仅临时传递，配对令牌保存在目标设备自己的网页存储中。')}</p>
     </section>
   )
 }

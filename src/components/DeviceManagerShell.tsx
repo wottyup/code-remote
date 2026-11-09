@@ -3,6 +3,7 @@ import {
   createWebDeviceFrameUrl,
   createWebDeviceId,
   currentWebDeviceId,
+  normalizePairingCode,
   normalizeWebDeviceUrl,
   type WebDeviceProfile,
 } from '../lib/webDeviceManager'
@@ -84,6 +85,7 @@ export function DeviceManagerShell() {
   const [savedProfiles, setSavedProfiles] = useState(initial.profiles)
   const [activeProfileId, setActiveProfileId] = useState(initial.activeProfileId)
   const [homePaired, setHomePaired] = useState(false)
+  const [pendingPairing, setPendingPairing] = useState<{ profileId: string; code: string } | null>(null)
   const [frameSessionId, setFrameSessionId] = useState(createWebDeviceId)
   const frame = useRef<HTMLIFrameElement>(null)
   const managerOrigin = window.location.origin
@@ -109,12 +111,13 @@ export function DeviceManagerShell() {
 
   const selectProfile = useCallback((profileId: string, addHistoryEntry = true) => {
     if (!profiles.some((profile) => profile.id === profileId) || profileId === activeProfileId) return
+    if (pendingPairing && pendingPairing.profileId !== profileId) setPendingPairing(null)
     setActiveProfileId(profileId)
     setFrameSessionId(createWebDeviceId())
     const nextUrl = newRootUrl(managerPath, profileId)
     if (addHistoryEntry) window.history.pushState({ codeRemoteDevice: profileId }, '', nextUrl)
     else window.history.replaceState({ codeRemoteDevice: profileId }, '', nextUrl)
-  }, [activeProfileId, managerPath, profiles])
+  }, [activeProfileId, managerPath, pendingPairing, profiles])
 
   const sendState = useCallback(() => {
     const target = frame.current?.contentWindow
@@ -132,8 +135,9 @@ export function DeviceManagerShell() {
       profiles,
       activeProfileId,
       managerPath,
+      pairingCode: pendingPairing?.profileId === activeProfileId ? pendingPairing.code : null,
     }, targetOrigin)
-  }, [activeProfile.url, activeProfileId, frameSessionId, managerPath, profiles])
+  }, [activeProfile.url, activeProfileId, frameSessionId, managerPath, pendingPairing, profiles])
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
@@ -153,18 +157,33 @@ export function DeviceManagerShell() {
         return
       }
       if (data.type === 'pairing-state' && typeof data.paired === 'boolean') {
+        if (data.paired && pendingPairing?.profileId === activeProfile.id) setPendingPairing(null)
         if (activeProfile.isCurrent) setHomePaired(data.paired)
         else updateSavedProfiles(savedProfiles.map((profile) => profile.id === activeProfile.id ? { ...profile, paired: data.paired } : profile))
+        return
+      }
+      if (data.type === 'pairing-code-consumed' && data.profileId === activeProfile.id && pendingPairing?.profileId === activeProfile.id) {
+        setPendingPairing(null)
         return
       }
       if (data.type === 'add' && typeof data.name === 'string' && typeof data.url === 'string') {
         try {
           const url = normalizeWebDeviceUrl(data.url)
+          const inputPairingCode = typeof data.pairingCode === 'string' ? data.pairingCode : ''
+          const pairingCode = normalizePairingCode(inputPairingCode)
+          if (inputPairingCode.trim() && pairingCode.length !== 8) return
           const currentUrl = normalizeWebDeviceUrl(new URL(managerPath, managerOrigin).href)
           const allProfiles = [{ id: currentWebDeviceId, url: currentUrl }, ...savedProfiles]
           if (allProfiles.some((profile) => profile.url === url)) return
           const name = data.name.trim().slice(0, 48) || new URL(url).host
-          updateSavedProfiles([...savedProfiles, { id: createWebDeviceId(), name, url, paired: false, isCurrent: false }])
+          const profile: WebDeviceProfile = { id: createWebDeviceId(), name, url, paired: false, isCurrent: false }
+          updateSavedProfiles([...savedProfiles, profile])
+          if (pairingCode) {
+            setPendingPairing({ profileId: profile.id, code: pairingCode })
+            setActiveProfileId(profile.id)
+            setFrameSessionId(createWebDeviceId())
+            window.history.pushState({ codeRemoteDevice: profile.id }, '', newRootUrl(managerPath, profile.id))
+          }
         } catch {
           // Settings performs the same validation before sending; ignore malformed messages.
         }
@@ -179,6 +198,7 @@ export function DeviceManagerShell() {
       if (data.type === 'remove' && typeof data.id === 'string') {
         if (!savedProfiles.some((profile) => profile.id === data.id)) return
         updateSavedProfiles(savedProfiles.filter((profile) => profile.id !== data.id))
+        if (pendingPairing?.profileId === data.id) setPendingPairing(null)
         if (data.id === activeProfileId) selectProfile(currentWebDeviceId)
         return
       }
@@ -187,13 +207,14 @@ export function DeviceManagerShell() {
 
     window.addEventListener('message', handleMessage)
     return () => window.removeEventListener('message', handleMessage)
-  }, [activeProfile, activeProfileId, frameSessionId, managerOrigin, managerPath, savedProfiles, selectProfile, sendState, updateSavedProfiles])
+  }, [activeProfile, activeProfileId, frameSessionId, managerOrigin, managerPath, pendingPairing, savedProfiles, selectProfile, sendState, updateSavedProfiles])
 
   useEffect(() => {
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== profilesStorageKey) return
       const next = readSavedProfiles()
       setSavedProfiles(next)
+      if (pendingPairing && !next.some((profile) => profile.id === pendingPairing.profileId)) setPendingPairing(null)
       if (activeProfileId !== currentWebDeviceId && !next.some((profile) => profile.id === activeProfileId)) {
         setActiveProfileId(currentWebDeviceId)
         setFrameSessionId(createWebDeviceId())
@@ -203,6 +224,7 @@ export function DeviceManagerShell() {
     const handlePopState = () => {
       const requestedId = new URLSearchParams(window.location.search).get('device') ?? currentWebDeviceId
       const targetId = profiles.some((profile) => profile.id === requestedId) ? requestedId : currentWebDeviceId
+      if (pendingPairing && pendingPairing.profileId !== targetId) setPendingPairing(null)
       setActiveProfileId(targetId)
       setFrameSessionId(createWebDeviceId())
     }
@@ -213,7 +235,7 @@ export function DeviceManagerShell() {
       window.removeEventListener('storage', handleStorage)
       window.removeEventListener('popstate', handlePopState)
     }
-  }, [activeProfileId, managerPath, profiles])
+  }, [activeProfileId, managerPath, pendingPairing, profiles])
 
   useEffect(() => {
     sendState()

@@ -1,16 +1,8 @@
 import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
-import type { WebDeviceManagerState } from '../lib/webDeviceManager'
-
-function normalizePairingCode(value: string) {
-  return value
-    .normalize('NFKC')
-    .toUpperCase()
-    .replace(/[\s_-]+/g, '')
-    .slice(0, 8)
-}
+import { normalizePairingCode, type WebDeviceManagerState } from '../lib/webDeviceManager'
 
 export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: string) => void; deviceManager: WebDeviceManagerState }) {
   useUiLanguage()
@@ -19,6 +11,7 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
   const [busy, setBusy] = useState(false)
   const [blockedUntil, setBlockedUntil] = useState<number | null>(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
+  const attemptedPairingCode = useRef<string | null>(null)
   const cooldownRemaining = blockedUntil === null ? 0 : Math.max(0, Math.ceil((blockedUntil - clockNow) / 1000))
   const activeProfile = deviceManager.profiles.find((profile) => profile.id === deviceManager.activeProfileId)
 
@@ -38,13 +31,19 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
     setBlockedUntil(now + seconds * 1000)
   }
 
-  async function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (busy || cooldownRemaining > 0 || code.trim().length !== 8) return
+  async function connectWithCode(value: string, completePendingPairing: boolean) {
+    if (busy || cooldownRemaining > 0) return
+    const normalizedCode = normalizePairingCode(value)
+    if (normalizedCode.length !== 8) {
+      setError('请输入有效的 8 位匹配码。')
+      if (completePendingPairing) deviceManager.completePendingPairing()
+      return
+    }
+    setCode(normalizedCode)
     setBusy(true)
     setError(null)
     try {
-      const result = await codexRemoteClient.pair(normalizePairingCode(code))
+      const result = await codexRemoteClient.pair(normalizedCode)
       onPaired(result.token)
     } catch (reason) {
       if (reason instanceof RemoteApiError && reason.status === 429) {
@@ -55,7 +54,26 @@ export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: str
       }
     } finally {
       setBusy(false)
+      if (completePendingPairing) deviceManager.completePendingPairing()
     }
+  }
+
+  useEffect(() => {
+    const pairingCode = deviceManager.pendingPairingCode
+    if (!pairingCode) {
+      attemptedPairingCode.current = null
+      return
+    }
+    setCode(pairingCode)
+    if (attemptedPairingCode.current === pairingCode) return
+    attemptedPairingCode.current = pairingCode
+    void connectWithCode(pairingCode, true)
+  }, [deviceManager.pendingPairingCode])
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (busy || cooldownRemaining > 0 || code.trim().length !== 8) return
+    void connectWithCode(code, false)
   }
 
   return (

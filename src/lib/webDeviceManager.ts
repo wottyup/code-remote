@@ -6,6 +6,10 @@ const managerOriginKey = 'code-remote-manager-origin'
 const managerPathKey = 'code-remote-manager-path'
 const managerSessionKey = 'code-remote-manager-session'
 
+export function normalizePairingCode(value: string): string {
+  return value.normalize('NFKC').toUpperCase().replace(/[\s_\-\u200b\ufeff]+/g, '').slice(0, 8)
+}
+
 export interface WebDeviceProfile {
   id: string
   name: string
@@ -26,7 +30,9 @@ export interface WebDeviceManagerState {
   available: boolean
   profiles: WebDeviceProfile[]
   activeProfileId: string
-  addProfile: (name: string, url: string) => void
+  pendingPairingCode: string | null
+  completePendingPairing: () => void
+  addProfile: (name: string, url: string, pairingCode?: string) => void
   renameProfile: (id: string, name: string) => void
   removeProfile: (id: string) => void
   selectProfile: (id: string) => void
@@ -107,6 +113,7 @@ export function useWebDeviceManager(): WebDeviceManagerState {
   const [profiles, setProfiles] = useState<WebDeviceProfile[]>([])
   const [activeProfileId, setActiveProfileId] = useState(currentWebDeviceId)
   const [available, setAvailable] = useState(false)
+  const [pendingPairingCode, setPendingPairingCode] = useState<string | null>(null)
 
   const sendAction = useCallback((action: Record<string, unknown>) => {
     if (!config) return
@@ -126,6 +133,8 @@ export function useWebDeviceManager(): WebDeviceManagerState {
       if (typeof event.data.activeProfileId !== 'string') return
       setProfiles(event.data.profiles)
       setActiveProfileId(event.data.activeProfileId)
+      const pairingCode = typeof event.data.pairingCode === 'string' ? normalizePairingCode(event.data.pairingCode) : ''
+      setPendingPairingCode(pairingCode.length === 8 ? pairingCode : null)
       setAvailable(true)
     }
 
@@ -134,9 +143,11 @@ export function useWebDeviceManager(): WebDeviceManagerState {
     return () => window.removeEventListener('message', receiveState)
   }, [config])
 
-  const addProfile = useCallback((name: string, value: string) => {
+  const addProfile = useCallback((name: string, value: string, valuePairingCode = '') => {
     const url = normalizeWebDeviceUrl(value)
     const trimmedName = name.trim().slice(0, 48) || new URL(url).host
+    const pairingCode = normalizePairingCode(valuePairingCode)
+    if (valuePairingCode.trim() && pairingCode.length !== 8) throw new Error('请输入有效的 8 位匹配码。')
     if (profiles.some((profile) => {
       try {
         return normalizeWebDeviceUrl(profile.url) === url
@@ -144,8 +155,13 @@ export function useWebDeviceManager(): WebDeviceManagerState {
         return false
       }
     })) throw new Error('这个地址已经添加了。')
-    sendAction({ type: 'add', name: trimmedName, url })
+    sendAction({ type: 'add', name: trimmedName, url, ...(pairingCode ? { pairingCode } : {}) })
   }, [profiles, sendAction])
+
+  const completePendingPairing = useCallback(() => {
+    if (!pendingPairingCode) return
+    sendAction({ type: 'pairing-code-consumed', profileId: activeProfileId })
+  }, [activeProfileId, pendingPairingCode, sendAction])
 
   const renameProfile = useCallback((id: string, name: string) => {
     const trimmedName = name.trim().slice(0, 48)
@@ -170,7 +186,7 @@ export function useWebDeviceManager(): WebDeviceManagerState {
     return url.href
   }, [config])
 
-  return { available, profiles, activeProfileId, addProfile, renameProfile, removeProfile, selectProfile, windowHref }
+  return { available, profiles, activeProfileId, pendingPairingCode, completePendingPairing, addProfile, renameProfile, removeProfile, selectProfile, windowHref }
 }
 
 export function createWebDeviceFrameUrl(profile: WebDeviceProfile, managerOrigin: string, managerPath: string, sessionId: string): string {
