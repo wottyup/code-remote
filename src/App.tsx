@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from 'react'
 import { CodexRemotePage } from './components/CodexRemotePage'
 import { PairingPage } from './components/PairingPage'
+import { DeviceManagerShell } from './components/DeviceManagerShell'
 import { codexRemoteClient } from './lib/codexRemoteClient'
 import { letterSpacingStyle, readThemePreferences, saveThemePreferences, themeRootStyle, type ThemePreferences } from './lib/themePreferences'
+import { postPairingStateToManager, useWebDeviceManager } from './lib/webDeviceManager'
 
 const STORAGE_KEY = 'codex-remote-token'
 
@@ -21,7 +23,8 @@ function readPairedToken() {
   return window.localStorage.getItem(STORAGE_KEY)
 }
 
-export default function App() {
+function RemoteClientApp() {
+  const deviceManager = useWebDeviceManager()
   const [token, setToken] = useState(readPairedToken)
   const [themePreferences, setThemePreferences] = useState<ThemePreferences>(readThemePreferences)
 
@@ -31,7 +34,7 @@ export default function App() {
 
   useEffect(() => {
     if (window.parent === window) return
-    window.parent.postMessage({ type: 'code-remote:pairing-state', paired: Boolean(token) }, '*')
+    postPairingStateToManager(Boolean(token))
   }, [token])
 
   useLayoutEffect(() => {
@@ -69,15 +72,23 @@ export default function App() {
 
   return (
     <div className={`app-root app-root--theme-${themePreferences.theme}`} style={themeRootStyle(themePreferences)}>
-      {!token ? <PairingPage onPaired={paired} /> : (
+      {!token ? <PairingPage onPaired={paired} deviceManager={deviceManager} /> : (
         <CodexRemotePage
           token={token}
           onUnauthorized={unpair}
           onUnpair={unpair}
           themePreferences={themePreferences}
           onThemePreferencesChange={setThemePreferences}
+          deviceManager={deviceManager}
         />
       )}
     </div>
   )
+}
+
+export default function App() {
+  if (window.CodeRemoteDesktop || window.CodexRemoteAndroid || window.parent !== window || new URLSearchParams(window.location.search).get('code-remote-client') === '1') {
+    return <RemoteClientApp />
+  }
+  return <DeviceManagerShell />
 }

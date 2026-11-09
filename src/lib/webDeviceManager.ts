@@ -1,0 +1,189 @@
+import { useCallback, useEffect, useState } from 'react'
+
+export const currentWebDeviceId = '__current__'
+const clientModeKey = 'code-remote-client'
+const managerOriginKey = 'code-remote-manager-origin'
+const managerPathKey = 'code-remote-manager-path'
+const managerSessionKey = 'code-remote-manager-session'
+
+export interface WebDeviceProfile {
+  id: string
+  name: string
+  url: string
+  paired: boolean
+  isCurrent: boolean
+}
+
+interface DeviceManagerFrameConfig {
+  origin: string
+  path: string
+  sessionId: string
+}
+
+let cachedFrameConfig: DeviceManagerFrameConfig | null | undefined
+
+export interface WebDeviceManagerState {
+  available: boolean
+  profiles: WebDeviceProfile[]
+  activeProfileId: string
+  addProfile: (name: string, url: string) => void
+  renameProfile: (id: string, name: string) => void
+  removeProfile: (id: string) => void
+  selectProfile: (id: string) => void
+  windowHref: (id: string) => string | null
+}
+
+export function normalizeWebDeviceUrl(value: string): string {
+  const raw = value.trim()
+  if (!raw) throw new Error('请填写 Code Remote 网页地址。')
+
+  let url: URL
+  try {
+    url = new URL(/^[a-z][a-z\d+.-]*:\/\//i.test(raw) ? raw : `http://${raw}`)
+  } catch {
+    throw new Error('请使用有效的 HTTP 或 HTTPS 地址，不要带账号、查询参数或片段。')
+  }
+
+  if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password || url.search || url.hash) {
+    throw new Error('请使用有效的 HTTP 或 HTTPS 地址，不要带账号、查询参数或片段。')
+  }
+  url.pathname = url.pathname.replace(/\/+$/, '') || '/'
+  return url.toString().replace(/\/$/, '')
+}
+
+function readFrameConfig(): DeviceManagerFrameConfig | null {
+  if (cachedFrameConfig !== undefined) return cachedFrameConfig
+  if (typeof window === 'undefined' || window.parent === window) return null
+  const search = new URLSearchParams(window.location.search)
+  if (search.get(clientModeKey) !== '1') {
+    cachedFrameConfig = null
+    return cachedFrameConfig
+  }
+
+  try {
+    const bridge = new URLSearchParams(window.location.hash.slice(1))
+    const origin = new URL(bridge.get(managerOriginKey) ?? '').origin
+    const path = bridge.get(managerPathKey) ?? '/'
+    const sessionId = bridge.get(managerSessionKey) ?? ''
+    if (!/^\/(?!\/)/.test(path) || path.includes('?') || path.includes('#') || !sessionId) return null
+    cachedFrameConfig = { origin, path, sessionId }
+    return cachedFrameConfig
+  } catch {
+    cachedFrameConfig = null
+    return cachedFrameConfig
+  }
+}
+
+function isDeviceProfile(value: unknown): value is WebDeviceProfile {
+  if (!value || typeof value !== 'object') return false
+  const profile = value as Partial<WebDeviceProfile>
+  return typeof profile.id === 'string' && typeof profile.name === 'string'
+    && typeof profile.url === 'string' && typeof profile.paired === 'boolean'
+    && typeof profile.isCurrent === 'boolean'
+}
+
+function randomId(): string {
+  try {
+    if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+  } catch {
+    // Insecure HTTP contexts may not expose randomUUID.
+  }
+  return `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+}
+
+export function postPairingStateToManager(paired: boolean): void {
+  const config = readFrameConfig()
+  if (!config) return
+  window.parent.postMessage({
+    source: 'code-remote-app',
+    type: 'pairing-state',
+    sessionId: config.sessionId,
+    paired,
+  }, config.origin)
+}
+
+export function useWebDeviceManager(): WebDeviceManagerState {
+  const [config] = useState(readFrameConfig)
+  const [profiles, setProfiles] = useState<WebDeviceProfile[]>([])
+  const [activeProfileId, setActiveProfileId] = useState(currentWebDeviceId)
+  const [available, setAvailable] = useState(false)
+
+  const sendAction = useCallback((action: Record<string, unknown>) => {
+    if (!config) return
+    window.parent.postMessage({ source: 'code-remote-app', sessionId: config.sessionId, ...action }, config.origin)
+  }, [config])
+
+  useEffect(() => {
+    const frameConfig = config
+    if (!frameConfig) return
+    const managerOrigin = frameConfig.origin
+    const sessionId = frameConfig.sessionId
+
+    function receiveState(event: MessageEvent) {
+      if (event.source !== window.parent || event.origin !== managerOrigin) return
+      if (event.data?.source !== 'code-remote-manager' || event.data?.type !== 'state' || event.data?.sessionId !== sessionId) return
+      if (!Array.isArray(event.data.profiles) || !event.data.profiles.every(isDeviceProfile)) return
+      if (typeof event.data.activeProfileId !== 'string') return
+      setProfiles(event.data.profiles)
+      setActiveProfileId(event.data.activeProfileId)
+      setAvailable(true)
+    }
+
+    window.addEventListener('message', receiveState)
+    window.parent.postMessage({ source: 'code-remote-app', type: 'ready', sessionId }, managerOrigin)
+    return () => window.removeEventListener('message', receiveState)
+  }, [config])
+
+  const addProfile = useCallback((name: string, value: string) => {
+    const url = normalizeWebDeviceUrl(value)
+    const trimmedName = name.trim().slice(0, 48) || new URL(url).host
+    if (profiles.some((profile) => {
+      try {
+        return normalizeWebDeviceUrl(profile.url) === url
+      } catch {
+        return false
+      }
+    })) throw new Error('这个地址已经添加了。')
+    sendAction({ type: 'add', name: trimmedName, url })
+  }, [profiles, sendAction])
+
+  const renameProfile = useCallback((id: string, name: string) => {
+    const trimmedName = name.trim().slice(0, 48)
+    if (!trimmedName) throw new Error('设备名称不能为空。')
+    if (id === currentWebDeviceId) throw new Error('当前网页不能重命名。')
+    sendAction({ type: 'rename', id, name: trimmedName })
+  }, [sendAction])
+
+  const removeProfile = useCallback((id: string) => {
+    if (id === currentWebDeviceId) throw new Error('当前网页不能移除。')
+    sendAction({ type: 'remove', id })
+  }, [sendAction])
+
+  const selectProfile = useCallback((id: string) => {
+    sendAction({ type: 'select', id })
+  }, [sendAction])
+
+  const windowHref = useCallback((id: string) => {
+    if (!config) return null
+    const url = new URL(config.path, config.origin)
+    url.searchParams.set('device', id)
+    return url.href
+  }, [config])
+
+  return { available, profiles, activeProfileId, addProfile, renameProfile, removeProfile, selectProfile, windowHref }
+}
+
+export function createWebDeviceFrameUrl(profile: WebDeviceProfile, managerOrigin: string, managerPath: string, sessionId: string): string {
+  const url = new URL(normalizeWebDeviceUrl(profile.url))
+  url.searchParams.set(clientModeKey, '1')
+  const bridge = new URLSearchParams()
+  bridge.set(managerOriginKey, managerOrigin)
+  bridge.set(managerPathKey, managerPath)
+  bridge.set(managerSessionKey, sessionId)
+  url.hash = bridge.toString()
+  return url.href
+}
+
+export function createWebDeviceId(): string {
+  return randomId()
+}

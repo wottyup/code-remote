@@ -64,9 +64,9 @@ pnpm --filter code-remote start
 
 ## Windows 桌面客户端
 
-桌面客户端用于连接多台已经运行 Code Remote 的电脑，不会在这台 Windows 电脑上启动 Code Remote 服务或 Codex。每台远端电脑需要运行包含桌面配对桥接的 Code Remote 版本，并能从当前网络访问。
+桌面客户端用于连接多台已经运行 Code Remote 的电脑，不会在这台 Windows 电脑上启动 Code Remote 服务或 Codex。每台远端电脑需要运行可从当前网络访问的 Code Remote，并显示配对码供首次连接使用。
 
-可以先在浏览器打开 `http://电脑的局域网 IP:4173/desktop-client/` 体验多设备侧栏。网页模式只在当前浏览器保存设备名称和地址；添加后会打开目标网页，并在那里输入匹配码完成配对。
+网页版现在直接在原有设置和聊天侧栏管理多台设备：在“设置 → 设备连接”添加 Code Remote 地址，在侧栏切换；右键设备可在新窗口并行打开。每台设备首次连接时，会在它自己的配对页面输入匹配码，令牌仍由该设备的网页保存。
 
 从 workspace 根目录构建 Windows x64 安装程序：
 

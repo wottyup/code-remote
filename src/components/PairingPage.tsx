@@ -2,6 +2,7 @@ import { ui, uiFormat, uiMessage, useUiLanguage } from '../lib/uiLanguage'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ArrowRight, KeyRound, LoaderCircle, ShieldCheck } from 'lucide-react'
 import { codexRemoteClient, RemoteApiError } from '../lib/codexRemoteClient'
+import type { WebDeviceManagerState } from '../lib/webDeviceManager'
 
 function normalizePairingCode(value: string) {
   return value
@@ -11,7 +12,7 @@ function normalizePairingCode(value: string) {
     .slice(0, 8)
 }
 
-export function PairingPage({ onPaired }: { onPaired: (token: string) => void }) {
+export function PairingPage({ onPaired, deviceManager }: { onPaired: (token: string) => void; deviceManager: WebDeviceManagerState }) {
   useUiLanguage()
   const [code, setCode] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -19,6 +20,7 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
   const [blockedUntil, setBlockedUntil] = useState<number | null>(null)
   const [clockNow, setClockNow] = useState(() => Date.now())
   const cooldownRemaining = blockedUntil === null ? 0 : Math.max(0, Math.ceil((blockedUntil - clockNow) / 1000))
+  const activeProfile = deviceManager.profiles.find((profile) => profile.id === deviceManager.activeProfileId)
 
   useEffect(() => {
     if (blockedUntil === null) return
@@ -59,6 +61,12 @@ export function PairingPage({ onPaired }: { onPaired: (token: string) => void })
   return (
     <main className="pair-page">
       <section className="pair-card">
+        {deviceManager.available && deviceManager.profiles.length > 1 ? <div className="pair-device-switcher">
+          <span className="pair-device-switcher__current"><small>{ui('当前设备')}</small><strong>{activeProfile?.name ?? ui('设备')}</strong></span>
+          <select aria-label={ui('切换设备')} value={deviceManager.activeProfileId} onChange={(event) => deviceManager.selectProfile(event.currentTarget.value)}>
+            {deviceManager.profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name} · {profile.paired ? ui('已配对') : ui('未配对')}</option>)}
+          </select>
+        </div> : null}
         <img className="pair-card__logo" src="/code-remote-mark.png" alt="Code Remote" />
         <p className="pair-eyebrow">CODE REMOTE</p>
         <h1>{ui("连接你的 Code Remote")}</h1>

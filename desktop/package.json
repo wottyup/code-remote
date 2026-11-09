@@ -1,6 +1,6 @@
 {
   "name": "code-remote-desktop",
-  "version": "0.112.0-dev.1",
+  "version": "0.113.0-dev.1",
   "private": true,
   "type": "commonjs",
   "main": "main.cjs",
