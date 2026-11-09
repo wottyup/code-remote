@@ -5081,7 +5081,9 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
     return summarizeFileChanges(activeRemote.fileChangesByTurn[activeRemote.runningTurnId] ?? [])
   }, [activeRemote.fileChangesByTurn, activeRemote.isRunning, activeRemote.runningTurnId])
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [devicePickerOpen, setDevicePickerOpen] = useState(false)
   const [deviceContextMenu, setDeviceContextMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  const devicePickerRef = useRef<HTMLDivElement>(null)
   const [claudeCodeAvailable, setClaudeCodeAvailable] = useState<boolean | null>(null)
   const [claudeModelOptions, setClaudeModelOptions] = useState<ComposerMenuOption[]>(defaultClaudeModelOptions)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -5130,6 +5132,21 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [deviceContextMenu])
+  useEffect(() => {
+    if (!devicePickerOpen) return
+    const closeOutsidePicker = (event: PointerEvent) => {
+      if (event.target instanceof Node && !devicePickerRef.current?.contains(event.target)) setDevicePickerOpen(false)
+    }
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setDevicePickerOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOutsidePicker)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOutsidePicker)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [devicePickerOpen])
   useEffect(() => {
     const syncTranslationPreferences = () => {
       const stored = readTranslationPreferencesIfAvailable()
@@ -6732,6 +6749,7 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
 
   const contextDevice = deviceContextMenu ? deviceManager.profiles.find((profile) => profile.id === deviceContextMenu.id) : null
   const contextDeviceWindowHref = contextDevice ? deviceManager.windowHref(contextDevice.id) : null
+  const activeDeviceProfile = deviceManager.profiles.find((profile) => profile.id === deviceManager.activeProfileId) ?? deviceManager.profiles[0] ?? null
   const sidebarBackdropVisible = sidebarOpen || sidebarDragging
 
   return (
@@ -6775,35 +6793,6 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
           </button>
           <button className="icon-button remote-sidebar__close" type="button" aria-label={ui("关闭对话列表")} onClick={() => setSidebarOpen(false)}><X size={18} /></button>
         </div>
-        {deviceManager.available ? <section className="sidebar-device-switcher" aria-label={ui('设备')}>
-          <div className="sidebar-device-switcher__heading">
-            <span>{ui('设备')}</span>
-            <button type="button" title={ui('设备连接设置')} aria-label={ui('设备连接设置')} onClick={() => openSettingsPanel('devices')}><Plus size={15} /></button>
-          </div>
-          <div className="sidebar-device-switcher__list">
-            {deviceManager.profiles.map((profile) => <div className="sidebar-device-switcher__row" key={profile.id}>
-              <button
-                className={'sidebar-device-switcher__device' + (deviceManager.activeProfileId === profile.id ? ' sidebar-device-switcher__device--active' : '')}
-                type="button"
-                aria-current={deviceManager.activeProfileId === profile.id ? 'page' : undefined}
-                title={`${profile.name} · ${profile.url}`}
-                onClick={() => { deviceManager.selectProfile(profile.id); setSidebarOpen(false) }}
-                onContextMenu={(event) => {
-                  event.preventDefault()
-                  setDeviceContextMenu({ id: profile.id, x: event.clientX, y: event.clientY })
-                }}
-              >
-                <i className={'sidebar-device-switcher__dot' + (profile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
-                <span className="sidebar-device-switcher__copy"><strong>{profile.name}</strong><small>{profile.paired ? ui('已配对') : ui('未配对')}</small></span>
-                {deviceManager.activeProfileId === profile.id ? <Check size={14} aria-hidden="true" /> : null}
-              </button>
-              <button className="sidebar-device-switcher__more" type="button" title={ui('更多设备操作')} aria-label={uiMessage(`更多设备操作：${profile.name}`)} onClick={(event) => {
-                const bounds = event.currentTarget.getBoundingClientRect()
-                setDeviceContextMenu({ id: profile.id, x: Math.max(8, Math.min(bounds.right - 174, window.innerWidth - 190)), y: Math.min(bounds.bottom, window.innerHeight - 52) })
-              }}><MoreHorizontal size={16} /></button>
-            </div>)}
-          </div>
-        </section> : null}
         <div className="sidebar-search">
           <Search size={15} aria-hidden="true" />
           <input type="text" value={sidebarSearch} onChange={(event) => setSidebarSearch(event.currentTarget.value)} placeholder={ui("搜索聊天记录")} aria-label={ui("搜索聊天记录")} autoComplete="off" enterKeyHint="search" />
@@ -6885,6 +6874,52 @@ export function CodexRemotePage({ token, onUnauthorized, onUnpair, themePreferen
               </span>
             ))}
           </div>
+          {deviceManager.available && activeDeviceProfile ? <div className="sidebar-device-picker" ref={devicePickerRef}>
+            {devicePickerOpen ? <section className="sidebar-device-switcher sidebar-device-switcher--bottom" aria-label={ui('设备')}>
+              <div className="sidebar-device-switcher__heading">
+                <span>{ui('设备')}</span>
+                <button type="button" title={ui('设备连接设置')} aria-label={ui('设备连接设置')} onClick={() => { setDevicePickerOpen(false); openSettingsPanel('devices') }}><Plus size={15} /></button>
+              </div>
+              <div className="sidebar-device-switcher__list">
+                {deviceManager.profiles.map((profile) => <div className="sidebar-device-switcher__row" key={profile.id}>
+                  <button
+                    className={'sidebar-device-switcher__device' + (deviceManager.activeProfileId === profile.id ? ' sidebar-device-switcher__device--active' : '')}
+                    type="button"
+                    aria-current={deviceManager.activeProfileId === profile.id ? 'page' : undefined}
+                    title={`${profile.name} · ${profile.url}`}
+                    onClick={() => { deviceManager.selectProfile(profile.id); setDevicePickerOpen(false); setSidebarOpen(false) }}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      setDevicePickerOpen(false)
+                      setDeviceContextMenu({ id: profile.id, x: event.clientX, y: event.clientY })
+                    }}
+                  >
+                    <i className={'sidebar-device-switcher__dot' + (profile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
+                    <span className="sidebar-device-switcher__copy"><strong>{profile.name}</strong><small>{profile.paired ? ui('已配对') : ui('未配对')}</small></span>
+                    {deviceManager.activeProfileId === profile.id ? <Check size={14} aria-hidden="true" /> : null}
+                  </button>
+                  <button className="sidebar-device-switcher__more" type="button" title={ui('更多设备操作')} aria-label={uiMessage(`更多设备操作：${profile.name}`)} onClick={(event) => {
+                    const bounds = event.currentTarget.getBoundingClientRect()
+                    setDevicePickerOpen(false)
+                    setDeviceContextMenu({ id: profile.id, x: Math.max(8, Math.min(bounds.right - 174, window.innerWidth - 190)), y: Math.min(bounds.bottom, window.innerHeight - 52) })
+                  }}><MoreHorizontal size={16} /></button>
+                </div>)}
+              </div>
+            </section> : null}
+            <button
+              className="sidebar-device-selector__button"
+              type="button"
+              aria-label={ui('切换设备')}
+              aria-haspopup="true"
+              aria-expanded={devicePickerOpen}
+              title={`${activeDeviceProfile.name} · ${activeDeviceProfile.paired ? ui('已配对') : ui('未配对')}`}
+              onClick={() => setDevicePickerOpen((open) => !open)}
+            >
+              <i className={'sidebar-device-switcher__dot' + (activeDeviceProfile.paired ? ' sidebar-device-switcher__dot--paired' : '')} aria-hidden="true" />
+              <span className="sidebar-device-selector__copy"><strong>{activeDeviceProfile.name}</strong><small>{activeDeviceProfile.paired ? ui('已配对') : ui('未配对')}</small></span>
+              <ChevronDown size={15} aria-hidden="true" />
+            </button>
+          </div> : null}
         </footer>
       </aside>
 
