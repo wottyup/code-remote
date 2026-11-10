@@ -4417,13 +4417,14 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-glass-glint: rgba(255, 255, 255, .22);
   --composer-glass-focus: rgba(255, 255, 255, .27);
   --composer-glass-sheen: rgba(255, 255, 255, .13);
-  --composer-glass-shadow: 0 20px 52px rgba(0, 0, 0, .32), inset 0 1px 0 rgba(255, 255, 255, .13), inset 0 -1px 0 rgba(255, 255, 255, .05);
+  --composer-glass-shadow: 0 20px 52px rgba(0, 0, 0, .32), inset 0 -1px 0 rgba(255, 255, 255, .05);
   --composer-control-surface: linear-gradient(155deg, rgba(255, 255, 255, .14), rgba(255, 255, 255, .075));
   --composer-control-hover: rgba(255, 255, 255, .19);
   --composer-control-edge: rgba(255, 255, 255, .09);
   --composer-control-ink: #e8e9ed;
   padding: 13px 15px 12px;
   border: 1px solid var(--composer-glass-edge);
+  border-top-color: transparent;
   border-radius: 30px;
   background: var(--composer-glass-surface);
   box-shadow: var(--composer-glass-shadow);
@@ -4436,7 +4437,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-glass-glint: rgba(255, 255, 255, .94);
   --composer-glass-focus: rgba(117, 130, 149, .48);
   --composer-glass-sheen: rgba(255, 255, 255, .52);
-  --composer-glass-shadow: 0 16px 42px rgba(41, 52, 70, .12), inset 0 1px 0 rgba(255, 255, 255, .94), inset 0 -1px 0 rgba(119, 132, 152, .09);
+  --composer-glass-shadow: 0 16px 42px rgba(41, 52, 70, .12), inset 0 -1px 0 rgba(119, 132, 152, .09);
   --composer-control-surface: linear-gradient(150deg, rgba(255, 255, 255, .9), rgba(231, 236, 243, .78));
   --composer-control-hover: rgba(219, 226, 236, .94);
   --composer-control-edge: rgba(119, 132, 151, .18);
@@ -4448,7 +4449,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-glass-glint: rgba(255, 255, 255, .86);
   --composer-glass-focus: rgba(153, 119, 81, .42);
   --composer-glass-sheen: rgba(255, 255, 255, .48);
-  --composer-glass-shadow: 0 16px 42px rgba(98, 75, 52, .13), inset 0 1px 0 rgba(255, 255, 255, .88), inset 0 -1px 0 rgba(153, 119, 81, .08);
+  --composer-glass-shadow: 0 16px 42px rgba(98, 75, 52, .13), inset 0 -1px 0 rgba(153, 119, 81, .08);
   --composer-control-surface: linear-gradient(150deg, rgba(255, 253, 249, .9), rgba(236, 221, 202, .78));
   --composer-control-hover: rgba(231, 213, 190, .94);
   --composer-control-edge: rgba(153, 119, 81, .19);
@@ -4460,7 +4461,7 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   --composer-glass-glint: color-mix(in srgb, var(--custom-theme-text-color) 24%, transparent);
   --composer-glass-focus: color-mix(in srgb, var(--custom-theme-text-color) 46%, transparent);
   --composer-glass-sheen: color-mix(in srgb, var(--custom-theme-text-color) 12%, transparent);
-  --composer-glass-shadow: 0 16px 42px rgba(0, 0, 0, .16), inset 0 1px 0 color-mix(in srgb, var(--custom-theme-text-color) 14%, transparent);
+  --composer-glass-shadow: 0 16px 42px rgba(0, 0, 0, .16);
   --composer-control-surface: color-mix(in srgb, var(--custom-theme-text-color) 9%, var(--custom-theme-control));
   --composer-control-hover: color-mix(in srgb, var(--custom-theme-text-color) 17%, var(--custom-theme-control));
   --composer-control-edge: var(--custom-theme-border);
