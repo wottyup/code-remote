@@ -7207,9 +7207,11 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
       setRecordingShortcut(null)
       setShortcutMessage('已取消录制。')
     }
+    const switchingEngineConfig = (activeSection === 'codex-config' || activeSection === 'claude-config')
+      && (sectionId === 'codex-config' || sectionId === 'claude-config')
     setActiveSection(sectionId)
     saveActiveSettingsSection(sectionId)
-    settingsContentRef.current?.scrollTo({ top: 0 })
+    if (!switchingEngineConfig) settingsContentRef.current?.scrollTo({ top: 0 })
   }
 
   function closeWithConfigCheck() {
