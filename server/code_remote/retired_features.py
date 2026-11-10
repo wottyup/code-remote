@@ -10,6 +10,9 @@ from .mcp_approvals import MCPApprovalError, MCPApprovalStore
 
 logger = logging.getLogger(__name__)
 
+# The old app-owned SSH implementation used these names and files. The current upstream
+# ssh-mcp integration uses a separate state directory and the server name
+# code_remote_ssh_mcp; keep it outside this retirement list.
 _RETIRED_SSH_MCP_SERVERS = frozenset({"code_remote_ssh", "code-remote-ssh", "ssh-mcp", "ssh_mcp"})
 
 

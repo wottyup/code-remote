@@ -23,6 +23,7 @@ from watchfiles import Change, DefaultFilter, awatch
 from websockets.asyncio.client import connect as websocket_connect
 from .codex_history import CodexHistoryStore
 from .mcp_approvals import MCPApprovalError, MCPApprovalStore, mcp_tool_confirmation
+from .ssh_mcp_settings import SSH_MCP_SERVER_NAME, SshMcpSettingsError, SshMcpSettingsStore
 from .terminal_handoff import TerminalHandoffBroker
 
 logger = logging.getLogger(__name__)
@@ -316,6 +317,7 @@ class CodexAppServer:
         self._active_turn_ids: dict[str, str] = {}
         self._mcp_approval_store: MCPApprovalStore | None = None
         self._terminal_handoff: TerminalHandoffBroker | None = None
+        self._ssh_mcp_settings: SshMcpSettingsStore | None = None
         # thread/start creates an in-memory thread before its first rollout
         # exists. Such a thread can accept turn/start but not thread/resume.
         self._fresh_thread_cwds: dict[str, Path] = {}
@@ -352,19 +354,33 @@ class CodexAppServer:
     def enable_terminal_handoff(self, broker: TerminalHandoffBroker) -> None:
         self._terminal_handoff = broker
 
-    def _terminal_mcp_config(self, context: str) -> dict[str, Any]:
-        assert self._terminal_handoff is not None
-        package_parent = str(Path(__file__).resolve().parent.parent)
-        python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
-        return {"mcp_servers": {"code_remote_terminal": {
-            "command": sys.executable,
-            "args": ["-m", "code_remote.terminal_handoff"],
-            "env": {
-                "PYTHONPATH": python_path,
-                "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),
-                "CODE_REMOTE_TERMINAL_CONTEXT": context,
-            },
-        }}}
+    def enable_ssh_mcp(self, settings: SshMcpSettingsStore) -> None:
+        self._ssh_mcp_settings = settings
+
+    def _thread_mcp_config(self, terminal_context: str | None) -> dict[str, Any] | None:
+        servers: dict[str, Any] = {}
+        if self._ssh_mcp_settings is not None:
+            try:
+                ssh_server = self._ssh_mcp_settings.codex_server_config()
+            except SshMcpSettingsError as error:
+                raise CodexRuntimeError(str(error)) from error
+            if ssh_server is not None:
+                servers[SSH_MCP_SERVER_NAME] = ssh_server
+
+        if terminal_context and self._terminal_handoff is not None:
+            package_parent = str(Path(__file__).resolve().parent.parent)
+            python_path = os.pathsep.join(filter(None, (package_parent, os.environ.get("PYTHONPATH", ""))))
+            servers["code_remote_terminal"] = {
+                "command": sys.executable,
+                "args": ["-m", "code_remote.terminal_handoff"],
+                "env": {
+                    "PYTHONPATH": python_path,
+                    "CODE_REMOTE_TERMINAL_SOCKET": str(self._terminal_handoff.socket_path),
+                    "CODE_REMOTE_TERMINAL_CONTEXT": terminal_context,
+                },
+            }
+
+        return {"mcp_servers": servers} if servers else None
 
     @property
     def connected(self) -> bool:
@@ -800,8 +816,9 @@ class CodexAppServer:
             "serviceName": "code_remote_web",
         }
         terminal_context = secrets.token_hex(16) if self._terminal_handoff and os.name != "nt" else None
-        if terminal_context:
-            params["config"] = self._terminal_mcp_config(terminal_context)
+        mcp_config = self._thread_mcp_config(terminal_context)
+        if mcp_config:
+            params["config"] = mcp_config
         if model:
             params["model"] = model
         if approval_policy:
@@ -828,8 +845,9 @@ class CodexAppServer:
             raise CodexRuntimeError("本机 Codex 历史数据库没有该对话，无法在隔离运行时中恢复。")
         params: dict[str, Any] = {"threadId": thread_id}
         terminal_context = secrets.token_hex(16) if self._terminal_handoff and os.name != "nt" else None
-        if terminal_context:
-            params["config"] = self._terminal_mcp_config(terminal_context)
+        mcp_config = self._thread_mcp_config(terminal_context)
+        if mcp_config:
+            params["config"] = mcp_config
         if cwd is not None:
             params["cwd"] = str(cwd)
         result = await self.request("thread/resume", params)

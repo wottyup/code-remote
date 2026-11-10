@@ -4389,3 +4389,23 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
   min-height: 0;
   margin: 0;
 }
+
+.ssh-mcp-card .theme-settings-card__heading h2 { display: flex; align-items: center; gap: 9px; }
+.ssh-mcp-shield { display: inline-grid; width: 27px; height: 22px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--settings-nav-accent) 50%, transparent); border-radius: 6px; color: var(--settings-nav-accent); font-size: 9px; font-weight: 750; letter-spacing: .04em; }
+.ssh-mcp-profile { padding-top: 20px; }
+.ssh-mcp-profile__heading { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: 12px; }
+.ssh-mcp-profile__heading h3 { min-width: 0; overflow-wrap: anywhere; }
+.ssh-mcp-profile__remove { min-height: 36px; flex: 0 0 auto; }
+.ssh-mcp-readonly { display: flex; align-items: flex-start; gap: 10px; padding: 12px 14px; border: 1px solid var(--settings-inner-border); border-radius: 9px; background: var(--settings-inner-surface); cursor: pointer; }
+.ssh-mcp-readonly > input { width: 17px; height: 17px; flex: 0 0 auto; margin: 2px 0 0; accent-color: var(--settings-nav-accent); }
+.ssh-mcp-readonly > span { display: grid; gap: 3px; }
+.ssh-mcp-readonly strong { font-size: calc(13px + var(--mobile-font-offset)); font-weight: 650; }
+.ssh-mcp-readonly small { font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; opacity: .72; }
+.ssh-mcp-actions { justify-content: space-between; padding-top: 3px; }
+.ssh-mcp-actions button { min-height: 40px; }
+.ssh-mcp-spin { animation: ssh-mcp-spin .9s linear infinite; }
+@keyframes ssh-mcp-spin { to { transform: rotate(360deg); } }
+@media (max-width: 640px) {
+  .ssh-mcp-profile__heading { align-items: flex-start; }
+  .ssh-mcp-actions { justify-content: flex-start; }
+}

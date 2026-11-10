@@ -135,7 +135,7 @@ function McpElicitationFields({ params, approvalScope, onRespond }: { params: Re
       const field = objectValue(definition)
       const value = values[name]
       if (field?.type === 'boolean') {
-        content[name] = value === true
+        content[name] = name === 'confirm' ? true : value === true
       } else if (value !== undefined && String(value).trim()) {
         content[name] = field?.type === 'integer' || field?.type === 'number' ? Number(value) : value
       }
@@ -149,6 +149,7 @@ function McpElicitationFields({ params, approvalScope, onRespond }: { params: Re
     {fields.map(([name, definition]) => {
       const field = objectValue(definition)
       if (!field || !['string', 'number', 'integer', 'boolean'].includes(String(field.type))) return null
+      if (name === 'confirm' && field.type === 'boolean') return null
       const label = typeof field.title === 'string' ? field.title : name
       const choices = Array.isArray(field.enum) ? field.enum.filter((value): value is string => typeof value === 'string') : []
       return <label className="approval-card__field" key={name}>

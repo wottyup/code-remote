@@ -27,6 +27,31 @@ export interface MCPApprovalGrant {
   toolName?: string
 }
 
+export type SshMcpAuthentication = 'agent' | 'key'
+export type SshMcpHostGroup = 'prod' | 'staging' | 'dev'
+export type SshMcpRole = 'viewer' | 'operator' | 'admin'
+export type SshMcpApprovalPolicy = 'ask-all' | 'ask-destructive' | 'deny'
+export interface SshMcpProfile {
+  name: string
+  host: string
+  port: number
+  user: string
+  auth: SshMcpAuthentication
+  keyRef?: string
+  group: SshMcpHostGroup
+  role: SshMcpRole
+  readOnly: boolean
+  approvalPolicy: SshMcpApprovalPolicy
+  trustedHostKey?: string
+  workdir?: string
+}
+export interface SshMcpSettings {
+  profiles: SshMcpProfile[]
+  available: boolean
+  configured: boolean
+  claudeSupported: boolean
+}
+
 export type TranslationProvider = 'google' | 'microsoft' | 'deepl' | 'codex' | 'claude' | 'chat' | 'anthropic' | 'responses'
 export type TranslationApiProtocol = Extract<TranslationProvider, 'chat' | 'anthropic' | 'responses'>
 export type TranslationStyle = 'natural' | 'formal'
@@ -929,6 +954,14 @@ export const codexRemoteClient = {
   },
   mcpApprovals(token: string) {
     return request<{ approvals: MCPApprovalGrant[] }>(token, '/api/v1/mcp/approvals')
+  },
+  sshMcpSettings(token: string) {
+    return request<SshMcpSettings>(token, '/api/v1/ssh-mcp/settings')
+  },
+  saveSshMcpSettings(token: string, profiles: SshMcpProfile[]) {
+    return request<SshMcpSettings>(token, '/api/v1/ssh-mcp/settings', {
+      method: 'PUT', body: JSON.stringify({ profiles }),
+    })
   },
   revokeMCPApproval(token: string, grantId: string) {
     return request<{ deleted: boolean }>(token, `/api/v1/mcp/approvals/${encodeURIComponent(grantId)}`, { method: 'DELETE' })

@@ -55,6 +55,7 @@ from .codex_app_server import (
 )
 from .shared_state import QueueConflictError, SharedQueueService, SharedStateStore
 from .mcp_approvals import MCPApprovalError, MCPApprovalNotFoundError, MCPApprovalStore
+from .ssh_mcp_settings import SshMcpSettingsError, SshMcpSettingsStore
 from .native_engine_config import NativeEngineConfigError, NativeEngineConfigStore
 from .native_engine_profiles import NativeEngineProfiles
 from .native_engine_gateway import NativeEngineGateway
@@ -356,6 +357,57 @@ class ThreadNameRequest(BaseModel):
 
 class TerminalHandoffRequest(BaseModel):
     enabled: bool
+
+
+class SshMcpProfileRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    name: str = Field(min_length=1, max_length=64)
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(default=22, ge=1, le=65535)
+    user: str = Field(min_length=1, max_length=128)
+    auth: Literal["agent", "key"] = "agent"
+    keyRef: str | None = Field(default=None, max_length=2_048)
+    group: Literal["prod", "staging", "dev"] = "prod"
+    role: Literal["viewer", "operator", "admin"] = "viewer"
+    readOnly: bool = True
+    approvalPolicy: Literal["ask-all", "ask-destructive", "deny"] = "ask-all"
+    trustedHostKey: str | None = Field(default=None, max_length=512)
+    workdir: str | None = Field(default=None, max_length=2_048)
+
+    @field_validator("name")
+    @classmethod
+    def validate_profile_name(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", value):
+            raise ValueError("服务器名称只能包含英文字母、数字、连字符和下划线。")
+        return value
+
+    @field_validator("host", "user")
+    @classmethod
+    def validate_host_and_user(cls, value: str) -> str:
+        value = value.strip()
+        if not value or any(character.isspace() or ord(character) < 32 for character in value):
+            raise ValueError("主机地址和用户名不能包含空白字符。")
+        return value
+
+    @field_validator("keyRef", "trustedHostKey", "workdir")
+    @classmethod
+    def normalize_optional_profile_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            return None
+        if any(ord(character) < 32 for character in value):
+            raise ValueError("配置字段不能包含控制字符。")
+        return value
+
+
+class SshMcpSettingsRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    profiles: list[SshMcpProfileRequest] = Field(default_factory=list, max_length=32)
 
 
 class TurnImage(BaseModel):
@@ -1705,6 +1757,8 @@ def create_app(
     mcp_approvals = MCPApprovalStore(auth.state_path.parent / "mcp-approvals.json")
     remove_retired_ssh_state(auth.state_path.parent, mcp_approvals)
     app_server.enable_mcp_approvals(mcp_approvals)
+    ssh_mcp_settings = SshMcpSettingsStore(auth.state_path.parent)
+    app_server.enable_ssh_mcp(ssh_mcp_settings)
     shared_state = SharedStateStore(state_path)
     claude_code = ClaudeCodeServer(
         claude_executable,
@@ -1873,7 +1927,7 @@ def create_app(
             shared_state.close()
             shutil.rmtree(runtime_directory, ignore_errors=True)
 
-    app = FastAPI(title="Code Remote", version="0.111.3-dev.3", lifespan=lifespan)
+    app = FastAPI(title="Code Remote", version="0.118.0-dev.1", lifespan=lifespan)
     app.state.codex = app_server
     app.state.claude_code = claude_code
     app.state.auth = auth
@@ -1883,6 +1937,7 @@ def create_app(
     app.state.shared_state = shared_state
     app.state.shared_queue = shared_queue
     app.state.mcp_approvals = mcp_approvals
+    app.state.ssh_mcp_settings = ssh_mcp_settings
     app.state.terminal_handoff = terminal_handoff
     app.state.translation = translation
     app.state.native_config = native_config
@@ -2163,6 +2218,23 @@ def create_app(
             return {"approvals": mcp_approvals.list()}
         except MCPApprovalError as error:
             raise HTTPException(status_code=500, detail=str(error)) from error
+
+    @app.get("/api/v1/ssh-mcp/settings")
+    async def get_ssh_mcp_settings() -> dict[str, Any]:
+        try:
+            return ssh_mcp_settings.status()
+        except SshMcpSettingsError as error:
+            raise HTTPException(status_code=500, detail=str(error)) from error
+
+    @app.put("/api/v1/ssh-mcp/settings")
+    async def save_ssh_mcp_settings(body: SshMcpSettingsRequest) -> dict[str, Any]:
+        profiles = [profile.model_dump(exclude_none=True) for profile in body.profiles]
+        if any(profile["auth"] == "key" and not profile.get("keyRef") for profile in profiles):
+            raise HTTPException(status_code=422, detail="使用私钥认证时，请填写 Code Remote 主机上的私钥文件路径。")
+        try:
+            return ssh_mcp_settings.save(profiles)
+        except SshMcpSettingsError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.delete("/api/v1/mcp/approvals/{grant_id}")
     async def revoke_mcp_approval(grant_id: str) -> dict[str, bool]:

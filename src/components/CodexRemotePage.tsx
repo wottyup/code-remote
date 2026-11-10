@@ -50,6 +50,7 @@ import {
   RotateCcw,
   Search,
   Scissors,
+  Server,
   Settings2,
   ShieldCheck,
   Square,
@@ -87,6 +88,7 @@ import { createThreadTranscript, threadTranscriptFilename } from '../lib/threadT
 import { createWorkspaceSelectionDocument, isWorkspaceSelectionDocument, numberWorkspaceSelectionDocument, sameWorkspaceSelectionDocument, workspaceSelectionMenuPosition, workspaceTextSelectionLineRange, type WorkspaceSelectionBounds } from '../lib/workspaceSelection'
 import { workspaceFileType } from '../lib/workspaceFileTypes'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
+import { SshMcpSettingsCard } from './SshMcpSettingsCard'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
@@ -7179,6 +7181,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
       { id: 'codex-config', label: 'Codex API', icon: <EngineBrandIcon engine="codex" size={17} /> },
       { id: 'claude-config', label: 'Claude Code API', icon: <EngineBrandIcon engine="claude-code" size={17} /> },
       { id: 'cpa-manager', label: ui('token使用量查询'), icon: <Link2 size={17} /> },
+      { id: 'ssh-mcp', label: ui('SSH MCP 服务器'), icon: <Server size={17} /> },
       { id: 'mcp-approvals', label: ui('MCP 自动批准'), icon: <ShieldCheck size={17} /> },
     ] },
     { label: ui('其他'), items: [
@@ -7407,6 +7410,9 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
         </div>
         <div id="settings-section-mcp-approvals" className="theme-settings-panel__section" hidden={activeSection !== 'mcp-approvals'}>
           <MCPApprovalsCard token={token} />
+        </div>
+        <div id="settings-section-ssh-mcp" className="theme-settings-panel__section" hidden={activeSection !== 'ssh-mcp'}>
+          {activeSection === 'ssh-mcp' ? <SshMcpSettingsCard token={token} /> : null}
         </div>
         <div id="settings-section-cpa-manager" className="theme-settings-panel__section" hidden={activeSection !== 'cpa-manager'}>
           <CPAUsageSettingsCard settings={cpaUsageSettings} token={token} onChange={onCPAUsageSettingsChange} />

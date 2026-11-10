@@ -66,6 +66,12 @@ pnpm --filter code-remote start
 
 Linux/macOS 的聊天终端使用 tmux 保留会话；Linux 可运行 `sudo apt-get install tmux`，macOS 可运行 `brew install tmux`。使用 systemd 时还需安装上面的 `code-remote-tmux.service`，这样 Python 服务重启后 tmux shell 仍可重新连接。电脑重启、主动停止 tmux service、输入 `exit`、会话空闲 30 分钟或未连接会话超过 10 个时会清理会话。Windows 原生终端保持临时 shell 行为。
 
+## SSH MCP 远程服务器
+
+在网页版“设置”→“SSH MCP 服务器”中添加一台或多台主机。连接认证支持运行 Code Remote 的电脑上的 SSH Agent，或该电脑上的私钥文件路径；私钥内容和 SSH 密码不会通过网页传输或保存。使用 Agent 时，启动 Code Remote 的服务进程需要继承 SSH Agent 环境。建议填写服务器提供的 SSH 主机指纹，以固定校验服务器身份。
+
+每台服务器可单独设置生产、预发布或开发分组，viewer、operator 或 admin 角色，以及只读限制和命令确认方式。默认采用生产分组、只读 viewer，并逐条询问命令；SSH MCP 的自动批准不会开放。需要批准的命令会在 Codex 聊天中显示供确认。当前 SSH MCP 仅接入 Codex，Claude Code 的网页审批桥接尚未支持。
+
 ## 阿里云百炼语音输入（可选）
 
 首次使用时，在网页版左侧“设置”→“阿里云百炼语音”中填写 API Key、Workspace ID 和地域，保存后立即生效，无需重启。API Key 保存在服务端本机的配置文件中，不会返回给浏览器；Linux/macOS 下该文件仅允许服务用户读写。默认实时模型为 `qwen3.8-omni-flash-realtime`，默认转写模型为 `qwen3-asr-flash-realtime`；模型也可以在高级设置中调整。
