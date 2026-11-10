@@ -91,6 +91,7 @@ import { workspaceFileType } from '../lib/workspaceFileTypes'
 import { ChatOverlayPanel } from './ChatOverlayPanel'
 import { CPAUsageSettingsCard } from './CPAUsageSettingsCard'
 import { CPAUsageStatsPanel } from './CPAUsageStatsPanel'
+import { DesktopUpdateCard } from './DesktopUpdateCard'
 import { TerminalRecoveryBoundary } from './TerminalRecoveryBoundary'
 import { ImagePreviewButton } from './ImagePreviewButton'
 import { PastedTablePreview } from './PastedTablePreview'
@@ -7767,6 +7768,7 @@ function ThemeSettingsPanel({ token, preferences, onChange, onClose, onUnpair, c
               <strong>{ui("GitHub 项目地址")}</strong>
               <span>https://github.com/wottyup/code-remote</span>
             </a>
+            <DesktopUpdateCard manager={deviceManager} />
           </div>
         </section>
         </div>

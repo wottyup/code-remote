@@ -606,6 +606,22 @@ button:focus-visible, textarea:focus-visible, input:focus-visible { outline: 2px
 .theme-about-card__link:focus-visible { outline: 2px solid #8da4d5; outline-offset: 2px; }
 .theme-about-card__link strong { color: var(--theme-about-primary); font-size: calc(14px + var(--mobile-font-offset)); font-weight: 600; }
 .theme-about-card__link span { max-width: 100%; overflow-wrap: anywhere; color: var(--theme-about-link); font-size: calc(12px + var(--mobile-font-offset)); }
+.desktop-update { display: grid; grid-template-columns: minmax(0, 1fr) auto; width: min(100%, 620px); align-items: center; gap: 13px 18px; margin-top: 12px; padding-top: 19px; border-top: 1px solid color-mix(in srgb, var(--theme-about-primary) 17%, transparent); color: var(--theme-about-primary); text-align: left; }
+.desktop-update__copy { min-width: 0; }
+.desktop-update__title { display: flex; min-width: 0; align-items: baseline; gap: 9px; }
+.desktop-update__title strong { font-size: calc(14px + var(--mobile-font-offset)); font-weight: 650; }
+.desktop-update__title span { overflow-wrap: anywhere; color: var(--theme-about-muted); font-size: calc(11px + var(--mobile-font-offset)); font-variant-numeric: tabular-nums; }
+.desktop-update__copy > p { margin: 5px 0 0; color: var(--theme-about-muted); font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.55; }
+.desktop-update__action { display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; padding: 8px 13px; border: 1px solid color-mix(in srgb, var(--theme-about-primary) 27%, transparent); border-radius: 8px; background: color-mix(in srgb, var(--theme-about-primary) 8%, transparent); color: var(--theme-about-primary); cursor: pointer; font: inherit; font-size: calc(12px + var(--mobile-font-offset)); font-weight: 600; white-space: nowrap; }
+.desktop-update__action:hover:not(:disabled) { background: color-mix(in srgb, var(--theme-about-primary) 14%, transparent); }
+.desktop-update__action:focus-visible { outline: 2px solid var(--theme-about-link); outline-offset: 2px; }
+.desktop-update__action:disabled { cursor: wait; opacity: .62; }
+.desktop-update__action:disabled:not(:has(.spin)) { cursor: not-allowed; }
+.desktop-update__error { grid-column: 1 / -1; margin: -3px 0 0; color: #ef9292; font-size: calc(12px + var(--mobile-font-offset)); line-height: 1.5; }
+.remote-shell--theme-light .desktop-update__error, .remote-shell--theme-warm .desktop-update__error { color: #b42318; }
+.remote-shell--theme-retro .desktop-update__action { border-radius: 2px; }
+.remote-shell--theme-pixel .desktop-update__action { border-radius: 0; }
+.remote-shell--theme-chinese-retro .desktop-update__action { border-radius: 4px; }
 .mcp-approvals-card { --mcp-approval-text: #e5e8ee; --mcp-approval-muted: #9aa3b2; --mcp-approval-surface: rgba(255,255,255,.045); --mcp-approval-border: rgba(160,174,194,.22); color: var(--mcp-approval-text); }
 .remote-shell--theme-light .mcp-approvals-card, .remote-shell--theme-warm .mcp-approvals-card, .remote-shell--theme-retro .mcp-approvals-card, .remote-shell--theme-chinese-retro .mcp-approvals-card { --mcp-approval-text: #303845; --mcp-approval-muted: #626e7b; --mcp-approval-surface: rgba(33,46,61,.035); --mcp-approval-border: rgba(53,67,85,.22); }
 .remote-shell--theme-custom .mcp-approvals-card { --mcp-approval-text: var(--custom-theme-text-color); --mcp-approval-muted: color-mix(in srgb, var(--custom-theme-text-color) 72%, transparent); }
@@ -4448,6 +4464,8 @@ html[lang="en"] .remote-shell--theme-retro .workspace-explorer__header-actions .
 .remote-shell--theme-chinese-retro .native-config :is(.native-config__file, .native-config__field input, .native-config__message) { border-radius: 5px; }
 
 @container settings-panel (max-width: 600px) {
+  .desktop-update { grid-template-columns: minmax(0, 1fr); }
+  .desktop-update__action { width: 100%; min-height: 42px; }
   .native-config__profiles { grid-template-columns: minmax(0, 1fr); }
   .native-config__profile-actions { justify-content: flex-end; }
   .native-config__columns { grid-template-columns: minmax(0, 1fr); }

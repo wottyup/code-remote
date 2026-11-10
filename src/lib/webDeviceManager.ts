@@ -43,7 +43,23 @@ export interface DesktopRemoveConnectionResult {
   remoteRevoked: boolean
 }
 
+export interface DesktopUpdateStatus {
+  currentVersion: string
+  latestVersion: string
+  available: boolean
+  filename: string
+  sizeBytes: number
+  sha256: string
+}
+
+export interface DownloadedDesktopUpdate {
+  version: string
+  filename: string
+  sizeBytes: number
+}
+
 export interface CodeRemoteDesktopBridge {
+  currentVersion?: string
   getToken: () => string | null
   getTokenAsync: () => Promise<string | null>
   saveToken: (token: string) => Promise<boolean>
@@ -56,6 +72,9 @@ export interface CodeRemoteDesktopBridge {
   activateConnection: (profileId: string) => Promise<boolean>
   showConnectionManager: () => Promise<boolean>
   openConnectionWindow: (profileId: string) => Promise<boolean>
+  checkDesktopUpdate: () => Promise<DesktopUpdateStatus>
+  downloadDesktopUpdate: () => Promise<DownloadedDesktopUpdate>
+  installDesktopUpdate: () => Promise<boolean>
   onConnectionsChanged: (callback: (connections: DesktopConnectionProfile[]) => void) => () => void
 }
 
