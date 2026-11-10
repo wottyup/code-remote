@@ -41,6 +41,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null)
   const disabled = loading || saving
+  const saveDisabled = disabled || settings === null
 
   useEffect(() => {
     let cancelled = false
@@ -150,7 +151,7 @@ export function SshMcpSettingsCard({ token }: { token: string }) {
         </section>)}
         <div className="native-config__actions ssh-mcp-actions">
           <button className="theme-notification-toggle" type="button" disabled={disabled} onClick={addProfile}><Plus size={16} />{ui('添加服务器')}</button>
-          <button className="theme-notification-toggle" type="submit" disabled={disabled || settings === null}>
+          <button className={`theme-notification-toggle${saveDisabled ? '' : ' theme-notification-toggle--enabled'}`} type="submit" disabled={saveDisabled}>
             {saving ? <LoaderCircle size={15} className="ssh-mcp-spin" /> : <Save size={15} />}{saving ? ui('保存中…') : ui('保存配置')}
           </button>
         </div>
