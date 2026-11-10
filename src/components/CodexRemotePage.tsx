@@ -4787,7 +4787,7 @@ const RemoteChatPane = memo(function RemoteChatPane({
       <header className="remote-chat__header">
         <div className="remote-chat__title-wrap">
           <button className="icon-button menu-button" type="button" aria-label={ui("打开对话列表")} onClick={(event) => { event.stopPropagation(); onOpenSidebar() }}><Menu size={20} /></button>
-          <div className="remote-chat__title"><span className="remote-chat__eyebrow">{uiFormat("{0} · 当前工作区", activeEngineLabel)}</span><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || ui('本机项目')}</span></div>
+          <div className="remote-chat__title"><strong>{activeTitle}</strong><span title={remote.activeThread?.cwd || remote.runtime.workspace}>{remote.activeThread?.cwd || remote.runtime.workspace || ui('本机项目')}</span></div>
         </div>
         <div className="remote-chat__controls">
           <button
